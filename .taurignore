@@ -1,0 +1,4 @@
+# Ignore the wallet data directory to prevent the dev server from
+# restarting every time the profile or vouchers are saved.
+src-tauri/wallet_data/
+
