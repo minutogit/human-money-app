@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use log::{error, info};
 use voucher_lib::app_service::AppService;
-use tauri_plugin_log::{Builder as LogBuilder, Target, TargetKind};
+use tauri_plugin_log::{Builder as LogBuilder, Target, TargetKind, log::LevelFilter};
 
 pub struct AppState(Mutex<AppService>);
 
@@ -49,6 +49,7 @@ pub fn run() {
                     Target::new(TargetKind::Stdout),
                     Target::new(TargetKind::Webview),
                 ])
+                .level(LevelFilter::Info)
                 .build(),
         )
         .manage(AppState(Mutex::new(service)))

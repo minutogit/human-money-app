@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { info, error } from "@tauri-apps/plugin-log";
 import "./App.css";
 
 function App() {
@@ -12,6 +13,7 @@ function App() {
 
   async function createProfile() {
     setFeedbackMsg("Creating profile...");
+    info(`Frontend: Attempting to create profile with prefix: "${userPrefix || 'none'}"`);
     try {
       await invoke("create_profile", {
         mnemonic,
@@ -20,9 +22,11 @@ function App() {
         password,
       });
       setFeedbackMsg("Profile successfully created and wallet is loaded!");
+      info("Frontend: Profile creation successful.");
     } catch (e) {
       // `e` ist die Fehlermeldung aus dem Rust-Backend
       setFeedbackMsg(`Error: ${e}`);
+      error(`Frontend: Profile creation failed: ${e}`);
     }
   }
 
