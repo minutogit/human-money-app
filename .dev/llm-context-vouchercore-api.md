@@ -54,6 +54,18 @@ pub fn process_and_attach_signature(container_bytes: &[u8], password: &str) -> R
 
 Verarbeitet eine empfangene losgelöste Signatur, fügt sie dem lokalen Gutschein hinzu und speichert den Wallet-Zustand.
 
+Hilfsfunktionen (Statische Methoden)
+Diese Funktionen sind Teil des AppService, benötigen aber keinen initialisierten Zustand (weder Locked noch Unlocked) und können jederzeit aufgerufen werden.
+
+pub fn generate_mnemonic(word_count: u32) -> Result<String, String>
+
+Erzeugt eine neue, kryptografisch sichere BIP-39 Mnemonic-Phrase (Seed-Wörter). Ideal, um einem neuen Benutzer bei der Profilerstellung eine Phrase vorzuschlagen. `word_count` ist typischerweise 12 oder 24.
+
+pub fn validate_mnemonic(mnemonic: &str) -> Result<(), String>
+
+Überprüft eine gegebene Mnemonic-Phrase auf ihre Gültigkeit (korrekte Wörter, gültige Prüfsumme). Dies ist nützlich, um dem Benutzer bei der Eingabe zur Wiederherstellung eines Wallets sofortiges Feedback zu geben, bevor der eigentliche Login-Versuch unternommen wird.
+
+
 Abfragen (Queries)
 Diese Funktionen dienen dem reinen Lesezugriff auf das entsperrte Wallet und sind ideal, um die Benutzeroberfläche mit Daten zu befüllen. Sie benötigen keine Passwörter, da sie den Zustand des Wallets nicht verändern.
 

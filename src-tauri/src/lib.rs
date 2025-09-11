@@ -12,6 +12,13 @@ pub struct AppState(Mutex<AppService>);
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
+
+#[tauri::command]
+fn generate_mnemonic(word_count: u32) -> Result<String, String> {
+    // Ruft die statische Methode aus der voucher_lib auf. Benötigt keinen AppState.
+    info!("Generating a new {}-word mnemonic", word_count);
+    AppService::generate_mnemonic(word_count)
+}
 #[tauri::command]
 fn create_profile(
     mnemonic: String,
@@ -54,7 +61,7 @@ pub fn run() {
         )
         .manage(AppState(Mutex::new(service)))
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, create_profile])
+        .invoke_handler(tauri::generate_handler![greet, create_profile, generate_mnemonic])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
