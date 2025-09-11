@@ -1,12 +1,13 @@
 /* src/App.css */
 
-/* Die NEUE, moderne Anweisung für das @tailwindcss/vite-Plugin */
+/* Tailwind v4+ mit Vite: Importiert alle Layer und lädt die Konfiguration */
 @import "tailwindcss";
+@config "../tailwind.config.js";
 
 /* Sie können hier optional noch eigene, globale Stile hinzufügen,
    falls Sie sie später benötigen. Für den Moment reicht das hier. */
 body {
   /* Setzt eine neutrale Hintergrundfarbe, die gut mit den 
      Komponenten-Stilen harmoniert. */
-  background-color: #f3f4f6; /* Dies ist ein Tailwind-Farbton (gray-100) */
+  background-color: #FFFAF0; /* Warmes Elfenbein */
 }

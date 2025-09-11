@@ -3,7 +3,6 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error } from "@tauri-apps/plugin-log";
 
-// Import unserer neuen UI-Komponenten
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
@@ -52,6 +51,11 @@ export function CreateProfile() {
             });
             setFeedbackMsg("Profile successfully created!");
             info("Frontend: Profile creation successful.");
+            setGeneratedSeed("");
+            setConfirmationSeed("");
+            setUserPrefix("");
+            setPassword("");
+            setConfirmPassword("");
         } catch (e) {
             setFeedbackMsg(`Error creating profile: ${e}`);
             error(`Frontend: Profile creation failed: ${e}`);
@@ -60,57 +64,62 @@ export function CreateProfile() {
         }
     }
 
-    const isCreationDisabled =
-        !generatedSeed ||
-        generatedSeed !== confirmationSeed ||
-        !password ||
-        password !== confirmPassword ||
-        isLoading;
+    // Button is only disabled when loading or when there are validation errors
+    const isCreationDisabled = isLoading || 
+        (confirmationSeed !== "" && generatedSeed !== confirmationSeed) ||
+        (password !== "" && confirmPassword !== "" && password !== confirmPassword) ||
+        (password !== "" && password.length < 8);
 
-    const feedbackClass = feedbackMsg.includes("Error") ? "text-danger" : "text-accent";
+    const feedbackClass = feedbackMsg.includes("Error") ? "text-theme-error" : "text-theme-success";
 
     return (
-        <div className="flex flex-col items-center justify-center min-h-screen bg-background p-4">
-            <div className="w-full max-w-xl bg-surface shadow-xl rounded-xl p-8 space-y-6">
+        <div className="flex flex-col items-center justify-center min-h-screen bg-bg-app p-4 font-sans">
+            <div className="w-full max-w-xl bg-bg-card shadow-2xl rounded-2xl p-8 space-y-6 border border-theme-subtle">
                 <div className="text-center">
-                    <h1 className="text-3xl font-bold text-gray-900">Voucher Wallet</h1>
-                    <p className="text-md text-secondary mt-1">Create New Profile</p>
+                    <h1 className="text-4xl font-extrabold text-theme-primary">Voucher Wallet</h1>
+                    <p className="text-lg text-theme-light mt-1">Create New Profile</p>
                 </div>
 
-                <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); createProfile(); }}>
-                    {/* Beachten Sie, wie sauber das jetzt ist. Keine langen classNames mehr! */}
+                <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); createProfile(); }}>
                     <div>
-                        <label className="block text-sm font-medium text-secondary mb-1">1. Your Seed Phrase</label>
-                        <Textarea value={generatedSeed} readOnly rows={3} className="bg-gray-100" />
+                        <label className="block text-sm font-semibold text-theme-secondary mb-1">1. Your Seed Phrase (Save this securely!)</label>
+                        <Textarea value={generatedSeed} readOnly rows={3} className="bg-bg-input-readonly" />
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-secondary mb-1">2. Confirm Seed Phrase</label>
-                        <Textarea value={confirmationSeed} onChange={(e) => setConfirmationSeed(e.target.value)} required rows={3} />
+                        <label className="block text-sm font-semibold text-theme-secondary mb-1">2. Confirm Seed Phrase</label>
+                        <Textarea value={confirmationSeed} onChange={(e) => setConfirmationSeed(e.target.value)} placeholder="Type your 12 words again here." required rows={3} />
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-secondary mb-1">3. Optional User Prefix</label>
-                        <Input type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} />
-                    </div>
-
-                    {/* Visuelle Gruppierung der Passwort-Felder */}
-                    <div className="border-t border-gray-200 pt-4 space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium text-secondary mb-1">4. Password</label>
-                            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-secondary mb-1">5. Confirm Password</label>
-                            <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required />
+                        <label className="block text-sm font-semibold text-theme-secondary mb-1">3. Optional User Prefix</label>
+                        <div className="max-w-md mx-auto">
+                            <Input type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g., 'my_wallet' (can be left blank)" />
                         </div>
                     </div>
 
-                    <div className="pt-2">
-                        {feedbackMsg && <p className={`text-center text-sm font-medium mb-3 ${feedbackClass}`}>{feedbackMsg}</p>}
-                        <Button type="submit" disabled={isCreationDisabled}>
-                            {isLoading ? "Creating..." : "Create Profile"}
-                        </Button>
+                    <div className="border-t border-theme-light-border pt-5 space-y-5">
+                        <div>
+                            <label className="block text-sm font-semibold text-theme-secondary mb-1">4. Password</label>
+                            <div className="max-w-md mx-auto">
+                                <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 8 characters" required />
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-semibold text-theme-secondary mb-1">4. Confirm Password</label>
+                            <div className="max-w-md mx-auto">
+                                <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repeat your password" required />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="pt-3 text-center">
+                        {feedbackMsg && <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>}
+                        <div className="flex justify-center">
+                            <Button type="submit" disabled={isCreationDisabled}>
+                                {isLoading ? "Creating Profile..." : "Create Profile"}
+                            </Button>
+                        </div>
                     </div>
                 </form>
             </div>
