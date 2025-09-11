@@ -1,49 +1,61 @@
 import { useState } from "react";
-import reactLogo from "./assets/react.svg";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  // State für das Profilerstellungs-Formular
+  const [mnemonic, setMnemonic] = useState("");
+  const [userPrefix, setUserPrefix] = useState("");
+  const [password, setPassword] = useState("");
+  // State für Feedback vom Backend (Erfolg oder Fehler)
+  const [feedbackMsg, setFeedbackMsg] = useState("");
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
+  async function createProfile() {
+    setFeedbackMsg("Creating profile...");
+    try {
+      await invoke("create_profile", {
+        mnemonic,
+        // Sende `null`, wenn das Feld leer ist, damit Rust es als `None` interpretiert
+        userPrefix: userPrefix || null,
+        password,
+      });
+      setFeedbackMsg("Profile successfully created and wallet is loaded!");
+    } catch (e) {
+      // `e` ist die Fehlermeldung aus dem Rust-Backend
+      setFeedbackMsg(`Error: ${e}`);
+    }
   }
 
   return (
     <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+      <h1>Voucher Wallet</h1>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
+      <h2>Create New Profile</h2>
       <form
         className="row"
         onSubmit={(e) => {
           e.preventDefault();
-          greet();
+          createProfile();
         }}
       >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
+        <textarea
+          onChange={(e) => setMnemonic(e.currentTarget.value)}
+          placeholder="Enter your 12-word mnemonic phrase"
+          required
         />
-        <button type="submit">Greet</button>
+        <input
+          onChange={(e) => setUserPrefix(e.currentTarget.value)}
+          placeholder="Optional user prefix (e.g., 'user')"
+        />
+        <input
+          type="password"
+          onChange={(e) => setPassword(e.currentTarget.value)}
+          placeholder="Enter a strong password"
+          required
+        />
+        <button type="submit">Create Profile</button>
       </form>
-      <p>{greetMsg}</p>
+      <p>{feedbackMsg}</p>
     </main>
   );
 }
