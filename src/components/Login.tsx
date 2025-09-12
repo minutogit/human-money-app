@@ -5,29 +5,28 @@ import { info, error } from "@tauri-apps/plugin-log";
 
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
-import { Textarea } from "./ui/Textarea";
 
 interface LoginProps {
     onLoginSuccess: () => void;
     onSwitchToCreate: () => void;
+    onSwitchToReset: () => void;
 }
 
-export function Login({ onLoginSuccess, onSwitchToCreate }: LoginProps) {
-    const [mnemonic, setMnemonic] = useState("");
+export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToReset }: LoginProps) {
     const [password, setPassword] = useState("");
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
 
     async function handleLogin() {
-        if (!mnemonic || !password) {
-            setFeedbackMsg("Error: Seed phrase and password are required.");
+        if (!password) {
+            setFeedbackMsg("Error: Password is required.");
             return;
         }
 
         setIsLoading(true);
         setFeedbackMsg("Logging in...");
         try {
-            await invoke("login", { mnemonic, password });
+            await invoke("login", { password });
             info("Frontend: Login successful.");
             onLoginSuccess();
         } catch (e) {
@@ -48,13 +47,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate }: LoginProps) {
             </div>
 
             <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
-                <div>
-                    <label className="block text-sm font-semibold text-theme-secondary mb-1">1. Your Seed Phrase</label>
-                    <Textarea value={mnemonic} onChange={(e) => setMnemonic(e.target.value)} placeholder="Enter your 12 or 24 word seed phrase here." required rows={3} />
-                </div>
-
-                <div>
-                    <label className="block text-sm font-semibold text-theme-secondary mb-1">2. Password</label>
+                 <div>
+                    <label className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
                     <div className="max-w-md mx-auto">
                         <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" required />
                     </div>
@@ -72,6 +66,13 @@ export function Login({ onLoginSuccess, onSwitchToCreate }: LoginProps) {
                             className="text-sm text-theme-primary hover:underline"
                         >
                             Don't have a wallet? Create one
+                        </button>
+                        <button
+                            type="button"
+                            onClick={onSwitchToReset}
+                            className="text-sm text-theme-light hover:underline"
+                        >
+                            Forgot password?
                         </button>
                     </div>
                 </div>

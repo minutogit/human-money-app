@@ -53,19 +53,38 @@ fn create_profile(
 
 #[tauri::command]
 fn login(
-    mnemonic: String,
     password: String,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
     info!("Attempting to login...");
     let mut service = state.0.lock().unwrap();
-    match service.login(&mnemonic, &password) {
+    match service.login(&password) {
         Ok(()) => {
             info!("Login successful!");
             Ok(())
         }
         Err(e) => {
             error!("Login failed: {}", e);
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
+fn recover_wallet_and_set_new_password(
+    mnemonic: String,
+    new_password: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    info!("Attempting to recover wallet and set new password...");
+    let mut service = state.0.lock().unwrap();
+    match service.recover_wallet_and_set_new_password(&mnemonic, &new_password) {
+        Ok(()) => {
+            info!("Wallet recovered and new password set successfully!");
+            Ok(())
+        }
+        Err(e) => {
+            error!("Wallet recovery failed: {}", e);
             Err(e)
         }
     }
@@ -122,6 +141,7 @@ pub fn run() {
             profile_exists,
             create_profile,
             login,
+            recover_wallet_and_set_new_password,
             logout,
             // Helpers
             generate_mnemonic,
