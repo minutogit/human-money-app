@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error } from "@tauri-apps/plugin-log";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Button } from "./ui/Button";
 import { VoucherSummary } from "../types";
 
@@ -14,6 +15,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
     const [balances, setBalances] = useState<Record<string, string>>({});
     const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState("");
+    const [copyFeedback, setCopyFeedback] = useState("");
 
     useEffect(() => {
         async function fetchData() {
@@ -49,19 +51,38 @@ export function Dashboard({ onLogout }: DashboardProps) {
         }
     }
 
+    async function handleCopyUserId() {
+        if (!userId) return;
+        try {
+            await writeText(userId);
+            setCopyFeedback("Copied!");
+            setTimeout(() => setCopyFeedback(""), 2000); // Reset feedback after 2s
+        } catch (e) {
+            const msg = `Failed to copy User ID: ${e}`;
+            error(msg);
+            setFeedbackMsg(`Error: ${msg}`);
+        }
+    }
+
     const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Loading...";
 
     return (
         <div className="flex flex-col min-h-screen bg-bg-app p-4 font-sans text-theme-secondary">
             {/* Header */}
-            <header className="w-full max-w-4xl mx-auto flex justify-between items-center pb-4 mb-4 border-b border-theme-subtle">
-                <h1 className="text-2xl font-bold text-theme-primary">Voucher Wallet</h1>
-                <div className="flex items-center space-x-4">
-                    <span className="text-sm font-mono" title={userId}>{truncatedUserId}</span>
-                    <button onClick={handleLogout} className="px-4 py-2 text-sm font-semibold text-theme-error border border-theme-error rounded-md hover:bg-theme-error hover:text-white transition-colors duration-150 ease-in-out">
-                        Logout
+            <header className="w-full max-w-4xl mx-auto flex justify-between items-start pb-4 mb-4 border-b border-theme-subtle gap-4">
+                <div className="flex-grow min-w-0">
+                    <h1 className="text-2xl font-bold text-theme-primary">Voucher Wallet</h1>
+                    <button onClick={handleCopyUserId} className="w-full text-left mt-1 rounded-md hover:bg-theme-subtle transition-colors duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-theme-primary focus:ring-opacity-50 px-2 py-1 -ml-2" title="Click to copy full ID">
+                        <div className="flex items-baseline">
+                            <span className="text-xs font-semibold text-theme-secondary mr-2 flex-shrink-0">Your ID:</span>
+                            <span className="text-sm font-mono text-theme-light truncate">{truncatedUserId}</span>
+                        </div>
+                         {copyFeedback && <p className="text-xs text-theme-success font-semibold mt-1">{copyFeedback}</p>}
                     </button>
                 </div>
+                <button onClick={handleLogout} className="px-4 py-2 text-sm font-semibold text-theme-error border border-theme-error rounded-md hover:bg-theme-error hover:text-white transition-colors duration-150 ease-in-out">
+                    Logout
+                </button>
             </header>
 
             <main className="w-full max-w-4xl mx-auto flex-grow">

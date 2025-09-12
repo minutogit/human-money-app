@@ -26,3 +26,4 @@ voucher_lib = { path = "../../decentral-voucher-system-core" }
 log = "0.4"
 tauri-plugin-log = { version = "2", features = ["colored"] }
 
+tauri-plugin-clipboard-manager = "2.0.0"
