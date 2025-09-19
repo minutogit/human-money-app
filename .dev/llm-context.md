@@ -49,8 +49,8 @@ Die folgenden Funktionen der `voucher_lib` sollen implementiert werden:
 * **Typsicherheit:** Für alle Datenstrukturen, die zwischen Rust und dem Frontend ausgetauscht werden (z. B. `VoucherSummary`), müssen entsprechende TypeScript-Interfaces definiert werden.
 * **Fehlerbehandlung:** Jeder `invoke`-Aufruf im Frontend muss robust in einem `try/catch`-Block gekapselt werden, um Fehler aus dem Rust-Backend abzufangen und dem Nutzer verständliches Feedback zu geben.
 
-**5. Ausgangs-Dateistruktur**
-Dies ist der initiale Zustand des Projekts, bevor Code-Änderungen vorgenommen werden.
+**5. Aktuelle Dateistruktur**
+Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 
 ```
 ├── index.html
@@ -66,11 +66,15 @@ Dies ist der initiale Zustand des Projekts, bevor Code-Änderungen vorgenommen w
 │   │   └── react.svg
 │   ├── components
 │   │   ├── CreateProfile.tsx
+│   │   ├── Dashboard.tsx
+│   │   ├── Login.tsx
+│   │   ├── PasswordReset.tsx
 │   │   └── ui
 │   │       ├── Button.tsx
 │   │       ├── Input.tsx
 │   │       └── Textarea.tsx
 │   ├── main.tsx
+│   ├── types.ts
 │   └── vite-env.d.ts
 ├── src-tauri
 │   ├── build.rs
@@ -87,7 +91,22 @@ Dies ist der initiale Zustand des Projekts, bevor Code-Änderungen vorgenommen w
 │       └── vouchers.enc
 ├── start-dev.sh
 ├── tailwind.config.js
+├── .taurignore
 ├── tsconfig.json
 ├── tsconfig.node.json
 └── vite.config.ts
 ```
+
+**6. Implementierte Kernfunktionen**
+
+* **Frontend (src/)**
+  * `App.tsx`: Hauptkomponente mit State-Management für die Anwendungsphasen (Profil erstellen, Login, Dashboard, Passwort zurücksetzen)
+  * `components/Dashboard.tsx`: Zeigt Benutzer-ID, Guthaben und Gutscheinübersicht an
+  * `components/CreateProfile.tsx`: Formular zur Profilerstellung mit Mnemonic-Generierung
+  * `components/Login.tsx`: Login-Formular mit Passwort-Eingabe
+  * `components/PasswordReset.tsx`: Formular zur Wiederherstellung des Wallets mit Mnemonic
+  * `types.ts`: TypeScript-Interface für `VoucherSummary`
+
+* **Backend (src-tauri/)**
+  * `src/lib.rs`: Hauptdatei mit allen Tauri-Befehlen, die die `voucher_lib::AppService`-Fassade nutzen
+  * `src/main.rs`: Einstiegspunkt, der die `run()`-Funktion aus `lib.rs` aufruft

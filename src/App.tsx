@@ -1,3 +1,4 @@
+// src/App.tsx
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { error } from "@tauri-apps/plugin-log";

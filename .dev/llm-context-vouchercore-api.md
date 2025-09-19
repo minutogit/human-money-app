@@ -26,6 +26,10 @@ Der `AppService` ist die einzige Schnittstelle, die für die Entwicklung der Cli
 **Automatische Speicherung:** Alle Operationen, die den Wallet-Zustand verändern (z.B. ein Transfer), werden automatisch persistent gespeichert.
 
 #### Hauptfunktionen (Befehle)
+**`pub fn new(storage_path: &Path) -> Result<Self, String>`**
+
+Initialisiert einen neuen `AppService` im `Locked`-Zustand. Erstellt eine `FileStorage`-Instanz für den angegebenen Pfad. Das Verzeichnis wird bei Bedarf erstellt.
+
 **`pub fn create_profile(mnemonic: &str, user_prefix: Option<&str>, password: &str) -> Result<(), String>`**
 
 Erstellt ein komplett neues Benutzerprofil und Wallet und speichert es verschlüsselt. `mnemonic` und `password` sind obligatorisch. Ein optionales `user_prefix` kann für die Erstellung der DID verwendet werden. Der Service wird bei Erfolg in den `Unlocked`-Zustand versetzt.
@@ -42,21 +46,37 @@ Stellt ein Wallet mithilfe der Mnemonic-Phrase wieder her und setzt ein neues Pa
 
 Sperrt das Wallet und entfernt sensible Daten wie private Schlüssel aus dem Speicher. Diese Operation kann nicht fehlschlagen.
 
+**`pub fn create_new_voucher(standard_toml_content: &str, lang_preference: &str, data: NewVoucherData, password: &str) -> Result<Voucher, String>`**
+
+Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand. Verifiziert zuerst die Standard-Definition, bevor der Gutschein erstellt wird.
+
 **`pub fn create_transfer_bundle(standard_definition: &VoucherStandardDefinition, local_instance_id: &str, recipient_id: &str, amount_to_send: &str, notes: Option<String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<Vec<u8>, String>`**
 
 Erstellt ein verschlüsseltes `SecureContainer`-Bundle für einen Transfer an einen Empfänger. Dies ist der Kernprozess zum Senden von Werten. Das Ergebnis (`Vec<u8>`) sind die serialisierten Daten, die an den Empfänger gesendet werden müssen (z.B. als Datei oder QR-Code). Die Wallet wird automatisch gespeichert.
 
-**`pub fn receive_bundle(bundle_data: &[u8], archive: Option<&dyn VoucherArchive>, password: &str) -> Result<ProcessBundleResult, String>`**
+**`pub fn receive_bundle(bundle_data: &[u8], standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<ProcessBundleResult, String>`**
 
-Verarbeitet ein empfangenes Bundle. Die Funktion validiert die Transaktion, fügt die Gutscheine zum eigenen Wallet hinzu und gibt ein `ProcessBundleResult` zurück, das über den Erfolg und die Details der Transaktion informiert. Die Wallet wird automatisch gespeichert.
+Verarbeitet ein empfangenes Bundle. Die Funktion validiert die Transaktion, fügt die Gutscheine zum eigenen Wallet hinzu und gibt ein `ProcessBundleResult` zurück, das über den Erfolg und die Details der Transaktion informiert. Die Wallet wird automatisch gespeichert. Der Caller muss die benötigten Standard-Definitionen als TOML-Strings bereitstellen.
 
 **`pub fn create_signing_request_bundle(local_instance_id: &str, recipient_id: &str) -> Result<Vec<u8>, String>`**
 
 Erstellt ein Bundle, um eine Signaturanfrage für einen Gutschein an einen Bürgen zu senden. Diese Operation verändert den Wallet-Zustand nicht.
 
-**`pub fn process_and_attach_signature(container_bytes: &[u8], password: &str) -> Result<(), String>`**
+**`pub fn create_detached_signature_response_bundle(voucher_to_sign: &Voucher, signature_data: DetachedSignature, original_sender_id: &str) -> Result<Vec<u8>, String>`**
+
+Erstellt eine losgelöste Signatur als Antwort auf eine Signaturanfrage. Diese Operation wird vom Bürgen aufgerufen und verändert dessen Wallet-Zustand nicht.
+
+**`pub fn process_and_attach_signature(container_bytes: &[u8], standard_toml_content: &str, password: &str) -> Result<(), String>`**
 
 Verarbeitet eine empfangene losgelöste Signatur, fügt sie dem lokalen Gutschein hinzu und speichert den Wallet-Zustand.
+
+**`pub fn save_encrypted_data(name: &str, data: &[u8], password: &str) -> Result<(), String>`**
+
+Speichert einen beliebigen Byte-Slice verschlüsselt auf der Festplatte. Diese Methode nutzt den gleichen sicheren Verschlüsselungsmechanismus wie das Wallet selbst. Ideal, um anwendungsspezifische Daten (z.B. Konfigurationen, Kontakte) sicher abzulegen.
+
+**`pub fn load_encrypted_data(name: &str, password: &str) -> Result<Vec<u8>, String>`**
+
+Lädt und entschlüsselt einen zuvor gespeicherten, beliebigen Datenblock. Aus Sicherheitsgründen wird das Passwort für jede Leseoperation benötigt, um den Entschlüsselungsschlüssel abzuleiten.
 
 #### Hilfsfunktionen (Statische Methoden)
 Diese Funktionen sind Teil des `AppService`, benötigen aber keinen initialisierten Zustand (weder `Locked` noch `Unlocked`) und können jederzeit aufgerufen werden.
