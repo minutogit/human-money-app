@@ -6,11 +6,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Button } from "./ui/Button";
 import { VoucherSummary } from "../types";
 
-interface DashboardProps {
-    onLogout: () => void;
-}
-
-export function Dashboard({ onLogout }: DashboardProps) {
+export function Dashboard() {
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<Record<string, string>>({});
     const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
@@ -39,23 +35,11 @@ export function Dashboard({ onLogout }: DashboardProps) {
         fetchData();
     }, []);
 
-    async function handleLogout() {
-        try {
-            await invoke("logout");
-            info("User logged out successfully.");
-            onLogout();
-        } catch (e) {
-            const msg = `Logout failed: ${e}`;
-            error(msg);
-            setFeedbackMsg(`Error: ${msg}`);
-        }
-    }
-
     async function handleCopyUserId() {
         if (!userId) return;
         try {
             await writeText(userId);
-            setCopyFeedback("Copied!");
+            setCopyFeedback("ID copied!");
             setTimeout(() => setCopyFeedback(""), 2000); // Reset feedback after 2s
         } catch (e) {
             const msg = `Failed to copy User ID: ${e}`;
@@ -64,62 +48,60 @@ export function Dashboard({ onLogout }: DashboardProps) {
         }
     }
 
-    const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Loading...";
+    const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Lade...";
 
     return (
-        <div className="flex flex-col min-h-screen bg-bg-app p-4 font-sans text-theme-secondary">
-            {/* Header */}
-            <header className="w-full max-w-4xl mx-auto flex justify-between items-start pb-4 mb-4 border-b border-theme-subtle gap-4">
-                <div className="flex-grow min-w-0">
-                    <h1 className="text-2xl font-bold text-theme-primary">Voucher Wallet</h1>
-                    <button onClick={handleCopyUserId} className="w-full text-left mt-1 rounded-md hover:bg-theme-subtle transition-colors duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-theme-primary focus:ring-opacity-50 px-2 py-1 -ml-2" title="Click to copy full ID">
-                        <div className="flex items-baseline">
-                            <span className="text-xs font-semibold text-theme-secondary mr-2 flex-shrink-0">Your ID:</span>
-                            <span className="text-sm font-mono text-theme-light truncate">{truncatedUserId}</span>
-                        </div>
-                         {copyFeedback && <p className="text-xs text-theme-success font-semibold mt-1">{copyFeedback}</p>}
-                    </button>
-                </div>
-                <button onClick={handleLogout} className="px-4 py-2 text-sm font-semibold text-theme-error border border-theme-error rounded-md hover:bg-theme-error hover:text-white transition-colors duration-150 ease-in-out">
-                    Logout
-                </button>
-            </header>
+        <div className="mx-auto max-w-4xl">
+            {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
 
-            <main className="w-full max-w-4xl mx-auto flex-grow">
-                {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
-                
-                {/* Balance Summary */}
-                <section className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                    {Object.entries(balances).map(([currency, amount]) => (
-                        <div key={currency} className="bg-bg-card shadow-lg rounded-xl p-6 text-center border border-theme-subtle">
+            {/* User ID Anzeige */}
+            <div className="mb-8 rounded-lg border border-theme-subtle bg-card p-4 shadow-sm">
+                <h2 className="text-sm font-semibold text-theme-secondary mb-1">Your User ID</h2>
+                <button onClick={handleCopyUserId} className="w-full text-left rounded-md hover:bg-bg-app transition-colors duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-theme-primary focus:ring-opacity-50 p-2 -ml-2" title="Click to copy the full ID">
+                    <span className="text-sm font-mono text-theme-light truncate block">{truncatedUserId}</span>
+                    {copyFeedback && <p className="text-xs text-theme-success font-semibold mt-1">{copyFeedback}</p>}
+                </button>
+            </div>
+
+            {/* Guthaben-Übersicht */}
+            <section className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                {Object.keys(balances).length > 0 ? (
+                    Object.entries(balances).map(([currency, amount]) => (
+                        <div key={currency} className="bg-card shadow-lg rounded-xl p-6 text-center border border-theme-subtle">
                             <p className="text-4xl font-bold text-theme-primary">{amount}</p>
                             <p className="text-lg text-theme-light mt-1">{currency}</p>
                         </div>
-                    ))}
-                </section>
-
-                {/* Primary Actions */}
-                <section className="flex justify-center gap-6 mb-8">
-                    <Button className="flex-1">Send</Button>
-                    <Button className="flex-1">Receive</Button>
-                </section>
-
-                {/* Voucher List */}
-                <section>
-                    <h2 className="text-2xl font-semibold mb-4">My Vouchers</h2>
-                    <div className="space-y-3 bg-bg-card shadow-lg rounded-xl p-4 border border-theme-subtle">
-                        {vouchers.length > 0 ? vouchers.map(v => (
-                            <div key={v.local_id} className="flex justify-between items-center p-3 border-b border-theme-subtle last:border-b-0">
-                                <div>
-                                    <p className="font-mono font-semibold">{v.amount} {v.currency}</p>
-                                    <p className="text-xs text-theme-light font-mono">ID: {v.local_id}</p>
-                                </div>
-                                <span className="px-2 py-1 text-xs font-bold text-green-800 bg-green-200 rounded-full">{v.status}</span>
-                            </div>
-                        )) : <p className="text-center text-theme-light py-4">No vouchers found.</p>}
+                    ))
+                ) : (
+                    <div className="md:col-span-2 bg-card shadow-lg rounded-xl p-6 text-center border border-theme-subtle">
+                        <p className="text-2xl font-bold text-theme-light">No balance available</p>
                     </div>
-                </section>
-            </main>
+                )}
+            </section>
+
+            {/* Hauptaktionen */}
+            <section className="flex justify-center gap-6 mb-8">
+                <Button className="flex-1">Send</Button>
+                <Button className="flex-1">Receive</Button>
+            </section>
+
+            {/* Gutschein-Liste */}
+            <section>
+                <h2 className="text-2xl font-semibold mb-4 text-theme-secondary">My Vouchers</h2>
+                <div className="space-y-3 bg-card shadow-lg rounded-xl p-4 border border-theme-subtle">
+                    {vouchers.length > 0 ? vouchers.map(v => (
+                        <div key={v.local_id} className="flex justify-between items-center p-3 border-b border-theme-subtle last:border-b-0">
+                            <div>
+                                <p className="font-mono font-semibold text-theme-secondary">{v.amount} {v.currency}</p>
+                                <p className="text-xs text-theme-light font-mono">ID: {v.local_id}</p>
+                            </div>
+                            <span className={`px-2 py-1 text-xs font-bold rounded-full ${v.status === 'active' ? 'text-green-800 bg-green-200' : 'text-gray-800 bg-gray-200'}`}>
+                                {v.status}
+                            </span>
+                        </div>
+                    )) : <p className="text-center text-theme-light py-4">No vouchers found.</p>}
+                </div>
+            </section>
         </div>
     );
 }

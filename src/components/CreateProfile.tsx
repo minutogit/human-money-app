@@ -80,7 +80,7 @@ export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
     }
 
     // Button is only disabled when loading or when there are validation errors
-    const isCreationDisabled = isLoading || 
+    const isCreationDisabled = isLoading ||
         (confirmationSeed !== "" && generatedSeed !== confirmationSeed) ||
         (password !== "" && confirmPassword !== "" && password !== confirmPassword) ||
         (password !== "" && password.length < 8);
@@ -88,8 +88,8 @@ export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
     const feedbackClass = feedbackMsg.includes("Error") ? "text-theme-error" : "text-theme-success";
 
     return (
-        <div className="flex flex-col items-center justify-center min-h-screen bg-bg-app p-4 font-sans">
-            <div className="w-full max-w-xl bg-bg-card shadow-2xl rounded-2xl p-8 space-y-6 border border-theme-subtle">
+        <div className="w-full h-full flex flex-col items-center justify-center">
+            <div className="w-full max-w-xl min-w-[380px] bg-bg-card shadow-2xl rounded-2xl p-8 space-y-6 border border-theme-subtle">
                 <div className="text-center">
                     <h1 className="text-4xl font-extrabold text-theme-primary">Voucher Wallet</h1>
                     <p className="text-lg text-theme-light mt-1">Create New Profile</p>

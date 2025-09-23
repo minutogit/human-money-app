@@ -30,15 +30,15 @@ Der `AppService` ist die einzige Schnittstelle, die für die Entwicklung der Cli
 
 Initialisiert einen neuen `AppService` im `Locked`-Zustand. Erstellt eine `FileStorage`-Instanz für den angegebenen Pfad. Das Verzeichnis wird bei Bedarf erstellt.
 
-**`pub fn create_profile(mnemonic: &str, user_prefix: Option<&str>, password: &str) -> Result<(), String>`**
+**`pub fn create_profile(mnemonic: &str, passphrase: Option<&str>, user_prefix: Option<&str>, password: &str) -> Result<(), String>`**
 
-Erstellt ein komplett neues Benutzerprofil und Wallet und speichert es verschlüsselt. `mnemonic` und `password` sind obligatorisch. Ein optionales `user_prefix` kann für die Erstellung der DID verwendet werden. Der Service wird bei Erfolg in den `Unlocked`-Zustand versetzt.
+Erstellt ein komplett neues Benutzerprofil und Wallet und speichert es verschlüsselt. `mnemonic` und `password` sind obligatorisch. Eine optionale `passphrase` kann zur weiteren Absicherung der Schlüsselableitung verwendet werden. Ein optionales `user_prefix` kann für die Erstellung der DID verwendet werden. Der Service wird bei Erfolg in den `Unlocked`-Zustand versetzt.
 
 **`pub fn login(password: &str) -> Result<(), String>`**
 
 Entsperrt ein existierendes Wallet mit dem `password` und lädt es in den Speicher.
 
-**`pub fn recover_wallet_and_set_new_password(mnemonic: &str, new_password: &str) -> Result<(), String>`**
+**`pub fn recover_wallet_and_set_new_password(mnemonic: &str, passphrase: Option<&str>, new_password: &str) -> Result<(), String>`**
 
 Stellt ein Wallet mithilfe der Mnemonic-Phrase wieder her und setzt ein neues Passwort. Diese Funktion ist für den Fall vorgesehen, dass ein Benutzer sein Passwort vergessen hat. Bei Erfolg wird der Service in den `Unlocked`-Zustand versetzt.
 
