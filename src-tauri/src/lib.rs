@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
+use bip39::Language;
 
 use log::{error, info};
 use tauri_plugin_log::{Builder as LogBuilder, log::LevelFilter, Target, TargetKind};
@@ -29,8 +30,15 @@ fn generate_mnemonic(word_count: u32) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn validate_mnemonic(mnemonic: String) -> Result<(), String> {
+    info!("Validating mnemonic...");
+    AppService::validate_mnemonic(&mnemonic)
+}
+
+#[tauri::command]
 fn create_profile(
     mnemonic: String,
+    passphrase: Option<String>,
     user_prefix: Option<String>,
     password: String,
     state: tauri::State<AppState>,
@@ -40,7 +48,7 @@ fn create_profile(
         user_prefix.as_deref().unwrap_or("none")
     );
     let mut service = state.0.lock().unwrap();
-    match service.create_profile(&mnemonic, user_prefix.as_deref(), &password) {
+    match service.create_profile(&mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password) {
         Ok(()) => {
             info!("Profile created successfully!");
             Ok(())
@@ -74,12 +82,13 @@ fn login(
 #[tauri::command]
 fn recover_wallet_and_set_new_password(
     mnemonic: String,
+    passphrase: Option<String>,
     new_password: String,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
     info!("Attempting to recover wallet and set new password...");
     let mut service = state.0.lock().unwrap();
-    match service.recover_wallet_and_set_new_password(&mnemonic, &new_password) {
+    match service.recover_wallet_and_set_new_password(&mnemonic, passphrase.as_deref(), &new_password) {
         Ok(()) => {
             info!("Wallet recovered and new password set successfully!");
             Ok(())
@@ -121,6 +130,12 @@ fn get_voucher_summaries(
     service.get_voucher_summaries()
 }
 
+#[tauri::command]
+fn get_bip39_wordlist() -> Vec<&'static str> {
+    info!("Fetching BIP-39 English wordlist for frontend.");
+    Language::English.word_list().iter().copied().collect()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let service = AppService::new(Path::new("./wallet_data")).expect("Failed to create AppService");
@@ -147,10 +162,12 @@ pub fn run() {
             logout,
             // Helpers
             generate_mnemonic,
+            validate_mnemonic,
             // Queries
             get_user_id,
             get_total_balance_by_currency,
-            get_voucher_summaries
+            get_voucher_summaries,
+            get_bip39_wordlist
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

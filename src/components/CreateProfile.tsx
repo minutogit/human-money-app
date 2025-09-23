@@ -1,44 +1,116 @@
 // src/components/CreateProfile.tsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, ChangeEvent, FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error } from "@tauri-apps/plugin-log";
 
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
-import { Textarea } from "./ui/Textarea";
 
+// Define the steps for the wizard
+type WizardStep = "display_seed" | "confirm_seed" | "set_password";
+
+// Define the structure for the confirmation words
+interface ConfirmationWord {
+    index: number;
+    value: string;
+}
 
 interface CreateProfileProps {
     onProfileCreated: () => void;
 }
+
 export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
-    const [generatedSeed, setGeneratedSeed] = useState("");
-    const [confirmationSeed, setConfirmationSeed] = useState("");
-    const [userPrefix, setUserPrefix] = useState("");
-    const [password, setPassword] = useState("");
-    const [confirmPassword, setConfirmPassword] = useState("");
+    const [wizardStep, setWizardStep] = useState<WizardStep>("display_seed");
+    const [generatedSeed, setGeneratedSeed] = useState<string[]>([]);
+    const [wordCount, setWordCount] = useState<12 | 24>(12);
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
 
+    // State for seed confirmation step
+    const [confirmationWords, setConfirmationWords] = useState<ConfirmationWord[]>([]);
+    const [userConfirmationInput, setUserConfirmationInput] = useState<{ [key: number]: string }>({});
+
+    // State for password step
+    const [passphrase, setPassphrase] = useState<string>("");
+    const [confirmPassphrase, setConfirmPassphrase] = useState<string>("");
+    const [userPrefix, setUserPrefix] = useState("");
+    const [password, setPassword] = useState("");
+    const [confirmPassword, setConfirmPassword] = useState("");
+
+    // --- Effects ---
+
     useEffect(() => {
-        async function initialGenerateSeed() {
+        // Generate a new seed phrase when the component mounts or word count changes.
+        async function generateNewSeed() {
+            setIsLoading(true);
+            setFeedbackMsg("Generating new secure seed phrase...");
             try {
-                const newSeed: string = await invoke("generate_mnemonic", { wordCount: 12 });
-                setGeneratedSeed(newSeed);
+                const newSeed: string = await invoke("generate_mnemonic", { wordCount });
+                setGeneratedSeed(newSeed.split(' '));
+                setFeedbackMsg("");
+                info("Frontend: A new seed phrase was generated.");
             } catch (e) {
-                const errorMsg = `Failed to generate initial seed phrase: ${e}`;
+                const errorMsg = `Failed to generate seed phrase: ${e}`;
                 setFeedbackMsg(`Error: ${errorMsg}`);
                 error(errorMsg);
+            } finally {
+                setIsLoading(false);
             }
         }
-        if (!generatedSeed) { initialGenerateSeed(); }
-    }, [generatedSeed]);
+        generateNewSeed();
+    }, [wordCount]);
 
-    async function createProfile() {
-        if (generatedSeed !== confirmationSeed) {
-            setFeedbackMsg("Error: The seed phrases do not match.");
-            return;
+
+    // --- Helper Functions ---
+
+    // Prepares the confirmation step by selecting random words
+    const prepareConfirmationStep = () => {
+        const shuffled = [...generatedSeed].map((word, index) => ({ word, index }));
+        shuffled.sort(() => 0.5 - Math.random()); // Shuffle indices
+        const selected = shuffled.slice(0, 3).map(item => ({ index: item.index, value: "" }));
+        selected.sort((a, b) => a.index - b.index); // Sort by index for user-friendly display
+        setConfirmationWords(selected);
+        setUserConfirmationInput({}); // Reset input
+        setFeedbackMsg("");
+        setWizardStep("confirm_seed");
+    };
+
+    // --- Event Handlers ---
+
+    async function handleGenerateNewSeed() {
+        // This is now handled by changing the wordCount, which triggers useEffect
+        // We'll reset the word count to itself to force a re-render if the user clicks it.
+        const currentCount = wordCount;
+        setWordCount(0 as any); // Temporarily set to an invalid value
+        setTimeout(() => setWordCount(currentCount), 0); // Then set it back
+    }
+
+    async function handleWordCountChange(event: ChangeEvent<HTMLSelectElement>) {
+        const newWordCount = parseInt(event.target.value, 10) as 12 | 24;
+        setWordCount(newWordCount);
+    }
+
+    const handleConfirmationInputChange = (index: number, value: string) => {
+        setUserConfirmationInput(prev => ({ ...prev, [index]: value.trim().toLowerCase() }));
+    };
+
+    const handleConfirmSeedSubmit = (e: FormEvent) => {
+        e.preventDefault();
+        for (const word of confirmationWords) {
+            if (userConfirmationInput[word.index] !== generatedSeed[word.index]) {
+                setFeedbackMsg("Error: One or more words are incorrect. Please check your saved seed phrase.");
+                return;
+            }
         }
+        setFeedbackMsg("Seed phrase confirmed successfully!");
+        setTimeout(() => {
+            setFeedbackMsg("");
+            setWizardStep("set_password");
+        }, 1500);
+    };
+
+    async function handleCreateProfileSubmit(e: FormEvent) {
+        e.preventDefault();
         if (password !== confirmPassword) {
             setFeedbackMsg("Error: The passwords do not match.");
             return;
@@ -47,13 +119,18 @@ export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
             setFeedbackMsg("Error: Password must be at least 8 characters long.");
             return;
         }
+        if (passphrase !== confirmPassphrase) {
+            setFeedbackMsg("Error: The passphrases do not match.");
+            return;
+        }
 
         setIsLoading(true);
         setFeedbackMsg("Creating profile, please wait...");
         try {
             await invoke("create_profile", {
-                mnemonic: generatedSeed,
-                userPrefix: userPrefix || null,
+                mnemonic: generatedSeed.join(' '),
+                passphrase: passphrase || undefined,
+                userPrefix: userPrefix || undefined,
                 password,
             });
             setFeedbackMsg("Profile successfully created!");
@@ -66,87 +143,128 @@ export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
         }
     }
 
-    async function handleGenerateNewSeed() {
-        setFeedbackMsg(""); // Clear previous messages
-        try {
-            const newSeed: string = await invoke("generate_mnemonic", { wordCount: 12 });
-            setGeneratedSeed(newSeed);
-            info("Frontend: A new seed phrase was generated by the user.");
-        } catch (e) {
-            const errorMessage = `Failed to generate new seed: ${e}`;
-            setFeedbackMsg(`Error: ${errorMessage}`);
-            error(`Frontend: ${errorMessage}`);
-        }
-    }
 
-    // Button is only disabled when loading or when there are validation errors
-    const isCreationDisabled = isLoading ||
-        (confirmationSeed !== "" && generatedSeed !== confirmationSeed) ||
-        (password !== "" && confirmPassword !== "" && password !== confirmPassword) ||
-        (password !== "" && password.length < 8);
+    // --- Render Logic ---
 
     const feedbackClass = feedbackMsg.includes("Error") ? "text-theme-error" : "text-theme-success";
 
-    return (
-        <div className="w-full h-full flex flex-col items-center justify-center">
-            <div className="w-full max-w-xl min-w-[380px] bg-bg-card shadow-2xl rounded-2xl p-8 space-y-6 border border-theme-subtle">
-                <div className="text-center">
-                    <h1 className="text-4xl font-extrabold text-theme-primary">Voucher Wallet</h1>
-                    <p className="text-lg text-theme-light mt-1">Create New Profile</p>
-                </div>
-
-                <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); createProfile(); }}>
-                    <div>
-                        <div className="flex justify-between items-center mb-1">
-                            <label className="block text-sm font-semibold text-theme-secondary">1. Your Seed Phrase (Save this securely!)</label>
-                            <button
-                                type="button"
-                                onClick={handleGenerateNewSeed}
-                                disabled={isLoading}
-                                className="px-3 py-1 text-xs font-semibold text-theme-primary border border-theme-primary rounded-md hover:bg-theme-primary hover:text-white transition-colors duration-150 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                Generate New
-                            </button>
+    const renderContent = () => {
+        switch (wizardStep) {
+            // STEP 1: Display Seed Phrase
+            case "display_seed":
+                return (
+                    <>
+                        <div className="text-center">
+                            <h2 className="text-2xl font-bold text-theme-primary">Step 1: Your Secret Seed Phrase</h2>
+                            <p className="text-theme-light mt-1">Write these words down in order and store them in a secure, offline location. This is the only way to recover your wallet.</p>
                         </div>
-                        <Textarea value={generatedSeed} readOnly rows={3} className="bg-bg-input-readonly" />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-semibold text-theme-secondary mb-1">2. Confirm Seed Phrase</label>
-                        <Textarea value={confirmationSeed} onChange={(e) => setConfirmationSeed(e.target.value)} placeholder="Type your 12 words again here." required rows={3} />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-semibold text-theme-secondary mb-1">3. Optional User Prefix</label>
-                        <div className="max-w-md mx-auto">
-                            <Input type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g., 'my_wallet' (can be left blank)" />
+                        <div className="my-4 p-4 border border-theme-error rounded-lg bg-red-500/10">
+                            <p className="font-bold text-center text-theme-error">WARNING: Never share this phrase with anyone. Anyone with this phrase can take your funds.</p>
                         </div>
-                    </div>
-
-                    <div className="border-t border-theme-light-border pt-5 space-y-5">
-                        <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">4. Password</label>
-                            <div className="max-w-md mx-auto">
-                                <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 8 characters" required />
-                            </div>
+                        <div className="grid grid-cols-3 gap-x-6 gap-y-3 my-6">
+                            {generatedSeed.map((word, index) => (
+                                <div key={index} className="text-theme-secondary font-mono">
+                                    <span className="text-sm text-theme-light mr-2">{index + 1}.</span>{word}
+                                </div>
+                            ))}
                         </div>
-                        <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">4. Confirm Password</label>
-                            <div className="max-w-md mx-auto">
-                                <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repeat your password" required />
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="pt-3 text-center">
-                        {feedbackMsg && <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>}
-                        <div className="flex justify-center">
-                            <Button type="submit" disabled={isCreationDisabled}>
-                                {isLoading ? "Creating Profile..." : "Create Profile"}
+                        <div className="flex justify-between items-center mt-4">
+                            <select value={wordCount} onChange={handleWordCountChange} className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary">
+                                <option value={12}>12 Words</option>
+                                <option value={24}>24 Words</option>
+                            </select>
+                            <Button type="button" onClick={prepareConfirmationStep} disabled={isLoading || generatedSeed.length === 0}>
+                                I've Saved My Seed Phrase
                             </Button>
                         </div>
-                    </div>
-                </form>
+                    </>
+                );
+
+            // STEP 2: Confirm Seed Phrase
+            case "confirm_seed":
+                return (
+                    <form onSubmit={handleConfirmSeedSubmit}>
+                        <div className="text-center">
+                            <h2 className="text-2xl font-bold text-theme-primary">Step 2: Confirm Your Seed Phrase</h2>
+                            <p className="text-theme-light mt-1">To ensure you saved it correctly, please enter the following words from your seed phrase.</p>
+                        </div>
+                        <div className="space-y-4 my-8">
+                            {confirmationWords.map(({ index }) => (
+                                <div key={index}>
+                                    <label className="block text-sm font-semibold text-theme-secondary mb-1">Word #{index + 1}</label>
+                                    <Input
+                                        type="text"
+                                        value={userConfirmationInput[index] || ""}
+                                        onChange={(e) => handleConfirmationInputChange(index, e.target.value)}
+                                        required
+                                        className="font-mono"
+                                        autoComplete="off"
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <Button type="button" variant="secondary" onClick={() => setWizardStep("display_seed")}>Back</Button>
+                            <Button type="submit">Confirm Seed</Button>
+                        </div>
+                    </form>
+                );
+
+            // STEP 3: Set Password
+            case "set_password":
+                return (
+                    <form onSubmit={handleCreateProfileSubmit} className="space-y-5">
+                        <div className="text-center">
+                            <h2 className="text-2xl font-bold text-theme-primary">Step 3: Secure Your Wallet</h2>
+                            <p className="text-theme-light mt-1">Create a strong password to encrypt your wallet on this device.</p>
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
+                            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 8 characters" required />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Password</label>
+                            <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repeat your password" required />
+                        </div>
+
+                        <div className="border-t border-theme-light-border pt-5 space-y-5">
+                            <div>
+                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (Advanced)</label>
+                                <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Adds extra security to your seed" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Optional Passphrase</label>
+                                <Input type="password" value={confirmPassphrase} onChange={(e) => setConfirmPassphrase(e.target.value)} placeholder="Repeat your passphrase" />
+                                <p className="text-xs text-theme-light mt-1">Warning: If you forget this passphrase, your seed phrase alone will not be enough to recover your wallet.</p>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Optional User Prefix</label>
+                                <Input type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g., 'my_wallet' (can be left blank)" />
+                            </div>
+                        </div>
+
+                        <div className="flex justify-center pt-3">
+                            <Button type="submit" disabled={isLoading}>
+                                {isLoading ? "Creating Profile..." : "Create & Encrypt Profile"}
+                            </Button>
+                        </div>
+                    </form>
+                );
+        }
+    };
+
+    return (
+        <div className="w-full h-full flex flex-col items-center justify-center">
+            <div className="w-full max-w-xl min-w-[420px] bg-bg-card shadow-2xl rounded-2xl p-8 border border-theme-subtle">
+                <div className="text-center mb-6">
+                    <h1 className="text-4xl font-extrabold text-theme-primary">Voucher Wallet</h1>
+                    <p className="text-lg text-theme-light mt-1">Create a New Profile</p>
+                </div>
+
+                {renderContent()}
+
+                {feedbackMsg && <p className={`text-center text-sm font-medium mt-4 ${feedbackClass}`}>{feedbackMsg}</p>}
             </div>
         </div>
     );

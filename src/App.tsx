@@ -2,13 +2,13 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { error } from "@tauri-apps/plugin-log";
-import { CreateProfile } from "./components/CreateProfile";
+import { CreateProfile } from "./components/CreateProfile"; 
 import { Dashboard } from "./components/Dashboard";
-import { PasswordReset } from "./components/PasswordReset";
+import { WalletRecovery } from "./components/WalletRecovery";
 import { Login } from "./components/Login";
 import "./App.css";
 
-type AppState = "loading" | "needs_profile" | "needs_login" | "logged_in" | "needs_reset";
+type AppState = "loading" | "needs_profile" | "needs_login" | "logged_in" | "needs_recovery";
 
 function App() {
     const [appState, setAppState] = useState<AppState>("loading");
@@ -44,11 +44,11 @@ function App() {
             case "needs_profile":
                 return <CreateProfile onProfileCreated={() => setAppState("logged_in")} />;
             case "needs_login":
-                return <Login onLoginSuccess={() => setAppState("logged_in")} onSwitchToCreate={() => setAppState("needs_profile")} onSwitchToReset={() => setAppState("needs_reset")} />;
+                return <Login onLoginSuccess={() => setAppState("logged_in")} onSwitchToCreate={() => setAppState("needs_profile")} onSwitchToReset={() => setAppState("needs_recovery")} />;
             case "logged_in":
                 return <Dashboard />;
-            case "needs_reset":
-                return <PasswordReset onResetSuccess={() => setAppState("logged_in")} onSwitchToLogin={() => setAppState("needs_login")} />;
+            case "needs_recovery":
+                return <WalletRecovery onRecoverySuccess={() => setAppState("logged_in")} onSwitchToLogin={() => setAppState("needs_login")} />;
             default:
                 return (
                     <div className="flex h-full w-full items-center justify-center">
