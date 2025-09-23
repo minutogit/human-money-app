@@ -1,18 +1,52 @@
 // src-tauri/src/lib.rs
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
-use std::collections::HashMap;
+ 
+use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
+ 
 use bip39::Language;
-
 use log::{error, info};
+use serde::{Deserialize, Serialize};
+use fs_extra::dir::{copy as copy_dir, CopyOptions};
+use std::collections::HashMap;
+use tauri::Manager;
 use tauri_plugin_log::{Builder as LogBuilder, log::LevelFilter, Target, TargetKind};
 use voucher_lib::app_service::AppService;
+use voucher_lib::models::voucher::Voucher;
+use voucher_lib::services::voucher_manager::NewVoucherData;
 use voucher_lib::wallet::VoucherSummary;
 
 pub struct AppState(Mutex<AppService>);
+
+// A local struct that mirrors `voucher_lib::...::NewVoucherData` but derives `Deserialize`.
+// This is necessary because Tauri needs to deserialize the JSON payload from the frontend,
+// and we cannot add `#[derive(Deserialize)]` to the original struct in the upstream library.
+#[derive(Deserialize)]
+struct NominalValueData {
+    amount: String,
+    unit: String,
+}
+
+#[derive(Deserialize)]
+struct FrontendCreatorData {
+    first_name: String,
+    last_name: String,
+}
+
+#[derive(Deserialize)]
+struct FrontendNewVoucherData {
+    nominal_value: NominalValueData,
+    creator: FrontendCreatorData,
+    validity_duration: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct VoucherStandardInfo {
+    id: String,
+    content: String,
+}
 
 #[tauri::command]
 fn profile_exists() -> bool {
@@ -131,6 +165,113 @@ fn get_voucher_summaries(
 }
 
 #[tauri::command]
+fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandardInfo>, String> {
+    info!("Ensuring voucher standards are available in app data directory...");
+
+    // 1. Define paths. We map the `tauri::Error` to a `String` to match the function's error type.
+    let app_data_dir = app.path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+    let standards_dir_in_data = app_data_dir.join("voucher_standards");
+
+    // 2. "First Run" Logic: If the standards directory doesn't exist in the user's data folder, copy it from the app bundle.
+    if !standards_dir_in_data.exists() {
+        info!("First run detected or standards directory missing. Copying default standards...");
+        fs::create_dir_all(&standards_dir_in_data)
+            .map_err(|e| format!("Failed to create standards directory in app data: {}", e))?;
+
+        // In debug mode, we point directly to the source directory.
+        // In release mode, we use the bundled resource path.
+        #[cfg(debug_assertions)]
+        let resource_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../voucher_standards");
+        #[cfg(not(debug_assertions))]
+        let resource_path = app.path()
+            .resolve("voucher_standards", tauri::path::BaseDirectory::Resource)
+            .map_err(|e| format!("Failed to resolve resource path: {}", e))?;
+
+        // Use the robust `fs_extra` library to copy the directory contents.
+        // The destination is the parent (`app_data_dir`), and `fs_extra` will place
+        // the `voucher_standards` folder inside it.
+        let mut options = CopyOptions::new();
+        options.overwrite = true;
+        copy_dir(resource_path, &app_data_dir, &options)
+            .map_err(|e| format!("Failed to copy standards from resources to app data: {}", e))?;
+        info!("Default standards copied successfully.");
+    }
+
+    // 3. Read standards from the user's app data directory
+    info!("Reading voucher standards from: {}", standards_dir_in_data.display());
+    let mut standards = Vec::new();
+    match fs::read_dir(&standards_dir_in_data) {
+        Ok(entries) => {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let path = entry.path();
+                    info!("[Debug] Checking entry: {}", path.display());
+                    if path.is_dir() {
+                        info!("[Debug]  -> Is a directory. Checking for standard.toml...");
+                        let standard_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        let toml_path = path.join("standard.toml");
+                        if toml_path.exists() {
+                            info!("[Debug]  -> Found standard.toml. Adding standard '{}'", standard_id);
+                            let content = fs::read_to_string(&toml_path)
+                                .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
+                            standards.push(VoucherStandardInfo {
+                                id: standard_id,
+                                content,
+                            });
+                        } else {
+                            info!("[Debug]  -> Skipping directory '{}' as it does not contain standard.toml", standard_id);
+                        }
+                    } else {
+                        info!("[Debug]  -> Skipping entry as it is not a directory.");
+                    }
+                }
+            }
+        }
+        Err(e) => return Err(format!("Failed to read standards directory '{}': {}", standards_dir_in_data.display(), e)),
+    };
+
+    info!("Found {} voucher standards.", standards.len());
+    Ok(standards)
+}
+
+#[tauri::command]
+fn create_new_voucher(
+    standard_toml_content: String,
+    data: FrontendNewVoucherData,
+    password: String,
+    state: tauri::State<AppState>,
+) -> Result<Voucher, String> {
+    info!("Attempting to create a new voucher...");
+    let mut service = state.0.lock().unwrap();
+    // For the prototype, language preference is hardcoded.
+    let lang_preference = "en-US";
+
+    // Get the current user's ID to use as the creator ID. This fixes the "Invalid creator ID" error.
+    let user_id = service.get_user_id()?;
+
+    // Convert the frontend data struct to the library's data struct
+    let voucher_data = NewVoucherData {
+        nominal_value: voucher_lib::models::voucher::NominalValue {
+            amount: data.nominal_value.amount,
+            unit: data.nominal_value.unit,
+            ..Default::default() // Fill other fields with default values
+        },
+        creator: voucher_lib::models::voucher::Creator {
+            id: user_id, 
+            first_name: data.creator.first_name,
+            last_name: data.creator.last_name,
+            ..Default::default()
+        },
+        validity_duration: data.validity_duration,
+        ..Default::default() // Fill other fields with default values
+    };
+
+    service.create_new_voucher(&standard_toml_content, lang_preference, voucher_data, &password)
+}
+ 
+#[tauri::command]
 fn get_bip39_wordlist() -> Vec<&'static str> {
     info!("Fetching BIP-39 English wordlist for frontend.");
     Language::English.word_list().iter().copied().collect()
@@ -167,7 +308,9 @@ pub fn run() {
             get_user_id,
             get_total_balance_by_currency,
             get_voucher_summaries,
-            get_bip39_wordlist
+            get_bip39_wordlist,
+            get_voucher_standards,
+            create_new_voucher
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

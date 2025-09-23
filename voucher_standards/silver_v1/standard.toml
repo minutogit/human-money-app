@@ -1,0 +1,58 @@
+[metadata]
+abbreviation = "Oz"
+documentation_url = "https://example.com/silver-standard-docs"
+homepage_url = "https://example.com/silver-standard-infos"
+issuer_name = "Silber Standard Council"
+keywords = [
+    "asset-backed",
+    "silver",
+    "precious-metal",
+    "payment",
+]
+name = "Silber-Umlauf-Gutschein"
+uuid = "SILVER-PAYMENT-V1-2025-09"
+
+[template.default]
+default_validity_duration = "P5Y"
+
+[template.fixed]
+footnote = "Besichert durch physisch hinterlegtes Silber."
+is_divisible = true
+is_summable = true
+primary_redemption_type = "goods_or_services"
+
+[template.fixed.collateral]
+description = "Der Gutschein ist durch die entsprechende Menge an physischem Silber besichert."
+redeem_condition = "Nur in Notfällen einlösbar, wenn der Aussteller die versprochene Leistung nicht erbringen kann."
+type = "Physisches Edelmetall"
+
+[[template.fixed.description]]
+lang = "de"
+text = "Dieser Gutschein dient als Zahlungsmittel für Waren oder Dienstleistungen im Wert von {{amount}} Unzen Silber."
+
+[[template.fixed.description]]
+lang = "en"
+text = "This voucher serves as a means of payment for goods or services worth {{amount}} ounces of silver."
+
+[template.fixed.guarantor_info]
+description = "Keine Bürgen erforderlich."
+needed_count = 0
+
+[template.fixed.nominal_value]
+unit = "Unzen"
+
+[validation]
+[validation.behavior_rules]
+allowed_t_types = [
+    "init",
+    "split",
+    "transfer",
+]
+amount_decimal_places = 4
+
+[signature]
+# Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält. asdf
+issuer_id = "did:key:z6Mkoim7ZGcaKdoeD41USV5gmxfiVXXiPDeYt4T9rnEB5zfM"
+
+# Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).
+signature = "3qDAyeqA6iY9qXQMmTRvkh36YSrtPcrAE4M7UM44eo8QcUSBH9iUR1MD6P3QGntwgjugQEARxp4ZdkL6gar1gG7X"

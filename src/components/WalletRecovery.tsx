@@ -1,5 +1,5 @@
 // src/components/WalletRecovery.tsx
-import { useState, useEffect, ChangeEvent, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error } from "@tauri-apps/plugin-log";
 import { Button } from "./ui/Button";

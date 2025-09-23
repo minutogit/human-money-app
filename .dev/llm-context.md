@@ -68,11 +68,11 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 │   │   ├── CreateProfile.tsx
 │   │   ├── Dashboard.tsx
 │   │   ├── Login.tsx
-│   │   ├── PasswordReset.tsx
-│   │   └── ui
-│   │       ├── Button.tsx
-│   │       ├── Input.tsx
-│   │       └── Textarea.tsx
+│   │   ├── ui
+│   │   │   ├── Button.tsx
+│   │   │   ├── Input.tsx
+│   │   │   └── Textarea.tsx
+│   │   └── WalletRecovery.tsx
 │   ├── main.tsx
 │   ├── types.ts
 │   └── vite-env.d.ts
@@ -94,7 +94,12 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 ├── .taurignore
 ├── tsconfig.json
 ├── tsconfig.node.json
-└── vite.config.ts
+├── vite.config.ts
+└── voucher_standards
+    ├── minuto_v1
+    │   └── standard.toml
+    └── silver_v1
+        └── standard.toml
 ```
 
 **6. Implementierte Kernfunktionen**

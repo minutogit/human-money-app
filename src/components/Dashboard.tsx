@@ -6,7 +6,11 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Button } from "./ui/Button";
 import { VoucherSummary } from "../types";
 
-export function Dashboard() {
+interface DashboardProps {
+    onNavigateToCreateVoucher: () => void;
+}
+
+export function Dashboard({ onNavigateToCreateVoucher }: DashboardProps) {
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<Record<string, string>>({});
     const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
@@ -48,6 +52,18 @@ export function Dashboard() {
         }
     }
 
+    // Helper function to safely render the voucher status
+    function renderVoucherStatus(status: string | object): string {
+        if (typeof status === 'string') {
+            return status;
+        }
+        if (typeof status === 'object' && status !== null) {
+            // Returns the key of the status object, e.g., "Incomplete"
+            return Object.keys(status)[0] || 'unknown';
+        }
+        return 'unknown';
+    }
+
     const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Lade...";
 
     return (
@@ -83,6 +99,7 @@ export function Dashboard() {
             <section className="flex justify-center gap-6 mb-8">
                 <Button className="flex-1">Send</Button>
                 <Button className="flex-1">Receive</Button>
+                <Button onClick={onNavigateToCreateVoucher} className="flex-1" variant="outline">Create Voucher</Button>
             </section>
 
             {/* Gutschein-Liste */}
@@ -95,8 +112,8 @@ export function Dashboard() {
                                 <p className="font-mono font-semibold text-theme-secondary">{v.amount} {v.currency}</p>
                                 <p className="text-xs text-theme-light font-mono">ID: {v.local_id}</p>
                             </div>
-                            <span className={`px-2 py-1 text-xs font-bold rounded-full ${v.status === 'active' ? 'text-green-800 bg-green-200' : 'text-gray-800 bg-gray-200'}`}>
-                                {v.status}
+                            <span className={`px-2 py-1 text-xs font-bold rounded-full capitalize ${renderVoucherStatus(v.status) === 'active' ? 'text-green-800 bg-green-200' : 'text-gray-800 bg-gray-200'}`}>
+                                {renderVoucherStatus(v.status)}
                             </span>
                         </div>
                     )) : <p className="text-center text-theme-light py-4">No vouchers found.</p>}
