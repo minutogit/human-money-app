@@ -42,3 +42,62 @@ export interface NewVoucherData {
     creator: CreatorData;
     validity_duration: string | null;
 }
+
+/**
+ * Represents the full, detailed structure of a voucher.
+ * Matches the Rust struct `VoucherDetails` (and by extension, `Voucher`).
+ */
+export interface VoucherDetails {
+    voucher_standard: {
+        name: string;
+        uuid: string;
+        standard_definition_hash: string;
+    };
+    voucher_id: string;
+    voucher_nonce: string;
+    description: string;
+    primary_redemption_type: string;
+    divisible: boolean;
+    creation_date: string; // ISO 8601
+    valid_until: string | null; // ISO 8601
+    standard_minimum_issuance_validity: string | null;
+    non_redeemable_test_voucher: boolean;
+    nominal_value: {
+        unit: string;
+        amount: string;
+    };
+    creator: {
+        id: string;
+        first_name: string;
+        last_name: string;
+        signature: string;
+    };
+    guarantor_requirements_description: string;
+    footnote: string;
+    guarantor_signatures: GuarantorSignature[];
+    needed_guarantors: number;
+    transactions: Transaction[];
+}
+
+export interface GuarantorSignature {
+    voucher_id: string;
+    signature_id: string;
+    guarantor_id: string;
+    first_name: string;
+    last_name: string;
+    gender: string;
+    signature: string;
+    signature_time: string; // ISO 8601
+}
+
+export interface Transaction {
+    t_id: string;
+    t_type: 'init' | 'split' | 'transfer' | 'merge_credit';
+    t_time: string; // ISO 8601
+    sender_id: string;
+    recipient_id: string;
+    amount: string;
+    sender_remaining_amount?: string;
+    sender_signature: string;
+    prev_hash: string;
+}

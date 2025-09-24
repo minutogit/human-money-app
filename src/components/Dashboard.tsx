@@ -1,16 +1,16 @@
 // src/components/Dashboard.tsx
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { info, error } from "@tauri-apps/plugin-log";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Button } from "./ui/Button";
 import { VoucherSummary } from "../types";
 
 interface DashboardProps {
     onNavigateToCreateVoucher: () => void;
+    onShowDetails: (voucherId: string) => void;
 }
 
-export function Dashboard({ onNavigateToCreateVoucher }: DashboardProps) {
+export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: DashboardProps) {
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<Record<string, string>>({});
     const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
@@ -20,7 +20,7 @@ export function Dashboard({ onNavigateToCreateVoucher }: DashboardProps) {
     useEffect(() => {
         async function fetchData() {
             try {
-                info("Dashboard: Fetching data from backend.");
+                console.log("Dashboard: Fetching data from backend.");
                 const [id, balanceMap, voucherList] = await Promise.all([
                     invoke<string>("get_user_id"),
                     invoke<Record<string, string>>("get_total_balance_by_currency"),
@@ -29,10 +29,10 @@ export function Dashboard({ onNavigateToCreateVoucher }: DashboardProps) {
                 setUserId(id);
                 setBalances(balanceMap);
                 setVouchers(voucherList);
-                info("Dashboard: Data successfully fetched.");
+                console.log("Dashboard: Data successfully fetched.");
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${e}`;
-                error(msg);
+                console.error(msg);
                 setFeedbackMsg(`Error: ${msg}`);
             }
         }
@@ -47,7 +47,7 @@ export function Dashboard({ onNavigateToCreateVoucher }: DashboardProps) {
             setTimeout(() => setCopyFeedback(""), 2000); // Reset feedback after 2s
         } catch (e) {
             const msg = `Failed to copy User ID: ${e}`;
-            error(msg);
+            console.error(msg);
             setFeedbackMsg(`Error: ${msg}`);
         }
     }
@@ -131,7 +131,11 @@ export function Dashboard({ onNavigateToCreateVoucher }: DashboardProps) {
                     {vouchers.length > 0 ? vouchers.map(v => {
                         const status = getVoucherStatus(v.status);
                         return (
-                            <div key={v.local_instance_id} className="bg-card rounded-lg border border-theme-subtle shadow-sm p-4 space-y-3">
+                            <button 
+                                key={v.local_instance_id} 
+                                onClick={() => onShowDetails(v.local_instance_id)}
+                                className="w-full text-left bg-card rounded-lg border border-theme-subtle shadow-sm p-4 space-y-3 transition-all duration-200 ease-in-out hover:shadow-md hover:border-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary focus:ring-opacity-50"
+                            >
                                 {/* Header: Amount and Status */}
                                 <div className="flex justify-between items-start">
                                     <div>
@@ -170,7 +174,7 @@ export function Dashboard({ onNavigateToCreateVoucher }: DashboardProps) {
                                         <span title="Additional Signatures">➕ {v.additional_signatures_count}</span>
                                     </div>
                                 </div>
-                            </div>
+                            </button>
                         );
                     }) : (
                         <div className="text-center text-theme-light py-8 bg-card rounded-lg border border-theme-subtle">

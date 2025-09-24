@@ -9,10 +9,19 @@ import { Login } from "./components/Login";
 import { CreateVoucher } from "./components/CreateVoucher";
 import "./App.css";
  
-type AppState = "loading" | "needs_profile" | "needs_login" | "logged_in" | "needs_recovery" | "create_voucher";
+import { VoucherDetailsView } from "./components/VoucherDetailsView";
+
+type AppState =
+    | { view: "loading" }
+    | { view: "needs_profile" }
+    | { view: "needs_login" }
+    | { view: "logged_in" }
+    | { view: "needs_recovery" }
+    | { view: "create_voucher" }
+    | { view: "voucher_details"; voucherId: string };
 
 function App() {
-    const [appState, setAppState] = useState<AppState>("loading");
+    const [appState, setAppState] = useState<AppState>({ view: "loading" });
     const [isSidebarOpen, setSidebarOpen] = useState(false);
 
     useEffect(() => {
@@ -22,10 +31,10 @@ function App() {
         async function checkProfile() {
             try {
                 const exists = await invoke<boolean>("profile_exists");
-                setAppState(exists ? "needs_login" : "needs_profile");
+                setAppState({ view: exists ? "needs_login" : "needs_profile" });
             } catch (e) {
                 error(`Failed to check if profile exists: ${e}`);
-                setAppState("needs_profile");
+                setAppState({ view: "needs_profile" });
             }
         }
         checkProfile();
@@ -34,11 +43,11 @@ function App() {
     function handleLogout() {
         invoke("logout").catch(e => error(`Logout failed: ${e}`));
         setSidebarOpen(false);
-        setAppState("needs_login");
+        setAppState({ view: "needs_login" });
     }
 
     function renderContent() {
-        switch (appState) {
+        switch (appState.view) {
             case "loading":
                 return (
                     <div className="flex h-full w-full items-center justify-center">
@@ -46,16 +55,24 @@ function App() {
                     </div>
                 );
             case "needs_profile":
-                return <CreateProfile onProfileCreated={() => setAppState("logged_in")} />;
+                return <CreateProfile onProfileCreated={() => setAppState({ view: "logged_in" })} />;
             case "needs_login":
-                return <Login onLoginSuccess={() => setAppState("logged_in")} onSwitchToCreate={() => setAppState("needs_profile")} onSwitchToReset={() => setAppState("needs_recovery")} />;
+                return <Login onLoginSuccess={() => setAppState({ view: "logged_in" })} onSwitchToCreate={() => setAppState({ view: "needs_profile" })} onSwitchToReset={() => setAppState({ view: "needs_recovery" })} />;
             case "logged_in":
-                return <Dashboard onNavigateToCreateVoucher={() => setAppState("create_voucher")} />;
+                return <Dashboard 
+                    onNavigateToCreateVoucher={() => setAppState({ view: "create_voucher" })} 
+                    onShowDetails={(voucherId) => setAppState({ view: "voucher_details", voucherId })}
+                />;
             case "needs_recovery":
-                return <WalletRecovery onRecoverySuccess={() => setAppState("logged_in")} onSwitchToLogin={() => setAppState("needs_login")} />;
+                return <WalletRecovery onRecoverySuccess={() => setAppState({ view: "logged_in" })} onSwitchToLogin={() => setAppState({ view: "needs_login" })} />;
             case "create_voucher":
-                return <CreateVoucher onVoucherCreated={() => setAppState("logged_in")} onCancel={() => setAppState("logged_in")} />;
- default:
+                return <CreateVoucher onVoucherCreated={() => setAppState({ view: "logged_in" })} onCancel={() => setAppState({ view: "logged_in" })} />;
+            case "voucher_details":
+                return <VoucherDetailsView 
+                    voucherId={appState.voucherId} 
+                    onBack={() => setAppState({ view: "logged_in" })}
+                />
+            default:
                 return (
                     <div className="flex h-full w-full items-center justify-center">
                         <p className="text-theme-error">Error: Invalid application state.</p>
@@ -66,7 +83,7 @@ function App() {
 
     return (
         <div className="flex h-screen w-full bg-bg-app font-sans text-theme-secondary overflow-hidden">
-            {appState === "logged_in" && (
+            {appState.view === "logged_in" && (
                 <>
                     {/* Adding 'will-change-transform' fixes the rendering bug with animations */}
                     <aside
@@ -105,7 +122,7 @@ function App() {
 
             {/* Main content area */}
             <div className="flex flex-1 flex-col overflow-y-auto">
-                {appState === "logged_in" && (
+                {appState.view === "logged_in" && (
                     <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-theme-subtle bg-card px-4 shadow-sm md:hidden">
                         <button
                             onClick={() => setSidebarOpen(true)}

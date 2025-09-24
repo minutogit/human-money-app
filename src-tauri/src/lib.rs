@@ -16,7 +16,7 @@ use tauri_plugin_log::{Builder as LogBuilder, log::LevelFilter, Target, TargetKi
 use voucher_lib::app_service::AppService;
 use voucher_lib::models::voucher::Voucher;
 use voucher_lib::services::voucher_manager::NewVoucherData;
-use voucher_lib::wallet::VoucherSummary;
+use voucher_lib::wallet::{VoucherDetails, VoucherSummary};
 
 pub struct AppState(Mutex<AppService>);
 
@@ -162,6 +162,15 @@ fn get_voucher_summaries(
 ) -> Result<Vec<VoucherSummary>, String> {
     let service = state.0.lock().unwrap();
     service.get_voucher_summaries(None, None)
+}
+
+#[tauri::command]
+fn get_voucher_details(
+    local_id: String,
+    state: tauri::State<AppState>,
+) -> Result<Voucher, String> {
+    let service = state.0.lock().unwrap();
+    service.get_voucher_details(&local_id).map(|details| details.voucher)
 }
 
 #[tauri::command]
@@ -313,6 +322,7 @@ pub fn run() {
             get_user_id,
             get_total_balance_by_currency,
             get_voucher_summaries,
+            get_voucher_details,
             get_bip39_wordlist,
             get_voucher_standards,
             create_new_voucher,

@@ -33,19 +33,14 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
 
     useEffect(() => {
         async function fetchDetails() {
-            // Log to Rust terminal that we're fetching details
-            invoke("frontend_log", { message: `VoucherDetailsView: Fetching details for voucherId: ${voucherId}` }).catch(console.error);
+            // Debug logging to Rust terminal
             setIsLoading(true);
             setErrorMsg("");
             try {
                 const result = await invoke<VoucherDetails>("get_voucher_details", { localId: voucherId });
-                // Log to Rust terminal the result we received
-                invoke("frontend_log", { message: `VoucherDetailsView: Received result for voucherId: ${voucherId}, hasDetails: ${!!result}` }).catch(console.error);
                 setDetails(result);
             } catch (e) {
                 const msg = `Failed to fetch voucher details: ${e}`;
-                // Log error to Rust terminal
-                invoke("frontend_log", { message: `VoucherDetailsView: Error details for voucherId: ${voucherId}, error: ${e}` }).catch(console.error);
                 setErrorMsg(msg);
             } finally {
                 setIsLoading(false);
