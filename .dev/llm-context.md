@@ -116,3 +116,16 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 * **Backend (src-tauri/)**
   * `src/lib.rs`: Hauptdatei mit allen Tauri-Befehlen, die die `voucher_lib::AppService`-Fassade nutzen
   * `src/main.rs`: Einstiegspunkt, der die `run()`-Funktion aus `lib.rs` aufruft
+
+**7. Logging**
+
+* **Frontend Logging:** Zum Debuggen von Frontend-Komponenten kann ein spezieller Logging-Befehl verwendet werden, der Logs direkt in das Rust-Terminal sendet:
+  * In der Komponente: `invoke("frontend_log", { message: "Deine Log-Nachricht" }).catch(console.error);`
+  * Dieser Befehl ruft eine spezielle Funktion im Rust-Backend auf, die die Nachricht mit dem Rust-Logger ausgibt und somit im Terminal sichtbar macht.
+  * Beispiel:
+    ```typescript
+    useEffect(() => {
+        invoke("frontend_log", { message: "Komponente wurde geladen" }).catch(console.error);
+        // Deine Logik hier
+    }, []);
+    ```

@@ -1,7 +1,7 @@
 // src/App.tsx
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { error } from "@tauri-apps/plugin-log";
+import { error, info } from "@tauri-apps/plugin-log";
 import { CreateProfile } from "./components/CreateProfile";
 import { Dashboard } from "./components/Dashboard";
 import { WalletRecovery } from "./components/WalletRecovery";
@@ -16,6 +16,9 @@ function App() {
     const [isSidebarOpen, setSidebarOpen] = useState(false);
 
     useEffect(() => {
+        // Log that the frontend application is starting
+        invoke("frontend_log", { message: "Frontend application starting, initializing profile check..." }).catch(console.error);
+
         async function checkProfile() {
             try {
                 const exists = await invoke<boolean>("profile_exists");

@@ -277,6 +277,11 @@ fn get_bip39_wordlist() -> Vec<&'static str> {
     Language::English.word_list().iter().copied().collect()
 }
 
+#[tauri::command]
+fn frontend_log(message: String) {
+    info!("{}", message);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let service = AppService::new(Path::new("./wallet_data")).expect("Failed to create AppService");
@@ -310,7 +315,9 @@ pub fn run() {
             get_voucher_summaries,
             get_bip39_wordlist,
             get_voucher_standards,
-            create_new_voucher
+            create_new_voucher,
+            // Logging
+            frontend_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
