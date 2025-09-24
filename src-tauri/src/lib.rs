@@ -4,7 +4,6 @@
 
 use chrono::Local;
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -17,30 +16,59 @@ use tauri_plugin_log::{log::LevelFilter, Builder as LogBuilder, Target, TargetKi
 use voucher_lib::app_service::AppService;
 use voucher_lib::models::voucher::Voucher;
 use voucher_lib::services::voucher_manager::NewVoucherData;
-use voucher_lib::wallet::VoucherSummary;
+use voucher_lib::wallet::{AggregatedBalance, VoucherSummary};
 
 pub struct AppState(Mutex<AppService>);
 
 // A local struct that mirrors `voucher_lib::...::NewVoucherData` but derives `Deserialize`.
 // This is necessary because Tauri needs to deserialize the JSON payload from the frontend,
 // and we cannot add `#[derive(Deserialize)]` to the original struct in the upstream library.
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct NominalValueData {
     amount: String,
     unit: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
+struct FrontendAddressData {
+    street: String,
+    house_number: String,
+    zip_code: String,
+    city: String,
+    country: String,
+    full_address: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct FrontendCollateralData {
+    amount: String,
+    unit: String,
+    abbreviation: String,
+}
+
+#[derive(Deserialize, Debug)]
 struct FrontendCreatorData {
     first_name: String,
     last_name: String,
+    address: FrontendAddressData,
+    organization: Option<String>,
+    community: Option<String>,
+    phone: Option<String>,
+    email: Option<String>,
+    url: Option<String>,
+    gender: String,
+    service_offer: Option<String>,
+    needs: Option<String>,
+    coordinates: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct FrontendNewVoucherData {
     nominal_value: NominalValueData,
     creator: FrontendCreatorData,
     validity_duration: Option<String>,
+    non_redeemable_test_voucher: bool,
+    collateral: FrontendCollateralData,
 }
 
 #[derive(Serialize, Clone)]
@@ -147,7 +175,7 @@ fn get_user_id(state: tauri::State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<HashMap<String, String>, String> {
+fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<Vec<AggregatedBalance>, String> {
     let service = state.0.lock().unwrap();
     service.get_total_balance_by_currency()
 }
@@ -254,16 +282,39 @@ fn create_new_voucher(
         nominal_value: voucher_lib::models::voucher::NominalValue {
             amount: data.nominal_value.amount,
             unit: data.nominal_value.unit,
-            ..Default::default() // Fill other fields with default values
+            ..Default::default()
+        },
+        collateral: voucher_lib::models::voucher::Collateral {
+            amount: data.collateral.amount,
+            unit: data.collateral.unit,
+            abbreviation: data.collateral.abbreviation,
+            ..Default::default()
         },
         creator: voucher_lib::models::voucher::Creator {
             id: user_id,
             first_name: data.creator.first_name,
             last_name: data.creator.last_name,
+            address: voucher_lib::models::voucher::Address {
+                street: data.creator.address.street,
+                house_number: data.creator.address.house_number,
+                zip_code: data.creator.address.zip_code,
+                city: data.creator.address.city,
+                country: data.creator.address.country,
+                full_address: data.creator.address.full_address,
+            },
+            organization: data.creator.organization,
+            community: data.creator.community,
+            phone: data.creator.phone,
+            email: data.creator.email,
+            url: data.creator.url,
+            gender: data.creator.gender,
+            service_offer: data.creator.service_offer,
+            needs: data.creator.needs,
+            coordinates: data.creator.coordinates,
             ..Default::default()
         },
         validity_duration: data.validity_duration,
-        ..Default::default() // Fill other fields with default values
+        non_redeemable_test_voucher: data.non_redeemable_test_voucher,
     };
 
     service.create_new_voucher(&standard_toml_content, lang_preference, voucher_data, &password)

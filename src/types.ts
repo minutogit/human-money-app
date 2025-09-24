@@ -25,6 +25,18 @@ export interface VoucherSummary {
     creator_first_name: string;
     creator_last_name: string;
     creator_coordinates: string;
+    non_redeemable_test_voucher: boolean;
+}
+
+/**
+ * Represents an aggregated balance for a specific voucher standard.
+ * Matches the Rust struct `AggregatedBalance`.
+ */
+export interface AggregatedBalance {
+    standard_name: string;
+    standard_uuid: string;
+    unit: string;
+    total_amount: string;
 }
 
 export interface VoucherStandardInfo {
@@ -32,16 +44,51 @@ export interface VoucherStandardInfo {
     content: string;
 }
 
+// NEU: Detaillierte Adress-Struktur
+export interface Address {
+    street: string;
+    house_number: string;
+    zip_code: string;
+    city: string;
+    country: string;
+    full_address: string; // Wird im Frontend konstruiert
+}
+
+// NEU: Detaillierte Ersteller-Struktur
 export interface CreatorData {
     first_name: string;
     last_name: string;
+    address: Address;
+    organization?: string;
+    community?: string;
+    phone?: string;
+    email?: string;
+    url?: string;
+    gender: string; // ISO 5218: 0=Not known, 1=Male, 2=Female, 9=Not applicable
+    service_offer?: string;
+    needs?: string;
+    coordinates: string; // z.B. "Breitengrad, Längengrad"
 }
 
-export interface NewVoucherData {
-    nominal_value: { amount: string; unit: string };
-    creator: CreatorData;
-    validity_duration: string | null;
+// NEU: Struktur für Besicherungsdaten
+export interface CollateralData {
+    amount: string;
+    unit: string;
+    abbreviation: string;
 }
+
+// AKTUALISIERT: Die vollständige Struktur für neue Gutscheindaten
+export interface NewVoucherData {
+    validity_duration: string | null;
+    non_redeemable_test_voucher: boolean;
+    nominal_value: {
+        amount: string;
+        unit: string; // Wird vom Prototyp fest auf "Minuto" gesetzt
+    };
+    collateral: CollateralData;
+    creator: CreatorData;
+}
+
 
 /**
  * Represents the full, detailed structure of a voucher.
