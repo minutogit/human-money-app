@@ -1,6 +1,7 @@
 // src/components/VoucherDetailsView.tsx
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { logger } from "../utils/log";
 import { VoucherDetails, Transaction, GuarantorSignature } from "../types";
 import { Button } from "./ui/Button";
 
@@ -32,6 +33,9 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
     const [showJson, setShowJson] = useState(false);
 
     useEffect(() => {
+        // Log when component is displayed
+        logger.info(`VoucherDetailsView component displayed for voucher ID: ${voucherId}`);
+        
         async function fetchDetails() {
             // Debug logging to Rust terminal
             setIsLoading(true);

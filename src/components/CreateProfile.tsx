@@ -2,6 +2,7 @@
 import { useState, useEffect, ChangeEvent, FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error } from "@tauri-apps/plugin-log";
+import { logger } from "../utils/log";
 
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -40,6 +41,9 @@ export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
     // --- Effects ---
 
     useEffect(() => {
+        // Log when component is displayed
+        logger.info("CreateProfile component displayed");
+        
         // Generate a new seed phrase when the component mounts or word count changes.
         async function generateNewSeed() {
             setIsLoading(true);

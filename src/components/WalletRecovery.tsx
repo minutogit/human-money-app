@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error } from "@tauri-apps/plugin-log";
+import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
@@ -33,6 +34,11 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     const [bip39Wordlist, setBip39Wordlist] = useState<string[]>([]);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const prevRawPhraseRef = useRef("");
+
+    // Log when component is displayed
+    useEffect(() => {
+        logger.info("WalletRecovery component displayed");
+    }, []);
 
     // Effect 1: Adjust mnemonicWords array size when wordCount changes
     useEffect(() => {

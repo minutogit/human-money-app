@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { error, info } from "@tauri-apps/plugin-log";
+import { logger } from "./utils/log";
 import { CreateProfile } from "./components/CreateProfile";
 import { Dashboard } from "./components/Dashboard";
 import { WalletRecovery } from "./components/WalletRecovery";
@@ -26,7 +27,7 @@ function App() {
 
     useEffect(() => {
         // Log that the frontend application is starting
-        invoke("frontend_log", { message: "Frontend application starting, initializing profile check..." }).catch(console.error);
+        logger.info("Frontend application starting, initializing profile check...");
 
         async function checkProfile() {
             try {

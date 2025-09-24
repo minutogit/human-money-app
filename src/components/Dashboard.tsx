@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { VoucherSummary } from "../types";
 
@@ -18,6 +19,9 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
     const [copyFeedback, setCopyFeedback] = useState("");
 
     useEffect(() => {
+        // Log when component is displayed
+        logger.info("Dashboard component displayed");
+        
         async function fetchData() {
             try {
                 console.log("Dashboard: Fetching data from backend.");

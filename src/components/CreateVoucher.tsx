@@ -2,6 +2,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { error, info } from "@tauri-apps/plugin-log";
+import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { NewVoucherData, VoucherStandardInfo } from "../types";
 
@@ -24,6 +25,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const [feedback, setFeedback] = useState<{ type: 'error' | 'success', msg: string } | null>(null);
 
     useEffect(() => {
+        // Log when component is displayed
+        logger.info("CreateVoucher component displayed");
+        
         async function fetchStandards() {
             try {
                 info("CreateVoucher: Fetching voucher standards.");

@@ -1,7 +1,8 @@
 // src/components/Login.tsx
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error } from "@tauri-apps/plugin-log";
+import { logger } from "../utils/log";
 
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -16,6 +17,11 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToReset }: Log
     const [password, setPassword] = useState("");
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
+
+    useEffect(() => {
+        // Log when component is displayed
+        logger.info("Login component displayed");
+    }, []);
 
     async function handleLogin() {
         if (!password) {

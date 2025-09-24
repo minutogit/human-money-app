@@ -1,22 +1,23 @@
 // src-tauri/src/lib.rs
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
- 
+
+use chrono::Local;
+use fs_extra::dir::{copy as copy_dir, CopyOptions};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
- 
+
 use bip39::Language;
-use log::{error, info};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use fs_extra::dir::{copy as copy_dir, CopyOptions};
-use std::collections::HashMap;
 use tauri::Manager;
-use tauri_plugin_log::{Builder as LogBuilder, log::LevelFilter, Target, TargetKind};
+use tauri_plugin_log::{log::LevelFilter, Builder as LogBuilder, Target, TargetKind, TimezoneStrategy};
 use voucher_lib::app_service::AppService;
 use voucher_lib::models::voucher::Voucher;
 use voucher_lib::services::voucher_manager::NewVoucherData;
-use voucher_lib::wallet::{VoucherDetails, VoucherSummary};
+use voucher_lib::wallet::VoucherSummary;
 
 pub struct AppState(Mutex<AppService>);
 
@@ -95,10 +96,7 @@ fn create_profile(
 }
 
 #[tauri::command]
-fn login(
-    password: String,
-    state: tauri::State<AppState>,
-) -> Result<(), String> {
+fn login(password: String, state: tauri::State<AppState>) -> Result<(), String> {
     info!("Attempting to login...");
     let mut service = state.0.lock().unwrap();
     match service.login(&password) {
@@ -149,26 +147,19 @@ fn get_user_id(state: tauri::State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn get_total_balance_by_currency(
-    state: tauri::State<AppState>,
-) -> Result<HashMap<String, String>, String> {
+fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<HashMap<String, String>, String> {
     let service = state.0.lock().unwrap();
     service.get_total_balance_by_currency()
 }
 
 #[tauri::command]
-fn get_voucher_summaries(
-    state: tauri::State<AppState>,
-) -> Result<Vec<VoucherSummary>, String> {
+fn get_voucher_summaries(state: tauri::State<AppState>) -> Result<Vec<VoucherSummary>, String> {
     let service = state.0.lock().unwrap();
     service.get_voucher_summaries(None, None)
 }
 
 #[tauri::command]
-fn get_voucher_details(
-    local_id: String,
-    state: tauri::State<AppState>,
-) -> Result<Voucher, String> {
+fn get_voucher_details(local_id: String, state: tauri::State<AppState>) -> Result<Voucher, String> {
     let service = state.0.lock().unwrap();
     service.get_voucher_details(&local_id).map(|details| details.voucher)
 }
@@ -178,9 +169,7 @@ fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandardInf
     info!("Ensuring voucher standards are available in app data directory...");
 
     // 1. Define paths. We map the `tauri::Error` to a `String` to match the function's error type.
-    let app_data_dir = app.path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let standards_dir_in_data = app_data_dir.join("voucher_standards");
 
     // 2. "First Run" Logic: If the standards directory doesn't exist in the user's data folder, copy it from the app bundle.
@@ -194,7 +183,8 @@ fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandardInf
         #[cfg(debug_assertions)]
         let resource_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../voucher_standards");
         #[cfg(not(debug_assertions))]
-        let resource_path = app.path()
+        let resource_path = app
+            .path()
             .resolve("voucher_standards", tauri::path::BaseDirectory::Resource)
             .map_err(|e| format!("Failed to resolve resource path: {}", e))?;
 
@@ -216,29 +206,28 @@ fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandardInf
             for entry in entries {
                 if let Ok(entry) = entry {
                     let path = entry.path();
-                    info!("[Debug] Checking entry: {}", path.display());
                     if path.is_dir() {
-                        info!("[Debug]  -> Is a directory. Checking for standard.toml...");
                         let standard_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                         let toml_path = path.join("standard.toml");
                         if toml_path.exists() {
-                            info!("[Debug]  -> Found standard.toml. Adding standard '{}'", standard_id);
                             let content = fs::read_to_string(&toml_path)
                                 .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
                             standards.push(VoucherStandardInfo {
                                 id: standard_id,
                                 content,
                             });
-                        } else {
-                            info!("[Debug]  -> Skipping directory '{}' as it does not contain standard.toml", standard_id);
                         }
-                    } else {
-                        info!("[Debug]  -> Skipping entry as it is not a directory.");
                     }
                 }
             }
         }
-        Err(e) => return Err(format!("Failed to read standards directory '{}': {}", standards_dir_in_data.display(), e)),
+        Err(e) => {
+            return Err(format!(
+                "Failed to read standards directory '{}': {}",
+                standards_dir_in_data.display(),
+                e
+            ))
+        }
     };
 
     info!("Found {} voucher standards.", standards.len());
@@ -268,7 +257,7 @@ fn create_new_voucher(
             ..Default::default() // Fill other fields with default values
         },
         creator: voucher_lib::models::voucher::Creator {
-            id: user_id, 
+            id: user_id,
             first_name: data.creator.first_name,
             last_name: data.creator.last_name,
             ..Default::default()
@@ -279,7 +268,7 @@ fn create_new_voucher(
 
     service.create_new_voucher(&standard_toml_content, lang_preference, voucher_data, &password)
 }
- 
+
 #[tauri::command]
 fn get_bip39_wordlist() -> Vec<&'static str> {
     info!("Fetching BIP-39 English wordlist for frontend.");
@@ -288,7 +277,18 @@ fn get_bip39_wordlist() -> Vec<&'static str> {
 
 #[tauri::command]
 fn frontend_log(message: String) {
-    info!("{}", message);
+    info!("[Frontend]: {}", message);
+}
+
+#[tauri::command]
+async fn log_to_backend(level: String, message: String) -> Result<(), String> {
+    match level.as_str() {
+        "info" => info!("[Frontend]: {}", message),
+        "warn" => warn!("[Frontend]: {}", message),
+        "error" => error!("[Frontend]: {}", message),
+        _ => info!("[Frontend, {level}]: {}", message),
+    }
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -298,11 +298,21 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(
             LogBuilder::default()
-                .targets([
-                    Target::new(TargetKind::Stdout),
-                    Target::new(TargetKind::Webview),
-                ])
+                .targets([Target::new(TargetKind::Stdout), Target::new(TargetKind::Webview)])
                 .level(LevelFilter::Info)
+                .timezone_strategy(TimezoneStrategy::UseLocal)
+                .format(move |out, message, record| {
+                    let now = Local::now();
+                    let date = now.format("%Y-%m-%d");
+                    let time = now.format("%H:%M:%S");
+                    out.finish(format_args!(
+                        "[{date}][{time}][{level}] {message}",
+                        date = date,
+                        time = time,
+                        level = record.level(),
+                        message = message
+                    ));
+                })
                 .build(),
         )
         .manage(AppState(Mutex::new(service)))
@@ -327,7 +337,8 @@ pub fn run() {
             get_voucher_standards,
             create_new_voucher,
             // Logging
-            frontend_log
+            frontend_log,
+            log_to_backend
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
