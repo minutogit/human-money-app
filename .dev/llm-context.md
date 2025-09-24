@@ -66,6 +66,7 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 │   │   └── react.svg
 │   ├── components
 │   │   ├── CreateProfile.tsx
+│   │   ├── CreateVoucher.tsx
 │   │   ├── Dashboard.tsx
 │   │   ├── Login.tsx
 │   │   ├── ui

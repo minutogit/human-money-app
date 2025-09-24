@@ -52,16 +52,38 @@ export function Dashboard({ onNavigateToCreateVoucher }: DashboardProps) {
         }
     }
 
-    // Helper function to safely render the voucher status
-    function renderVoucherStatus(status: string | object): string {
-        if (typeof status === 'string') {
-            return status;
+    // Helper function to extract and format the voucher status
+    function getVoucherStatus(status: object): { name: string; color: string } {
+        // Handle both simple string statuses (e.g., "Active") and object statuses (e.g., { Incomplete: ... })
+        const statusName = (typeof status === 'string' ? status : Object.keys(status)[0])?.toLowerCase() || 'unknown';
+        let color = 'text-gray-800 bg-gray-200'; // Default/Incomplete
+
+        switch (statusName) {
+            case 'active':
+                color = 'text-green-800 bg-green-200';
+                break;
+            case 'quarantined':
+                color = 'text-red-800 bg-red-200';
+                break;
+            case 'archived':
+                color = 'text-indigo-800 bg-indigo-200';
+                break;
         }
-        if (typeof status === 'object' && status !== null) {
-            // Returns the key of the status object, e.g., "Incomplete"
-            return Object.keys(status)[0] || 'unknown';
-        }
-        return 'unknown';
+        return { name: statusName, color: color };
+    }
+
+    // Helper function to format the date
+    function formatDate(isoString: string): string {
+        if (!isoString) return 'N/A';
+        return new Date(isoString).toLocaleDateString(undefined, {
+            year: 'numeric', month: 'short', day: 'numeric'
+        });
+    }
+
+    // Helper function to truncate text
+    function truncate(text: string, length: number): string {
+        if (text.length <= length) return text;
+        return text.substring(0, length) + '...';
     }
 
     const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Lade...";
@@ -105,18 +127,56 @@ export function Dashboard({ onNavigateToCreateVoucher }: DashboardProps) {
             {/* Gutschein-Liste */}
             <section>
                 <h2 className="text-2xl font-semibold mb-4 text-theme-secondary">My Vouchers</h2>
-                <div className="space-y-3 bg-card shadow-lg rounded-xl p-4 border border-theme-subtle">
-                    {vouchers.length > 0 ? vouchers.map(v => (
-                        <div key={v.local_id} className="flex justify-between items-center p-3 border-b border-theme-subtle last:border-b-0">
-                            <div>
-                                <p className="font-mono font-semibold text-theme-secondary">{v.amount} {v.currency}</p>
-                                <p className="text-xs text-theme-light font-mono">ID: {v.local_id}</p>
+                <div className="space-y-4">
+                    {vouchers.length > 0 ? vouchers.map(v => {
+                        const status = getVoucherStatus(v.status);
+                        return (
+                            <div key={v.local_instance_id} className="bg-card rounded-lg border border-theme-subtle shadow-sm p-4 space-y-3">
+                                {/* Header: Amount and Status */}
+                                <div className="flex justify-between items-start">
+                                    <div>
+                                        <div>
+                                            <p className="text-2xl font-bold text-theme-primary">{v.current_amount} <span className="text-lg font-normal text-theme-light">{v.unit}</span></p>
+                                            <p className="text-sm text-theme-light -mt-1">{v.voucher_standard_name}</p>
+                                        </div>
+                                        <p className="text-xs text-theme-light font-mono">by {v.creator_first_name} {v.creator_last_name} {v.creator_id ? `(${v.creator_id.substring(0, 25)}...${v.creator_id.substring(v.creator_id.length - 5)})` : ''}</p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        {/* Indicator for "Own" or "External" */}
+                                        {v.creator_id && userId && (
+                                            v.creator_id.includes(userId) ? (
+                                                <span className="px-2 py-1 text-xs font-bold rounded-full text-sky-800 bg-sky-200">Own</span>
+                                            ) : (
+                                                <span className="px-2 py-1 text-xs font-bold rounded-full text-yellow-800 bg-yellow-200">External</span>
+                                            )
+                                        )}
+                                        <span className={`px-2 py-1 text-xs font-bold rounded-full capitalize ${status.color}`}>
+                                            {status.name}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {/* Body: Description */}
+                                <p className="text-sm text-theme-secondary">{truncate(v.description, 120)}</p>
+
+                                {/* Footer: Validity and Indicators */}
+                                <div
+                                    className="flex justify-between items-center text-xs text-theme-light border-t border-theme-subtle pt-2">
+                                    <p>Valid until: <span className="font-semibold">{formatDate(v.valid_until)}</span>
+                                    </p>
+                                    <div className="flex items-center space-x-3">
+                                        {v.has_collateral && <span title="Has Collateral">🛡️</span>}
+                                        <span title="Guarantor Signatures">✍️ {v.guarantor_signatures_count}</span>
+                                        <span title="Additional Signatures">➕ {v.additional_signatures_count}</span>
+                                    </div>
+                                </div>
                             </div>
-                            <span className={`px-2 py-1 text-xs font-bold rounded-full capitalize ${renderVoucherStatus(v.status) === 'active' ? 'text-green-800 bg-green-200' : 'text-gray-800 bg-gray-200'}`}>
-                                {renderVoucherStatus(v.status)}
-                            </span>
+                        );
+                    }) : (
+                        <div className="text-center text-theme-light py-8 bg-card rounded-lg border border-theme-subtle">
+                            <p>No vouchers found.</p>
                         </div>
-                    )) : <p className="text-center text-theme-light py-4">No vouchers found.</p>}
+                    )}
                 </div>
             </section>
         </div>

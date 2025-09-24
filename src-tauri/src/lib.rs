@@ -161,7 +161,7 @@ fn get_voucher_summaries(
     state: tauri::State<AppState>,
 ) -> Result<Vec<VoucherSummary>, String> {
     let service = state.0.lock().unwrap();
-    service.get_voucher_summaries()
+    service.get_voucher_summaries(None, None)
 }
 
 #[tauri::command]

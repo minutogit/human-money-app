@@ -97,13 +97,52 @@ Diese Funktionen dienen dem reinen Lesezugriff auf das entsperrte Wallet und sin
 
 Gibt die eindeutige ID des aktuellen Benutzers zurück (z.B. `did:key:z...`).
 
-**`pub fn get_voucher_summaries(&self) -> Result<Vec<VoucherSummary>, String>`**
+`pub fn get_voucher_summaries(
+    &self,
+    voucher_standard_uuid_filter: Option<&[String]>,
+    status_filter: Option<&[VoucherStatus]>,
+) -> Result<Vec<VoucherSummary>, String>`
 
-Gibt eine vereinfachte Liste aller aktiven Gutscheine im Wallet zurück. `VoucherSummary` ist eine Struktur, die für die Anzeige in einer Liste optimiert ist.
+Die Funktion akzeptiert die folgenden optionalen Filter:
+
+* `voucher_standard_uuid_filter`: Ein optionaler Slice (`&[String]`) von UUIDs. Wenn vorhanden, werden nur Gutscheine zurückgegeben, deren Standard-UUID in diesem Slice enthalten ist. Wenn `None` oder ein leerer Slice übergeben wird, werden alle Gutscheine, unabhängig vom Standard, berücksichtigt.
+
+* `status_filter`: Ein optionaler Slice (`&[VoucherStatus]`) von Status-Enums. Wenn vorhanden, werden nur Gutscheine mit einem dieser Status-Werte zurückgegeben. Wenn `None` oder ein leerer Slice übergeben wird, werden alle Gutschein-Status berücksichtigt.
+
+Die Funktion ist ideal, um eine Übersicht aller Guthaben in einer UI anzuzeigen und diese nach bestimmten Kriterien zu filtern.
+
+---
+
+Die zurückgegebene `VoucherSummary`-Struktur enthält die folgenden Felder:
+
+* `local_instance_id`: Die eindeutige, lokale ID der Gutschein-Instanz im Wallet.
+* `status`: Der aktuelle Status des Gutscheins (`Active`, `Archived`, `Quarantined`, etc.).
+* `valid_until`: Das Gültigkeitsdatum des Gutscheins im ISO 8601-Format.
+* `creator_id`: Die eindeutige ID des ursprünglichen Erstellers (oft ein Public Key).
+* `description`: Eine menschenlesbare Beschreibung des Gutscheins.
+* `current_amount`: Der aktuelle verfügbare Betrag des Gutscheins als String.
+* `unit`: Die Abkürzung der Währungseinheit (z.B. "m" für Minuten).
+* `voucher_standard_name`: Der Name des Gutschein-Standards (z.B. "Minuto-Gutschein").
+* `voucher_standard_uuid`: Die eindeutige Kennung (UUID) des Standards.
+* `transaction_count`: Die Anzahl der Transaktionen, exklusive der initialen `init`-Transaktion.
+* `guarantor_signatures_count`: Die Anzahl der vorhandenen Bürgen-Signaturen.
+* `additional_signatures_count`: Die Anzahl der vorhandenen zusätzlichen, optionalen Signaturen.
+* `has_collateral`: Ein boolesches Flag, das anzeigt, ob der Gutschein besichert ist.
+* `creator_first_name`: Der Vorname des ursprünglichen Erstellers.
+* `creator_last_name`: Der Nachname des ursprünglichen Erstellers.
+* `creator_coordinates`: Die geografischen Koordinaten des Erstellers.
+
 
 **`pub fn get_total_balance_by_currency(&self) -> Result<HashMap<String, String>, String>`**
 
-Gibt eine Map zurück, die das aggregierte Gesamtguthaben für jede Währung (z.B. "Minuto", "EUR") enthält. Perfekt für eine Dashboard-Anzeige.
+Gibt eine `HashMap` zurück, die das aggregierte Gesamtguthaben für jede Währung (z.B. "Minuto", "EUR") enthält. Perfekt für eine Dashboard-Anzeige oder einen Gesamtüberblick über die Guthaben.
+
+Die Map hat das Format:
+* **Schlüssel (`String`):** Die Währungseinheit (z.B. `Minuten`, `EUR`).
+* **Wert (`String`):** Der aufsummierte Gesamtbetrag als kanonischer String.
+
+
+
 
 **`pub fn get_voucher_details(&self, local_id: &str) -> Result<VoucherDetails, String>`**
 
