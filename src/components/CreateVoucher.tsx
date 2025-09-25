@@ -327,7 +327,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
 
                     <Fieldset legend="Collateral (if applicable for standard)">
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                            <div className="col-span-2">
+                            <div>
                                 <label htmlFor="collateralAmount"
                                        className="block text-sm font-medium text-theme-secondary mb-1">Amount</label>
                                 <input id="collateralAmount" type="number" value={collateralAmount}
@@ -339,6 +339,12 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                                        className="block text-sm font-medium text-theme-secondary mb-1">Unit</label>
                                 <input id="collateralUnit" type="text" value={collateralUnit}
                                        onChange={(e) => setCollateralUnit(e.target.value)} disabled={isLoading}
+                                       className={inputClass}/>
+                            </div>
+                            <div>
+                                <label htmlFor="collateralAbbreviation" className="block text-sm font-medium text-theme-secondary mb-1">Abbreviation</label>
+                                <input id="collateralAbbreviation" type="text" value={collateralAbbreviation}
+                                       onChange={(e) => setCollateralAbbreviation(e.target.value)} disabled={isLoading}
                                        className={inputClass}/>
                             </div>
                         </div>

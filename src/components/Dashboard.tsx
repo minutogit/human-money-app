@@ -149,7 +149,7 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
             <section className="flex justify-center gap-6 mb-8">
                 <Button className="flex-1">Send</Button>
                 <Button className="flex-1">Receive</Button>
-                <Button onClick={onNavigateToCreateVoucher} className="flex-1" variant="outline">Create Voucher</Button>
+                <Button onClick={onNavigateToCreateVoucher} className="flex-1">Create Voucher</Button>
             </section>
 
             {/* Gutschein-Liste */}

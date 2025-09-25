@@ -81,14 +81,6 @@ export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
 
     // --- Event Handlers ---
 
-    async function handleGenerateNewSeed() {
-        // This is now handled by changing the wordCount, which triggers useEffect
-        // We'll reset the word count to itself to force a re-render if the user clicks it.
-        const currentCount = wordCount;
-        setWordCount(0 as any); // Temporarily set to an invalid value
-        setTimeout(() => setWordCount(currentCount), 0); // Then set it back
-    }
-
     async function handleWordCountChange(event: ChangeEvent<HTMLSelectElement>) {
         const newWordCount = parseInt(event.target.value, 10) as 12 | 24;
         setWordCount(newWordCount);

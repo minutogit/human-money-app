@@ -5,7 +5,6 @@
 use chrono::Local;
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
 use std::fs;
-use std::path::Path;
 use std::sync::Mutex;
 
 use bip39::Language;
@@ -78,11 +77,23 @@ pub struct VoucherStandardInfo {
 }
 
 #[tauri::command]
-fn profile_exists() -> bool {
-    // This check is independent of the AppService state and looks for the wallet file.
+fn profile_exists(app: tauri::AppHandle) -> bool {
     info!("Checking for existing profile...");
-    let exists = Path::new("./wallet_data/profile.enc").exists();
-    info!("Profile exists: {}", exists);
+    // This must check the same path the AppService will use.
+    let profile_path = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("wallet_data").join("profile.enc"),
+        Err(e) => {
+            error!("Could not determine app data directory for profile check: {}", e);
+            return false;
+        }
+    };
+
+    let exists = profile_path.exists();
+    info!(
+        "Profile check at '{}': {}",
+        profile_path.display(),
+        exists
+    );
     exists
 }
 
@@ -196,37 +207,58 @@ fn get_voucher_details(local_id: String, state: tauri::State<AppState>) -> Resul
 fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandardInfo>, String> {
     info!("Ensuring voucher standards are available in app data directory...");
 
-    // 1. Define paths. We map the `tauri::Error` to a `String` to match the function's error type.
+    // 1. Define paths.
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let standards_dir_in_data = app_data_dir.join("voucher_standards");
+    info!("App data standards directory is set to: {}", standards_dir_in_data.display());
 
-    // 2. "First Run" Logic: If the standards directory doesn't exist in the user's data folder, copy it from the app bundle.
-    if !standards_dir_in_data.exists() {
-        info!("First run detected or standards directory missing. Copying default standards...");
+    // 2. "First Run" Logic: If the standards directory doesn't exist, copy it from the app bundle.
+    let needs_copy = if !standards_dir_in_data.exists() {
+        info!("Standards directory does not exist. Will copy.");
+        true
+    } else {
+        // Directory exists, check if it is empty.
+        match fs::read_dir(&standards_dir_in_data) {
+            Ok(mut dir) => match dir.next().is_none() {
+                true => { info!("Standards directory exists but is empty. Will copy."); true },
+                false => { info!("Standards directory exists and is not empty. No copy needed."); false }
+            },
+            Err(e) => {
+                error!("Could not read existing standards directory, will attempt to overwrite: {}", e);
+                true // If we can't even read it, better to try a fresh copy.
+            }
+        }
+    };
+    if needs_copy {
         fs::create_dir_all(&standards_dir_in_data)
             .map_err(|e| format!("Failed to create standards directory in app data: {}", e))?;
 
-        // In debug mode, we point directly to the source directory.
-        // In release mode, we use the bundled resource path.
         #[cfg(debug_assertions)]
-        let resource_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../voucher_standards");
+        {
+            let standards_source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../voucher_standards");
+            info!("Attempting to copy standards from DEV source: {}", standards_source_path.display());
+            let mut options = CopyOptions::new();
+            options.overwrite = true;
+            // In dev, we copy the entire `voucher_standards` folder into the app_data_dir.
+            copy_dir(&standards_source_path, &app_data_dir, &options)
+                .map_err(|e| format!("Failed to copy standards from DEV source: {}", e))?;
+        }
         #[cfg(not(debug_assertions))]
-        let resource_path = app
-            .path()
-            .resolve("voucher_standards", tauri::path::BaseDirectory::Resource)
-            .map_err(|e| format!("Failed to resolve resource path: {}", e))?;
-
-        // Use the robust `fs_extra` library to copy the directory contents.
-        // The destination is the parent (`app_data_dir`), and `fs_extra` will place
-        // the `voucher_standards` folder inside it.
-        let mut options = CopyOptions::new();
-        options.overwrite = true;
-        copy_dir(resource_path, &app_data_dir, &options)
-            .map_err(|e| format!("Failed to copy standards from resources to app data: {}", e))?;
+        {
+            let resource_dir = app.path().resource_dir()
+                .map_err(|e| format!("Failed to get resource directory: {}", e))?;
+            // The tauri bundler can create a nested `_up_/voucher_standards` dir from `../` paths.
+            // We need to specifically target this path as our source.
+            let standards_source_path = resource_dir.join("_up_").join("voucher_standards");
+            info!("Attempting to copy standards from AppImage resource path: {}", standards_source_path.display());
+            let options = CopyOptions { overwrite: true, content_only: true, ..Default::default() };
+            copy_dir(&standards_source_path, &standards_dir_in_data, &options)
+                .map_err(|e| format!("Failed to copy standards from resources to app data: {}", e))?;
+        }
         info!("Default standards copied successfully.");
     }
 
-    // 3. Read standards from the user's app data directory
+    // 3. Read standards from the user's app data directory.
     info!("Reading voucher standards from: {}", standards_dir_in_data.display());
     let mut standards = Vec::new();
     match fs::read_dir(&standards_dir_in_data) {
@@ -234,11 +266,13 @@ fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandardInf
             for entry in entries {
                 if let Ok(entry) = entry {
                     let path = entry.path();
+                    info!("Found entry in standards directory: {}", path.display());
                     if path.is_dir() {
                         let standard_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                         let toml_path = path.join("standard.toml");
+                        info!("Checking for standard file at: {}", toml_path.display());
                         if toml_path.exists() {
-                            let content = fs::read_to_string(&toml_path)
+                             let content = fs::read_to_string(&toml_path)
                                 .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
                             standards.push(VoucherStandardInfo {
                                 id: standard_id,
@@ -344,9 +378,26 @@ async fn log_to_backend(level: String, message: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let service = AppService::new(Path::new("./wallet_data")).expect("Failed to create AppService");
-
     tauri::Builder::default()
+        .setup(|app| {
+            // Get the application's data directory
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .expect("Failed to find app data directory");
+
+            // We'll create a subdirectory for our wallet data to keep things tidy
+            let wallet_path = data_dir.join("wallet_data");
+            if !wallet_path.exists() {
+                fs::create_dir_all(&wallet_path).expect("Failed to create wallet data directory");
+            }
+            info!("Using wallet data path: {}", wallet_path.display());
+
+            // Create the AppService with the correct, platform-specific path
+            let service = AppService::new(&wallet_path).expect("Failed to create AppService");
+            app.manage(AppState(Mutex::new(service)));
+            Ok(())
+        })
         .plugin(
             LogBuilder::default()
                 .targets([Target::new(TargetKind::Stdout), Target::new(TargetKind::Webview)])
@@ -366,7 +417,6 @@ pub fn run() {
                 })
                 .build(),
         )
-        .manage(AppState(Mutex::new(service)))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![

@@ -1,7 +1,7 @@
 // src/App.tsx
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { error, info } from "@tauri-apps/plugin-log";
+import { error } from "@tauri-apps/plugin-log";
 import { logger } from "./utils/log";
 import { CreateProfile } from "./components/CreateProfile";
 import { Dashboard } from "./components/Dashboard";
