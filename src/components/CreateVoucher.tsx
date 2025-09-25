@@ -147,7 +147,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     return (
         <div className="mx-auto max-w-2xl">
             <h1 className="text-3xl font-bold text-center mb-6 text-theme-primary">Create New Voucher</h1>
-            <div className="rounded-lg border border-theme-subtle bg-card p-6 shadow-lg">
+            <div className="rounded-lg border border-theme-subtle bg-bg-card-alternate p-6 shadow-lg">
                 <form onSubmit={handleSubmit}>
                     <Fieldset legend="Basic Information">
                         <div>
@@ -344,7 +344,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         </div>
                     </Fieldset>
 
-                    <div className="mt-8 rounded-lg border border-theme-accent/50 bg-bg-app p-4">
+                    <div className="mt-8 rounded-lg border border-theme-accent/50 bg-bg-card-alternate p-4">
                         <p className="text-center text-sm text-theme-light mb-4">
                             To authorize and sign the new voucher, please enter your wallet password.
                             <br/>

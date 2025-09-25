@@ -25,6 +25,7 @@ export default {
                     'app': '#FFFAF0', // Warmes Elfenbein für App-Hintergrund
                     'card': '#FFFFFF', // Reines Weiß für Karten
                     'input-readonly': '#FFF8E1', // Sehr helles Cream für ReadOnly-Felder
+                    'card-alternate': '#f8ebe1', // Warmes Cream für abwechselnde Karten
                 },
                 
                 // Border colors

@@ -19,12 +19,9 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
     const [copied, setCopied] = useState(false);
 
     useEffect(() => {
-        // Log when component is displayed
         logger.info("Dashboard component displayed");
-
         async function fetchData() {
             try {
-                console.log("Dashboard: Fetching data from backend.");
                 const [id, balanceList, voucherList] = await Promise.all([
                     invoke<string>("get_user_id"),
                     invoke<AggregatedBalance[]>("get_total_balance_by_currency"),
@@ -33,14 +30,12 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
                 setUserId(id);
                 setBalances(balanceList);
                 setVouchers(voucherList);
-                console.log("Dashboard: Data successfully fetched.");
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${e}`;
                 console.error(msg);
                 setFeedbackMsg(`Error: ${msg}`);
             }
         }
-
         fetchData();
     }, []);
 
@@ -49,7 +44,7 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
         try {
             await writeText(userId);
             setCopied(true);
-            setTimeout(() => setCopied(false), 2000); // Reset icon after 2s
+            setTimeout(() => setCopied(false), 2000);
         } catch (e) {
             const msg = `Failed to copy User ID: ${e}`;
             console.error(msg);
@@ -57,11 +52,9 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
         }
     }
 
-    // Helper function to extract and format the voucher status
     function getVoucherStatus(status: object): { name: string; color: string; tooltip: string } {
-        // Handle both simple string statuses (e.g., "Active") and object statuses (e.g., { Incomplete: ... })
         const statusName = (typeof status === 'string' ? status : Object.keys(status)[0])?.toLowerCase() || 'unknown';
-        let color = 'text-gray-800 bg-gray-200'; // Default
+        let color = 'text-gray-800 bg-gray-200';
         let tooltip = '';
 
         switch (statusName) {
@@ -88,7 +81,6 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
         return { name: statusName, color: color, tooltip: tooltip };
     }
 
-    // Helper function to format the date
     function formatDate(isoString: string): string {
         if (!isoString) return 'N/A';
         return new Date(isoString).toLocaleDateString(undefined, {
@@ -96,35 +88,34 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
         });
     }
 
-    // Helper function to truncate text
+
     function truncate(text: string, length: number): string {
         if (text.length <= length) return text;
         return text.substring(0, length) + '...';
     }
 
-    // Helper function to format the amount display
+
     function formatAmount(amountStr: string): string {
         const num = parseFloat(amountStr);
-        if (isNaN(num)) return amountStr; // Fallback for non-numeric strings
-        // .toString() on a number automatically removes trailing zeros after the decimal point
+        if (isNaN(num)) return amountStr;
         return num.toString();
     }
 
     const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Lade...";
 
     return (
-        <div className="mx-auto max-w-4xl">
+        <div className="mx-auto max-w-4xl p-4 sm:p-6">
             {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
 
             {/* User ID Anzeige */}
-            <div className="mb-8 flex h-12 items-center justify-between gap-4 rounded-full bg-card px-4 shadow-sm border border-theme-subtle">
+            <div className="mb-8 flex h-12 items-center justify-between gap-4 rounded-full bg-input-readonly px-4 shadow-sm border border-theme-subtle">
                 <div className="flex items-center gap-3 overflow-hidden">
                     <span className="text-sm font-bold text-theme-secondary flex-shrink-0">User ID</span>
-                    <span className="text-sm font-mono text-theme-light bg-bg-app px-3 py-1 rounded-full truncate">
+                    <span className="text-sm font-mono text-theme-light bg-card px-3 py-1 rounded-full truncate">
                         {truncatedUserId}
                     </span>
                 </div>
-                <button onClick={handleCopyUserId} title="Copy User ID" className="p-2 rounded-full hover:bg-bg-app focus:outline-none focus:ring-2 focus:ring-theme-accent flex-shrink-0">
+                <button onClick={handleCopyUserId} title="Copy User ID" className="p-2 rounded-full hover:bg-card focus:outline-none focus:ring-2 focus:ring-theme-accent flex-shrink-0">
                     {copied ? (
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-theme-success" viewBox="0 0 20 20" fill="currentColor">
                             <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
@@ -142,13 +133,13 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
             <section className="grid grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] gap-6 mb-8">
                 {balances.length > 0 ? (
                     balances.map((balance) => (
-                        <div key={balance.standard_uuid} className="bg-card shadow-lg rounded-lg p-4 text-center border border-theme-subtle">
+                        <div key={balance.standard_uuid} className="bg-input-readonly shadow-lg rounded-lg p-4 text-center border border-theme-subtle">
                             <p className="text-base font-semibold text-theme-light">{balance.standard_name}</p>
                             <p className="text-3xl font-bold text-theme-primary mt-1">{formatAmount(balance.total_amount)} <span className="text-xl font-normal">{balance.unit}</span></p>
                         </div>
                     ))
                 ) : (
-                    <div className="md:col-span-2 bg-card shadow-lg rounded-xl p-6 text-center border border-theme-subtle">
+                    <div className="md:col-span-2 bg-input-readonly shadow-lg rounded-xl p-6 text-center border border-theme-subtle">
                         <p className="text-lg text-theme-light">No balance available</p>
                     </div>
                 )}
@@ -170,13 +161,13 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
                         return (
                             <div key={v.local_instance_id} className="relative">
                                 {v.non_redeemable_test_voucher && (
-                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
-                                        <span className="text-[120px] font-extrabold text-gray-400/30 transform rotate-12 select-none pointer-events-none">TEST</span>
+                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                                        <span className="text-[90px] font-bold text-gray-800/20 transform -rotate-12 select-none pointer-events-none">TEST</span>
                                     </div>
                                 )}
                                 <button
                                     onClick={() => onShowDetails(v.local_instance_id)}
-                                    className={`w-full text-left bg-card rounded-lg border border-theme-subtle shadow-sm p-4 space-y-3 transition-all duration-200 ease-in-out hover:shadow-md hover:border-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary focus:ring-opacity-50 relative z-10`}
+                                    className="w-full text-left bg-bg-card-alternate rounded-lg border border-theme-subtle shadow-sm p-4 space-y-3 transition-all duration-200 ease-in-out hover:shadow-md hover:border-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary focus:ring-opacity-50 relative z-10"
                                 >
                                     {/* Header: Amount and Voucher Name */}
                                     <div className="flex justify-between items-start">
@@ -185,7 +176,7 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
                                                 <span className="inline-block min-w-[4rem] text-right">{formatAmount(v.current_amount)}</span>
                                                 <span className="ml-2 text-lg font-normal text-theme-light">{v.unit}</span>
                                             </div>
-                                            <p className="text-xs text-theme-light font-mono">by {v.creator_first_name} {v.creator_last_name} {v.creator_id ? `(${v.creator_id.substring(0, 25)}...${v.creator_id.substring(v.creator_id.length - 5)})` : ''}</p>
+                                            <p className="text-xs text-theme-light font-mono">by {v.creator_first_name} {v.creator_last_name}</p>
                                         </div>
                                         <div className="text-right">
                                             <p className="text-xl font-normal text-theme-light">{v.voucher_standard_name}</p>
@@ -198,26 +189,16 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
                                     {/* Footer: Validity and Indicators */}
                                     <div className="border-t border-theme-subtle pt-2">
                                         <div className="flex justify-between items-center text-xs text-theme-light">
-                                            {/* Left: Validity */}
                                             <p>Valid until: <span className="font-semibold">{formatDate(v.valid_until)}</span></p>
-                                            {/* Center: Icons */}
                                             <div className="flex items-center space-x-3 text-sm">
                                                 {v.has_collateral && <span title="Has Collateral">🛡️</span>}
                                                 <span title="Guarantor Signatures">✍️ {v.guarantor_signatures_count}</span>
                                                 <span title="Additional Signatures">➕ {v.additional_signatures_count}</span>
                                             </div>
-                                            {/* Right: Status Badges */}
                                             <div className="flex items-center gap-2">
-                                                {v.creator_id && userId && (
-                                                    v.creator_id.includes(userId) ? (
-                                                        <span className="px-2 py-1 text-xs font-bold rounded-full text-sky-800 bg-sky-200" title="This voucher was created by you.">Own</span>
-                                                    ) : (
-                                                        <span className="px-2 py-1 text-xs font-bold rounded-full text-yellow-800 bg-yellow-200" title="This voucher was created by another user.">External</span>
-                                                    )
-                                                )}
                                                 <span className={`px-2 py-1 text-xs font-bold rounded-full capitalize ${status.color}`} title={status.tooltip}>
-                                                {status.name}
-                                            </span>
+                                                    {status.name}
+                                                </span>
                                                 {v.non_redeemable_test_voucher && (
                                                     <span className="px-3 py-1 text-xs font-bold rounded-full text-purple-800 bg-purple-200" title="Non-redeemable test voucher">Test</span>
                                                 )}
@@ -228,7 +209,7 @@ export function Dashboard({ onNavigateToCreateVoucher, onShowDetails }: Dashboar
                             </div>
                         );
                     }) : (
-                        <div className="text-center text-theme-light py-8 bg-card rounded-lg border border-theme-subtle">
+                        <div className="text-center text-theme-light py-8 bg-input-readonly rounded-lg border border-theme-subtle">
                             <p>No vouchers found.</p>
                         </div>
                     )}
