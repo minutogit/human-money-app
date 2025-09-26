@@ -83,6 +83,11 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
 
     async function handleSubmit(event: FormEvent) {
         event.preventDefault();
+        // Guard Clause: Prevent multiple submissions if already loading.
+        if (isLoading) {
+            return;
+        }
+
         setFeedback(null);
         setIsLoading(true);
 
@@ -126,18 +131,18 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         };
 
         try {
-            info("CreateVoucher: Invoking create_new_voucher command.");
             await invoke("create_new_voucher", {
                 standardTomlContent: selectedStandard.content,
                 data: voucherData,
                 password,
             });
-            setFeedback({ type: 'success', msg: "Voucher created successfully! Redirecting..." });
+            setFeedback({type: 'success', msg: "Voucher created successfully! Redirecting..."});
             setTimeout(onVoucherCreated, 2000);
         } catch (e) {
             const msg = `Failed to create voucher: ${e}`;
-            error(msg);
-            setFeedback({ type: 'error', msg });
+            setFeedback({type: 'error', msg});
+            // ONLY set loading to false on error, so the user can try again.
+            // On success, the form should remain disabled until navigation.
             setIsLoading(false);
         }
     }
