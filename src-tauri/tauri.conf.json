@@ -19,9 +19,16 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": [
-        "default"
-      ]
+      "capabilities": [{
+        "identifier": "main-capability",
+        "windows": ["main"],
+        "permissions": [
+          "core:window:default",
+          "core:window:allow-set-title",
+          "clipboard-manager:allow-write-text",
+          "log:default"
+        ]
+      }]
     }
   },
   "bundle": {

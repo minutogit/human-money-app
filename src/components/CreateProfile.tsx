@@ -34,6 +34,7 @@ export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
     // State for password step
     const [passphrase, setPassphrase] = useState<string>("");
     const [confirmPassphrase, setConfirmPassphrase] = useState<string>("");
+    const [profileName, setProfileName] = useState("");
     const [userPrefix, setUserPrefix] = useState("");
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
@@ -124,6 +125,7 @@ export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
         setFeedbackMsg("Creating profile, please wait...");
         try {
             await invoke("create_profile", {
+                profileName,
                 mnemonic: generatedSeed.join(' '),
                 passphrase: passphrase || undefined,
                 userPrefix: userPrefix || undefined,
@@ -215,6 +217,10 @@ export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
                             <p className="text-theme-light mt-1">Create a strong password to encrypt your wallet on this device.</p>
                         </div>
 
+                        <div>
+                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Profile Name</label>
+                            <Input type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="e.g., 'My Main Wallet'" required />
+                        </div>
                         <div>
                             <label className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
                             <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 8 characters" required />

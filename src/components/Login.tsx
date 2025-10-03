@@ -6,35 +6,59 @@ import { logger } from "../utils/log";
 
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
+import { ProfileInfo } from "../types";
 
 interface LoginProps {
-    onLoginSuccess: () => void;
+    onLoginSuccess: (profileName: string) => void;
     onSwitchToCreate: () => void;
     onSwitchToReset: () => void;
 }
 
 export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToReset }: LoginProps) {
+    const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
+    const [selectedProfile, setSelectedProfile] = useState<string>("");
     const [password, setPassword] = useState("");
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
 
     useEffect(() => {
-        // Log when component is displayed
         logger.info("Login component displayed");
+        async function fetchProfiles() {
+            setIsLoading(true);
+            try {
+                const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
+                setProfiles(availableProfiles);
+                if (availableProfiles.length > 0) {
+                    setSelectedProfile(availableProfiles[0].folderName);
+                }
+                info(`Frontend: Found ${availableProfiles.length} profiles.`);
+            } catch (e) {
+                const errorMsg = `Failed to fetch profiles: ${e}`;
+                setFeedbackMsg(`Error: ${errorMsg}`);
+                error(`Frontend: ${errorMsg}`);
+            } finally {
+                setIsLoading(false);
+            }
+        }
+        fetchProfiles();
     }, []);
 
     async function handleLogin() {
-        if (!password) {
-            setFeedbackMsg("Error: Password is required.");
+        if (!selectedProfile || !password) {
+            setFeedbackMsg("Error: Please select a profile and enter your password.");
             return;
         }
 
         setIsLoading(true);
         setFeedbackMsg("Logging in...");
         try {
-            await invoke("login", { password });
+            await invoke("login", { folderName: selectedProfile, password });
             info("Frontend: Login successful.");
-            onLoginSuccess();
+            const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
+            if (loggedInProfile) {
+                onLoginSuccess(loggedInProfile.profileName);
+            }
+
         } catch (e) {
             const msg = `Login failed: ${e}`;
             setFeedbackMsg(`Error: ${msg}`);
@@ -54,6 +78,24 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToReset }: Log
                 </div>
 
                 <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
+                    {profiles.length > 0 && (
+                        <div>
+                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Select Profile</label>
+                            <div className="max-w-md mx-auto">
+                                <select
+                                    value={selectedProfile}
+                                    onChange={(e) => setSelectedProfile(e.target.value)}
+                                    className="w-full px-3 py-2 border rounded-md bg-bg-input border-theme-subtle text-theme-light focus:ring-2 focus:ring-theme-primary"
+                                >
+                                    {profiles.map((profile) => (
+                                        <option key={profile.folderName} value={profile.folderName}>
+                                            {profile.profileName}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                    )}
                     <div>
                         <label className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
                         <div className="max-w-md mx-auto">
@@ -64,7 +106,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToReset }: Log
                     <div className="pt-3 text-center">
                         {feedbackMsg && <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>}
                         <div className="flex flex-col items-center gap-4">
-                            <Button type="submit" disabled={isLoading}>
+                            <Button type="submit" disabled={isLoading || profiles.length === 0}>
                                 {isLoading ? "Logging In..." : "Login"}
                             </Button>
                             <button

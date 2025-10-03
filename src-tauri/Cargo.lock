@@ -5340,6 +5340,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
+ "base64 0.21.7",
  "bincode",
  "bip39",
  "bs58",

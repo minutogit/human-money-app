@@ -26,21 +26,29 @@ Der `AppService` ist die einzige Schnittstelle, die für die Entwicklung der Cli
 **Automatische Speicherung:** Alle Operationen, die den Wallet-Zustand verändern (z.B. ein Transfer), werden automatisch persistent gespeichert.
 
 #### Hauptfunktionen (Befehle)
-**`pub fn new(storage_path: &Path) -> Result<Self, String>`**
+**`pub fn new(base_storage_path: &Path) -> Result<Self, String>`**
 
 Initialisiert einen neuen `AppService` im `Locked`-Zustand. Erstellt eine `FileStorage`-Instanz für den angegebenen Pfad. Das Verzeichnis wird bei Bedarf erstellt.
 
-**`pub fn create_profile(mnemonic: &str, passphrase: Option<&str>, user_prefix: Option<&str>, password: &str) -> Result<(), String>`**
+**`pub fn list_profiles() -> Result<Vec<ProfileInfo>, String>`**
 
-Erstellt ein komplett neues Benutzerprofil und Wallet und speichert es verschlüsselt. `mnemonic` und `password` sind obligatorisch. Eine optionale `passphrase` kann zur weiteren Absicherung der Schlüsselableitung verwendet werden. Ein optionales `user_prefix` kann für die Erstellung der DID verwendet werden. Der Service wird bei Erfolg in den `Unlocked`-Zustand versetzt.
+Listet alle verfügbaren, im Basisverzeichnis konfigurierten Profile auf. Liest die zentrale `profiles.json`-Datei und gibt eine Liste von `ProfileInfo`-Objekten zurück, die für die Anzeige in einem Login-Screen verwendet werden kann.
 
-**`pub fn login(password: &str) -> Result<(), String>`**
+Die `ProfileInfo`-Struktur enthält:
+* `profile_name: String`: Der vom Benutzer gewählte, menschenlesbare Name.
+* `folder_name: String`: Der anonyme Ordnername, der für `login` benötigt wird.
 
-Entsperrt ein existierendes Wallet mit dem `password` und lädt es in den Speicher.
+**`pub fn create_profile(profile_name: &str, mnemonic: &str, passphrase: Option<&str>, user_prefix: Option<&str>, password: &str) -> Result<(), String>`**
 
-**`pub fn recover_wallet_and_set_new_password(mnemonic: &str, passphrase: Option<&str>, new_password: &str) -> Result<(), String>`**
+Erstellt ein komplett neues Benutzerprofil. Diese Funktion leitet einen anonymen Ordnernamen aus den Secrets ab, speichert das Wallet in diesem Ordner und fügt einen Eintrag mit dem `profile_name` zur zentralen `profiles.json` hinzu. Bei Erfolg wird der Service in den `Unlocked`-Zustand versetzt.
 
-Stellt ein Wallet mithilfe der Mnemonic-Phrase wieder her und setzt ein neues Passwort. Diese Funktion ist für den Fall vorgesehen, dass ein Benutzer sein Passwort vergessen hat. Bei Erfolg wird der Service in den `Unlocked`-Zustand versetzt.
+**`pub fn login(folder_name: &str, password: &str) -> Result<(), String>`**
+
+Entsperrt ein existierendes Wallet. Der `folder_name` wird typischerweise über die `list_profiles`-Funktion bezogen. Die Mnemonic-Phrase wird für den normalen Login **nicht** mehr benötigt.
+
+**`pub fn recover_wallet_and_set_new_password(folder_name: &str, mnemonic: &str, passphrase: Option<&str>, new_password: &str) -> Result<(), String>`**
+
+Stellt ein Wallet mithilfe der Mnemonic-Phrase wieder her und setzt ein neues Passwort. Der `folder_name` gibt an, welches Profil wiederhergestellt werden soll. Bei Erfolg wird der Service in den `Unlocked`-Zustand versetzt.
 
 **`pub fn logout(&mut self)`**
 
@@ -133,13 +141,13 @@ Die zurückgegebene `VoucherSummary`-Struktur enthält die folgenden Felder:
 * `creator_coordinates`: Die geografischen Koordinaten des Erstellers.
 
 
-**`pub fn get_total_balance_by_currency(&self) -> Result<HashMap<String, String>, String>`**
+**`pub fn get_total_balance_by_currency(&self) -> Result<Vec<AggregatedBalance>, String>`**
 
-Gibt eine `HashMap` zurück, die das aggregierte Gesamtguthaben für jede Währung (z.B. "Minuto", "EUR") enthält. Perfekt für eine Dashboard-Anzeige oder einen Gesamtüberblick über die Guthaben.
+Gibt einen Vektor von `AggregatedBalance`-Strukturen zurück, die das aggregierte Gesamtguthaben für jede Währung (z.B. "Minuto", "EUR") enthalten. Perfekt für eine Dashboard-Anzeige.
 
-Die Map hat das Format:
-* **Schlüssel (`String`):** Die Währungseinheit (z.B. `Minuten`, `EUR`).
-* **Wert (`String`):** Der aufsummierte Gesamtbetrag als kanonischer String.
+Die `AggregatedBalance`-Struktur enthält:
+* `unit: String`: Die Währungseinheit (z.B. `Minuten`, `EUR`).
+* `total_amount: String`: Der aufsummierte Gesamtbetrag als kanonischer String.
 
 
 

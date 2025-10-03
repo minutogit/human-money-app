@@ -51,6 +51,13 @@ pub struct FrontendNewVoucherData {
     pub collateral: FrontendCollateralData,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileInfo {
+    pub profile_name: String,
+    pub folder_name: String,
+}
+
 #[derive(Serialize, Clone)]
 pub struct VoucherStandardInfo {
     pub id: String,

@@ -1,4 +1,5 @@
 use crate::AppState;
+use crate::models::ProfileInfo;
 use log::{error, info};
 use tauri::Manager;
 
@@ -24,19 +25,32 @@ pub fn profile_exists(app: tauri::AppHandle) -> bool {
 }
 
 #[tauri::command]
+pub fn list_profiles(state: tauri::State<AppState>) -> Result<Vec<ProfileInfo>, String> {
+    info!("Listing available profiles...");
+    let service = state.0.lock().unwrap();
+    service.list_profiles().map(|profiles| {
+        profiles
+            .into_iter()
+            .map(|p| ProfileInfo {
+                profile_name: p.profile_name,
+                folder_name: p.folder_name,
+            })
+            .collect()
+    })
+}
+
+#[tauri::command]
 pub fn create_profile(
+    profile_name: String,
     mnemonic: String,
     passphrase: Option<String>,
     user_prefix: Option<String>,
     password: String,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
-    info!(
-        "Attempting to create profile with prefix: {:?}",
-        user_prefix.as_deref().unwrap_or("none")
-    );
+    info!("Attempting to create profile '{}'...", profile_name);
     let mut service = state.0.lock().unwrap();
-    match service.create_profile(&mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password) {
+    match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password) {
         Ok(()) => {
             info!("Profile created successfully!");
             Ok(())
@@ -49,10 +63,10 @@ pub fn create_profile(
 }
 
 #[tauri::command]
-pub fn login(password: String, state: tauri::State<AppState>) -> Result<(), String> {
+pub fn login(folder_name: String, password: String, state: tauri::State<AppState>) -> Result<(), String> {
     info!("Attempting to login...");
     let mut service = state.0.lock().unwrap();
-    match service.login(&password) {
+    match service.login(&folder_name, &password) {
         Ok(()) => {
             info!("Login successful!");
             Ok(())
@@ -66,6 +80,7 @@ pub fn login(password: String, state: tauri::State<AppState>) -> Result<(), Stri
 
 #[tauri::command]
 pub fn recover_wallet_and_set_new_password(
+    folder_name: String,
     mnemonic: String,
     passphrase: Option<String>,
     new_password: String,
@@ -73,7 +88,7 @@ pub fn recover_wallet_and_set_new_password(
 ) -> Result<(), String> {
     info!("Attempting to recover wallet and set new password...");
     let mut service = state.0.lock().unwrap();
-    match service.recover_wallet_and_set_new_password(&mnemonic, passphrase.as_deref(), &new_password) {
+    match service.recover_wallet_and_set_new_password(&folder_name, &mnemonic, passphrase.as_deref(), &new_password) {
         Ok(()) => {
             info!("Wallet recovered and new password set successfully!");
             Ok(())

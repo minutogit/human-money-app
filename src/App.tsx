@@ -1,6 +1,7 @@
 // src/App.tsx
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { webviewWindow } from '@tauri-apps/api';
 import { error } from "@tauri-apps/plugin-log";
 import { logger } from "./utils/log";
 import { CreateProfile } from "./components/CreateProfile";
@@ -11,6 +12,7 @@ import { CreateVoucher } from "./components/CreateVoucher";
 import "./App.css";
  
 import { VoucherDetailsView } from "./components/VoucherDetailsView";
+import { ProfileInfo } from "./types";
 
 type AppState =
     | { view: "loading" }
@@ -23,6 +25,7 @@ type AppState =
 
 function App() {
     const [appState, setAppState] = useState<AppState>({ view: "loading" });
+    const [profileName, setProfileName] = useState<string>("");
     const [isSidebarOpen, setSidebarOpen] = useState(false);
 
     useEffect(() => {
@@ -31,19 +34,35 @@ function App() {
 
         async function checkProfile() {
             try {
-                const exists = await invoke<boolean>("profile_exists");
-                setAppState({ view: exists ? "needs_login" : "needs_profile" });
+                const profiles = await invoke<ProfileInfo[]>("list_profiles");
+                setAppState({ view: profiles.length > 0 ? "needs_login" : "needs_profile" });
             } catch (e) {
                 error(`Failed to check if profile exists: ${e}`);
-                setAppState({ view: "needs_profile" });
+                // Fallback to creation if there's an error, as it's the safest default
+                setAppState({ view: "needs_profile" }); 
             }
         }
         checkProfile();
     }, []);
 
+    useEffect(() => {
+        async function updateTitle() {
+            const win = webviewWindow.getCurrentWebviewWindow();
+            if (profileName) {
+                await win.setTitle(`Voucher Wallet - ${profileName}`);
+            } else {
+                await win.setTitle('Voucher Wallet');
+            }
+        }
+
+        updateTitle();
+    }, [profileName]);
+
     function handleLogout() {
         invoke("logout").catch(e => error(`Logout failed: ${e}`));
         setSidebarOpen(false);
+        // Reset the profile name on logout
+        setProfileName("");
         setAppState({ view: "needs_login" });
     }
 
@@ -58,10 +77,18 @@ function App() {
             case "needs_profile":
                 return <CreateProfile onProfileCreated={() => setAppState({ view: "logged_in" })} />;
             case "needs_login":
-                return <Login onLoginSuccess={() => setAppState({ view: "logged_in" })} onSwitchToCreate={() => setAppState({ view: "needs_profile" })} onSwitchToReset={() => setAppState({ view: "needs_recovery" })} />;
+                return <Login 
+                    onLoginSuccess={(name) => {
+                        setProfileName(name);
+                        setAppState({ view: "logged_in" });
+                    }} 
+                    onSwitchToCreate={() => setAppState({ view: "needs_profile" })} 
+                    onSwitchToReset={() => setAppState({ view: "needs_recovery" })} 
+                />;
             case "logged_in":
                 return <Dashboard 
-                    onNavigateToCreateVoucher={() => setAppState({ view: "create_voucher" })} 
+                    profileName={profileName}
+                    onNavigateToCreateVoucher={() => setAppState({ view: "create_voucher" })}
                     onShowDetails={(voucherId) => setAppState({ view: "voucher_details", voucherId })}
                 />;
             case "needs_recovery":

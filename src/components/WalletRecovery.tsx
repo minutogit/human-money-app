@@ -6,6 +6,7 @@ import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
+import { ProfileInfo } from "../types";
 
 interface WalletRecoveryProps {
     onRecoverySuccess: () => void;
@@ -14,6 +15,9 @@ interface WalletRecoveryProps {
 type InputMode = "words" | "phrase";
 
 export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRecoveryProps) {
+    const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
+    const [selectedProfile, setSelectedProfile] = useState<string>("");
+
     // Core state
     const [wordCount, setWordCount] = useState<12 | 24>(12);
     const [mnemonicWords, setMnemonicWords] = useState<string[]>(Array(12).fill(""));
@@ -38,6 +42,27 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     // Log when component is displayed
     useEffect(() => {
         logger.info("WalletRecovery component displayed");
+
+        async function fetchProfiles() {
+            setIsLoading(true);
+            try {
+                const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
+                setProfiles(availableProfiles);
+                if (availableProfiles.length > 0) {
+                    setSelectedProfile(availableProfiles[0].folderName);
+                } else {
+                    setFeedbackMsg("Error: No profiles found to recover.");
+                }
+                info(`Frontend: Found ${availableProfiles.length} profiles for recovery selection.`);
+            } catch (e) {
+                const errorMsg = `Failed to fetch profiles: ${e}`;
+                setFeedbackMsg(`Error: ${errorMsg}`);
+                error(`Frontend: ${errorMsg}`);
+            } finally {
+                setIsLoading(false);
+            }
+        }
+        fetchProfiles();
     }, []);
 
     // Effect 1: Adjust mnemonicWords array size when wordCount changes
@@ -176,6 +201,10 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
         const el = textareaRef.current;
         if (el) el.setSelectionRange(el.value.length, el.value.length);
 
+        if (!selectedProfile) {
+            setFeedbackMsg("Error: Please select a profile to recover.");
+            return;
+        }
         if (!isValidMnemonic) {
             setFeedbackMsg("Error: Please enter a valid seed phrase.");
             return;
@@ -193,6 +222,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
         setFeedbackMsg("Recovering wallet...");
         try {
             await invoke("recover_wallet_and_set_new_password", {
+                folderName: selectedProfile,
                 mnemonic: mnemonicWords.join(" "),
                 passphrase: passphrase || undefined,
                 newPassword
@@ -200,8 +230,8 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
             info("Frontend: Wallet successfully recovered. Logging in.");
             onRecoverySuccess();
         } catch (e) {
-            setFeedbackMsg(`Error creating profile: ${e}`);
-            error(`Frontend: Profile creation failed: ${e}`);
+            setFeedbackMsg(`Error recovering wallet: ${e}`);
+            error(`Frontend: Wallet recovery failed: ${e}`);
         } finally {
             setIsLoading(false);
         }
@@ -218,10 +248,29 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 </div>
 
                 <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); handleRecovery(); }}>
+                    {profiles.length > 0 && (
+                         <div>
+                            <label className="block text-sm font-semibold text-theme-secondary mb-1">1. Profile to Recover</label>
+                            <div className="max-w-md">
+                                <select
+                                    value={selectedProfile}
+                                    onChange={(e) => setSelectedProfile(e.target.value)}
+                                    className="w-full px-3 py-2 border rounded-md bg-bg-input border-theme-subtle text-theme-light focus:ring-2 focus:ring-theme-primary"
+                                >
+                                    {profiles.map((profile) => (
+                                        <option key={profile.folderName} value={profile.folderName}>
+                                            {profile.profileName}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                    )}
+
                     <div>
                         <div className="flex justify-between items-center mb-2">
                             <div className="flex items-center gap-4">
-                                <label className="text-sm font-semibold text-theme-secondary">1. Your Seed Phrase</label>
+                                <label className="text-sm font-semibold text-theme-secondary">2. Your Seed Phrase</label>
                                 <button type="button" onClick={handleInputModeToggle} className="text-xs text-theme-primary hover:underline">
                                     {inputMode === "words" ? "Enter full phrase" : "Use single fields"}
                                 </button>
@@ -265,17 +314,17 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
 
                     <div className="border-t border-theme-light-border pt-5 space-y-5">
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">2. Optional Passphrase</label>
+                            <label className="block text-sm font-semibold text-theme-secondary mb-1">3. Optional Passphrase</label>
                             <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Enter if you used one during profile creation" />
                         </div>
 
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">3. New Password</label>
+                            <label className="block text-sm font-semibold text-theme-secondary mb-1">4. New Password</label>
                             <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Minimum 8 characters" required />
                         </div>
 
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">4. Confirm New Password</label>
+                            <label className="block text-sm font-semibold text-theme-secondary mb-1">5. Confirm New Password</label>
                             <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repeat your new password" required />
                         </div>
                     </div>
@@ -283,7 +332,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                     <div className="pt-3 text-center">
                         {feedbackMsg && <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>}
                         <div className="flex flex-col items-center gap-4">
-                            <Button type="submit" disabled={isLoading || !isValidMnemonic}>
+                            <Button type="submit" disabled={isLoading || !isValidMnemonic || profiles.length === 0}>
                                 {isLoading ? "Recovering..." : "Recover Wallet & Login"}
                             </Button>
                             <button type="button" onClick={onSwitchToLogin} className="text-sm text-theme-primary hover:underline">

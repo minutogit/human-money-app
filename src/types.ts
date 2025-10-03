@@ -1,5 +1,14 @@
 // src/types.ts
 
+/**
+ * Represents information about a user profile.
+ * Matches the Rust struct `ProfileInfo`.
+ */
+export interface ProfileInfo {
+    profileName: string;
+    folderName: string;
+}
+
 // The status of a voucher can be represented as an object with a single key,
 // e.g., { "Active": null } or { "Quarantined": "Reason why" }.
 export type VoucherStatus = { [key: string]: string | null };
