@@ -63,10 +63,15 @@ pub fn create_profile(
 }
 
 #[tauri::command]
-pub fn login(folder_name: String, password: String, state: tauri::State<AppState>) -> Result<(), String> {
+pub fn login(
+    folder_name: String,
+    password: String,
+    cleanup_on_login: bool,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
     info!("Attempting to login...");
     let mut service = state.0.lock().unwrap();
-    match service.login(&folder_name, &password) {
+    match service.login(&folder_name, &password, cleanup_on_login) {
         Ok(()) => {
             info!("Login successful!");
             Ok(())

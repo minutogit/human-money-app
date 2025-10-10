@@ -52,7 +52,11 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToReset }: Log
         setIsLoading(true);
         setFeedbackMsg("Logging in...");
         try {
-            await invoke("login", { folderName: selectedProfile, password });
+            await invoke("login", {
+                folderName: selectedProfile,
+                password,
+                cleanupOnLogin: true, // Perform storage cleanup on login
+            });
             info("Frontend: Login successful.");
             const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
             if (loggedInProfile) {

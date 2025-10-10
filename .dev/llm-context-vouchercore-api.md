@@ -42,9 +42,9 @@ Die `ProfileInfo`-Struktur enthält:
 
 Erstellt ein komplett neues Benutzerprofil. Diese Funktion leitet einen anonymen Ordnernamen aus den Secrets ab, speichert das Wallet in diesem Ordner und fügt einen Eintrag mit dem `profile_name` zur zentralen `profiles.json` hinzu. Bei Erfolg wird der Service in den `Unlocked`-Zustand versetzt.
 
-**`pub fn login(folder_name: &str, password: &str) -> Result<(), String>`**
+**`pub fn login(folder_name: &str, password: &str, cleanup_on_login: bool) -> Result<(), String>`**
 
-Entsperrt ein existierendes Wallet. Der `folder_name` wird typischerweise über die `list_profiles`-Funktion bezogen. Die Mnemonic-Phrase wird für den normalen Login **nicht** mehr benötigt.
+Entsperrt ein existierendes Wallet. Der `folder_name` wird typischerweise über die `list_profiles`-Funktion bezogen. Bei Bedarf kann eine Speicherbereinigung direkt beim Login durchgeführt werden.
 
 **`pub fn recover_wallet_and_set_new_password(folder_name: &str, mnemonic: &str, passphrase: Option<&str>, new_password: &str) -> Result<(), String>`**
 
@@ -78,6 +78,10 @@ Erstellt eine losgelöste Signatur als Antwort auf eine Signaturanfrage. Diese O
 
 Verarbeitet eine empfangene losgelöste Signatur, fügt sie dem lokalen Gutschein hinzu und speichert den Wallet-Zustand.
 
+**`pub fn import_resolution_endorsement(endorsement: ResolutionEndorsement, password: &str) -> Result<(), String>`**
+
+Importiert eine Beilegungserklärung für einen Double-Spend-Konflikt, fügt sie dem entsprechenden Beweis im Wallet hinzu und speichert den Zustand.
+
 **`pub fn save_encrypted_data(name: &str, data: &[u8], password: &str) -> Result<(), String>`**
 
 Speichert einen beliebigen Byte-Slice verschlüsselt auf der Festplatte. Diese Methode nutzt den gleichen sicheren Verschlüsselungsmechanismus wie das Wallet selbst. Ideal, um anwendungsspezifische Daten (z.B. Konfigurationen, Kontakte) sicher abzulegen.
@@ -97,6 +101,27 @@ Erzeugt eine neue, kryptografisch sichere BIP-39 Mnemonic-Phrase (Seed-Wörter).
 
 Überprüft eine gegebene Mnemonic-Phrase auf ihre Gültigkeit (korrekte Wörter, gültige Prüfsumme). Dies ist nützlich, um dem Benutzer bei der Eingabe zur Wiederherstellung eines Wallets sofortiges Feedback zu geben, bevor der eigentliche Login-Versuch unternommen wird.
 
+
+#### Konflikt-Management
+Diese Funktionen dienen der Verwaltung von Double-Spend-Konflikten.
+
+**`pub fn list_conflicts(&self) -> Result<Vec<ProofOfDoubleSpendSummary>, String>`**
+
+Gibt eine Liste von Zusammenfassungen aller bekannten Double-Spend-Konflikte im Wallet zurück.
+
+**`pub fn get_proof_of_double_spend(&self, proof_id: &str) -> Result<ProofOfDoubleSpend, String>`**
+
+Ruft einen vollständigen `ProofOfDoubleSpend` (den Beweis für einen Double-Spend-Versuch) anhand seiner ID ab. Ideal, um Details anzuzeigen oder den Beweis zu exportieren.
+
+**`pub fn create_resolution_endorsement(&self, proof_id: &str, notes: Option<String>) -> Result<ResolutionEndorsement, String>`**
+
+Erstellt eine signierte Beilegungserklärung für einen Konflikt. Dies ist eine vom Wallet-Inhaber (dem Opfer) signierte Nachricht, die bestätigt, dass der Konflikt aus seiner Sicht gelöst wurde. Diese Operation verändert den Wallet-Zustand nicht.
+
+**`pub fn run_storage_cleanup(&mut self) -> Result<CleanupReport, VoucherCoreError>`**
+
+Führt eine manuelle Bereinigung des Speichers für Transaktions-Fingerprints durch. Dies löscht abgelaufene und, falls nötig, die ältesten Fingerprints, um das Speicherlimit einzuhalten.
+
+---
 
 #### Abfragen (Queries)
 Diese Funktionen dienen dem reinen Lesezugriff auf das entsperrte Wallet und sind ideal, um die Benutzeroberfläche mit Daten zu befüllen. Sie benötigen keine Passwörter, da sie den Zustand des Wallets nicht verändern.
