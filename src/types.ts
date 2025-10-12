@@ -52,6 +52,7 @@ export interface AggregatedBalance {
 export interface VoucherStandardInfo {
     id: string;
     content: string;
+    decimal_places?: number; // NEU: Optionale Angabe der erlaubten Dezimalstellen
 }
 
 // NEU: Detaillierte Adress-Struktur

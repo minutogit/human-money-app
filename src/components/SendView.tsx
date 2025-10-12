@@ -102,6 +102,20 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
         }
         const newSelection = new Map<string, string>();
         let currentTotal = 0;
+
+        // Finde den ausgewählten Standard, um die korrekte Präzision zu ermitteln.
+        const selectedStandard = voucherStandards.find(s => s.id === selectedStandardId);
+        let precision = 4; // Ein sicherer Standard-Fallback.
+
+        // ROBUSTE LÖSUNG: Parse die Präzision direkt aus dem TOML-Content,
+        // da das Backend sie nicht als separates Feld bereitstellt.
+        if (selectedStandard) {
+            const match = selectedStandard.content.match(/amount_decimal_places\s*=\s*(\d+)/);
+            if (match && match[1]) {
+                precision = parseInt(match[1], 10);
+            }
+        }
+
         const sortedVouchers = [...filteredVouchers].sort((a, b) => parseFloat(a.current_amount) - parseFloat(b.current_amount));
         for (const voucher of sortedVouchers) {
             const voucherAmount = parseFloat(voucher.current_amount);
@@ -111,7 +125,8 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
             } else {
                 const neededAmount = targetAmount - currentTotal;
                 if (voucher.divisible) {
-                    newSelection.set(voucher.local_instance_id, neededAmount.toFixed(8));
+                    // KORREKTUR: Wende die dynamisch ermittelte Präzision an.
+                    newSelection.set(voucher.local_instance_id, neededAmount.toFixed(precision));
                     currentTotal += neededAmount;
                     break;
                 }
