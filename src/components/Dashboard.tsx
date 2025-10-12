@@ -9,6 +9,8 @@ import { AggregatedBalance, VoucherSummary } from "../types";
 interface DashboardProps {
     onNavigateToCreateVoucher: () => void;
     onShowDetails: (voucherId: string) => void;
+    onNavigateToSend: () => void;
+    onNavigateToHistory: () => void;
     profileName: string;
 }
 
@@ -162,9 +164,10 @@ export function Dashboard(props: DashboardProps) {
                     </section>
 
                     {/* Hauptaktionen */}
-                    <section className="flex justify-center gap-6 mb-8">
-                        <Button className="flex-1" disabled>Send</Button>
-                        <Button className="flex-1" disabled>Receive</Button>
+                    <section className="grid grid-cols-2 md:grid-cols-4 justify-center gap-4 mb-8">
+                        <Button onClick={props.onNavigateToSend} className="flex-1">Send</Button>
+                        <Button className="flex-1" disabled>Receive</Button> {/* Receive bleibt vorerst deaktiviert */}
+                        <Button onClick={props.onNavigateToHistory} variant="secondary" className="flex-1">History</Button>
                         <Button onClick={props.onNavigateToCreateVoucher} className="flex-1">Create Voucher</Button>
                     </section>
 

@@ -58,9 +58,16 @@ Sperrt das Wallet und entfernt sensible Daten wie private Schlüssel aus dem Spe
 
 Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand. Verifiziert zuerst die Standard-Definition, bevor der Gutschein erstellt wird.
 
-**`pub fn create_transfer_bundle(standard_definition: &VoucherStandardDefinition, local_instance_id: &str, recipient_id: &str, amount_to_send: &str, notes: Option<String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<Vec<u8>, String>`**
+**`pub fn create_transfer_bundle(request: MultiTransferRequest, standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<Vec<u8>, String>`**
 
-Erstellt ein verschlüsseltes `SecureContainer`-Bundle für einen Transfer an einen Empfänger. Dies ist der Kernprozess zum Senden von Werten. Das Ergebnis (`Vec<u8>`) sind die serialisierten Daten, die an den Empfänger gesendet werden müssen (z.B. als Datei oder QR-Code). Die Wallet wird automatisch gespeichert.
+Erstellt ein verschlüsseltes `SecureContainer`-Bundle für einen Transfer an einen Empfänger. Dies ist der Kernprozess zum Senden von Werten. Die Funktion akzeptiert eine `MultiTransferRequest`, die es ermöglicht, Guthaben von einem oder mehreren Quell-Gutscheinen in einer einzigen Transaktion zu bündeln.
+
+Die `MultiTransferRequest`-Struktur enthält:
+* `recipient_id: String`: Die User-ID des Empfängers.
+* `sources: Vec<SourceTransfer>`: Eine Liste von Quell-Gutscheinen, die für die Zahlung verwendet werden sollen. Jede `SourceTransfer` definiert `local_instance_id` und `amount_to_send`.
+* `notes: Option<String>`: Optionale Notizen für den Empfänger.
+
+Das Ergebnis (`Vec<u8>`) sind die serialisierten Daten, die an den Empfänger gesendet werden müssen (z.B. als Datei oder QR-Code). Die Wallet wird automatisch gespeichert.
 
 **`pub fn receive_bundle(bundle_data: &[u8], standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<ProcessBundleResult, String>`**
 

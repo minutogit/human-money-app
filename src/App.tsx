@@ -10,7 +10,10 @@ import { WalletRecovery } from "./components/WalletRecovery";
 import { Login } from "./components/Login";
 import { CreateVoucher } from "./components/CreateVoucher";
 import "./App.css";
- 
+import { SendView } from "./components/SendView";
+import { TransactionHistoryView } from "./components/TransactionHistoryView";
+import { TransferSuccessView } from "./components/TransferSuccessView";
+
 import { VoucherDetailsView } from "./components/VoucherDetailsView";
 import { ProfileInfo } from "./types";
 
@@ -21,7 +24,10 @@ type AppState =
     | { view: "logged_in" }
     | { view: "needs_recovery" }
     | { view: "create_voucher" }
-    | { view: "voucher_details"; voucherId: string };
+    | { view: "voucher_details"; voucherId: string }
+    | { view: "send_vouchers" }
+    | { view: "transaction_history" }
+    | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string };
 
 function App() {
     const [appState, setAppState] = useState<AppState>({ view: "loading" });
@@ -89,6 +95,8 @@ function App() {
                 return <Dashboard 
                     profileName={profileName}
                     onNavigateToCreateVoucher={() => setAppState({ view: "create_voucher" })}
+                    onNavigateToSend={() => setAppState({ view: "send_vouchers" })}
+                    onNavigateToHistory={() => setAppState({ view: "transaction_history" })}
                     onShowDetails={(voucherId) => setAppState({ view: "voucher_details", voucherId })}
                 />;
             case "needs_recovery":
@@ -99,7 +107,23 @@ function App() {
                 return <VoucherDetailsView 
                     voucherId={appState.voucherId} 
                     onBack={() => setAppState({ view: "logged_in" })}
-                />
+                />;
+            case "send_vouchers":
+                return <SendView 
+                    onBack={() => setAppState({ view: "logged_in" })}
+                    onTransferPrepared={(bundleData, recipientId, summary) =>
+                        setAppState({ view: "transfer_success", bundleData, recipientId, summary })
+                    }
+                />;
+            case "transaction_history":
+                return <TransactionHistoryView onBack={() => setAppState({ view: "logged_in" })} />;
+            case "transfer_success":
+                return <TransferSuccessView
+                    bundleData={appState.bundleData}
+                    recipientId={appState.recipientId}
+                    summary={appState.summary}
+                    onDone={() => setAppState({ view: "logged_in" })}
+                />;
             default:
                 return (
                     <div className="flex h-full w-full items-center justify-center">

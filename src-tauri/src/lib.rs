@@ -105,13 +105,18 @@ pub fn run() {
                 })
                 .build(),
         )
+        // Add the new plugins here
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             profile_exists, list_profiles, create_profile, login, recover_wallet_and_set_new_password, logout,
             generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic,
             get_user_id, get_total_balance_by_currency, get_voucher_summaries, get_voucher_details,
-            create_new_voucher, frontend_log, log_to_backend
+            create_new_voucher, create_transfer_bundle,
+            save_transaction_record, load_transaction_history,
+            frontend_log, log_to_backend
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

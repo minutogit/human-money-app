@@ -6,6 +6,13 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "clipboard-manager:allow-write-text"
+    "clipboard-manager:allow-write-text",
+    "log:default",
+    "dialog:allow-save",
+    "fs:allow-write-file",
+    {
+      "identifier": "fs:scope",
+      "allow": ["**"]
+    }
   ]
 }

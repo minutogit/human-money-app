@@ -19,6 +19,7 @@ pub fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<Ve
 #[tauri::command]
 pub fn get_voucher_summaries(state: tauri::State<AppState>) -> Result<Vec<VoucherSummary>, String> {
     let service = state.0.lock().unwrap();
+    // The robust filtering is handled in the frontend; the backend's job is to fetch all summaries.
     service.get_voucher_summaries(None, None)
 }
 

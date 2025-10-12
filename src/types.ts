@@ -35,6 +35,7 @@ export interface VoucherSummary {
     creator_last_name: string;
     creator_coordinates: string;
     non_redeemable_test_voucher: boolean;
+    divisible?: boolean; // Add optional divisible property
 }
 
 /**
@@ -156,4 +157,41 @@ export interface Transaction {
     sender_remaining_amount?: string;
     sender_signature: string;
     prev_hash: string;
+}
+
+// NEU: Typen für die Transfer-Erstellung
+
+/**
+ * Definiert eine einzelne Quelle für einen Transfer.
+ * Entspricht `SourceTransfer` in voucher_lib.
+ */
+export interface SourceTransfer {
+    local_instance_id: string;
+    amount_to_send: string;
+}
+
+/**
+ * Definiert die Anfrage für einen Transfer mit mehreren Quellen.
+ * Entspricht `MultiTransferRequest` in voucher_lib.
+ */
+export interface MultiTransferRequest {
+    recipient_id: string;
+    sources: SourceTransfer[];
+    notes?: string;
+}
+
+
+/**
+ * Repräsentiert einen einzelnen Eintrag im Transaktionsverlauf ("Kontoauszug").
+ * Entspricht der `TransactionRecord` Rust-Struktur.
+ */
+export interface TransactionRecord {
+    id: string; // Eindeutige ID, z.B. UUID v4, im Frontend generiert
+    direction: 'sent' | 'received';
+    recipient_id: string;
+    sender_id: string; // Eigene User-ID bei 'sent'
+    timestamp: string; // ISO 8601 Zeitstempel
+    total_amount_by_unit: Record<string, string>; // z.B. { "Minuto": "50.00" }
+    involved_vouchers: string[]; // local_instance_ids
+    bundle_data: number[]; // Das `Vec<u8>` Transfer-Bundle
 }
