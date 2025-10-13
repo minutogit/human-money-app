@@ -4,6 +4,7 @@
 
 pub mod commands;
 pub mod models;
+pub mod settings;
 
 use chrono::Local;
 use std::fs;
@@ -19,6 +20,8 @@ use tauri_plugin_log::{
 use voucher_lib::app_service::AppService;
 
 use crate::commands::{actions::*, auth::*, queries::*, utils::*};
+use crate::commands::actions::TransactionRecord;
+use crate::settings::AppSettings;
 
 const LOG_TARGET_NAME: &str = "voucher_wallet_client.log";
 
@@ -53,7 +56,11 @@ fn setup_log_rotation(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-pub struct AppState(Mutex<AppService>);
+pub struct AppState {
+    pub service: Mutex<AppService>,
+    pub history: Mutex<Option<Vec<TransactionRecord>>>,
+    pub settings: Mutex<Option<AppSettings>>,
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -78,7 +85,11 @@ pub fn run() {
             info!("Using wallet data path: {}", wallet_path.display());
 
             let service = AppService::new(&wallet_path).expect("Failed to create AppService");
-            app.manage(AppState(Mutex::new(service)));
+            app.manage(AppState {
+                service: Mutex::new(service),
+                history: Mutex::new(None),
+                settings: Mutex::new(None),
+            });
 
             Ok(())
         })
@@ -114,8 +125,9 @@ pub fn run() {
             profile_exists, list_profiles, create_profile, login, recover_wallet_and_set_new_password, logout,
             generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic,
             get_user_id, get_total_balance_by_currency, get_voucher_summaries, get_voucher_details,
-            create_new_voucher, create_transfer_bundle,
-            save_transaction_record, load_transaction_history,
+            create_new_voucher, create_transfer_bundle, save_transaction_record,
+            get_transaction_history,
+            get_app_settings, save_app_settings,
             frontend_log, log_to_backend
         ])
         .run(tauri::generate_context!())

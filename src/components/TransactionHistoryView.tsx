@@ -2,6 +2,8 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/log';
+import { save } from '@tauri-apps/plugin-dialog';
+import { writeFile } from '@tauri-apps/plugin-fs';
 import { Button } from './ui/Button';
 import { TransactionRecord } from '../types';
 
@@ -20,19 +22,17 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
     const [history, setHistory] = useState<TransactionRecord[]>([]);
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(true);
+    const [feedback, setFeedback] = useState<{ [key: string]: string }>({});
+    const [isSaving, setIsSaving] = useState<string | null>(null);
 
     useEffect(() => {
         async function fetchHistory() {
             logger.info("TransactionHistoryView: Attempting to load history.");
-            const password = window.prompt("Please enter your wallet password to view your transaction history:");
-            if (!password) {
-                logger.warn("No password provided. Aborting history load.");
-                onBack();
-                return;
-            }
+
 
             try {
-                const records = await invoke<TransactionRecord[]>("load_transaction_history", { password });
+                // Ruft die Historie aus dem Cache ab, kein Passwort erforderlich.
+                const records = await invoke<TransactionRecord[]>("get_transaction_history");
                 // Sort records by timestamp, newest first
                 records.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
                 setHistory(records);
@@ -46,7 +46,43 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
             }
         }
         fetchHistory();
-    }, [onBack]);
+    }, []); // onBack aus den Abhängigkeiten entfernt, da es nicht mehr für den Abbruch benötigt wird.
+
+    async function handleSaveBundle(record: TransactionRecord) {
+        if (!record.bundle_data || record.bundle_data.length === 0) {
+            setFeedback(f => ({ ...f, [record.id]: 'Error: No bundle data available for this record.' }));
+            return;
+        }
+
+        setIsSaving(record.id);
+        setFeedback(f => ({ ...f, [record.id]: '' }));
+
+        try {
+            const suggestedFilename = `transfer-for-${record.recipient_id.substring(8, 20)}-${new Date(record.timestamp).toISOString().split('T')[0]}.minuto-bundle`;
+
+            const filePath = await save({
+                title: 'Save Transfer Bundle Again',
+                defaultPath: suggestedFilename,
+                filters: [{ name: 'Minuto Bundle', extensions: ['minuto-bundle'] }]
+            });
+
+            if (filePath) {
+                const content = new Uint8Array(record.bundle_data);
+                await writeFile(filePath, content);
+                logger.info(`Successfully re-saved transfer bundle to ${filePath}`);
+                setFeedback(f => ({ ...f, [record.id]: `Saved successfully!` }));
+            } else {
+                logger.info('File re-save dialog was cancelled.');
+            }
+
+        } catch (e) {
+            const msg = `Failed to re-save file: ${e}`;
+            logger.error(msg);
+            setFeedback(f => ({ ...f, [record.id]: `Error: ${msg}` }));
+        } finally {
+            setIsSaving(null);
+        }
+    }
 
     return (
         <div className="flex flex-col h-full max-w-4xl mx-auto">
@@ -89,6 +125,17 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                         </p>
                                     </div>
                                 </div>
+                                {/* NEU: Button zum erneuten Speichern */}
+                                {record.direction === 'sent' && record.bundle_data && record.bundle_data.length > 0 && (
+                                    <div className="border-t border-theme-subtle mt-4 pt-3 text-right">
+                                        <div className="flex justify-end items-center gap-4">
+                                            {feedback[record.id] && <p className="text-xs text-theme-light">{feedback[record.id]}</p>}
+                                            <Button size="sm" variant="outline" onClick={() => handleSaveBundle(record)} disabled={isSaving === record.id}>
+                                                {isSaving === record.id ? 'Saving...' : 'Save Bundle'}
+                                            </Button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )) : (
                             <div className="text-center text-theme-light py-8 bg-input-readonly rounded-lg border border-theme-subtle">

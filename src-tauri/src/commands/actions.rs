@@ -1,10 +1,11 @@
 // src-tauri/src/commands/actions.rs
-use crate::{models::FrontendNewVoucherData, AppState};
-use log::{error, info};
+use crate::{models::FrontendNewVoucherData, AppState, settings::{AppSettings, SETTINGS_KEY}};
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use voucher_lib::{
     archive::VoucherArchive, // Korrigierter Importpfad
+    app_service::AppService,
     models::voucher::Voucher,
     services::voucher_manager::NewVoucherData,
     wallet::{MultiTransferRequest, SourceTransfer}, // Korrigierter Importpfad
@@ -16,16 +17,16 @@ pub struct FrontendSourceTransfer {
     amount_to_send: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct TransactionRecord {
-    id: String,
-    direction: String, // "sent" or "received"
-    recipient_id: String,
-    sender_id: String,
-    timestamp: String, // ISO 8601
-    total_amount_by_unit: HashMap<String, String>,
-    involved_vouchers: Vec<String>, // local_instance_ids
-    bundle_data: Vec<u8>,
+    pub id: String,
+    pub direction: String, // "sent" or "received"
+    pub recipient_id: String,
+    pub sender_id: String,
+    pub timestamp: String, // ISO 8601
+    pub total_amount_by_unit: HashMap<String, String>,
+    pub involved_vouchers: Vec<String>, // local_instance_ids
+    pub bundle_data: Vec<u8>,
 }
 
 #[tauri::command]
@@ -42,7 +43,7 @@ pub fn create_transfer_bundle(
         "Attempting to create a transfer bundle for recipient: {}",
         recipient_id
     );
-    let mut service = state.0.lock().unwrap();
+    let mut service = state.service.lock().unwrap();
 
     let source_transfers = sources
         .into_iter()
@@ -67,7 +68,7 @@ pub fn create_transfer_bundle(
     service.create_transfer_bundle(request, &standard_definitions_toml, archive, &password)
 }
 
-const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
+pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
 
 #[tauri::command]
 pub fn save_transaction_record(
@@ -76,45 +77,76 @@ pub fn save_transaction_record(
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
     info!("Saving new transaction record with id: {}", record.id);
-    // KORRIGIERT: `service` ist jetzt als `mut` deklariert.
-    let mut service = state.0.lock().unwrap();
+    let mut service = state.service.lock().unwrap();
 
-    // 1. Lade die bestehende History (falls vorhanden)
-    let mut history: Vec<TransactionRecord> =
-        match service.load_encrypted_data(TRANSACTION_HISTORY_KEY, &password) {
-            Ok(data) => serde_json::from_slice(&data).unwrap_or_else(|e| {
-                error!(
-                    "Failed to parse existing transaction history, starting fresh: {}",
-                    e
-                );
-                Vec::new()
-            }),
-            Err(_) => {
-                info!("No existing transaction history found. Creating a new one.");
-                Vec::new()
-            }
-        };
+    // 1. Lade die bestehende History vom Speicher
+    let mut history = load_history_from_disk(&service, &password)?;
 
     // 2. Füge den neuen Record hinzu
+    let new_record = record.clone();
     history.push(record);
 
-    // 3. Speichere die aktualisierte History
+    // 3. Speichere die aktualisierte History auf der Festplatte
     let history_bytes = serde_json::to_vec(&history).map_err(|e| e.to_string())?;
-    service.save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, &password)
+    service.save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, &password)?;
+
+    // 4. Aktualisiere den Cache im AppState
+    let mut history_cache = state.history.lock().unwrap();
+    if let Some(cache) = history_cache.as_mut() {
+        cache.push(new_record);
+    } else {
+        // Sollte nicht passieren, wenn der User eingeloggt ist, aber als Fallback.
+        *history_cache = Some(history);
+    }
+    Ok(())
+}
+
+// Hilfsfunktion, um das Laden zu zentralisieren
+pub fn load_history_from_disk(
+    service: &AppService,
+    password: &str,
+) -> Result<Vec<TransactionRecord>, String> {
+    match service.load_encrypted_data(TRANSACTION_HISTORY_KEY, password) {
+        Ok(data) => serde_json::from_slice(&data)
+            .map_err(|e| format!("Failed to parse transaction history: {}", e)),
+        Err(_) => Ok(Vec::new()), // Keine History ist kein Fehler
+    }
 }
 
 #[tauri::command]
-pub fn load_transaction_history(
+pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<TransactionRecord>, String> {
+    info!("Getting transaction history from cache...");
+    let history_cache = state.history.lock().unwrap();
+    history_cache
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| "Transaction history not available. User might be logged out.".to_string())
+}
+
+#[tauri::command]
+pub fn get_app_settings(state: tauri::State<AppState>) -> Result<AppSettings, String> {
+    info!("Getting app settings from cache...");
+    let settings_cache = state.settings.lock().unwrap();
+    settings_cache
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| "Settings not available. User might be logged out.".to_string())
+}
+
+#[tauri::command]
+pub fn save_app_settings(
+    settings: AppSettings,
     password: String,
     state: tauri::State<AppState>,
-) -> Result<Vec<TransactionRecord>, String> {
-    info!("Loading transaction history...");
-    let service = state.0.lock().unwrap();
-    let data = service.load_encrypted_data(TRANSACTION_HISTORY_KEY, &password)?;
-    serde_json::from_slice(&data).map_err(|e| {
-        error!("Failed to parse transaction history data: {}", e);
-        e.to_string()
-    })
+) -> Result<(), String> {
+    info!("Saving app settings to disk...");
+    let mut service = state.service.lock().unwrap();
+    let bytes = serde_json::to_vec(&settings).map_err(|e| e.to_string())?;
+    service.save_encrypted_data(SETTINGS_KEY, &bytes, &password)?;
+
+    *state.settings.lock().unwrap() = Some(settings);
+    info!("App settings saved and cache updated successfully.");
+    Ok(())
 }
 
 #[tauri::command]
@@ -125,7 +157,7 @@ pub fn create_new_voucher(
     state: tauri::State<AppState>,
 ) -> Result<Voucher, String> {
     info!("Attempting to create a new voucher...");
-    let mut service = state.0.lock().unwrap();
+    let mut service = state.service.lock().unwrap();
     // For the prototype, language preference is hardcoded.
     let lang_preference = "en-US";
 

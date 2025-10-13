@@ -196,3 +196,11 @@ export interface TransactionRecord {
     involved_vouchers: string[]; // local_instance_ids
     bundle_data: number[]; // Das `Vec<u8>` Transfer-Bundle
 }
+
+/**
+ * Repräsentiert die anwendungsspezifischen Einstellungen.
+ * Entspricht der `AppSettings` Rust-Struktur.
+ */
+export interface AppSettings {
+    bundle_retention_days: number;
+}

@@ -11,6 +11,7 @@ import { Login } from "./components/Login";
 import { CreateVoucher } from "./components/CreateVoucher";
 import "./App.css";
 import { SendView } from "./components/SendView";
+import { SettingsView } from "./components/SettingsView";
 import { TransactionHistoryView } from "./components/TransactionHistoryView";
 import { TransferSuccessView } from "./components/TransferSuccessView";
 
@@ -23,6 +24,7 @@ type AppState =
     | { view: "needs_login" }
     | { view: "logged_in" }
     | { view: "needs_recovery" }
+    | { view: "settings" }
     | { view: "create_voucher" }
     | { view: "voucher_details"; voucherId: string }
     | { view: "send_vouchers" }
@@ -99,6 +101,8 @@ function App() {
                     onNavigateToHistory={() => setAppState({ view: "transaction_history" })}
                     onShowDetails={(voucherId) => setAppState({ view: "voucher_details", voucherId })}
                 />;
+            case "settings":
+                return <SettingsView onBack={() => setAppState({ view: "logged_in" })} />;
             case "needs_recovery":
                 return <WalletRecovery onRecoverySuccess={() => setAppState({ view: "logged_in" })} onSwitchToLogin={() => setAppState({ view: "needs_login" })} />;
             case "create_voucher":
@@ -151,8 +155,8 @@ function App() {
                             <nav className="flex flex-grow flex-col space-y-2">
                                 <a href="#" className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Dashboard</a>
                                 <a href="#" className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Send</a>
-                                <a href="#" className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Receive</a>
-                                <a href="#" className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Settings</a>
+                                <a href="#" className="rounded-md px-4 py-2 text-gray-500 cursor-not-allowed">Receive</a>
+                                <a href="#" onClick={() => setAppState({ view: 'settings' })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Settings</a>
                             </nav>
                             <div className="mt-auto border-t border-theme-subtle pt-4">
                                 <button onClick={handleLogout} className="w-full rounded-md px-4 py-2 text-left text-theme-secondary hover:bg-bg-app focus:outline-none focus:ring-2 focus:ring-theme-accent">
