@@ -1,12 +1,10 @@
 // src/App.tsx
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { webviewWindow } from '@tauri-apps/api';
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { error } from "@tauri-apps/plugin-log";
 import { logger } from "./utils/log";
-import { CreateProfile } from "./components/CreateProfile";
-import { Dashboard } from "./components/Dashboard";
-import { WalletRecovery } from "./components/WalletRecovery";
+import { CreateProfile } from './components/CreateProfile';
 import { Login } from "./components/Login";
 import { CreateVoucher } from "./components/CreateVoucher";
 import "./App.css";
@@ -14,9 +12,12 @@ import { SendView } from "./components/SendView";
 import { SettingsView } from "./components/SettingsView";
 import { TransactionHistoryView } from "./components/TransactionHistoryView";
 import { TransferSuccessView } from "./components/TransferSuccessView";
-
-import { VoucherDetailsView } from "./components/VoucherDetailsView";
-import { ProfileInfo } from "./types";
+import { VoucherDetailsView } from './components/VoucherDetailsView';
+import { ReceiveView } from './components/ReceiveView';
+import { ReceiveSuccessView } from './components/ReceiveSuccessView';
+import { Dashboard } from './components/Dashboard';
+import { WalletRecovery } from './components/WalletRecovery';
+import { ProfileInfo, ReceiveSuccessPayload } from './types';
 
 type AppState =
     | { view: "loading" }
@@ -28,8 +29,10 @@ type AppState =
     | { view: "create_voucher" }
     | { view: "voucher_details"; voucherId: string }
     | { view: "send_vouchers" }
+    | { view: "receive_bundle" }
     | { view: "transaction_history" }
-    | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string };
+    | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string }
+    | { view: "receive_success"; payload: ReceiveSuccessPayload };
 
 function App() {
     const [appState, setAppState] = useState<AppState>({ view: "loading" });
@@ -55,7 +58,7 @@ function App() {
 
     useEffect(() => {
         async function updateTitle() {
-            const win = webviewWindow.getCurrentWebviewWindow();
+            const win = getCurrentWindow();
             if (profileName) {
                 await win.setTitle(`Voucher Wallet - ${profileName}`);
             } else {
@@ -98,6 +101,7 @@ function App() {
                     profileName={profileName}
                     onNavigateToCreateVoucher={() => setAppState({ view: "create_voucher" })}
                     onNavigateToSend={() => setAppState({ view: "send_vouchers" })}
+                    onNavigateToReceive={() => setAppState({ view: "receive_bundle" })}
                     onNavigateToHistory={() => setAppState({ view: "transaction_history" })}
                     onShowDetails={(voucherId) => setAppState({ view: "voucher_details", voucherId })}
                 />;
@@ -119,6 +123,13 @@ function App() {
                         setAppState({ view: "transfer_success", bundleData, recipientId, summary })
                     }
                 />;
+            case "receive_bundle":
+                return <ReceiveView
+                    onBack={() => setAppState({ view: "logged_in" })}
+                    onReceiveSuccess={(payload) => {
+                        setAppState({ view: "receive_success", payload })
+                    }}
+                />;
             case "transaction_history":
                 return <TransactionHistoryView onBack={() => setAppState({ view: "logged_in" })} />;
             case "transfer_success":
@@ -128,6 +139,8 @@ function App() {
                     summary={appState.summary}
                     onDone={() => setAppState({ view: "logged_in" })}
                 />;
+            case "receive_success":
+                return <ReceiveSuccessView payload={appState.payload} onDone={() => setAppState({ view: "logged_in" })} />;
             default:
                 return (
                     <div className="flex h-full w-full items-center justify-center">
@@ -152,10 +165,10 @@ function App() {
                                 <h1 className="text-xl font-bold text-theme-primary">Voucher Wallet</h1>
                                 <p className="text-sm text-theme-light">Prototype v0.1</p>
                             </div>
-                            <nav className="flex flex-grow flex-col space-y-2">
-                                <a href="#" className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Dashboard</a>
-                                <a href="#" className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Send</a>
-                                <a href="#" className="rounded-md px-4 py-2 text-gray-500 cursor-not-allowed">Receive</a>
+                            <nav className="flex flex-grow flex-col space-y-2 text-left">
+                                <button onClick={() => setAppState({ view: "logged_in" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Dashboard</button>
+                                <button onClick={() => setAppState({ view: "send_vouchers" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Send</button>
+                                <button onClick={() => setAppState({ view: "receive_bundle" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Receive</button>
                                 <a href="#" onClick={() => setAppState({ view: 'settings' })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Settings</a>
                             </nav>
                             <div className="mt-auto border-t border-theme-subtle pt-4">

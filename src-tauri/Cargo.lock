@@ -5521,6 +5521,7 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-log",
  "tauri-plugin-opener",
+ "uuid",
  "voucher_lib",
 ]
 

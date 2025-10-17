@@ -19,8 +19,9 @@ Die Anwendung folgt einer strikten Trennung von Backend und Frontend.
 * **Kommandomodulstruktur:** Die Tauri-Befehle sind in mehrere Module aufgeteilt:
   * `commands/auth.rs`: Authentifizierungsbezogene Befehle
   * `commands/queries.rs`: Abfragebezogene Befehle
-  * `commands/actions.rs`: Aktionen wie Gutscheinerstellung
+  * `commands/actions.rs`: Aktionen wie Gutscheinerstellung und Transaktionen
   * `commands/utils.rs`: Hilfsfunktionen und Logging
+  * `settings.rs`: Konfigurations- und Einstellungsverwaltung
 * **Datenmodelle:** Zusätzliche Datenstrukturen in `models.rs` dienen zum Austausch zwischen Frontend und Backend.
 
 **Frontend (React - src)**
@@ -47,6 +48,7 @@ Die folgenden Funktionen der `voucher_lib` sollen implementiert werden:
   * `logout`
   * `generate_mnemonic`
   * `validate_mnemonic`
+  * `list_profiles` (neu für Multi-Profile-Unterstützung)
 * **Dashboard-Anzeige:**
   * `get_user_id`
   * `get_total_balance_by_currency`
@@ -55,6 +57,9 @@ Die folgenden Funktionen der `voucher_lib` sollen implementiert werden:
 * **Transaktionen:**
   * `create_transfer_bundle`
   * `receive_bundle`
+  * `get_transaction_history`
+  * `save_transaction_bundle`
+  * `cleanup_expired_bundles`
 * **Gutschein-Management:**
   * `create_new_voucher`
   * `get_voucher_standards`
@@ -84,6 +89,12 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 │   │   ├── CreateVoucher.tsx
 │   │   ├── Dashboard.tsx
 │   │   ├── Login.tsx
+│   │   ├── ReceiveSuccessView.tsx (Bundle-Empfangsbestätigung)
+│   │   ├── ReceiveView.tsx (Bundle-Empfangskomponente mit Drag & Drop)
+│   │   ├── SendView.tsx (Gutscheinversandkomponente)
+│   │   ├── SettingsView.tsx ( Einstellungen für Bundle-Retention)
+│   │   ├── TransactionHistoryView.tsx (Transaktionshistorie)
+│   │   ├── TransferSuccessView.tsx (Versandbestätigung)
 │   │   ├── ui
 │   │   │   ├── Button.tsx
 │   │   │   ├── Input.tsx
@@ -108,7 +119,8 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 │   │   │   └── utils.rs
 │   │   ├── lib.rs
 │   │   ├── main.rs
-│   │   └── models.rs
+│   │   ├── models.rs
+│   │   └── settings.rs (Einstellungsverwaltung)
 │   ├── tauri.conf.json
 │   └── wallet_data
 │       ├── bundles.meta.enc
@@ -131,24 +143,31 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 **6. Implementierte Kernfunktionen**
 
 * **Frontend (src/)**
-  * `App.tsx`: Hauptkomponente mit State-Management für die Anwendungsphasen (Profil erstellen, Login, Dashboard, Passwort zurücksetzen, Gutschein erstellen, Gutschein Details anzeigen)
+  * `App.tsx`: Hauptkomponente mit State-Management für die Anwendungsphasen (Profil erstellen, Login, Dashboard, Passwort zurücksetzen, Gutschein erstellen, Gutschein Details anzeigen, Senden, Empfangen, Einstellungen)
   * `components/Dashboard.tsx`: Zeigt Benutzer-ID, Guthaben und Gutscheinübersicht an
-  * `components/CreateProfile.tsx`: Formular zur Profilerstellung mit Mnemonic-Generierung
-  * `components/Login.tsx`: Login-Formular mit Passwort-Eingabe
+  * `components/CreateProfile.tsx`: Formular zur Profilerstellung mit Mnemonic-Generierung und Profilnameneingabe
+  * `components/Login.tsx`: Login-Formular mit Profilauswahl und Passwort-Eingabe
   * `components/VoucherDetailsView.tsx`: Detaillierte Ansicht für einen einzelnen Gutschein mit allen Eigenschaften, Transaktionshistorie und Signaturinformationen
   * `components/CreateVoucher.tsx`: Formular zur Erstellung neuer Gutscheine mit umfassenden Details zum Ersteller und zur Besicherung
-  * `components/WalletRecovery.tsx`: Formular zur Wiederherstellung des Wallets mit Mnemonic
-  * `types.ts`: TypeScript-Interfaces für `VoucherSummary`, `VoucherDetails`, `NewVoucherData` und andere komplexe Datentypen
+  * `components/WalletRecovery.tsx`: Formular zur Wiederherstellung des Wallets mit Profilauswahl und Mnemonic
+  * `components/SendView.tsx`: Komponente zum Erstellen und Vorbereiten von Transfer-Bundles
+  * `components/ReceiveView.tsx`: Komponente zum Empfangen von Transfer-Bundles mit Datei-Dialog und Drag & Drop Unterstützung
+  * `components/TransactionHistoryView.tsx`: Zeigt vergangene Sende-Transaktionen an
+  * `components/SettingsView.tsx`: Ermöglicht die Konfiguration von Anwendungseinstellungen wie Bundle-Retention-Period
+  * `components/TransferSuccessView.tsx`: Zeigt Erfolgsmeldung nach erfolgreichem Versand und ermöglicht Bundle-Speicherung
+  * `components/ReceiveSuccessView.tsx`: Zeigt Zusammenfassung nach erfolgreichem Empfang einer Transaktion
+  * `types.ts`: TypeScript-Interfaces für `VoucherSummary`, `VoucherDetails`, `NewVoucherData`, `TransactionHistoryEntry`, `ProfileInfo` und andere komplexe Datentypen
   * `utils/log.ts`: Frontend-Logging-Utility für konsistentes Logging ins Backend
 
 * **Backend (src-tauri/)**
   * `src/lib.rs`: Hauptdatei mit allen Tauri-Befehlen, die die `voucher_lib::AppService`-Fassade nutzen
   * `src/main.rs`: Einstiegspunkt, der die `run()`-Funktion aus `lib.rs` aufruft
-  * `src/commands/actions.rs`: Implementierung von Voucher-Aktionen wie `create_new_voucher`
-  * `src/commands/auth.rs`: Authentifizierungsbezogene Befehle wie `create_profile`, `login`, `logout`
-  * `src/commands/queries.rs`: Abfragebezogene Befehle wie `get_voucher_summaries`, `get_voucher_details`
+  * `src/commands/actions.rs`: Implementierung von Voucher-Aktionen wie `create_new_voucher`, `create_transfer_bundle`, `receive_bundle`
+  * `src/commands/auth.rs`: Authentifizierungsbezogene Befehle wie `create_profile`, `login`, `logout`, `list_profiles`
+  * `src/commands/queries.rs`: Abfragebezogene Befehle wie `get_voucher_summaries`, `get_voucher_details`, `get_transaction_history`
   * `src/commands/utils.rs`: Hilfsfunktionen wie `generate_mnemonic`, `get_voucher_standards`, `frontend_log`, `log_to_backend`
   * `src/models.rs`: Datenstrukturdefinitionen für den Austausch zwischen Frontend und Backend
+  * `src/settings.rs`: Implementierung der Einstellungs- und Konfigurationsverwaltung mit Speicherung in verschlüsselter Datei
 
 **7. Logging**
 
@@ -165,3 +184,12 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
     }, []);
     ```
   * Alternativ kann weiterhin der direkte Befehl verwendet werden: `invoke("frontend_log", { message: "Deine Log-Nachricht" }).catch(console.error);`
+
+**8. Weitere Features**
+
+* **Multi-Profile-Unterstützung:** Das System unterstützt nun mehrere Benutzerprofile, die über ein Auswahlinterface verwaltet werden können. Beim Erstellen eines Profils kann ein menschenlesbarer Profilname vergeben werden, und bei der Anmeldung erfolgt eine Profilauswahl.
+* **Bundle-Empfangsworkflow:** Neue Komponenten `ReceiveView` und `ReceiveSuccessView` ermöglichen den Empfang von Transfer-Bundles über Dateidialog oder Drag & Drop. Der `dragDropEnabled`-Parameter in `tauri.conf.json` wurde auf `false` gesetzt, um native Browser-Events zu ermöglichen.
+* **Send-Workflow und Transaktionshistorie:** Neue Komponenten `SendView`, `TransactionHistoryView` und `TransferSuccessView` implementieren den kompletten Workflow zum Versenden von Gutscheinen und zur Anzeige der Transaktionshistorie.
+* **In-Memory-Caching:** Die Transaktionshistorie und App-Einstellungen werden nach der Anmeldung einmal entschlüsselt und im Speicher gecached, um wiederholte Passwortabfragen zu vermeiden.
+* **Automatisches Bereinigen:** Beim Login werden automatisch abgelaufene Transfer-Bundle-Daten aus dem Verlauf gelöscht, basierend auf dem konfigurierten Aufbewahrungszeitraum.
+* **Log-Rotation:** Implementierung einer Log-Rotationsfunktion, die beim Start die Größe der Logdatei prüft und diese bei Überschreitung eines definierten Limits kürzt. Logging wird zusätzlich in eine Datei im Anwendungs-Log-Verzeichnis geschrieben.

@@ -5,11 +5,17 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:default",
+    "core:window:allow-set-title",
+    "core:event:allow-listen",
     "opener:default",
     "clipboard-manager:allow-write-text",
     "log:default",
+    "dialog:allow-open",
     "dialog:allow-save",
+    "fs:default",
     "fs:allow-write-file",
+    "fs:allow-read-file",
     {
       "identifier": "fs:scope",
       "allow": ["**"]

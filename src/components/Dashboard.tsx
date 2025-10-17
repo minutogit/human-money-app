@@ -11,6 +11,7 @@ interface DashboardProps {
     onShowDetails: (voucherId: string) => void;
     onNavigateToSend: () => void;
     onNavigateToHistory: () => void;
+    onNavigateToReceive: () => void;
     profileName: string;
 }
 
@@ -166,7 +167,7 @@ export function Dashboard(props: DashboardProps) {
                     {/* Hauptaktionen */}
                     <section className="grid grid-cols-2 md:grid-cols-4 justify-center gap-4 mb-8">
                         <Button onClick={props.onNavigateToSend} className="flex-1">Send</Button>
-                        <Button className="flex-1" disabled>Receive</Button> {/* Receive bleibt vorerst deaktiviert */}
+                        <Button onClick={props.onNavigateToReceive} className="flex-1">Receive</Button>
                         <Button onClick={props.onNavigateToHistory} variant="secondary" className="flex-1">History</Button>
                         <Button onClick={props.onNavigateToCreateVoucher} className="flex-1">Create Voucher</Button>
                     </section>

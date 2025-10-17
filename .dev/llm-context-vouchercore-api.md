@@ -30,7 +30,7 @@ Der `AppService` ist die einzige Schnittstelle, die für die Entwicklung der Cli
 
 Initialisiert einen neuen `AppService` im `Locked`-Zustand. Erstellt eine `FileStorage`-Instanz für den angegebenen Pfad. Das Verzeichnis wird bei Bedarf erstellt.
 
-**`pub fn list_profiles() -> Result<Vec<ProfileInfo>, String>`**
+**`pub fn list_profiles(&self) -> Result<Vec<ProfileInfo>, String>`**
 
 Listet alle verfügbaren, im Basisverzeichnis konfigurierten Profile auf. Liest die zentrale `profiles.json`-Datei und gibt eine Liste von `ProfileInfo`-Objekten zurück, die für die Anzeige in einem Login-Screen verwendet werden kann.
 
@@ -38,15 +38,15 @@ Die `ProfileInfo`-Struktur enthält:
 * `profile_name: String`: Der vom Benutzer gewählte, menschenlesbare Name.
 * `folder_name: String`: Der anonyme Ordnername, der für `login` benötigt wird.
 
-**`pub fn create_profile(profile_name: &str, mnemonic: &str, passphrase: Option<&str>, user_prefix: Option<&str>, password: &str) -> Result<(), String>`**
+**`pub fn create_profile(&mut self, profile_name: &str, mnemonic: &str, passphrase: Option<&str>, user_prefix: Option<&str>, password: &str) -> Result<(), String>`**
 
 Erstellt ein komplett neues Benutzerprofil. Diese Funktion leitet einen anonymen Ordnernamen aus den Secrets ab, speichert das Wallet in diesem Ordner und fügt einen Eintrag mit dem `profile_name` zur zentralen `profiles.json` hinzu. Bei Erfolg wird der Service in den `Unlocked`-Zustand versetzt.
 
-**`pub fn login(folder_name: &str, password: &str, cleanup_on_login: bool) -> Result<(), String>`**
+**`pub fn login(&mut self, folder_name: &str, password: &str, cleanup_on_login: bool) -> Result<(), String>`**
 
 Entsperrt ein existierendes Wallet. Der `folder_name` wird typischerweise über die `list_profiles`-Funktion bezogen. Bei Bedarf kann eine Speicherbereinigung direkt beim Login durchgeführt werden.
 
-**`pub fn recover_wallet_and_set_new_password(folder_name: &str, mnemonic: &str, passphrase: Option<&str>, new_password: &str) -> Result<(), String>`**
+**`pub fn recover_wallet_and_set_new_password(&mut self, folder_name: &str, mnemonic: &str, passphrase: Option<&str>, new_password: &str) -> Result<(), String>`**
 
 Stellt ein Wallet mithilfe der Mnemonic-Phrase wieder her und setzt ein neues Passwort. Der `folder_name` gibt an, welches Profil wiederhergestellt werden soll. Bei Erfolg wird der Service in den `Unlocked`-Zustand versetzt.
 
@@ -54,11 +54,11 @@ Stellt ein Wallet mithilfe der Mnemonic-Phrase wieder her und setzt ein neues Pa
 
 Sperrt das Wallet und entfernt sensible Daten wie private Schlüssel aus dem Speicher. Diese Operation kann nicht fehlschlagen.
 
-**`pub fn create_new_voucher(standard_toml_content: &str, lang_preference: &str, data: NewVoucherData, password: &str) -> Result<Voucher, String>`**
+**`pub fn create_new_voucher(&mut self, standard_toml_content: &str, lang_preference: &str, data: NewVoucherData, password: &str) -> Result<Voucher, String>`**
 
 Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand. Verifiziert zuerst die Standard-Definition, bevor der Gutschein erstellt wird.
 
-**`pub fn create_transfer_bundle(request: MultiTransferRequest, standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<Vec<u8>, String>`**
+**`pub fn create_transfer_bundle(&mut self, request: MultiTransferRequest, standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<Vec<u8>, String>`**
 
 Erstellt ein verschlüsseltes `SecureContainer`-Bundle für einen Transfer an einen Empfänger. Dies ist der Kernprozess zum Senden von Werten. Die Funktion akzeptiert eine `MultiTransferRequest`, die es ermöglicht, Guthaben von einem oder mehreren Quell-Gutscheinen in einer einzigen Transaktion zu bündeln.
 
@@ -69,27 +69,27 @@ Die `MultiTransferRequest`-Struktur enthält:
 
 Das Ergebnis (`Vec<u8>`) sind die serialisierten Daten, die an den Empfänger gesendet werden müssen (z.B. als Datei oder QR-Code). Die Wallet wird automatisch gespeichert.
 
-**`pub fn receive_bundle(bundle_data: &[u8], standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<ProcessBundleResult, String>`**
+**`pub fn receive_bundle(&mut self, bundle_data: &[u8], standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<ProcessBundleResult, String>`**
 
 Verarbeitet ein empfangenes Bundle. Die Funktion validiert die Transaktion, fügt die Gutscheine zum eigenen Wallet hinzu und gibt ein `ProcessBundleResult` zurück, das über den Erfolg und die Details der Transaktion informiert. Die Wallet wird automatisch gespeichert. Der Caller muss die benötigten Standard-Definitionen als TOML-Strings bereitstellen.
 
-**`pub fn create_signing_request_bundle(local_instance_id: &str, recipient_id: &str) -> Result<Vec<u8>, String>`**
+**`pub fn create_signing_request_bundle(&self, local_instance_id: &str, recipient_id: &str) -> Result<Vec<u8>, String>`**
 
 Erstellt ein Bundle, um eine Signaturanfrage für einen Gutschein an einen Bürgen zu senden. Diese Operation verändert den Wallet-Zustand nicht.
 
-**`pub fn create_detached_signature_response_bundle(voucher_to_sign: &Voucher, signature_data: DetachedSignature, original_sender_id: &str) -> Result<Vec<u8>, String>`**
+**`pub fn create_detached_signature_response_bundle(&self, voucher_to_sign: &Voucher, signature_data: DetachedSignature, original_sender_id: &str) -> Result<Vec<u8>, String>`**
 
 Erstellt eine losgelöste Signatur als Antwort auf eine Signaturanfrage. Diese Operation wird vom Bürgen aufgerufen und verändert dessen Wallet-Zustand nicht.
 
-**`pub fn process_and_attach_signature(container_bytes: &[u8], standard_toml_content: &str, password: &str) -> Result<(), String>`**
+**`pub fn process_and_attach_signature(&mut self, container_bytes: &[u8], standard_toml_content: &str, password: &str) -> Result<(), String>`**
 
 Verarbeitet eine empfangene losgelöste Signatur, fügt sie dem lokalen Gutschein hinzu und speichert den Wallet-Zustand.
 
-**`pub fn import_resolution_endorsement(endorsement: ResolutionEndorsement, password: &str) -> Result<(), String>`**
+**`pub fn import_resolution_endorsement(&mut self, endorsement: ResolutionEndorsement, password: &str) -> Result<(), String>`**
 
 Importiert eine Beilegungserklärung für einen Double-Spend-Konflikt, fügt sie dem entsprechenden Beweis im Wallet hinzu und speichert den Zustand.
 
-**`pub fn save_encrypted_data(name: &str, data: &[u8], password: &str) -> Result<(), String>`**
+**`pub fn save_encrypted_data(&mut self, name: &str, data: &[u8], password: &str) -> Result<(), String>`**
 
 Speichert einen beliebigen Byte-Slice verschlüsselt auf der Festplatte. Diese Methode nutzt den gleichen sicheren Verschlüsselungsmechanismus wie das Wallet selbst. Ideal, um anwendungsspezifische Daten (z.B. Konfigurationen, Kontakte) sicher abzulegen.
 

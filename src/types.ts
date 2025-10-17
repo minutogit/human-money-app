@@ -204,3 +204,9 @@ export interface TransactionRecord {
 export interface AppSettings {
     bundle_retention_days: number;
 }
+
+
+export interface ReceiveSuccessPayload {
+    senderId: string;
+    totalAmountByUnit: Record<string, string>;
+}

@@ -52,10 +52,10 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
         {
             let standards_source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../voucher_standards");
             info!("Attempting to copy standards from DEV source: {}", standards_source_path.display());
-            let mut options = CopyOptions::new();
-            options.overwrite = true;
-            // In dev, we copy the entire `voucher_standards` folder into the app_data_dir.
-            copy_dir(&standards_source_path, &app_data_dir, &options)
+            // KORREKTUR: Die Logik wird an die des Release-Builds angeglichen, um Konsistenz zu gewährleisten.
+            // Es wird nur der Inhalt in das Zielverzeichnis kopiert.
+            let options = CopyOptions { overwrite: true, content_only: true, ..Default::default() };
+            copy_dir(&standards_source_path, &standards_dir_in_data, &options)
                 .map_err(|e| format!("Failed to copy standards from DEV source: {}", e))?;
         }
         #[cfg(not(debug_assertions))]
@@ -81,14 +81,16 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
             for entry in entries {
                 if let Ok(entry) = entry {
                     let path = entry.path();
-                    info!("Found entry in standards directory: {}", path.display());
+                    info!("[Debug] Found entry in standards directory: {}", path.display());
                     if path.is_dir() {
                         let standard_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        info!("[Debug] Found potential standard directory with ID: '{}'", standard_id);
                         let toml_path = path.join("standard.toml");
-                        info!("Checking for standard file at: {}", toml_path.display());
+                        info!("[Debug] Checking for standard file at: {}", toml_path.display());
                         if toml_path.exists() {
                              let content = fs::read_to_string(&toml_path)
                                 .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
+                            info!("[Debug] Successfully read '{}', adding to list.", toml_path.display());
                             standards.push(VoucherStandardInfo {
                                 id: standard_id,
                                 content,
@@ -107,6 +109,7 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
         }
     };
 
+    info!("[Debug] Final standards loaded: {:?}", standards.iter().map(|s| &s.id).collect::<Vec<_>>());
     info!("Found {} voucher standards.", standards.len());
     Ok(standards)
 }
