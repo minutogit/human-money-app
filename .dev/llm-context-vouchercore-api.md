@@ -58,7 +58,7 @@ Sperrt das Wallet und entfernt sensible Daten wie private Schlüssel aus dem Spe
 
 Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand. Verifiziert zuerst die Standard-Definition, bevor der Gutschein erstellt wird.
 
-**`pub fn create_transfer_bundle(&mut self, request: MultiTransferRequest, standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<Vec<u8>, String>`**
+**`pub fn create_transfer_bundle(&mut self, request: MultiTransferRequest, standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<(Vec<u8>, String), String>`**
 
 Erstellt ein verschlüsseltes `SecureContainer`-Bundle für einen Transfer an einen Empfänger. Dies ist der Kernprozess zum Senden von Werten. Die Funktion akzeptiert eine `MultiTransferRequest`, die es ermöglicht, Guthaben von einem oder mehreren Quell-Gutscheinen in einer einzigen Transaktion zu bündeln.
 
@@ -66,12 +66,38 @@ Die `MultiTransferRequest`-Struktur enthält:
 * `recipient_id: String`: Die User-ID des Empfängers.
 * `sources: Vec<SourceTransfer>`: Eine Liste von Quell-Gutscheinen, die für die Zahlung verwendet werden sollen. Jede `SourceTransfer` definiert `local_instance_id` und `amount_to_send`.
 * `notes: Option<String>`: Optionale Notizen für den Empfänger.
+* `sender_profile_name: Option<String>`: Optionaler Anzeigename des Senders.
 
-Das Ergebnis (`Vec<u8>`) sind die serialisierten Daten, die an den Empfänger gesendet werden müssen (z.B. als Datei oder QR-Code). Die Wallet wird automatisch gespeichert.
+Das Ergebnis (`(Vec<u8>, String)`) ist ein Tupel, das die serialisierten Daten (`Vec<u8>`) für den Versand und die eindeutige `bundle_id` (String) enthält.
+Die `bundle_id` wird von der Client-Anwendung benötigt, um den `TransactionRecord` zu erstellen. Die Wallet wird automatisch gespeichert.
 
 **`pub fn receive_bundle(&mut self, bundle_data: &[u8], standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<ProcessBundleResult, String>`**
 
 Verarbeitet ein empfangenes Bundle. Die Funktion validiert die Transaktion, fügt die Gutscheine zum eigenen Wallet hinzu und gibt ein `ProcessBundleResult` zurück, das über den Erfolg und die Details der Transaktion informiert. Die Wallet wird automatisch gespeichert. Der Caller muss die benötigten Standard-Definitionen als TOML-Strings bereitstellen.
+
+---
+
+### 3.1 Wichtige Rückgabe-Strukturen
+
+**`pub struct ProcessBundleResult`**
+Dies ist die Rückgabestruktur von `receive_bundle` und enthält eine Zusammenfassung der Transaktion.
+
+* `header: TransactionBundleHeader`: Metadaten des Bundles (Absender, Empfänger, Notizen, etc.).
+* `check_result: DoubleSpendCheckResult`: Ergebnis der Double-Spend-Prüfung.
+* `transfer_summary: TransferSummary`: Detaillierte Aufschlüsselung der empfangenen Werte.
+* `involved_vouchers: Vec<String>`: Liste der lokalen IDs der Gutscheine, die im Wallet neu erstellt/aktualisiert wurden.
+
+**`pub struct TransferSummary`**
+Fasst die Ergebnisse eines Transfers pro Währungseinheit zusammen.
+
+* `summable_amounts: HashMap<String, String>`:
+  * Aufsummierte Beträge für teilbare/summierbare Gutscheine (z.B. "10.50 Minuto").
+  * Key: Währungseinheit (z.B. "Minuto"), Value: Summe als String.
+* `countable_items: HashMap<String, u32>`:
+  * Gezählte Einheiten für nicht-teilbare/nicht-summierbare Gutscheine (z.B. "3 Brote").
+  * Key: Währungseinheit (z.B. "Brot"), Value: Anzahl.
+
+---
 
 **`pub fn create_signing_request_bundle(&self, local_instance_id: &str, recipient_id: &str) -> Result<Vec<u8>, String>`**
 
@@ -178,6 +204,8 @@ Die zurückgegebene `VoucherSummary`-Struktur enthält die folgenden Felder:
 Gibt einen Vektor von `AggregatedBalance`-Strukturen zurück, die das aggregierte Gesamtguthaben für jede Währung (z.B. "Minuto", "EUR") enthalten. Perfekt für eine Dashboard-Anzeige.
 
 Die `AggregatedBalance`-Struktur enthält:
+* `standard_name: String`: Der Name des Gutschein-Standards (z.B. "Minuto-Gutschein").
+* `standard_uuid: String`: Die eindeutige UUID des Gutschein-Standards.
 * `unit: String`: Die Währungseinheit (z.B. `Minuten`, `EUR`).
 * `total_amount: String`: Der aufsummierte Gesamtbetrag als kanonischer String.
 

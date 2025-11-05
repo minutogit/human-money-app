@@ -16,12 +16,20 @@ function formatAmount(amountStr: string): string {
 }
 
 export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps) {
-    const summaryString = Object.entries(payload.totalAmountByUnit)
-        .map(([unit, total]) => `${formatAmount(total)} ${unit}`)
-        .join(', ');
+
+    // Erzeuge einen detaillierten String aus der TransferSummary
+    const summable = Object.entries(payload.transferSummary.summableAmounts)
+        .map(([unit, total]) => `${formatAmount(total)} ${unit}`);
+
+    const countable = Object.entries(payload.transferSummary.countableItems)
+        // Einfaches Plural-Handling für die Anzeige
+        .map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`);
+
+    const summaryString = [...summable, ...countable].join(', ') || 'No items received';
+
 
     useEffect(() => {
-        logger.info(`Receive success screen shown. Received: ${summaryString} from ${payload.senderId}`);
+        logger.info(`Receive success screen shown. Received: ${summaryString} from ${payload.senderId} (${payload.senderProfileName ?? 'N/A'})`);
     }, [payload, summaryString]);
 
     return (
@@ -41,9 +49,22 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                         <p className="text-2xl font-bold text-theme-primary">{summaryString}</p>
                     </div>
                     <div>
-                        <p className="text-sm text-theme-light">From Sender</p>
-                        <p className="text-base font-mono text-theme-secondary break-all">{payload.senderId}</p>
+                        <p className="text-sm text-theme-light">From</p>
+                        {payload.senderProfileName ? (
+                            <p className="text-lg font-semibold text-theme-primary">{payload.senderProfileName}</p>
+                        ) : (
+                            <p className="text-base font-mono text-theme-secondary break-all">{payload.senderId}</p>
+                        )}
+                        {payload.senderProfileName && (
+                            <p className="text-xs font-mono text-theme-light break-all" title={payload.senderId}>({payload.senderId})</p>
+                        )}
                     </div>
+                    {payload.notes && (
+                        <div>
+                            <p className="text-sm text-theme-light">Notes / Verwendungszweck</p>
+                            <p className="text-base text-theme-secondary whitespace-pre-wrap">{payload.notes}</p>
+                        </div>
+                    )}
                 </div>
 
                 <Button size="lg" onClick={onDone} className="w-full">Back to Dashboard</Button>

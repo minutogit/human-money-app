@@ -118,6 +118,7 @@ function App() {
                 />;
             case "send_vouchers":
                 return <SendView 
+                    profileName={profileName}
                     onBack={() => setAppState({ view: "logged_in" })}
                     onTransferPrepared={(bundleData, recipientId, summary) =>
                         setAppState({ view: "transfer_success", bundleData, recipientId, summary })

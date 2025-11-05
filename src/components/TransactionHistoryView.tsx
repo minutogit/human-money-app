@@ -18,12 +18,42 @@ function formatTimestamp(isoString: string): string {
     });
 }
 
+// NEU: Helper-Funktion zum Kürzen von DIDs im Format [erste 10]...[letzte 5]
+function truncateId(id: string): string {
+    const prefix = "did:key:";
+    let key = id;
+
+    if (id.startsWith(prefix)) {
+        key = id.substring(prefix.length);
+    }
+
+    // z.B. z6MknxUwKV...a6xEP
+    if (key.length > 15) {
+        return `${key.substring(0, 10)}...${key.substring(key.length - 5)}`;
+    }
+
+    // Fallback für kurze oder unerwartete IDs
+    return key;
+}
+
+// NEU: Helper-Funktion zum Formatieren der vollständigen Zusammenfassung
+function formatSummary(
+    summable: Record<string, string> | undefined,
+    countable: Record<string, number> | undefined
+): string {
+    const s = Object.entries(summable || {}).map(([unit, amount]) => `${amount} ${unit}`);
+    const c = Object.entries(countable || {}).map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`); // Simple plural
+    const all = [...s, ...c];
+    return all.length > 0 ? all.join(', ') : '0.00';
+}
+
 export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) {
     const [history, setHistory] = useState<TransactionRecord[]>([]);
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(true);
     const [feedback, setFeedback] = useState<{ [key: string]: string }>({});
     const [isSaving, setIsSaving] = useState<string | null>(null);
+    const [expandedId, setExpandedId] = useState<string | null>(null); // NEU: Für aufklappbare Details
 
     useEffect(() => {
         async function fetchHistory() {
@@ -84,6 +114,14 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
         }
     }
 
+    const toggleDetails = (id: string) => {
+        if (expandedId === id) {
+            setExpandedId(null);
+        } else {
+            setExpandedId(id);
+        }
+    };
+
     return (
         <div className="flex flex-col h-full max-w-4xl mx-auto">
             <header className="flex-shrink-0 mb-6">
@@ -109,33 +147,90 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                         </div>
                                         <div>
                                             <p className="font-semibold capitalize text-theme-primary">
-                                                {record.direction}
+                                                {/* Leichte Bereinigung: "sent" -> "Sent" */}
+                                                {record.direction === 'sent' ? 'Sent' : 'Received'}
                                             </p>
-                                            <p className="text-sm text-theme-light font-mono">
-                                                {record.direction === 'sent' ? `To: ${record.recipient_id.substring(0, 25)}...` : `From: ${record.sender_id.substring(0, 25)}...`}
-                                            </p>
+                                            {/* --- ANGEPASSTE LOGIK FÜR ID/NAME --- */}
+                                            {record.direction === 'sent' ? (
+                                                <p className="text-sm text-theme-light font-mono" title={record.recipient_id}>
+                                                    To: {truncateId(record.recipient_id)}
+                                                </p>
+                                            ) : (
+                                                <>
+                                                    {record.sender_profile_name ? (
+                                                        <p className="text-sm text-theme-light">
+                                                            From: {record.sender_profile_name}
+                                                        </p>
+                                                    ) : null}
+                                                    <p className={`font-mono ${record.sender_profile_name ? 'text-xs text-theme-light' : 'text-sm text-theme-light'}`} title={record.sender_id}>
+                                                        {record.sender_profile_name ? `(${truncateId(record.sender_id)})` : `From: ${truncateId(record.sender_id)}`}
+                                                    </p>
+                                                </>
+                                            )}
+                                            {/* --- ENDE ANPASSUNG --- */}
                                         </div>
                                     </div>
                                     <div className="text-right">
                                         <p className="font-bold text-lg text-theme-primary">
-                                            {Object.entries(record.total_amount_by_unit).map(([unit, amount]) => `${amount} ${unit}`).join(', ')}
+                                            {/* NEU: formatSummary verwenden */}
+                                            {formatSummary(record.summableAmounts, record.countableItems)}
                                         </p>
                                         <p className="text-sm text-theme-light">
                                             {formatTimestamp(record.timestamp)}
                                         </p>
                                     </div>
                                 </div>
-                                {/* NEU: Button zum erneuten Speichern */}
-                                {record.direction === 'sent' && record.bundle_data && record.bundle_data.length > 0 && (
-                                    <div className="border-t border-theme-subtle mt-4 pt-3 text-right">
-                                        <div className="flex justify-end items-center gap-4">
-                                            {feedback[record.id] && <p className="text-xs text-theme-light">{feedback[record.id]}</p>}
-                                            <Button size="sm" variant="outline" onClick={() => handleSaveBundle(record)} disabled={isSaving === record.id}>
-                                                {isSaving === record.id ? 'Saving...' : 'Save Bundle'}
-                                            </Button>
-                                        </div>
+
+                                {/* NEU: Aufklappbare Details */}
+                                <div className="border-t border-theme-subtle mt-3 pt-3">
+                                    <div className="flex justify-between items-center">
+                                        <button
+                                            onClick={() => toggleDetails(record.id)}
+                                            className="text-sm text-theme-accent font-medium"
+                                        >
+                                            {expandedId === record.id ? 'Hide Details' : 'Show Details'}
+                                        </button>
+
+                                        {/* Button zum erneuten Speichern (nur für "sent") */}
+                                        {record.direction === 'sent' && record.bundle_data && record.bundle_data.length > 0 && (
+                                            <div className="flex justify-end items-center gap-4">
+                                                {feedback[record.id] && <p className="text-xs text-theme-light">{feedback[record.id]}</p>}
+                                                <Button size="sm" variant="outline" onClick={() => handleSaveBundle(record)} disabled={isSaving === record.id}>
+                                                    {isSaving === record.id ? 'Saving...' : 'Save Bundle'}
+                                                </Button>
+                                            </div>
+                                        )}
                                     </div>
-                                )}
+
+                                    {/* Aufklappbarer Bereich */}
+                                    {expandedId === record.id && (
+                                        <div className="mt-3 space-y-1 text-sm">
+                                            {record.notes && (
+                                                <p className="text-theme-light"><span className="font-medium text-theme-secondary">Notes:</span> {record.notes}</p>
+                                            )}
+                                            <p className="text-theme-light font-mono text-xs" title={record.bundle_id}>
+                                                <span className="font-medium text-theme-secondary">Bundle ID:</span> {record.bundle_id}
+                                            </p>
+
+                                            {/* NEU: Involvierte Gutscheine anzeigen */}
+                                            {record.involved_vouchers && record.involved_vouchers.length > 0 && (
+                                                <div className="text-theme-light pt-1">
+                                                    <span className="font-medium text-theme-secondary">
+                                                        {record.direction === 'sent' ? 'Sent from Vouchers' : 'Received into Vouchers'} ({record.involved_vouchers.length}):
+                                                    </span>
+                                                    {/* Wir kürzen die lokalen IDs mit derselben Funktion wie die User-IDs */}
+                                                    <ul className="list-disc list-inside pl-2 font-mono text-xs">
+                                                        {record.involved_vouchers.map(id => (
+                                                            <li key={id} title={id}>{truncateId(id)}</li>
+                                                        ))}
+                                                    </ul>
+                                                </div>
+                                            )}
+
+                                        </div>
+                                    )}
+                                </div>
+                                {/* KORREKTUR: Der redundante "Save Bundle"-Block wurde von hier entfernt */}
                             </div>
                         )) : (
                             <div className="text-center text-theme-light py-8 bg-input-readonly rounded-lg border border-theme-subtle">

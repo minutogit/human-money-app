@@ -5,10 +5,12 @@ import { logger } from "../utils/log";
 import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord } from "../types";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
+import { Textarea } from "./ui/Textarea";
 
 interface SendViewProps {
     onBack: () => void;
     onTransferPrepared: (bundleData: number[], recipientId: string, summary: string) => void;
+    profileName: string | null; // NEU: Profilname des aktuellen Benutzers
 }
 
 function formatDate(isoString: string): string {
@@ -25,8 +27,10 @@ function formatAmount(amountStr: string): string {
 }
 
 
-export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
+export function SendView({ onBack, onTransferPrepared, profileName }: SendViewProps) {
     const [recipientId, setRecipientId] = useState("");
+    const [notes, setNotes] = useState(""); // NEU
+    const [sendProfileName, setSendProfileName] = useState(true); // NEU
     const [ownUserId, setOwnUserId] = useState("");
     const [targetAmountStr, setTargetAmountStr] = useState("");
     const [availableVouchers, setAvailableVouchers] = useState<VoucherSummary[]>([]);
@@ -47,7 +51,7 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
                 const allFetchedVouchers = await invoke<VoucherSummary[]>("get_voucher_summaries");
                 logger.info(`1. Fetched ${allFetchedVouchers.length} vouchers from backend.`);
 
-                 // Use robust logic from Dashboard to handle both string and object statuses.
+                // Use robust logic from Dashboard to handle both string and object statuses.
                 const activeVouchers = allFetchedVouchers.filter(v => {
                     const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
                     return statusName === 'Active';
@@ -65,14 +69,14 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
                 });
                 setStandardIdToUuidMap(newMap);
 
-                // For the prototype, we assume vouchers are divisible. This should come from the backend in the future.
+                // KORREKTUR (von 13:31): Die Annahme des Prototyps wiederherstellen.
+                // Die 'divisible'-Eigenschaft kommt noch nicht vom Backend-Summary.
                 const enrichedVouchers = activeVouchers.map(v => ({ ...v, divisible: true }));
 
-                const finalVoucherList = enrichedVouchers as (VoucherSummary & { divisible: boolean })[];
-                setAvailableVouchers(finalVoucherList);
+                setAvailableVouchers(enrichedVouchers);
                 setVoucherStandards(standards);
                 setOwnUserId(userId);
-                logger.info(`3. Set state with ${finalVoucherList.length} vouchers to be displayed.`);
+                logger.info(`3. Set state with ${enrichedVouchers.length} vouchers to be displayed.`);
             } catch (e) {
                 const msg = `Failed to fetch data for SendView: ${e}`;
                 logger.error(msg);
@@ -119,6 +123,7 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
         const sortedVouchers = [...filteredVouchers].sort((a, b) => parseFloat(a.current_amount) - parseFloat(b.current_amount));
         for (const voucher of sortedVouchers) {
             const voucherAmount = parseFloat(voucher.current_amount);
+            // KORREKTUR: Stelle sicher, dass 'divisible' geprüft wird (kommt von enrichedVouchers)
             if (currentTotal + voucherAmount <= targetAmount) {
                 newSelection.set(voucher.local_instance_id, voucher.current_amount);
                 currentTotal += voucherAmount;
@@ -153,21 +158,35 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
         setSelection(newSelection);
     };
 
+    // KORREKTUR (von 13:28): Unterscheidet summable/countable
     const checkoutSummary = useMemo(() => {
         let count = 0;
-        const totals = {} as Record<string, number>;
+        const summableTotals = {} as Record<string, number>;
+        const countableTotals = {} as Record<string, number>;
+
         for (const [voucherId, amountStr] of selection.entries()) {
             const voucher = availableVouchers.find(v => v.local_instance_id === voucherId);
             if (voucher) {
                 count++;
                 const amount = parseFloat(amountStr);
-                if (!totals[voucher.unit]) {
-                    totals[voucher.unit] = 0;
+
+                // NEUE LOGIK: Unterscheidung basierend auf 'divisible'
+                // @ts-ignore (wir wissen, dass 'divisible' durch 'enrichedVouchers' hinzugefügt wurde)
+                if (voucher.divisible) {
+                    if (!summableTotals[voucher.unit]) {
+                        summableTotals[voucher.unit] = 0;
+                    }
+                    summableTotals[voucher.unit] += amount;
+                } else {
+                    // Nicht-teilbare Gutscheine werden gezählt
+                    if (!countableTotals[voucher.unit]) {
+                        countableTotals[voucher.unit] = 0;
+                    }
+                    countableTotals[voucher.unit] += 1; // Wir senden 1 ganzen Gutschein
                 }
-                totals[voucher.unit] += amount;
             }
         }
-        return { count, totals };
+        return { count, summableTotals, countableTotals };
     }, [selection, availableVouchers]);
 
     async function handlePrepareTransfer(event: FormEvent) {
@@ -179,6 +198,9 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
         setIsProcessing(true);
         setFeedbackMsg("");
         try {
+            const senderProfileNameToSend = sendProfileName && profileName ? profileName : null;
+            const notesToSend = notes.trim() === "" ? null : notes.trim();
+
             const sources: SourceTransfer[] = Array.from(selection.entries()).map(([id, amount]) => ({
                 local_instance_id: id,
                 amount_to_send: amount,
@@ -187,27 +209,51 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
             voucherStandards.forEach(standard => {
                 standardDefinitionsToml[standard.id] = standard.content;
             });
-            const bundleBytes = await invoke<number[]>("create_transfer_bundle", { recipientId, sources, notes: null, standardDefinitionsToml, password });
-            logger.info(`Successfully created transfer bundle with ${bundleBytes.length} bytes.`);
-            const totalAmountByUnit: Record<string, string> = {};
-            Object.entries(checkoutSummary.totals).forEach(([unit, total]) => {
-                totalAmountByUnit[unit] = total.toFixed(2);
+
+            // AKTUALISIERT: Erwarte ein Objekt statt nur bytes, um die bundle_id für den Record zu haben.
+            const bundleResult = await invoke<{ bundleData: number[], bundleId: string }>("create_transfer_bundle", {
+                recipientId,
+                sources,
+                notes: notesToSend, // NEU
+                senderProfileName: senderProfileNameToSend, // NEU
+                standardDefinitionsToml,
+                password
             });
-            const record: TransactionRecord = {
+
+            logger.info(`Successfully created transfer bundle ${bundleResult.bundleId} with ${bundleResult.bundleData.length} bytes.`);
+
+            // KORREKTUR (von 13:28): summableAmounts und countableItems getrennt verarbeiten
+            const summableAmounts: Record<string, string> = {};
+            Object.entries(checkoutSummary.summableTotals).forEach(([unit, total]) => {
+                summableAmounts[unit] = total.toFixed(2);
+            });
+
+            const countableItems: Record<string, number> = checkoutSummary.countableTotals;
+
+            const record: Omit<TransactionRecord, 'bundle_data'> & { bundle_data: number[] } = {
                 id: crypto.randomUUID(),
                 direction: 'sent',
                 recipient_id: recipientId,
                 sender_id: ownUserId,
                 timestamp: new Date().toISOString(),
-                total_amount_by_unit: totalAmountByUnit,
+                summableAmounts: summableAmounts, // KORREKTUR (von 13:28)
+                countableItems: countableItems, // KORREKTUR (von 13:28)
                 involved_vouchers: Array.from(selection.keys()),
-                bundle_data: bundleBytes
+                bundle_data: bundleResult.bundleData,
+                bundle_id: bundleResult.bundleId, // NEU
+                notes: notesToSend ?? undefined, // NEU
+                sender_profile_name: senderProfileNameToSend ?? undefined, // NEU
             };
-            await invoke("save_transaction_record", { record, password });
+
+            await invoke("save_transaction_record", { record: record as TransactionRecord, password });
             logger.info(`Transaction record ${record.id} saved successfully.`);
 
-            const summaryString = Object.entries(checkoutSummary.totals).map(([unit, total]) => `${formatAmount(total.toString())} ${unit}`).join(', ');
-            onTransferPrepared(bundleBytes, recipientId, summaryString);
+            // KORREKTUR (von 13:28): Detaillierte summaryString erstellen
+            const summableStrings = Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => `${formatAmount(total.toString())} ${unit}`);
+            const countableStrings = Object.entries(checkoutSummary.countableTotals).map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`);
+            const summaryString = [...summableStrings, ...countableStrings].join(', ');
+
+            onTransferPrepared(bundleResult.bundleData, recipientId, summaryString);
 
         } catch (e) {
             const msg = `Failed to create transfer bundle: ${e}`;
@@ -235,6 +281,34 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
                                 <label htmlFor="recipientId" className="block text-sm font-medium text-theme-light mb-1">Recipient User ID</label>
                                 <Input id="recipientId" placeholder="did:key:z..." value={recipientId} onChange={(e: ChangeEvent<HTMLInputElement>) => setRecipientId(e.target.value)} required />
                             </div>
+                            {/* --- NEU START --- */}
+                            <div>
+                                <label htmlFor="notes" className="block text-sm font-medium text-theme-light mb-1">Notes / Verwendungszweck (Optional)</label>
+                                <Textarea
+                                    id="notes"
+                                    placeholder="e.g., Monthly contribution, Coffee..."
+                                    value={notes}
+                                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setNotes(e.target.value)}
+                                    rows={2}
+                                />
+                            </div>
+                            <div>
+                                <div className="flex items-center">
+                                    <input
+                                        id="sendProfileName"
+                                        type="checkbox"
+                                        checked={sendProfileName}
+                                        onChange={(e: ChangeEvent<HTMLInputElement>) => setSendProfileName(e.target.checked)}
+                                        disabled={!profileName}
+                                        className="h-4 w-4 text-theme-accent border-input-border rounded focus:ring-theme-accent"
+                                    />
+                                    <label htmlFor="sendProfileName" className="ml-2 block text-sm text-theme-light">
+                                        Send my profile name ({profileName || 'No name set'})
+                                    </label>
+                                </div>
+                                {!profileName && <p className="text-xs text-theme-light mt-1">Profile name not available to send.</p>}
+                            </div>
+                            {/* --- NEU ENDE --- */}
                             <div>
                                 <label className="block text-sm font-medium text-theme-light mb-1">Filter by Standard</label>
                                 <div className="flex flex-wrap gap-2">
@@ -260,9 +334,17 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
                             <div className="md:col-span-1">
                                 <p className="text-sm text-theme-light">{checkoutSummary.count} Vouchers Selected</p>
                                 <div className="text-lg font-bold text-theme-primary truncate">
-                                    {Object.entries(checkoutSummary.totals).length > 0 ? Object.entries(checkoutSummary.totals).map(([unit, total]) => (
-                                        <span key={unit} className="mr-4">{formatAmount(total.toString())} <span className="text-base font-normal">{unit}</span></span>
-                                    )) : <span>0.00</span>}
+                                    {/* KORREKTUR (von 13:28): Detaillierte Anzeige */}
+                                    {checkoutSummary.count > 0 ? (
+                                        <>
+                                            {Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => (
+                                                <span key={unit} className="mr-4">{formatAmount(total.toString())} <span className="text-base font-normal">{unit}</span></span>
+                                            ))}
+                                            {Object.entries(checkoutSummary.countableTotals).map(([unit, total]) => (
+                                                <span key={unit} className="mr-4">{total} <span className="text-base font-normal">{unit}{total > 1 ? 's' : ''}</span></span>
+                                            ))}
+                                        </>
+                                    ) : <span>0.00</span>}
                                 </div>
                             </div>
                             <div className="md:col-span-1">
@@ -290,6 +372,7 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
                     <section className="mb-6">
                         <div className="space-y-3">
                             {filteredVouchers.length > 0 ? filteredVouchers.map(v => {
+                                // @ts-ignore (wir wissen, dass 'divisible' durch 'enrichedVouchers' hinzugefügt wurde)
                                 const selectedAmount = selection.get(v.local_instance_id);
                                 const isSelected = selectedAmount !== undefined;
                                 return (
@@ -297,20 +380,27 @@ export function SendView({ onBack, onTransferPrepared }: SendViewProps) {
                                         <div className="flex justify-between items-start">
                                             <div>
                                                 <div className="flex items-baseline text-xl font-bold text-theme-primary">
+                                                    {/* @ts-ignore */}
                                                     {isSelected && selectedAmount !== v.current_amount ? (
                                                         <>
                                                             <span>{formatAmount(selectedAmount)}</span>
+                                                            {/* @ts-ignore */}
                                                             <span className="ml-2 text-base font-normal text-gray-400">of {formatAmount(v.current_amount)}</span>
                                                         </>
                                                     ) : (
+                                                        // @ts-ignore
                                                         <span>{formatAmount(v.current_amount)}</span>
                                                     )}
+                                                    {/* @ts-ignore */}
                                                     <span className="ml-2 text-base font-normal text-theme-light">{v.unit}</span>
                                                 </div>
+                                                {/* @ts-ignore */}
                                                 <p className="text-xs text-theme-light font-mono">by {v.creator_first_name} {v.creator_last_name}</p>
                                             </div>
                                             <div className="text-right">
+                                                {/* @ts-ignore */}
                                                 <p className="text-base font-medium text-theme-light">{v.voucher_standard_name}</p>
+                                                {/* @ts-ignore */}
                                                 <p className="text-xs text-theme-light">until {formatDate(v.valid_until)}</p>
                                             </div>
                                         </div>

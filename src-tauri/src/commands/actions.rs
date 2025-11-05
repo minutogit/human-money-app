@@ -1,7 +1,7 @@
 // src-tauri/src/commands/actions.rs
 use crate::{models::FrontendNewVoucherData, AppState, settings::{AppSettings, SETTINGS_KEY}};
 use chrono::Utc;
-use log::{info, error};
+use log::{info, error}; // <--- 'debug' wieder entfernt, wir nutzen info!
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -26,29 +26,50 @@ pub struct TransactionRecord {
     pub recipient_id: String,
     pub sender_id: String,
     pub timestamp: String, // ISO 8601
-    pub total_amount_by_unit: HashMap<String, String>,
+
+    // Rust-Feldnamen sind jetzt snake_case, um Warnings zu beheben.
+    #[serde(rename = "summableAmounts", alias = "total_amount_by_unit", alias = "summable_amounts", default)] // Serialisiert als camelCase, fängt alle alten Varianten ab
+    pub summable_amounts: HashMap<String, String>,
+
+    #[serde(rename = "countableItems", alias = "countable_items", default)] // Serialisiert als camelCase, fängt alle alten Varianten ab
+    pub countable_items: HashMap<String, u32>,
     pub involved_vouchers: Vec<String>, // local_instance_ids
     pub bundle_data: Vec<u8>,
+    pub bundle_id: String,
+    pub notes: Option<String>,
+    pub sender_profile_name: Option<String>,
 }
 
 // NEU: Diese Struktur wird an das Frontend zurückgegeben, wenn der Empfang erfolgreich war.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ReceiveSuccessPayload {
-    sender_id: String,
-    total_amount_by_unit: HashMap<String, String>,
+    pub sender_id: String,
+    pub sender_profile_name: Option<String>,
+    pub notes: Option<String>,
+    pub transfer_summary: FrontendTransferSummary, // <--- Geändert
+    pub involved_vouchers: Vec<String>,
 }
 
+// NEU: Diese Struktur wird an das Frontend zurückgegeben, wenn ein Bundle ERSTELLT wurde.
+// Sie entspricht dem, was SendView.tsx erwartet.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBundleResult {
+    pub bundle_data: Vec<u8>,
+    pub bundle_id: String,
+}
 
 #[tauri::command]
 pub fn create_transfer_bundle(
     recipient_id: String,
     sources: Vec<FrontendSourceTransfer>,
     notes: Option<String>,
+    sender_profile_name: Option<String>,
     standard_definitions_toml: HashMap<String, String>,
     password: String,
     state: tauri::State<AppState>,
-) -> Result<Vec<u8>, String> {
+) -> Result<CreateBundleResult, String> { // RÜCKGABETYP GEÄNDERT
     info!(
         "Attempting to create a transfer bundle for recipient: {}",
         recipient_id
@@ -67,11 +88,21 @@ pub fn create_transfer_bundle(
         recipient_id,
         sources: source_transfers,
         notes,
+        sender_profile_name,
     };
 
     let archive: Option<&dyn VoucherArchive> = None;
 
-    service.create_transfer_bundle(request, &standard_definitions_toml, archive, &password)
+    // RUF DIE BIBLIOTHEK AUF UND VERARBEITE DIE (bytes, bundle_id) ANTWORT
+    match service.create_transfer_bundle(request, &standard_definitions_toml, archive, &password) {
+        Ok((bundle_bytes, bundle_id)) => {
+            Ok(CreateBundleResult {
+                bundle_data: bundle_bytes,
+                bundle_id,
+            })
+        }
+        Err(e) => Err(e),
+    }
 }
 
 // NEU: Der Befehl zum Empfangen von Bundles.
@@ -96,32 +127,12 @@ pub fn receive_bundle(
                 return Err(msg);
             }
 
-            // KORREKTE LOGIK: Da `VoucherSummary` keine globale `voucher_id` hat, müssen wir
-            // über die vollen Details gehen, um die empfangenen Gutscheine zu identifizieren.
-            let all_summaries = service.get_voucher_summaries(None, None)?;
-            let mut received_summaries = Vec::new();
-
-            for summary in all_summaries {
-                // Rufe die Details ab, um an die globale voucher_id zu kommen.
-                if let Ok(details) = service.get_voucher_details(&summary.local_instance_id) {
-                    if result.header.voucher_ids.contains(&details.voucher.voucher_id) {
-                        received_summaries.push(summary);
-                    }
-                }
-            }
-
-            let mut total_amount_by_unit: HashMap<String, String> = HashMap::new();
-            for summary in &received_summaries {
-                let entry = total_amount_by_unit.entry(summary.unit.clone()).or_insert_with(|| "0".to_string());
-                let current_total: f64 = entry.parse().unwrap_or(0.0);
-                let amount_to_add: f64 = summary.current_amount.parse().unwrap_or(0.0);
-                *entry = (current_total + amount_to_add).to_string();
-            }
-
-            let involved_vouchers: Vec<String> = received_summaries
-                .into_iter()
-                .map(|s| s.local_instance_id.clone())
-                .collect();
+            // Entferne alte Summenberechnung. Nutze Daten direkt aus dem ProcessBundleResult.
+            let transfer_summary = result.transfer_summary.clone();
+            let involved_vouchers = result.involved_vouchers.clone();
+            let notes = result.header.notes.clone();
+            let sender_profile_name = result.header.sender_profile_name.clone();
+            let bundle_id = result.header.bundle_id.clone();
 
             let record = TransactionRecord {
                 id: Uuid::new_v4().to_string(),
@@ -129,9 +140,19 @@ pub fn receive_bundle(
                 recipient_id: service.get_user_id()?, // The current user is the recipient
                 sender_id: result.header.sender_id.clone(),
                 timestamp: Utc::now().to_rfc3339(),
-                total_amount_by_unit: total_amount_by_unit.clone(),
-                involved_vouchers,
-                bundle_data: Vec::new(),
+                summable_amounts: transfer_summary.summable_amounts.clone(), // <-- Feldname zu snake_case geändert
+                countable_items: transfer_summary.countable_items.clone(), // <-- Feldname zu snake_case geändert
+                involved_vouchers: involved_vouchers.clone(),
+                bundle_data: Vec::new(), // Bundle-Daten werden nur für "sent" gespeichert
+                bundle_id,
+                notes: notes.clone(),
+                sender_profile_name: sender_profile_name.clone(),
+            };
+
+            // Erstelle die Frontend-kompatible TransferSummary
+            let fe_transfer_summary = FrontendTransferSummary {
+                summable_amounts: transfer_summary.summable_amounts.clone(),
+                countable_items: transfer_summary.countable_items.clone(),
             };
 
             // Speichere den neuen Eintrag atomar in der Historie.
@@ -152,7 +173,10 @@ pub fn receive_bundle(
 
             Ok(ReceiveSuccessPayload {
                 sender_id: result.header.sender_id,
-                total_amount_by_unit,
+                sender_profile_name,
+                notes,
+                transfer_summary: fe_transfer_summary, // <--- Geändert
+                involved_vouchers,
             })
         }
         Err(e) => {
@@ -162,6 +186,14 @@ pub fn receive_bundle(
     }
 }
 
+// NEU: Eine lokale Struktur, die #[serde(rename_all = "camelCase")] erzwingt,
+// da die TransferSummary aus der voucher_lib dies nicht garantiert.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendTransferSummary {
+    pub summable_amounts: HashMap<String, String>,
+    pub countable_items: HashMap<String, u32>,
+}
 
 pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
 
@@ -195,9 +227,34 @@ pub fn load_history_from_disk(
     password: &str,
 ) -> Result<Vec<TransactionRecord>, String> {
     match service.load_encrypted_data(TRANSACTION_HISTORY_KEY, password) {
-        Ok(data) => serde_json::from_slice(&data)
-            .map_err(|e| format!("Failed to parse transaction history: {}", e)),
-        Err(_) => Ok(Vec::new()),
+        Ok(data) => {
+            // NEU: Debug-Ausgabe des Roh-JSONs
+            // let raw_json = String::from_utf8_lossy(&data); // <-- Entfernt, da es zu groß sein kann (bundle_data)
+            // info!("Lade Transaktionshistorie (Roh-JSON): {}", raw_json);
+
+            let records: Result<Vec<TransactionRecord>, _> = serde_json::from_slice(&data);
+            match records {
+                 Ok(parsed_records) => {
+                    // Debug-Ausgaben entfernt
+                    // info!("Transaktionshistorie erfolgreich geparst. {} Einträge geladen.", parsed_records.len());
+                    // for (i, record) in parsed_records.iter().enumerate() {
+                    //     info!("  Record[{}]: ID={}, summableAmounts={:?}, countableItems={:?}", // <-- Feldnamen geändert
+                    //         i, record.id, record.summableAmounts, record.countableItems
+                    //     );
+                    // }
+                    Ok(parsed_records)
+                }
+                Err(e) => {
+                     let msg = format!("Failed to parse transaction history: {}", e);
+                     error!("{}", msg); // Extra loggen, da der map_err das sonst verbirgt
+                     Err(msg)
+                }
+            }
+        },
+        Err(_) => {
+            info!("Keine Transaktionshistorie auf Festplatte gefunden. Erstelle neue.");
+            Ok(Vec::new())
+        }
     }
 }
 

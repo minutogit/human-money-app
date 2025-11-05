@@ -179,6 +179,7 @@ export interface MultiTransferRequest {
     recipient_id: string;
     sources: SourceTransfer[];
     notes?: string;
+    sender_profile_name?: string;
 }
 
 
@@ -192,9 +193,13 @@ export interface TransactionRecord {
     recipient_id: string;
     sender_id: string; // Eigene User-ID bei 'sent'
     timestamp: string; // ISO 8601 Zeitstempel
-    total_amount_by_unit: Record<string, string>; // z.B. { "Minuto": "50.00" }
+    summableAmounts: Record<string, string>; // z.B. { "Minuto": "50.00" }
+    countableItems: Record<string, number>; // z.B. { "Brot": 3 }
     involved_vouchers: string[]; // local_instance_ids
     bundle_data: number[]; // Das `Vec<u8>` Transfer-Bundle
+    bundle_id: string;
+    notes?: string;
+    sender_profile_name?: string;
 }
 
 /**
@@ -205,8 +210,19 @@ export interface AppSettings {
     bundle_retention_days: number;
 }
 
+/**
+ * Represents the summary of a transfer, detailing summable and countable items.
+ * Matches the Rust struct `TransferSummary`.
+ */
+export interface TransferSummary {
+    summableAmounts: Record<string, string>;
+    countableItems: Record<string, number>;
+}
 
 export interface ReceiveSuccessPayload {
     senderId: string;
-    totalAmountByUnit: Record<string, string>;
+    senderProfileName?: string;
+    notes?: string;
+    transferSummary: TransferSummary;
+    involvedVouchers: string[];
 }
