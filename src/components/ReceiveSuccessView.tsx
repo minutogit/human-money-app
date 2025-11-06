@@ -1,6 +1,6 @@
 // src/components/ReceiveSuccessView.tsx
 import { useEffect } from "react";
-import { ReceiveSuccessPayload } from "../types";
+import { ReceiveSuccessPayload, InvolvedVoucherInfo } from "../types"; // <--- NEU
 import { Button } from "./ui/Button";
 import { logger } from '../utils/log';
 
@@ -65,6 +65,22 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                             <p className="text-base text-theme-secondary whitespace-pre-wrap">{payload.notes}</p>
                         </div>
                     )}
+
+                    {/* --- NEU: ANZEIGE DER DETAILS --- */}
+                    {payload.involvedVouchersDetails && payload.involvedVouchersDetails.length > 0 && (
+                         <div>
+                            <p className="text-sm text-theme-light mt-3">Received into Vouchers</p>
+                            <ul className="list-none space-y-1 mt-1 font-mono text-xs">
+                                {payload.involvedVouchersDetails.map((detail, index) => (
+                                    <li key={index} className="p-1.5 bg-black/10 rounded">
+                                        <span className="font-semibold text-theme-primary">{detail.amount} {detail.unit}</span>
+                                        <span className="text-theme-light"> ({detail.standard_name})</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                    {/* --- ENDE --- */}
                 </div>
 
                 <Button size="lg" onClick={onDone} className="w-full">Back to Dashboard</Button>

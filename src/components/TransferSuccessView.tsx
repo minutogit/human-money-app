@@ -22,14 +22,23 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
         setFeedback('');
 
         try {
-            const suggestedFilename = `transfer-for-${recipientId.substring(8, 20)}-${new Date().toISOString().split('T')[0]}.minuto-bundle`;
+            // NEUE LOGIK: Format [RECIPIENT_NAME]_[DATUM-ZEIT].transfer
+            // 1. Extrahiere den Teil vor dem "@" (z.B. hans-tRB)
+            const recipientNameMatch = recipientId.match(/(.+)@/);
+            const recipientName = recipientNameMatch ? recipientNameMatch[1] : 'transfer';
+
+            // 2. Erzeuge den Zeitstempel: YYYYMMDD_HHmm (ohne Doppelpunkte)
+            const now = new Date();
+            const dateTimePart = now.toISOString().substring(0, 16).replace(/-/g, '').replace('T', '_').replace(/:/g, ''); // z.B. 20251106_2119
+            
+            const suggestedFilename = `${recipientName}_${dateTimePart}.transfer`;
 
             const filePath = await save({
                 title: 'Save Transfer Bundle',
                 defaultPath: suggestedFilename,
                 filters: [{
-                    name: 'Minuto Bundle',
-                    extensions: ['minuto-bundle']
+                    name: 'Transfer Bundle',
+                    extensions: ['transfer']
                 }]
             });
 

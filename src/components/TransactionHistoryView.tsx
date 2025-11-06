@@ -5,7 +5,7 @@ import { logger } from '../utils/log';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { Button } from './ui/Button';
-import { TransactionRecord } from '../types';
+import { TransactionRecord } from '../types'; // Stellt sicher, dass TransactionRecord 'involved_sources_details?' enthält
 
 interface TransactionHistoryViewProps {
     onBack: () => void;
@@ -53,7 +53,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
     const [isLoading, setIsLoading] = useState(true);
     const [feedback, setFeedback] = useState<{ [key: string]: string }>({});
     const [isSaving, setIsSaving] = useState<string | null>(null);
-    const [expandedId, setExpandedId] = useState<string | null>(null); // NEU: Für aufklappbare Details
+    const [expandedId, setExpandedId] = useState<string | null>(null);
 
     useEffect(() => {
         async function fetchHistory() {
@@ -76,7 +76,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
             }
         }
         fetchHistory();
-    }, []); // onBack aus den Abhängigkeiten entfernt, da es nicht mehr für den Abbruch benötigt wird.
+    }, []);
 
     async function handleSaveBundle(record: TransactionRecord) {
         if (!record.bundle_data || record.bundle_data.length === 0) {
@@ -88,12 +88,21 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
         setFeedback(f => ({ ...f, [record.id]: '' }));
 
         try {
-            const suggestedFilename = `transfer-for-${record.recipient_id.substring(8, 20)}-${new Date(record.timestamp).toISOString().split('T')[0]}.minuto-bundle`;
+            // NEUE LOGIK: Format [RECIPIENT_NAME]_[DATUM-ZEIT].transfer
+            // 1. Extrahiere den Teil vor dem "@" (z.B. hans-tRB)
+            const recipientNameMatch = record.recipient_id.match(/(.+)@/);
+            const recipientName = recipientNameMatch ? recipientNameMatch[1] : 'transfer';
+
+            // 2. Erzeuge den Zeitstempel aus dem Record: YYYYMMDD_HHmm (ohne Doppelpunkte)
+            const txDate = new Date(record.timestamp);
+            const dateTimePart = txDate.toISOString().substring(0, 16).replace(/-/g, '').replace('T', '_').replace(/:/g, ''); // z.B. 20251106_1801
+            
+            const suggestedFilename = `${recipientName}_${dateTimePart}.transfer`;
 
             const filePath = await save({
                 title: 'Save Transfer Bundle Again',
                 defaultPath: suggestedFilename,
-                filters: [{ name: 'Minuto Bundle', extensions: ['minuto-bundle'] }]
+                filters: [{ name: 'Transfer Bundle', extensions: ['transfer'] }]
             });
 
             if (filePath) {
@@ -147,32 +156,64 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                         </div>
                                         <div>
                                             <p className="font-semibold capitalize text-theme-primary">
-                                                {/* Leichte Bereinigung: "sent" -> "Sent" */}
                                                 {record.direction === 'sent' ? 'Sent' : 'Received'}
                                             </p>
-                                            {/* --- ANGEPASSTE LOGIK FÜR ID/NAME --- */}
+                                            
+                                            {/* --- NEUES LAYOUT FÜR SENDER/EMPFÄNGER & NOTIZEN --- */}
                                             {record.direction === 'sent' ? (
-                                                <p className="text-sm text-theme-light font-mono" title={record.recipient_id}>
-                                                    To: {truncateId(record.recipient_id)}
-                                                </p>
+                                                (() => {
+                                                    const recipientNameMatch = record.recipient_id.match(/(.+)@/);
+                                                    const recipientName = recipientNameMatch ? recipientNameMatch[1] : null;
+                                                    const recipientIdPart = recipientNameMatch ? record.recipient_id.split('@')[1] : record.recipient_id;
+
+                                                    return (
+                                                        <div>
+                                                            <p className="text-sm text-theme-light" title={record.recipient_id}>
+                                                                To: {recipientName ? (
+                                                                    <>
+                                                                        <span className="font-semibold text-theme-primary">{recipientName}</span>
+                                                                        <span className="font-mono text-xs ml-1.5">({truncateId(recipientIdPart)})</span>
+                                                                    </>
+                                                                ) : (
+                                                                    <span className="font-mono">{truncateId(record.recipient_id)}</span>
+                                                                )}
+                                                            </p>
+                                                            {/* NEUES LAYOUT FÜR NOTIZEN */}
+                                                            {record.notes && (
+                                                                <p className="text-xs text-theme-light max-w-xs truncate" title={record.notes}>
+                                                                    <span className="font-medium text-theme-secondary">Notes:</span>
+                                                                    <span className="text-sm text-theme-primary italic ml-1.5">{record.notes}</span>
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })()
                                             ) : (
-                                                <>
-                                                    {record.sender_profile_name ? (
-                                                        <p className="text-sm text-theme-light">
-                                                            From: {record.sender_profile_name}
-                                                        </p>
-                                                    ) : null}
-                                                    <p className={`font-mono ${record.sender_profile_name ? 'text-xs text-theme-light' : 'text-sm text-theme-light'}`} title={record.sender_id}>
-                                                        {record.sender_profile_name ? `(${truncateId(record.sender_id)})` : `From: ${truncateId(record.sender_id)}`}
+                                                <div>
+                                                    <p className="text-sm text-theme-light" title={record.sender_id}>
+                                                        From: {record.sender_profile_name ? (
+                                                            <>
+                                                                <span className="font-semibold text-theme-primary">{record.sender_profile_name}</span>
+                                                                <span className="font-mono text-xs ml-1.5">({truncateId(record.sender_id)})</span>
+                                                            </>
+                                                        ) : (
+                                                            <span className="font-mono">{truncateId(record.sender_id)}</span>
+                                                        )}
                                                     </p>
-                                                </>
+                                                    {/* NEUES LAYOUT FÜR NOTIZEN */}
+                                                    {record.notes && (
+                                                        <p className="text-xs text-theme-light max-w-xs truncate" title={record.notes}>
+                                                            <span className="font-medium text-theme-secondary">Notes:</span>
+                                                            <span className="text-sm text-theme-primary italic ml-1.5">{record.notes}</span>
+                                                        </p>
+                                                    )}
+                                                </div>
                                             )}
-                                            {/* --- ENDE ANPASSUNG --- */}
+                                            {/* --- ENDE NEUES LAYOUT --- */}
                                         </div>
                                     </div>
                                     <div className="text-right">
                                         <p className="font-bold text-lg text-theme-primary">
-                                            {/* NEU: formatSummary verwenden */}
                                             {formatSummary(record.summableAmounts, record.countableItems)}
                                         </p>
                                         <p className="text-sm text-theme-light">
@@ -181,7 +222,6 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                     </div>
                                 </div>
 
-                                {/* NEU: Aufklappbare Details */}
                                 <div className="border-t border-theme-subtle mt-3 pt-3">
                                     <div className="flex justify-between items-center">
                                         <button
@@ -191,7 +231,6 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                             {expandedId === record.id ? 'Hide Details' : 'Show Details'}
                                         </button>
 
-                                        {/* Button zum erneuten Speichern (nur für "sent") */}
                                         {record.direction === 'sent' && record.bundle_data && record.bundle_data.length > 0 && (
                                             <div className="flex justify-end items-center gap-4">
                                                 {feedback[record.id] && <p className="text-xs text-theme-light">{feedback[record.id]}</p>}
@@ -202,24 +241,50 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                         )}
                                     </div>
 
-                                    {/* Aufklappbarer Bereich */}
+                                    {/* --- NEUER DETAILBEREICH START --- */}
                                     {expandedId === record.id && (
-                                        <div className="mt-3 space-y-1 text-sm">
-                                            {record.notes && (
-                                                <p className="text-theme-light"><span className="font-medium text-theme-secondary">Notes:</span> {record.notes}</p>
-                                            )}
+                                        <div className="mt-4 space-y-3 text-sm">
                                             <p className="text-theme-light font-mono text-xs" title={record.bundle_id}>
                                                 <span className="font-medium text-theme-secondary">Bundle ID:</span> {record.bundle_id}
                                             </p>
 
-                                            {/* NEU: Involvierte Gutscheine anzeigen */}
-                                            {record.involved_vouchers && record.involved_vouchers.length > 0 && (
-                                                <div className="text-theme-light pt-1">
+                                            {/* Fall 1: Wir haben reiche Details (NUR für "Sent" Transaktionen) */}
+                                            {record.involvedSourcesDetails && record.involvedSourcesDetails.length > 0 && (
+                                                <div className="text-theme-light pt-2">
                                                     <span className="font-medium text-theme-secondary">
-                                                        {record.direction === 'sent' ? 'Sent from Vouchers' : 'Received into Vouchers'} ({record.involved_vouchers.length}):
+                                                        {record.direction === 'sent' ? 'Sent from Vouchers' : 'Received into Vouchers'} ({record.involvedSourcesDetails.length}):
                                                     </span>
-                                                    {/* Wir kürzen die lokalen IDs mit derselben Funktion wie die User-IDs */}
-                                                    <ul className="list-disc list-inside pl-2 font-mono text-xs">
+                                                    <div className="mt-2 space-y-2 font-mono text-xs">
+                                                        {/* Header für die "Tabelle" */}
+                                                        <div className="grid grid-cols-5 gap-2 font-bold text-theme-secondary">
+                                                            <span>Standard</span>
+                                                            <span className="text-right">Amount</span>
+                                                            <span>Unit</span>
+                                                            <span>Voucher-ID</span>
+                                                            <span>Local-ID</span>
+                                                        </div>
+                                                        {/* Datenzeilen */}
+                                                        {record.involvedSourcesDetails.map((detail, index) => (
+                                                            <div key={index} className="grid grid-cols-5 gap-2 p-1.5 bg-black/10 rounded items-center">
+                                                                <span className="truncate" title={detail.standard_name}>{detail.standard_name}</span>
+                                                                <span className="text-right font-semibold" title={detail.amount}>{detail.amount}</span>
+                                                                <span title={detail.unit}>{detail.unit}</span>
+                                                                <span className="truncate" title={detail.voucher_id}>{truncateId(detail.voucher_id)}</span>
+                                                                <span className="truncate" title={detail.local_instance_id}>{truncateId(detail.local_instance_id)}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Fall 2: Wir haben NUR IDs (NUR für "Received" Transaktionen) */}
+                                            {/* Zeige dies nur an, wenn Fall 1 nicht zutrifft */}
+                                            {record.involved_vouchers && record.involved_vouchers.length > 0 && !(record.involvedSourcesDetails && record.involvedSourcesDetails.length > 0) && (
+                                                <div className="text-theme-light pt-2">
+                                                    <span className="font-medium text-theme-secondary">
+                                                        Received into Vouchers ({record.involved_vouchers.length}):
+                                                    </span>
+                                                    <ul className="list-disc list-inside pl-2 font-mono text-xs mt-1">
                                                         {record.involved_vouchers.map(id => (
                                                             <li key={id} title={id}>{truncateId(id)}</li>
                                                         ))}
@@ -229,8 +294,8 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
 
                                         </div>
                                     )}
+                                    {/* --- NEUER DETAILBEREICH ENDE --- */}
                                 </div>
-                                {/* KORREKTUR: Der redundante "Save Bundle"-Block wurde von hier entfernt */}
                             </div>
                         )) : (
                             <div className="text-center text-theme-light py-8 bg-input-readonly rounded-lg border border-theme-subtle">

@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, FormEvent, ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "../utils/log";
-import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord } from "../types";
+import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord, InvolvedVoucherInfo } from "../types"; // NEU
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
@@ -211,7 +211,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             });
 
             // AKTUALISIERT: Erwarte ein Objekt statt nur bytes, um die bundle_id für den Record zu haben.
-            const bundleResult = await invoke<{ bundleData: number[], bundleId: string }>("create_transfer_bundle", {
+            const bundleResult = await invoke<CreateBundleResult>("create_transfer_bundle", {
                 recipientId,
                 sources,
                 notes: notesToSend, // NEU
@@ -219,8 +219,15 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 standardDefinitionsToml,
                 password
             });
+            
+            // NEU: Definieren der vollständigen Rückgabe-Struktur
+            interface CreateBundleResult {
+                bundleData: number[];
+                bundleId: string;
+                involvedSourcesDetails: InvolvedVoucherInfo[];
+            }
 
-            logger.info(`Successfully created transfer bundle ${bundleResult.bundleId} with ${bundleResult.bundleData.length} bytes.`);
+            logger.info(`Successfully created transfer bundle ${bundleResult.bundleId} with ${bundleResult.bundleData.length} bytes and ${bundleResult.involvedSourcesDetails.length} source details.`);
 
             // KORREKTUR (von 13:28): summableAmounts und countableItems getrennt verarbeiten
             const summableAmounts: Record<string, string> = {};
@@ -238,7 +245,9 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 timestamp: new Date().toISOString(),
                 summableAmounts: summableAmounts, // KORREKTUR (von 13:28)
                 countableItems: countableItems, // KORREKTUR (von 13:28)
-                involved_vouchers: Array.from(selection.keys()),
+                // NEU: Speichere sowohl die reinen IDs als auch die vollen Details
+                involved_vouchers: bundleResult.involvedSourcesDetails.map(d => d.local_instance_id),
+                involved_sources_details: bundleResult.involvedSourcesDetails,
                 bundle_data: bundleResult.bundleData,
                 bundle_id: bundleResult.bundleId, // NEU
                 notes: notesToSend ?? undefined, // NEU

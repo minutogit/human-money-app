@@ -10,7 +10,7 @@ use voucher_lib::{
     app_service::AppService,
     models::voucher::Voucher,
     services::voucher_manager::NewVoucherData,
-    wallet::{MultiTransferRequest, SourceTransfer},
+    wallet::{MultiTransferRequest, SourceTransfer, InvolvedVoucherInfo},
 };
 
 #[derive(Deserialize)]
@@ -34,6 +34,10 @@ pub struct TransactionRecord {
     #[serde(rename = "countableItems", alias = "countable_items", default)] // Serialisiert als camelCase, fängt alle alten Varianten ab
     pub countable_items: HashMap<String, u32>,
     pub involved_vouchers: Vec<String>, // local_instance_ids
+    // DAS FEHLENDE FELD:
+    #[serde(rename = "involvedSourcesDetails", alias = "involved_sources_details", default)]
+    pub involved_sources_details: Option<Vec<InvolvedVoucherInfo>>, // Muss Option<> sein, da es bei "received" fehlt
+
     pub bundle_data: Vec<u8>,
     pub bundle_id: String,
     pub notes: Option<String>,
@@ -49,6 +53,7 @@ pub struct ReceiveSuccessPayload {
     pub notes: Option<String>,
     pub transfer_summary: FrontendTransferSummary, // <--- Geändert
     pub involved_vouchers: Vec<String>,
+    pub involved_vouchers_details: Vec<InvolvedVoucherInfo>,
 }
 
 // NEU: Diese Struktur wird an das Frontend zurückgegeben, wenn ein Bundle ERSTELLT wurde.
@@ -58,6 +63,8 @@ pub struct ReceiveSuccessPayload {
 pub struct CreateBundleResult {
     pub bundle_data: Vec<u8>,
     pub bundle_id: String,
+    // NEU: Dieses Feld wird jetzt an das Frontend durchgereicht.
+    pub involved_sources_details: Vec<InvolvedVoucherInfo>,
 }
 
 #[tauri::command]
@@ -93,12 +100,14 @@ pub fn create_transfer_bundle(
 
     let archive: Option<&dyn VoucherArchive> = None;
 
-    // RUF DIE BIBLIOTHEK AUF UND VERARBEITE DIE (bytes, bundle_id) ANTWORT
+    // RUF DIE BIBLIOTHEK AUF UND VERARBEITE DIE CreateBundleResult ANTWORT
     match service.create_transfer_bundle(request, &standard_definitions_toml, archive, &password) {
-        Ok((bundle_bytes, bundle_id)) => {
+        Ok(result) => {
+            // 'result' ist die neue CreateBundleResult aus der voucher_lib
             Ok(CreateBundleResult {
-                bundle_data: bundle_bytes,
-                bundle_id,
+                bundle_data: result.bundle_bytes, // Feld 'bundle_bytes' verwenden
+                bundle_id: result.bundle_id,     // Feld 'bundle_id' verwenden
+                involved_sources_details: result.involved_sources_details, // NEU: Details durchreichen
             })
         }
         Err(e) => Err(e),
@@ -129,7 +138,8 @@ pub fn receive_bundle(
 
             // Entferne alte Summenberechnung. Nutze Daten direkt aus dem ProcessBundleResult.
             let transfer_summary = result.transfer_summary.clone();
-            let involved_vouchers = result.involved_vouchers.clone();
+            let involved_vouchers_details = result.involved_vouchers_details.clone(); // <--- HIER SIND DIE DETAILS
+            let involved_vouchers_ids: Vec<String> = involved_vouchers_details.iter().map(|d| d.local_instance_id.clone()).collect();
             let notes = result.header.notes.clone();
             let sender_profile_name = result.header.sender_profile_name.clone();
             let bundle_id = result.header.bundle_id.clone();
@@ -142,7 +152,8 @@ pub fn receive_bundle(
                 timestamp: Utc::now().to_rfc3339(),
                 summable_amounts: transfer_summary.summable_amounts.clone(), // <-- Feldname zu snake_case geändert
                 countable_items: transfer_summary.countable_items.clone(), // <-- Feldname zu snake_case geändert
-                involved_vouchers: involved_vouchers.clone(),
+                involved_vouchers: involved_vouchers_ids.clone(), // <--- KORRIGIERT
+                involved_sources_details: Some(involved_vouchers_details.clone()), // <--- KORRIGIERT
                 bundle_data: Vec::new(), // Bundle-Daten werden nur für "sent" gespeichert
                 bundle_id,
                 notes: notes.clone(),
@@ -176,7 +187,8 @@ pub fn receive_bundle(
                 sender_profile_name,
                 notes,
                 transfer_summary: fe_transfer_summary, // <--- Geändert
-                involved_vouchers,
+                involved_vouchers: involved_vouchers_ids, // <--- KORRIGIERT
+                involved_vouchers_details, // <--- KORRIGIERT
             })
         }
         Err(e) => {

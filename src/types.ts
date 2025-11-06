@@ -182,6 +182,19 @@ export interface MultiTransferRequest {
     sender_profile_name?: string;
 }
 
+/**
+ * NEU: Detaillierte Info zu einem beteiligten Gutschein.
+ * Entspricht `InvolvedVoucherInfo` in voucher_lib.
+ */
+export interface InvolvedVoucherInfo {
+    local_instance_id: string;
+    voucher_id: string;
+    standard_name: string;
+    unit: string;
+    amount: string;
+    is_divisible: boolean;
+}
+
 
 /**
  * Repräsentiert einen einzelnen Eintrag im Transaktionsverlauf ("Kontoauszug").
@@ -195,7 +208,8 @@ export interface TransactionRecord {
     timestamp: string; // ISO 8601 Zeitstempel
     summableAmounts: Record<string, string>; // z.B. { "Minuto": "50.00" }
     countableItems: Record<string, number>; // z.B. { "Brot": 3 }
-    involved_vouchers: string[]; // local_instance_ids
+    involved_vouchers: string[]; // local_instance_ids (wird von "received" verwendet)
+    involvedSourcesDetails?: InvolvedVoucherInfo[]; // KORRIGIERT: (wird von "sent" verwendet)
     bundle_data: number[]; // Das `Vec<u8>` Transfer-Bundle
     bundle_id: string;
     notes?: string;
@@ -225,4 +239,5 @@ export interface ReceiveSuccessPayload {
     notes?: string;
     transferSummary: TransferSummary;
     involvedVouchers: string[];
+    involvedVouchersDetails: InvolvedVoucherInfo[]; // <--- NEU
 }
