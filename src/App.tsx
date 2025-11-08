@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { error } from "@tauri-apps/plugin-log";
 import { logger } from "./utils/log";
-import { CreateProfile } from './components/CreateProfile';
+import { CreateNewProfile } from './components/CreateNewProfile';
 import { Login } from "./components/Login";
 import { CreateVoucher } from "./components/CreateVoucher";
 import "./App.css";
@@ -17,6 +17,7 @@ import { ReceiveView } from './components/ReceiveView';
 import { ReceiveSuccessView } from './components/ReceiveSuccessView';
 import { Dashboard } from './components/Dashboard';
 import { WalletRecovery } from './components/WalletRecovery';
+import { RecreateProfile } from './components/RecreateProfile';
 import { ProfileInfo, ReceiveSuccessPayload } from './types';
 
 type AppState =
@@ -24,6 +25,7 @@ type AppState =
     | { view: "needs_profile" }
     | { view: "needs_login" }
     | { view: "logged_in" }
+    | { view: "recreate_profile" }
     | { view: "needs_recovery" }
     | { view: "settings" }
     | { view: "create_voucher" }
@@ -50,7 +52,7 @@ function App() {
             } catch (e) {
                 error(`Failed to check if profile exists: ${e}`);
                 // Fallback to creation if there's an error, as it's the safest default
-                setAppState({ view: "needs_profile" }); 
+                setAppState({ view: "needs_profile" });
             }
         }
         checkProfile();
@@ -86,24 +88,33 @@ function App() {
                     </div>
                 );
             case "needs_profile":
-                return <CreateProfile onProfileCreated={() => setAppState({ view: "logged_in" })} />;
+                return <CreateNewProfile
+                    onProfileCreated={() => setAppState({ view: "logged_in" })}
+                    onSwitchToRecreate={() => setAppState({ view: "recreate_profile" })}
+                />;
             case "needs_login":
-                return <Login 
+                return <Login
                     onLoginSuccess={(name) => {
                         setProfileName(name);
                         setAppState({ view: "logged_in" });
-                    }} 
-                    onSwitchToCreate={() => setAppState({ view: "needs_profile" })} 
-                    onSwitchToReset={() => setAppState({ view: "needs_recovery" })} 
+                    }}
+                    onSwitchToRecreate={() => setAppState({ view: "recreate_profile" })}
+                    onSwitchToCreate={() => setAppState({ view: "needs_profile" })}
+                    onSwitchToReset={() => setAppState({ view: "needs_recovery" })}
                 />;
             case "logged_in":
-                return <Dashboard 
+                return <Dashboard
                     profileName={profileName}
                     onNavigateToCreateVoucher={() => setAppState({ view: "create_voucher" })}
                     onNavigateToSend={() => setAppState({ view: "send_vouchers" })}
                     onNavigateToReceive={() => setAppState({ view: "receive_bundle" })}
                     onNavigateToHistory={() => setAppState({ view: "transaction_history" })}
                     onShowDetails={(voucherId) => setAppState({ view: "voucher_details", voucherId })}
+                />;
+            case "recreate_profile":
+                return <RecreateProfile
+                    onProfileCreated={() => setAppState({ view: "logged_in" })}
+                    onSwitchToLogin={() => setAppState({ view: "needs_login" })}
                 />;
             case "settings":
                 return <SettingsView onBack={() => setAppState({ view: "logged_in" })} />;
@@ -112,12 +123,12 @@ function App() {
             case "create_voucher":
                 return <CreateVoucher onVoucherCreated={() => setAppState({ view: "logged_in" })} onCancel={() => setAppState({ view: "logged_in" })} />;
             case "voucher_details":
-                return <VoucherDetailsView 
-                    voucherId={appState.voucherId} 
+                return <VoucherDetailsView
+                    voucherId={appState.voucherId}
                     onBack={() => setAppState({ view: "logged_in" })}
                 />;
             case "send_vouchers":
-                return <SendView 
+                return <SendView
                     profileName={profileName}
                     onBack={() => setAppState({ view: "logged_in" })}
                     onTransferPrepared={(bundleData, recipientId, summary) =>

@@ -41,13 +41,13 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         try {
             const selectedPath = await open({
                 multiple: false,
-                filters: [{ name: 'Minuto Bundle', extensions: ['minuto-bundle'] }]
+                filters: [{ name: 'Transfer Bundle', extensions: ['transfer'] }]
             });
 
             if (typeof selectedPath === 'string') {
                 logger.info(`File selected via dialog: ${selectedPath}`);
                 setBundlePath(selectedPath);
-                setBundleName(selectedPath.split(/[/\\]/).pop() || 'bundle.minuto-bundle');
+                setBundleName(selectedPath.split(/[/\\]/).pop() || 'bundle.transfer');
             }
         } catch (e) {
             const msg = `Error selecting file: ${e}`;
@@ -138,8 +138,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             const file = files[0];
             logger.info(`Processing dropped file: ${file.name} (Size: ${file.size})`);
             
-            // Check if the file is a .minuto-bundle file
-            if (file.name.endsWith('.minuto-bundle')) {
+            // Check if the file is a .transfer file
+            if (file.name.endsWith('.transfer')) {
                 try {
                     // Read the file content as ArrayBuffer
                     const fileBuffer = await file.arrayBuffer();
@@ -160,7 +160,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     setFeedbackMsg(msg);
                 }
             } else {
-                const msg = `Invalid file type. Please drop a '.minuto-bundle' file. Got: ${file.name}`;
+                const msg = `Invalid file type. Please drop a '.transfer' file. Got: ${file.name}`;
                 logger.warn(msg);
                 setFeedbackMsg(msg);
             }
@@ -262,7 +262,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                             </div>
                         ) : (
                             <div>
-                                <p className="text-theme-light mb-4">Drag & Drop your '.minuto-bundle' file here</p>
+                                <p className="text-theme-light mb-4">Drag & Drop your '.transfer' file here</p>
                                 <p className="text-theme-light text-sm mb-4">or</p>
                                 <Button type="button" onClick={handleFileSelect}>Select Bundle File</Button>
                             </div>

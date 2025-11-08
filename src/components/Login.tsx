@@ -11,10 +11,11 @@ import { ProfileInfo } from "../types";
 interface LoginProps {
     onLoginSuccess: (profileName: string) => void;
     onSwitchToCreate: () => void;
+    onSwitchToRecreate: () => void;
     onSwitchToReset: () => void;
 }
 
-export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToReset }: LoginProps) {
+export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, onSwitchToReset }: LoginProps) {
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
     const [selectedProfile, setSelectedProfile] = useState<string>("");
     const [password, setPassword] = useState("");
@@ -119,6 +120,13 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToReset }: Log
                                 className="text-sm text-theme-primary hover:underline"
                             >
                                 Don't have a wallet? Create one
+                            </button>
+                            <button
+                                type="button"
+                                onClick={onSwitchToRecreate}
+                                className="text-sm text-theme-primary hover:underline"
+                            >
+                                Recreate profile from seed
                             </button>
                             <button
                                 type="button"

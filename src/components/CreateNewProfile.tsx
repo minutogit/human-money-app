@@ -1,4 +1,4 @@
-// src/components/CreateProfile.tsx
+// src/components/CreateNewProfile.tsx
 import { useState, useEffect, ChangeEvent, FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error } from "@tauri-apps/plugin-log";
@@ -16,11 +16,12 @@ interface ConfirmationWord {
     value: string;
 }
 
-interface CreateProfileProps {
+interface CreateNewProfileProps {
     onProfileCreated: () => void;
+    onSwitchToRecreate: () => void;
 }
 
-export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
+export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate }: CreateNewProfileProps) {
     const [wizardStep, setWizardStep] = useState<WizardStep>("display_seed");
     const [generatedSeed, setGeneratedSeed] = useState<string[]>([]);
     const [wordCount, setWordCount] = useState<12 | 24>(12);
@@ -43,8 +44,8 @@ export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
 
     useEffect(() => {
         // Log when component is displayed
-        logger.info("CreateProfile component displayed");
-        
+        logger.info("CreateNewProfile component displayed");
+
         // Generate a new seed phrase when the component mounts or word count changes.
         async function generateNewSeed() {
             setIsLoading(true);
@@ -155,6 +156,12 @@ export function CreateProfile({ onProfileCreated }: CreateProfileProps) {
                         <div className="text-center">
                             <h2 className="text-2xl font-bold text-theme-primary">Step 1: Your Secret Seed Phrase</h2>
                             <p className="text-theme-light mt-1">Write these words down in order and store them in a secure, offline location. This is the only way to recover your wallet.</p>
+                            <p className="text-theme-light mt-2 text-sm">
+                                Already have a seed phrase?
+                                <button type="button" onClick={onSwitchToRecreate} className="ml-1 text-theme-primary hover:underline font-semibold">
+                                    Recreate profile here
+                                </button>
+                            </p>
                         </div>
                         <div className="my-4 p-4 border border-theme-error rounded-lg bg-red-500/10">
                             <p className="font-bold text-center text-theme-error">WARNING: Never share this phrase with anyone. Anyone with this phrase can take your funds.</p>
