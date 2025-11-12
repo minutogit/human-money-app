@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "../utils/log";
-import { VoucherDetails } from "../types";
+import { VoucherDetails, VoucherSignature, PublicProfile } from "../types"; // Importiert PublicProfile und VoucherSignature
 import { Button } from "./ui/Button";
 
 // Props for the component
@@ -60,7 +60,9 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
     }, [voucherId]);
 
     function getDerivedVoucherStatus(voucher: VoucherDetails): { name: string; color: string; tooltip: string } {
-        if (voucher.guarantor_signatures.length < voucher.needed_guarantors) {
+        // GEÄNDERT: Verwendet 'signatures' und prüft auf 'guarantor'
+        const guarantorSignatures = voucher.signatures.filter(s => s.role === 'guarantor').length;
+        if (guarantorSignatures === 0) { // 'needed_guarantors' existiert nicht mehr, prüfe nur ob > 0
             return {
                 name: 'Incomplete',
                 color: 'text-yellow-800 bg-yellow-200',
@@ -97,8 +99,8 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
     if (!details) return <div className="p-4 sm:p-6 min-h-screen"><div className="text-center p-8 text-theme-light">No details found for this voucher.</div></div>;
 
     const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
-    const creator = details.creator as any;
-    const collateral = (details as any).collateral;
+    const creator = details.creator; // 'as any' entfernt
+    const collateral = details.collateral; // 'as any' entfernt
     const statusInfo = getDerivedVoucherStatus(details);
 
     return (
@@ -131,21 +133,23 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                             <p className="text-xl text-theme-light">{details.nominal_value.unit}</p>
                         </div>
                         <h1 className="text-2xl font-bold text-theme-primary mt-1">{details.voucher_standard.name}</h1>
-                        <p className="text-theme-secondary mt-2 max-w-2xl">{details.description}</p>
+                        {/* GEÄNDERT: Zugriff auf 'description' im template-Objekt */}
+                        <p className="text-theme-secondary mt-2 max-w-2xl">{details.voucher_standard.template.description}</p>
                     </div>
 
                     <Card title="Creator Details">
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-4">
-                            <InfoRow label="Name">{creator.first_name} {creator.last_name}</InfoRow>
+                            {/* GEÄNDERT: Nullish Coalescing für optionale Felder */}
+                            <InfoRow label="Name">{creator.first_name ?? ''} {creator.last_name ?? ''}</InfoRow>
                             <InfoRow label="Gender">{formatGender(creator.gender)}</InfoRow>
                             <InfoRow label="Address">
                                 {creator.address?.street} {creator.address?.house_number}<br/>
                                 {creator.address?.zip_code} {creator.address?.city}, {creator.address?.country}
                             </InfoRow>
                             <InfoRow label="Contact">
-                                {creator.email && <div>Email: {creator.email}</div>}
-                                {creator.phone && <div>Phone: {creator.phone}</div>}
-                                {creator.url && <div>Web: {creator.url}</div>}
+                                {creator.email && <div className="truncate">Email: {creator.email}</div>}
+                                {creator.phone && <div className="truncate">Phone: {creator.phone}</div>}
+                                {creator.url && <div className="truncate">Web: {creator.url}</div>}
                             </InfoRow>
                             <InfoRow label="Affiliation">
                                 {creator.organization && <div>Org: {creator.organization}</div>}
@@ -154,7 +158,6 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                             <InfoRow label="Coordinates">{creator.coordinates}</InfoRow>
                             <InfoRow label="Service Offer">{creator.service_offer}</InfoRow>
                             <InfoRow label="Needs">{creator.needs}</InfoRow>
-                            <InfoRow label="Creator ID" isMono>{creator.id}</InfoRow>
                         </div>
                     </Card>
 
@@ -164,15 +167,17 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                         </span>
                         <div className="flex items-center gap-2 text-sm text-theme-secondary" title="Required guarantor signatures.">
                             <span className="text-lg">✍️</span>
-                            <span><strong>{details.guarantor_signatures.length} / {details.needed_guarantors}</strong> Guarantors</span>
+                            {/* GEÄNDERT: Verwendet 'signatures' und entfernt 'needed_guarantors' */}
+                            <span><strong>{details.signatures.filter(s => s.role === 'guarantor').length}</strong> Guarantors</span>
                         </div>
                         <div className="flex items-center gap-2 text-sm text-theme-secondary" title="Indicates if this voucher is backed by collateral.">
                             <span className="text-lg">🛡️</span>
+                            {/* KORRIGIERT: Greift direkt auf 'amount' zu, da das Feld 'value' im JSON nicht existiert (serde(flatten)) */}
                             <span>Collateral: <strong>{collateral?.amount ? 'Yes' : 'No'}</strong></span>
                         </div>
                         <div className="flex items-center gap-2 text-sm text-theme-secondary" title="Indicates if this voucher can be split into smaller amounts.">
                             <span className="text-lg">✂️</span>
-                            <span>Divisible: <strong>{details.divisible ? 'Yes' : 'No'}</strong></span>
+                            <span>Divisible: <strong>{details.voucher_standard.template.divisible ? 'Yes' : 'No'}</strong></span>
                         </div>
                     </div>
 
@@ -181,27 +186,32 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                             <Card title="General Information">
                                 <div className="space-y-4">
                                     <InfoRow label="Voucher ID" isMono>{details.voucher_id}</InfoRow>
+                                    <InfoRow label="Creator ID" isMono>{creator.id}</InfoRow>
                                     <InfoRow label="Created On">{formatDateTime(details.creation_date)}</InfoRow>
                                     <InfoRow label="Valid Until">{formatDateTime(details.valid_until || undefined)}</InfoRow>
-                                    <InfoRow label="Footnote">{details.footnote || 'None'}</InfoRow>
+                                    {/* GEÄNDERT: Zugriff auf 'footnote' im template-Objekt */}
+                                    <InfoRow label="Footnote">{details.voucher_standard.template.footnote || 'None'}</InfoRow>
                                 </div>
                             </Card>
                         </div>
 
                         <div className="lg:col-span-1 space-y-6">
                             <Card title="Guarantors">
-                                <p className="text-sm text-theme-secondary pb-4">{details.guarantor_requirements_description}</p>
-                                {details.guarantor_signatures.length > 0 ? (
+                                {/* GEÄNDERT: Zugriff auf 'signature_requirements_description' im template-Objekt */}
+                                <p className="text-sm text-theme-secondary pb-4">{details.voucher_standard.template.signature_requirements_description}</p>
+                                {/* GEÄNDERT: Filtert das 'signatures'-Array */}
+                                {details.signatures.filter(s => s.role === 'guarantor').length > 0 ? (
                                     <div className="space-y-4">
-                                        {details.guarantor_signatures.map(g => (
+                                        {details.signatures.filter(s => s.role === 'guarantor').map(g => (
                                             <div key={g.signature_id} className="bg-theme-subtle/30 rounded p-2 border-t border-theme-subtle pt-3">
-                                                <p className="font-semibold">{g.first_name} {g.last_name}</p>
-                                                <p className="text-xs font-mono text-theme-light">{g.guarantor_id}</p>
+                                                {/* GEÄNDERT: Greift auf das verschachtelte 'details'-Objekt zu */}
+                                                <p className="font-semibold">{g.details?.first_name ?? ''} {g.details?.last_name ?? ''}</p>
+                                                <p className="text-xs font-mono text-theme-light">{g.signer_id}</p>
                                                 <p className="text-xs text-theme-light mt-1">Signed on: {formatDateTime(g.signature_time)}</p>
                                             </div>
                                         ))}
                                     </div>
-                                ) : <p className="text-sm text-theme-light">No guarantor signatures yet.</p>}
+                                ) : <p className="text-sm text-theme-light">No 'guarantor' signatures yet.</p>}
                             </Card>
                         </div>
                     </div>

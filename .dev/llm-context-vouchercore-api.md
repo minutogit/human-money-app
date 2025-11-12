@@ -1,3 +1,4 @@
+.dev/llm-context-vouchercore-api.md
 ### Kontext für Tauri-App-Entwicklung mit voucher_lib
 Dies ist die Kontextdatei für die voucher_lib-Bibliothek, die für die Entwicklung von Client-Anwendungen, wie z. B. Tauri-Apps, aufbereitet wurde. Sie bietet eine präzise und vollständige Referenz für die öffentliche API, die zur Interaktion mit der Kernlogik notwendig ist.
 
@@ -58,7 +59,7 @@ Sperrt das Wallet und entfernt sensible Daten wie private Schlüssel aus dem Spe
 
 Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand. Verifiziert zuerst die Standard-Definition, bevor der Gutschein erstellt wird.
 
-**`pub fn create_transfer_bundle(&mut self, request: MultiTransferRequest, standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<(Vec<u8>, String), String>`**
+**`pub fn create_transfer_bundle(&mut self, request: MultiTransferRequest, standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<CreateBundleResult, String>`**
 
 Erstellt ein verschlüsseltes `SecureContainer`-Bundle für einen Transfer an einen Empfänger. Dies ist der Kernprozess zum Senden von Werten. Die Funktion akzeptiert eine `MultiTransferRequest`, die es ermöglicht, Guthaben von einem oder mehreren Quell-Gutscheinen in einer einzigen Transaktion zu bündeln.
 
@@ -68,8 +69,8 @@ Die `MultiTransferRequest`-Struktur enthält:
 * `notes: Option<String>`: Optionale Notizen für den Empfänger.
 * `sender_profile_name: Option<String>`: Optionaler Anzeigename des Senders.
 
-Das Ergebnis (`(Vec<u8>, String)`) ist ein Tupel, das die serialisierten Daten (`Vec<u8>`) für den Versand und die eindeutige `bundle_id` (String) enthält.
-Die `bundle_id` wird von der Client-Anwendung benötigt, um den `TransactionRecord` zu erstellen. Die Wallet wird automatisch gespeichert.
+Das Ergebnis (`CreateBundleResult`) ist eine Struktur, die die serialisierten Daten (`bundle_bytes: Vec<u8>`) für den Versand sowie detaillierte Informationen über die Transaktion (z.B. `involved_sources_details`) enthält.
+Die Wallet wird automatisch gespeichert.
 
 **`pub fn receive_bundle(&mut self, bundle_data: &[u8], standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<ProcessBundleResult, String>`**
 
@@ -103,7 +104,7 @@ Fasst die Ergebnisse eines Transfers pro Währungseinheit zusammen.
 
 Erstellt ein Bundle, um eine Signaturanfrage für einen Gutschein an einen Bürgen zu senden. Diese Operation verändert den Wallet-Zustand nicht.
 
-**`pub fn create_detached_signature_response_bundle(&self, voucher_to_sign: &Voucher, signature_data: DetachedSignature, original_sender_id: &str) -> Result<Vec<u8>, String>`**
+**`pub fn create_detached_signature_response_bundle(&self, voucher_to_sign: &Voucher, role: &str, include_details: bool, original_sender_id: &str) -> Result<Vec<u8>, String>`**
 
 Erstellt eine losgelöste Signatur als Antwort auf eine Signaturanfrage. Diese Operation wird vom Bürgen aufgerufen und verändert dessen Wallet-Zustand nicht.
 

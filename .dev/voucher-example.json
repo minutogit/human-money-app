@@ -2,104 +2,142 @@
   "voucher_standard": {
     "name": "Minuto-Gutschein",
     "uuid": "MINUTO-V1-2025-09",
-    "standard_definition_hash": "EE3k5RDpVw1uzGTStY6ZeK1LEwjPtUYk1tAXGzjz4DMG"
+    "standard_definition_hash": "AHDeNndzY7p6AHD42S8YNJWnsKVfB9p7m2DRBersySBP",
+    "template": {
+      "description": "Ein Gutschein für Waren oder Dienstleistungen im Wert von 60 Minuten qualitativer Leistung.",
+      "primary_redemption_type": "goods_or_services",
+      "divisible": true,
+      "standard_minimum_issuance_validity": "P3Y",
+      "signature_requirements_description": "Ein männlicher und ein weiblicher Bürge sind erforderlich.",
+      "footnote": "Gutschein-Nutzung nur für Mitspieler/innen."
+    }
   },
-  "voucher_id": "5y4DPvWtUbYadeYzDhRtyFKWqrw4o317dRr5vWRRVGix",
-  "voucher_nonce": "EXRJXVPLbJEZwYDE29fkEC",
-  "description": "Ein Gutschein für Waren oder Dienstleistungen im Wert von 60 Minuten qualitativer Leistung.",
-  "primary_redemption_type": "goods_or_services",
-  "divisible": true,
-  "creation_date": "2025-09-22T14:28:38.747802Z",
+  "voucher_id": "H6epqoDLFJCsFLhUxdpcK1F5j37pm9xm2B7RJjgJLgpy",
+  "voucher_nonce": "ET22xpq9z3T3sAfZkCtCBW",
+  "creation_date": "2025-11-12T13:30:58.714993Z",
   "valid_until": "2030-12-31T23:59:59.999999Z",
-  "standard_minimum_issuance_validity": "P3Y",
   "non_redeemable_test_voucher": false,
   "nominal_value": {
     "unit": "Minuto",
     "amount": "60",
-    "abbreviation": "Minuto",
-    "description": ""
-  },
-  "collateral": {
-    "type": "",
-    "unit": "",
-    "amount": "",
-    "abbreviation": "",
-    "description": "",
-    "redeem_condition": ""
+    "abbreviation": "m",
+    "description": "Objektive Zeit"
   },
   "creator": {
-    "id": "creator@did:key:z6MkotWPDa8wm93iWRWRvLaeEKCe2BEP3SKFn741VKDeXTqL",
+    "id": "creator-gAT@did:key:z6MkeTHnEGVomWobktFqoPd5ugxan7GGPQkXCXgfYHryWkXg",
     "first_name": "Max",
-    "last_name": "Creator",
+    "last_name": "Mustermann",
+    "organization": "Musterfirma GmbH",
+    "community": "Bürgergemeinschaft Musterstadt",
     "address": {
-      "street": "",
-      "house_number": "",
-      "zip_code": "",
-      "city": "",
-      "country": "",
-      "full_address": ""
+      "street": "Musterstraße",
+      "house_number": "123",
+      "zip_code": "12345",
+      "city": "Musterstadt",
+      "country": "Deutschland",
+      "full_address": "Musterstraße 123, 12345 Musterstadt, Deutschland"
     },
-    "gender": "",
-    "signature": "41aEKbWs1Ls7WWrG6CAvuvKUxvmjrpZVLPnmtVFYw4gyNCxvskAsf6xjFiugxTv7hYa63RmdyCBysRDmJXTcp21a",
-    "coordinates": ""
+    "gender": "2",
+    "email": "max@mustermann.de",
+    "phone": "+49 123 456789",
+    "coordinates": "52.5200, 13.4050",
+    "url": "https://www.mustermann.de"
   },
-  "guarantor_requirements_description": "Ein männlicher und ein weiblicher Bürge sind erforderlich.",
-  "footnote": "Gutschein-Nutzung nur für Mitspieler/innen.",
-  "guarantor_signatures": [
-    {
-      "voucher_id": "5y4DPvWtUbYadeYzDhRtyFKWqrw4o317dRr5vWRRVGix",
-      "signature_id": "G7Q1G2kL3962uhR33f9YFnpEtarkEHHMwPr7Wu4W6NcU",
-      "guarantor_id": "g1@did:key:z6Mkk2gGWgYnP3aNbnbYvn3j4pMwpLoRYfWrx6yA6vTmfAA4",
-      "first_name": "Hans",
-      "last_name": "Bürge",
-      "gender": "1",
-      "signature": "2tfkNrSq7eGotu878RgSpqxP6FQGShfdXV3PqYzM322ARCbMPpYrS2scJPnzhAAEu1NKYJJ2cgiFUaiZVGx4voXd",
-      "signature_time": "2025-09-22T14:28:40.244068Z"
-    },
-    {
-      "voucher_id": "5y4DPvWtUbYadeYzDhRtyFKWqrw4o317dRr5vWRRVGix",
-      "signature_id": "BdfZp5msvdn5NKqJSKpKbWaFfeDo7PrzDygbtx9Jhjbc",
-      "guarantor_id": "g2@did:key:z6MkpshwjvzShYHGEzY4fdQDsVfMCSrCowsMsqBEycdKBnNZ",
-      "first_name": "Gabi",
-      "last_name": "Bürgin",
-      "gender": "2",
-      "signature": "4yPdeagjMxj7FgRuxQJ83yLqQN65Smpms349VFLmDRMfj4Ado7y2ohBywsTHC1fEFQwDEunFfbERy5VWGoUpN7Ec",
-      "signature_time": "2025-09-22T14:28:41.749635Z"
-    }
-  ],
-  "needed_guarantors": 2,
   "transactions": [
     {
-      "t_id": "AzaNSWnmTqq8Rp224L1WCLD928XzGkiHa7NaXVzUX1zR",
+      "t_id": "Ciarsk8V1AXTUMs22KAUDBgzygSozTz6K2Vqch38UgBM",
       "t_type": "init",
-      "t_time": "2025-09-22T14:28:38.747802Z",
-      "sender_id": "creator@did:key:z6MkotWPDa8wm93iWRWRvLaeEKCe2BEP3SKFn741VKDeXTqL",
-      "recipient_id": "creator@did:key:z6MkotWPDa8wm93iWRWRvLaeEKCe2BEP3SKFn741VKDeXTqL",
+      "t_time": "2025-11-12T13:30:58.714993Z",
+      "sender_id": "creator-gAT@did:key:z6MkeTHnEGVomWobktFqoPd5ugxan7GGPQkXCXgfYHryWkXg",
+      "recipient_id": "creator-gAT@did:key:z6MkeTHnEGVomWobktFqoPd5ugxan7GGPQkXCXgfYHryWkXg",
       "amount": "60",
-      "sender_signature": "eXKUgs7R8xe4YR41tdW5agqbgVMANQpUMM58WMJp4Yg3RAcYSSPNKU7hsy9YsApyyE729cgztZnrij8aAkQpGC8",
-      "prev_hash": "9QeTsDVXXovUD9C2aQgcZNwAEizppaqoRUgVWtF9aa8t"
+      "sender_signature": "65ZeA5zVE67Mr23dRMjTG9S4gP6Ep9yh5TGm3kLzvYF5NPUvdXfH85zmwhNgf3DeSUUJvrZ9Kem7wtNqPwzfX8DW",
+      "prev_hash": "5ggcauU6uSPkvHkfSMCuz2CuVbWhWcf9RMR6w4pEugf3"
     },
     {
-      "t_id": "5CTCGZXVFHtKgxSdEJhFd6JBTtMd2SUeGrWTfs6F2iMg",
+      "t_id": "HxtWhhno1Bx19awep49zcTEnLbDPwKKeCqSvk55ifxWA",
       "t_type": "split",
-      "t_time": "2025-09-22T14:28:43.304902Z",
-      "sender_id": "creator@did:key:z6MkotWPDa8wm93iWRWRvLaeEKCe2BEP3SKFn741VKDeXTqL",
-      "recipient_id": "rcp@did:key:z6Mkftaan3GHYU1HuYLHphyZ6P5g2ENyCCDPdCwjpd9m9s6k",
+      "t_time": "2025-11-12T13:31:06.337661Z",
+      "sender_id": "creator-gAT@did:key:z6MkeTHnEGVomWobktFqoPd5ugxan7GGPQkXCXgfYHryWkXg",
+      "recipient_id": "rcp-rMq@did:key:z6MkjFgJmyhUTEWnahK5y54a5ftz4XCA2K7W6GwHGQ32G91J",
       "amount": "25",
       "sender_remaining_amount": "35",
-      "sender_signature": "5RqYLjLi2uMByzCtmL4zo77KVMm6TXQ88me5m8f64n7SNuYzUQ9URRxwS9WqHr4AdDBTyempZ3ct9R8UQhhx78U9",
-      "prev_hash": "EYhXfh3ad9aNw2PJFyqKpuQfMYZVN4Y6HHCRKZ2vBGYT"
+      "sender_signature": "VoknBVFZFHaD5GXGueruEVPAXcPwFUpkaSVPXb85uxCbncPbr26p97yUYnahiMx6CVDB7fTTX7mb3R9p3x3qBCX",
+      "prev_hash": "7ef1jC5hZUJXk6rZYms8ofgr9uemEaiYghyB3zfZPZuy"
     },
     {
-      "t_id": "7PJy18AeMij7h35yfKVJzkGk9dJQfC4hTLsMsHdL7v4A",
+      "t_id": "2jPCEu6nw64Jy63oza9x3JsD8hpy5quAnMscvUtKdSJW",
       "t_type": "transfer",
-      "t_time": "2025-09-22T14:28:46.395286Z",
-      "sender_id": "rcp@did:key:z6Mkftaan3GHYU1HuYLHphyZ6P5g2ENyCCDPdCwjpd9m9s6k",
-      "recipient_id": "charlie@did:key:z6MktvYQVJQrVCyb4uW62p1saPpH5hsXnme9c9qonhz5KfHV",
+      "t_time": "2025-11-12T13:31:11.298359Z",
+      "sender_id": "rcp-rMq@did:key:z6MkjFgJmyhUTEWnahK5y54a5ftz4XCA2K7W6GwHGQ32G91J",
+      "recipient_id": "charlie-Lhd@did:key:z6Mknhp4KXYYaADvoGDHeoxozMvMvZnRQiPvR624s4QE3MNR",
       "amount": "25",
-      "sender_signature": "5GUHW2m9vj1uSMj7NxALgSdQzaRkZ8YZcDjA43TkiMMBcYiTFTRAkv1ZtTC6FFktt9znr7ctSxoiUD6yAQ3S31tP",
-      "prev_hash": "CbL6Wao4b2hmTnmh49Z93W9DiazZVMnCUqm132wQKCqR"
+      "sender_signature": "2R54Ao22dRYjUxKfYuLJvntMnSGdD8fbEQGvbhQD3ntrMrJwpKePSgy1Fpm8yvDQLm1r7Eo8JbfAPbusFTGbkVBP",
+      "prev_hash": "EGyyWxfcb59T2F3WJiU4kh3Ai7yc1tcMEeTXvqV15PMQ"
     }
   ],
-  "additional_signatures": []
+  "signatures": [
+    {
+      "voucher_id": "H6epqoDLFJCsFLhUxdpcK1F5j37pm9xm2B7RJjgJLgpy",
+      "signature_id": "B8zcBkZQEtzZB32WUM3FhCfLLQdvmKv6f6vq3v2eyYzc",
+      "signer_id": "creator-gAT@did:key:z6MkeTHnEGVomWobktFqoPd5ugxan7GGPQkXCXgfYHryWkXg",
+      "signature": "4TiZx9GmmtWVDJzWtZTeAwG1fqq2ia1g5xk8Zj3uR8RJ5Pf2VkXkqbNWkFSCmRJoXKrHuhUDYuc3qXjYqZygbTjT",
+      "signature_time": "2025-11-12T13:30:58.714993Z",
+      "role": "creator"
+    },
+    {
+      "voucher_id": "H6epqoDLFJCsFLhUxdpcK1F5j37pm9xm2B7RJjgJLgpy",
+      "signature_id": "7tdkTM6WeotJ3D84fTcjmTzYTHFuG1k6G16zaAgnRT4b",
+      "signer_id": "g1-NWo@did:key:z6MkfLYhaRt4YCQ7SxZs7SMBXwrFAe6H8kUPCdUG9P5Decq1",
+      "signature": "5ShXKLZqFpMV8NkrBn1eXdiMLvTjJJiMhJLAo9gjehg1n9nb6VyrRaEK8FfD3QZB6BVBreG6bpRM5dJ7oxqQegxT",
+      "signature_time": "2025-11-12T13:31:01.218069Z",
+      "role": "guarantor",
+      "details": {
+        "first_name": "Max",
+        "last_name": "Bürger",
+        "organization": "Bürgschaft GmbH",
+        "community": "Bürgergemeinschaft Musterstadt",
+        "address": {
+          "street": "Bürgenstraße",
+          "house_number": "789",
+          "zip_code": "98765",
+          "city": "Bürgenstadt",
+          "country": "Deutschland",
+          "full_address": "Bürgenstraße 789, 98765 Bürgenstadt, Deutschland"
+        },
+        "gender": "1",
+        "email": "max@buergen.de",
+        "phone": "+49 123 987654",
+        "coordinates": "50.1109, 8.6821",
+        "url": "https://www.buergen.de"
+      }
+    },
+    {
+      "voucher_id": "H6epqoDLFJCsFLhUxdpcK1F5j37pm9xm2B7RJjgJLgpy",
+      "signature_id": "BLGoLZQjiuix9sCKs6m11ffPRHQZuGTLfXfK5UrnTVi2",
+      "signer_id": "g2-jAT@did:key:z6MksVj1JaeSdvq7iDyWCQjX1fyTPuc7i9B9uzC8b6N3nWGS",
+      "signature": "4hjNgBnKqKSgWBZnhXH7BwpkZGLNC2MbThTLoFcbzAh5hdVfBzTtmgtzCA8Jjjo2ufuNSqJ3AXhjw4k1oSpEGnqL",
+      "signature_time": "2025-11-12T13:31:03.693985Z",
+      "role": "guarantor",
+      "details": {
+        "first_name": "Erika",
+        "last_name": "Bürgin",
+        "organization": "Bürgschaft GmbH",
+        "community": "Bürgergemeinschaft Musterstadt",
+        "address": {
+          "street": "Bürgenstraße",
+          "house_number": "456",
+          "zip_code": "54321",
+          "city": "Bürgenstadt",
+          "country": "Deutschland",
+          "full_address": "Bürgenstraße 456, 54321 Bürgenstadt, Deutschland"
+        },
+        "gender": "2",
+        "email": "erika@buergin.de",
+        "phone": "+49 987 654321",
+        "coordinates": "48.1351, 11.5820",
+        "url": "https://www.buergin.de"
+      }
+    }
+  ]
 }

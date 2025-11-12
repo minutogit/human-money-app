@@ -319,38 +319,41 @@ pub fn create_new_voucher(
     let user_id = service.get_user_id()?;
 
     let voucher_data = NewVoucherData {
-        nominal_value: voucher_lib::models::voucher::NominalValue {
+        nominal_value: voucher_lib::models::voucher::ValueDefinition {
             amount: data.nominal_value.amount,
             unit: data.nominal_value.unit,
             ..Default::default()
         },
-        collateral: voucher_lib::models::voucher::Collateral {
-            amount: data.collateral.amount,
-            unit: data.collateral.unit,
-            abbreviation: data.collateral.abbreviation,
+        collateral: Some(voucher_lib::models::voucher::Collateral {
+            value: voucher_lib::models::voucher::ValueDefinition {
+                amount: data.collateral.amount,
+                unit: data.collateral.unit,
+                ..Default::default()
+            },
+            // collateral_type and redeem_condition are covered by ..Default::default()
             ..Default::default()
-        },
-        creator: voucher_lib::models::voucher::Creator {
-            id: user_id,
-            first_name: data.creator.first_name,
-            last_name: data.creator.last_name,
-            address: voucher_lib::models::voucher::Address {
+        }),
+        creator_profile: voucher_lib::models::profile::PublicProfile {
+            id: Some(user_id),
+            first_name: Some(data.creator.first_name),
+            last_name: Some(data.creator.last_name),
+            address: Some(voucher_lib::models::voucher::Address {
                 street: data.creator.address.street,
                 house_number: data.creator.address.house_number,
                 zip_code: data.creator.address.zip_code,
                 city: data.creator.address.city,
                 country: data.creator.address.country,
                 full_address: data.creator.address.full_address,
-            },
+            }),
             organization: data.creator.organization,
             community: data.creator.community,
             phone: data.creator.phone,
             email: data.creator.email,
             url: data.creator.url,
-            gender: data.creator.gender,
+            gender: Some(data.creator.gender),
+            coordinates: Some(data.creator.coordinates),
             service_offer: data.creator.service_offer,
             needs: data.creator.needs,
-            coordinates: data.creator.coordinates,
             ..Default::default()
         },
         validity_duration: data.validity_duration,

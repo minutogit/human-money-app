@@ -1,3 +1,4 @@
+# voucher_standards/silver_v1/standard.toml
 [metadata]
 abbreviation = "Oz"
 documentation_url = "https://example.com/silver-standard-docs"
@@ -51,8 +52,8 @@ allowed_t_types = [
 amount_decimal_places = 4
 
 [signature]
-# Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält. asdf
-issuer_id = "did:key:z6Mkoim7ZGcaKdoeD41USV5gmxfiVXXiPDeYt4T9rnEB5zfM"
+# Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.
+issuer_id = "0-xXz@did:key:z6Mkoim7ZGcaKdoeD41USV5gmxfiVXXiPDeYt4T9rnEB5zfM"
 
 # Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).
 signature = "3qDAyeqA6iY9qXQMmTRvkh36YSrtPcrAE4M7UM44eo8QcUSBH9iUR1MD6P3QGntwgjugQEARxp4ZdkL6gar1gG7X"

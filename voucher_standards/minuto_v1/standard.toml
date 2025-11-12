@@ -1,3 +1,4 @@
+# voucher_standards/minuto_v1/standard.toml
 [metadata]
 abbreviation = "Minuto"
 documentation_url = "https://github.com/minuto/standards/tree/main/minuto_v1"
@@ -44,9 +45,6 @@ unit = "Minuto"
 
 [validation]
 [validation.counts]
-# Erzwingt exakt zwei Bürgen-Signaturen, wie in `needed_count` beschrieben.
-guarantor_signatures = { min = 2, max = 2 }
-
 [validation.behavior_rules]
 allowed_t_types = [
     "init",
@@ -60,16 +58,18 @@ issuance_minimum_validity_duration = "P3Y"
 # NEU: Erzwingt, dass von den zwei Bürgen exakt einer männlich ('1')
 # und einer weiblich ('2') sein muss, gemäß ISO 5218.
 [validation.field_group_rules]
-[validation.field_group_rules.guarantor_signatures]
-field = "gender"
+[validation.field_group_rules.signatures]
+field = "details.gender"
 value_counts = [
+    # Erzwingt 1x Männlich (ISO 5218)
     { value = "1", min = 1, max = 1 },
+    # Erzwingt 1x Weiblich (ISO 5218)
     { value = "2", min = 1, max = 1 },
 ]
 
 [signature]
 # Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.
-issuer_id = "did:key:z6Mkoim7ZGcaKdoeD41USV5gmxfiVXXiPDeYt4T9rnEB5zfM"
+issuer_id = "0-xXz@did:key:z6Mkoim7ZGcaKdoeD41USV5gmxfiVXXiPDeYt4T9rnEB5zfM"
 
 # Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).
-signature = "2pMQNQMj3q5Eqsv6nsLwc7kFNhSb17LCLxQG1v3bWWaaFEKkE8RGWf1SVa3CSRfJJrZShkX5nEui57iXGhZzQEVv"
+signature = "3ceXHE7eTpLAptURfcZnz8H4GPi3QtXfbpastT1ZPTxGZR3XMQgPAroTKHfi6XmXnh5EDPyb6wAt8FrC4RxFCrCq"

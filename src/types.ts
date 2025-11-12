@@ -100,6 +100,56 @@ export interface NewVoucherData {
     creator: CreatorData;
 }
 
+// NEU: Definiert einen Wert (Betrag und Einheit)
+// Entspricht `ValueDefinition` in voucher.rs
+export interface ValueDefinition {
+    unit: string;
+    amount: string;
+    abbreviation?: string;
+    description?: string;
+}
+
+// NEU: Definiert die (optionale) Besicherung
+// Entspricht `Collateral` in voucher.rs
+export interface Collateral {
+    // ValueDefinition-Felder sind hier flach eingebettet
+    unit: string;
+    amount: string;
+    abbreviation?: string;
+    description?: string;
+    // Das JSON-Feld heißt 'type'
+    type?: string;
+    redeem_condition?: string;
+}
+
+// NEU: Definiert das öffentliche Profil für Ersteller und Bürgen
+// Entspricht `PublicProfile` in voucher_lib::models::profile
+export interface PublicProfile {
+    id?: string;
+    first_name?: string;
+    last_name?: string;
+    address?: Address;
+    organization?: string;
+    community?: string;
+    phone?: string;
+    email?: string;
+    url?: string;
+    gender?: string;
+    coordinates?: string;
+    service_offer?: string; // Wieder hinzugefügt
+    needs?: string; // Wieder hinzugefügt
+}
+
+// NEU: Definiert die Template-Daten aus dem Standard
+// Entspricht `VoucherTemplateData` in voucher.rs
+export interface VoucherTemplateData {
+    description: string;
+    primary_redemption_type: string;
+    divisible: boolean;
+    standard_minimum_issuance_validity: string;
+    signature_requirements_description: string;
+    footnote: string;
+}
 
 /**
  * Represents the full, detailed structure of a voucher.
