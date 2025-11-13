@@ -12,9 +12,9 @@
       "footnote": "Gutschein-Nutzung nur für Mitspieler/innen."
     }
   },
-  "voucher_id": "H6epqoDLFJCsFLhUxdpcK1F5j37pm9xm2B7RJjgJLgpy",
-  "voucher_nonce": "ET22xpq9z3T3sAfZkCtCBW",
-  "creation_date": "2025-11-12T13:30:58.714993Z",
+  "voucher_id": "7LyhSSQCeKNYMPXTHC2ujqVNNNwDMVkHAcVY8g7sRbjb",
+  "voucher_nonce": "UA19YMz8XSvxH8HP1MDXyG",
+  "creation_date": "2025-11-13T08:06:59.599806Z",
   "valid_until": "2030-12-31T23:59:59.999999Z",
   "non_redeemable_test_voucher": false,
   "nominal_value": {
@@ -24,7 +24,7 @@
     "description": "Objektive Zeit"
   },
   "creator": {
-    "id": "creator-gAT@did:key:z6MkeTHnEGVomWobktFqoPd5ugxan7GGPQkXCXgfYHryWkXg",
+    "id": "creator-oBL@did:key:z6MktJNHcUuCKy8MyrYCMFr6F6jDVbZATYKtZiKd6N6rN8Vz",
     "first_name": "Max",
     "last_name": "Mustermann",
     "organization": "Musterfirma GmbH",
@@ -41,56 +41,58 @@
     "email": "max@mustermann.de",
     "phone": "+49 123 456789",
     "coordinates": "52.5200, 13.4050",
-    "url": "https://www.mustermann.de"
+    "url": "https://www.mustermann.de",
+    "service_offer": "Biete Webdesign und Beratung",
+    "needs": "Suche Minuto-Gutscheine"
   },
   "transactions": [
     {
-      "t_id": "Ciarsk8V1AXTUMs22KAUDBgzygSozTz6K2Vqch38UgBM",
+      "t_id": "GWqBpiY8Pccx3au8ehoY4EHx1RiBCZxcf871RYA1hRJ4",
       "t_type": "init",
-      "t_time": "2025-11-12T13:30:58.714993Z",
-      "sender_id": "creator-gAT@did:key:z6MkeTHnEGVomWobktFqoPd5ugxan7GGPQkXCXgfYHryWkXg",
-      "recipient_id": "creator-gAT@did:key:z6MkeTHnEGVomWobktFqoPd5ugxan7GGPQkXCXgfYHryWkXg",
+      "t_time": "2025-11-13T08:06:59.599806Z",
+      "sender_id": "creator-oBL@did:key:z6MktJNHcUuCKy8MyrYCMFr6F6jDVbZATYKtZiKd6N6rN8Vz",
+      "recipient_id": "creator-oBL@did:key:z6MktJNHcUuCKy8MyrYCMFr6F6jDVbZATYKtZiKd6N6rN8Vz",
       "amount": "60",
-      "sender_signature": "65ZeA5zVE67Mr23dRMjTG9S4gP6Ep9yh5TGm3kLzvYF5NPUvdXfH85zmwhNgf3DeSUUJvrZ9Kem7wtNqPwzfX8DW",
-      "prev_hash": "5ggcauU6uSPkvHkfSMCuz2CuVbWhWcf9RMR6w4pEugf3"
+      "sender_signature": "4vDFKcWLf32FhX9a67iVWdj8jGJjCLSGN9kmwh98A9j8FZNVje7Bd246QSHoG5tmv97eAKFG6Zwr9hZQk1N7Xj33",
+      "prev_hash": "9bdiiHXwVYZxAb2cjYxKQmF45L77ENeALzF6dhKbXAdd"
     },
     {
-      "t_id": "HxtWhhno1Bx19awep49zcTEnLbDPwKKeCqSvk55ifxWA",
+      "t_id": "Gov5DprGZdLHTpNoaVtSxLgxRSkqwXf2yKjcazLZPY8i",
       "t_type": "split",
-      "t_time": "2025-11-12T13:31:06.337661Z",
-      "sender_id": "creator-gAT@did:key:z6MkeTHnEGVomWobktFqoPd5ugxan7GGPQkXCXgfYHryWkXg",
-      "recipient_id": "rcp-rMq@did:key:z6MkjFgJmyhUTEWnahK5y54a5ftz4XCA2K7W6GwHGQ32G91J",
+      "t_time": "2025-11-13T08:07:06.087035Z",
+      "sender_id": "creator-oBL@did:key:z6MktJNHcUuCKy8MyrYCMFr6F6jDVbZATYKtZiKd6N6rN8Vz",
+      "recipient_id": "rcp-HhS@did:key:z6MkveYwnLaijWHBdPtwnfrSw8WauJvgLjhoJGmzqcrXVVYp",
       "amount": "25",
       "sender_remaining_amount": "35",
-      "sender_signature": "VoknBVFZFHaD5GXGueruEVPAXcPwFUpkaSVPXb85uxCbncPbr26p97yUYnahiMx6CVDB7fTTX7mb3R9p3x3qBCX",
-      "prev_hash": "7ef1jC5hZUJXk6rZYms8ofgr9uemEaiYghyB3zfZPZuy"
+      "sender_signature": "4XQ6KZUaZi1PYwg4LrR5nmBkXiN2iPhjMedJMG21xGh7KaPaHzof7cLmju7tcvc1SpyZXJXo9AqbjygmAiLcrDq2",
+      "prev_hash": "9HqEoKnDwiYoBck7guVhHRrRJxNtJKz73AAw84JCcuMK"
     },
     {
-      "t_id": "2jPCEu6nw64Jy63oza9x3JsD8hpy5quAnMscvUtKdSJW",
+      "t_id": "4es1zqyhzNTENNdhDRYJXbQq6BPGhDbwS8VegV7DMPdV",
       "t_type": "transfer",
-      "t_time": "2025-11-12T13:31:11.298359Z",
-      "sender_id": "rcp-rMq@did:key:z6MkjFgJmyhUTEWnahK5y54a5ftz4XCA2K7W6GwHGQ32G91J",
-      "recipient_id": "charlie-Lhd@did:key:z6Mknhp4KXYYaADvoGDHeoxozMvMvZnRQiPvR624s4QE3MNR",
+      "t_time": "2025-11-13T08:07:10.499681Z",
+      "sender_id": "rcp-HhS@did:key:z6MkveYwnLaijWHBdPtwnfrSw8WauJvgLjhoJGmzqcrXVVYp",
+      "recipient_id": "charlie-MB4@did:key:z6Mko5U2a22WYn7jY98UkDaw9mwVEuM72hsdURzkumCejTsU",
       "amount": "25",
-      "sender_signature": "2R54Ao22dRYjUxKfYuLJvntMnSGdD8fbEQGvbhQD3ntrMrJwpKePSgy1Fpm8yvDQLm1r7Eo8JbfAPbusFTGbkVBP",
-      "prev_hash": "EGyyWxfcb59T2F3WJiU4kh3Ai7yc1tcMEeTXvqV15PMQ"
+      "sender_signature": "5HeQRb6HDc3EvriWU5ZVSAVC6eXBwPJyhMz4CAHrMYEjE6HTFEHpmJc8LYTpy6rQr1aKEC61NzfrQZUEeXbSsJ12",
+      "prev_hash": "733d3KjhaubVpeoVR1xmaR6tjW41bymQWKxmqWd3kxg5"
     }
   ],
   "signatures": [
     {
-      "voucher_id": "H6epqoDLFJCsFLhUxdpcK1F5j37pm9xm2B7RJjgJLgpy",
-      "signature_id": "B8zcBkZQEtzZB32WUM3FhCfLLQdvmKv6f6vq3v2eyYzc",
-      "signer_id": "creator-gAT@did:key:z6MkeTHnEGVomWobktFqoPd5ugxan7GGPQkXCXgfYHryWkXg",
-      "signature": "4TiZx9GmmtWVDJzWtZTeAwG1fqq2ia1g5xk8Zj3uR8RJ5Pf2VkXkqbNWkFSCmRJoXKrHuhUDYuc3qXjYqZygbTjT",
-      "signature_time": "2025-11-12T13:30:58.714993Z",
+      "voucher_id": "7LyhSSQCeKNYMPXTHC2ujqVNNNwDMVkHAcVY8g7sRbjb",
+      "signature_id": "Ddvai5nWfXwMos1NPqKrsSjdSgUDiieN3Xr8hxV2DSfR",
+      "signer_id": "creator-oBL@did:key:z6MktJNHcUuCKy8MyrYCMFr6F6jDVbZATYKtZiKd6N6rN8Vz",
+      "signature": "p8qHPuJmkwECuZwoo5xhp9weWwNY3okvGB2LckKYE7rcYfnFiHcZUVCdWCnahw4b3sipZ1Qn2rkWjK4N2zQmEVq",
+      "signature_time": "2025-11-13T08:06:59.599806Z",
       "role": "creator"
     },
     {
-      "voucher_id": "H6epqoDLFJCsFLhUxdpcK1F5j37pm9xm2B7RJjgJLgpy",
-      "signature_id": "7tdkTM6WeotJ3D84fTcjmTzYTHFuG1k6G16zaAgnRT4b",
-      "signer_id": "g1-NWo@did:key:z6MkfLYhaRt4YCQ7SxZs7SMBXwrFAe6H8kUPCdUG9P5Decq1",
-      "signature": "5ShXKLZqFpMV8NkrBn1eXdiMLvTjJJiMhJLAo9gjehg1n9nb6VyrRaEK8FfD3QZB6BVBreG6bpRM5dJ7oxqQegxT",
-      "signature_time": "2025-11-12T13:31:01.218069Z",
+      "voucher_id": "7LyhSSQCeKNYMPXTHC2ujqVNNNwDMVkHAcVY8g7sRbjb",
+      "signature_id": "GA6VVvsK2zZrL9sMiKK1LfwHoZcqu67oj2FwQ7HgLC8P",
+      "signer_id": "g1-LWx@did:key:z6Mkt6p7H7HYLLqKQ8LZK7a42EbHXo1T5GjxrJ1KrZdZiqbs",
+      "signature": "2pgwFPMTS2QsmZcq1zUZspidaKBUTiTCucHivL1prh2MnZD8ALkWNL8eFdQm29XuiqG4hgFELkw2f8HxDR9CfVGJ",
+      "signature_time": "2025-11-13T08:07:01.716246Z",
       "role": "guarantor",
       "details": {
         "first_name": "Max",
@@ -113,11 +115,11 @@
       }
     },
     {
-      "voucher_id": "H6epqoDLFJCsFLhUxdpcK1F5j37pm9xm2B7RJjgJLgpy",
-      "signature_id": "BLGoLZQjiuix9sCKs6m11ffPRHQZuGTLfXfK5UrnTVi2",
-      "signer_id": "g2-jAT@did:key:z6MksVj1JaeSdvq7iDyWCQjX1fyTPuc7i9B9uzC8b6N3nWGS",
-      "signature": "4hjNgBnKqKSgWBZnhXH7BwpkZGLNC2MbThTLoFcbzAh5hdVfBzTtmgtzCA8Jjjo2ufuNSqJ3AXhjw4k1oSpEGnqL",
-      "signature_time": "2025-11-12T13:31:03.693985Z",
+      "voucher_id": "7LyhSSQCeKNYMPXTHC2ujqVNNNwDMVkHAcVY8g7sRbjb",
+      "signature_id": "93VrLnyBH6HzNEwGyn9cbSvJjRCRxXKWLpiPziJZz5cj",
+      "signer_id": "g2-d9P@did:key:z6MkpxappJNJAxcJMASes8o8pqLrN4p2XsKLV6JB9cE4gGrY",
+      "signature": "5R5JcgdAnS3i6evABqYUEucSzQ2ir3N6FjK5XXtwLQUVrGUNHvU3QQqsn6pZbH63dZCnzXemJaG3sGvW6cjFky5n",
+      "signature_time": "2025-11-13T08:07:03.857855Z",
       "role": "guarantor",
       "details": {
         "first_name": "Erika",

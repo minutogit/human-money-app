@@ -216,3 +216,31 @@ Die `AggregatedBalance`-Struktur enthält:
 **`pub fn get_voucher_details(&self, local_id: &str) -> Result<VoucherDetails, String>`**
 
 Ruft detaillierte Informationen zu einem einzelnen Gutschein ab, inklusive seiner Transaktionshistorie. `VoucherDetails` ist eine umfassende Struktur für eine Detailansicht.
+
+
+## Gutschein-Struktur (Voucher)
+
+Ein Gutschein ist ein JSON-Objekt mit folgenden Hauptfeldern:
+
+- **`voucher_standard`**: Name, UUID, Hash der Definition.
+- **`voucher_id`**: Eindeutige ID (Hash der Stammdaten).
+- **`voucher_nonce`**: Zufälliger Nonce für Anonymität.
+- **`creation_date`**: Erstellungsdatum (ISO 8601).
+- **`valid_until`**: Gültigkeitsdatum (ISO 8601).
+- **`nominal_value`**: Wert mit `unit`, `amount`, `abbreviation`, `description`.
+- **`collateral`** (optional): Besicherung mit `unit`, `amount`, `type`, `redeem_condition`.
+- **`creator_profile`**: Öffentliches Profil des Erstellers.
+- **`signatures`**: Array von Signaturen (inkl. Bürgen) mit `signature_id`, `signer_id`, `signature`, `role`, `details`.
+- **`transactions`**: Verkettete Liste von Transaktionen mit `t_id`, `prev_hash`, `t_type`, `sender_id`, `recipient_id`, `amount`, `sender_remaining_amount`, `sender_signature`.
+
+## Fehlerbehandlung
+
+Alle Funktionen geben `Result<T, String>` zurück. Häufige Fehler: Wallet gesperrt, ungültige Eingaben, Speicherfehler. Für detaillierte Fehler siehe `VoucherCoreError` und `StorageError`.
+
+## Beispiel-Nutzung
+
+```rust
+use voucher_lib::app_service::AppService;
+
+let mut app = AppService::new(Path::new("/tmp/wallets")).unwrap();
+app.create_profile("Mein Profil", &mnemonic, None, Some("user"), "pass").unwrap();

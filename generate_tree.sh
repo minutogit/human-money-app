@@ -21,6 +21,7 @@ EXCLUDES=(
     "package-lock.json"
     "generate_tree.sh"
     ".gitignore"
+    "wallet_data"
 )
 
 # Erstelle den endgültigen String für die -I Option mit printf (robuster als echo).
