@@ -1,10 +1,12 @@
 // src/components/CreateVoucher.tsx
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, FormEvent, ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { error, info } from "@tauri-apps/plugin-log";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { NewVoucherData, VoucherStandardInfo } from "../types";
+import { useSession } from "../context/SessionContext"; // <--- NEU
+import { ConfirmationModal } from "./ui/ConfirmationModal"; // <--- NEU
 
 
 interface CreateVoucherProps {
@@ -22,7 +24,29 @@ const Fieldset: React.FC<{ legend: string; children: React.ReactNode }> = ({ leg
     </fieldset>
 );
 
+// Helper: Extrahiert Metadaten aus dem TOML-Content
+function parseStandardInfo(tomlContent: string) {
+    // Name aus [metadata] extrahieren
+    const nameMatch = tomlContent.match(/\bname\s*=\s*"([^"]+)"/);
+    const name = nameMatch ? nameMatch[1] : null;
+
+    // Issuer Name aus [metadata] extrahieren
+    const issuerMatch = tomlContent.match(/issuer_name\s*=\s*"([^"]+)"/);
+    const issuer = issuerMatch ? issuerMatch[1] : null;
+
+    // Default Validity aus [template.default] extrahieren (Format PnY, PnM, PnD)
+    // Vereinfachtes Regex für den Prototyp (erwartet P<Zahl><Einheit>)
+    const durationMatch = tomlContent.match(/default_validity_duration\s*=\s*"P(\d+)([YMD])"/);
+    let validity = null;
+    if (durationMatch) {
+        validity = { value: parseInt(durationMatch[1], 10), unit: durationMatch[2] as "Y" | "M" | "D" };
+    }
+
+    return { name, issuer, validity };
+}
+
 export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps) {
+    const { protectAction } = useSession(); // <--- NEU
     // Basic Voucher State
     const [standards, setStandards] = useState<VoucherStandardInfo[]>([]);
     const [selectedStandardId, setSelectedStandardId] = useState<string>("");
@@ -55,9 +79,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const [collateralAbbreviation, setCollateralAbbreviation] = useState("");
 
     // General Component State
-    const [password, setPassword] = useState("");
     const [isLoading, setIsLoading] = useState(true);
     const [feedback, setFeedback] = useState<{ type: 'error' | 'success', msg: string } | null>(null);
+    const [showConfirm, setShowConfirm] = useState(false); // <--- NEU
 
     useEffect(() => {
         logger.info("CreateVoucher component displayed");
@@ -68,6 +92,13 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                 setStandards(fetchedStandards);
                 if (fetchedStandards.length > 0) {
                     setSelectedStandardId(fetchedStandards[0].id);
+                    // Standard-Gültigkeit setzen
+                    const { validity } = parseStandardInfo(fetchedStandards[0].content);
+                    if (validity) {
+                        setValidityValue(validity.value);
+                        setValidityUnit(validity.unit);
+                        info(`CreateVoucher: Applied default validity P${validity.value}${validity.unit}`);
+                    }
                 }
                 info(`CreateVoucher: Loaded ${fetchedStandards.length} standards.`);
             } catch (e) {
@@ -81,7 +112,23 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         fetchStandards();
     }, []);
 
-    async function handleSubmit(event: FormEvent) {
+    // Handler für Wechsel des Standards
+    const handleStandardChange = (e: ChangeEvent<HTMLSelectElement>) => {
+        const newId = e.target.value;
+        setSelectedStandardId(newId);
+
+        const selectedStd = standards.find(s => s.id === newId);
+        if (selectedStd) {
+            const { validity } = parseStandardInfo(selectedStd.content);
+            if (validity) {
+                setValidityValue(validity.value);
+                setValidityUnit(validity.unit);
+            }
+        }
+    };
+
+    // 1. Schritt: Formular validieren
+    const handleCreateClick = (event: FormEvent) => {
         event.preventDefault();
         // Guard Clause: Prevent multiple submissions if already loading.
         if (isLoading) {
@@ -89,15 +136,21 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         }
 
         setFeedback(null);
-        setIsLoading(true);
 
         const selectedStandard = standards.find(s => s.id === selectedStandardId);
         if (!selectedStandard) {
             setFeedback({ type: 'error', msg: "Selected standard not found." });
-            setIsLoading(false);
             return;
         }
 
+        // Alles ok -> Modal öffnen
+        setShowConfirm(true);
+    };
+
+    // 2. Schritt: Ausführen
+    async function executeCreation() {
+        setIsLoading(true);
+        const selectedStandard = standards.find(s => s.id === selectedStandardId)!; // Sicher, da vorher geprüft
         const validityDuration = validityValue > 0 ? `P${validityValue}${validityUnit}` : null;
         const fullAddress = `${street} ${houseNumber}, ${zipCode} ${city}, ${country}`.trim();
 
@@ -131,10 +184,12 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         };
 
         try {
-            await invoke("create_new_voucher", {
-                standardTomlContent: selectedStandard.content,
-                data: voucherData,
-                password,
+            await protectAction(async (password) => {
+                await invoke("create_new_voucher", {
+                    standardTomlContent: selectedStandard.content,
+                    data: voucherData,
+                    password, // Ist null im Session-Modus, oder string im Modus A
+                });
             });
             setFeedback({type: 'success', msg: "Voucher created successfully! Redirecting..."});
             setTimeout(onVoucherCreated, 2000);
@@ -144,6 +199,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             // ONLY set loading to false on error, so the user can try again.
             // On success, the form should remain disabled until navigation.
             setIsLoading(false);
+            setShowConfirm(false);
         }
     }
 
@@ -153,15 +209,31 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         <div className="mx-auto max-w-2xl">
             <h1 className="text-3xl font-bold text-center mb-6 text-theme-primary">Create New Voucher</h1>
             <div className="rounded-lg border border-theme-subtle bg-bg-card-alternate p-6 shadow-lg">
-                <form onSubmit={handleSubmit}>
+                <form onSubmit={handleCreateClick}>
                     <Fieldset legend="Basic Information">
                         <div>
                             <label htmlFor="standard" className="block text-sm font-medium text-theme-secondary mb-1">Voucher
                                 Type</label>
                             <select id="standard" value={selectedStandardId}
-                                    onChange={(e) => setSelectedStandardId(e.target.value)}
+                                    onChange={handleStandardChange}
                                     disabled={isLoading || standards.length === 0} className={inputClass}>
-                                {standards.map(s => <option key={s.id} value={s.id}>{s.id}</option>)}
+                                {standards.map(s => {
+                                    const { name, issuer } = parseStandardInfo(s.content);
+                                    
+                                    let label = name ? name : s.id;
+                                    
+                                    if (issuer) {
+                                        // Issuer kürzen, falls länger als 25 Zeichen
+                                        const displayIssuer = issuer.length > 25 ? issuer.substring(0, 22) + "..." : issuer;
+                                        label = `${label} (${displayIssuer})`;
+                                    }
+
+                                    return (
+                                        <option key={s.id} value={s.id}>
+                                            {label}
+                                        </option>
+                                    );
+                                })}
                             </select>
                         </div>
                         <div>
@@ -355,19 +427,6 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         </div>
                     </Fieldset>
 
-                    <div className="mt-8 rounded-lg border border-theme-accent/50 bg-bg-card-alternate p-4">
-                        <p className="text-center text-sm text-theme-light mb-4">
-                            To authorize and sign the new voucher, please enter your wallet password.
-                            <br/>
-                            This password is only used for this action and is not stored in the voucher.
-                        </p>
-                        <input id="password" type="password" value={password}
-                               onChange={(e) => setPassword(e.target.value)} required disabled={isLoading}
-                               autoComplete="current-password" className={inputClass}
-                               placeholder="Your Wallet Password (Required)"
-                               title="Please enter your wallet password."/>
-                    </div>
-
                     {feedback && (
                         <p className={`text-center text-sm font-semibold ${feedback.type === 'error' ? 'text-theme-error' : 'text-theme-success'}`}>
                             {feedback.msg}
@@ -384,6 +443,18 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                     </div>
                 </form>
             </div>
+
+            <ConfirmationModal
+                isOpen={showConfirm}
+                title="Create Voucher?"
+                description={
+                    <p>Do you really want to create a new <strong>{amount} {standards.find(s=>s.id===selectedStandardId)?.id || 'Minuto'}</strong> voucher?<br/><br/>This action will sign the voucher with your private key.</p>
+                }
+                confirmText="Yes, Create"
+                onConfirm={executeCreation}
+                onCancel={() => setShowConfirm(false)}
+                isProcessing={isLoading}
+            />
         </div>
     );
 }

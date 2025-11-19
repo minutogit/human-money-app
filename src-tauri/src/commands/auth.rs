@@ -81,21 +81,28 @@ pub fn login(
             info!("Login successful!");
 
             // Lade oder erstelle die Einstellungen
-            let settings: AppSettings = match service.load_encrypted_data(SETTINGS_KEY, &password) {
+            let settings: AppSettings = match service.load_encrypted_data(SETTINGS_KEY, Some(&password)) {
                 Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
                 Err(_) => {
                     info!("No settings file found, creating default settings.");
                     let default_settings = AppSettings::default();
                     let bytes = serde_json::to_vec(&default_settings).unwrap();
                     service
-                        .save_encrypted_data(SETTINGS_KEY, &bytes, &password)
+                        .save_encrypted_data(SETTINGS_KEY, &bytes, Some(&password))
                         .map_err(|e| format!("Failed to save default settings: {}", e))?;
                     default_settings
-                }
-            };
+                 }
+             };
 
-            // Lade die Transaktionshistorie und führe die Bereinigung durch
-            let mut history = load_history_from_disk(&service, &password)?;
+            // NEU: Wenn ein Timeout konfiguriert ist, starten wir direkt die Session.
+            // So muss der User für die ersten Aktionen kein Passwort eingeben.
+            if settings.session_timeout_seconds > 0 {
+                service.unlock_session(&password, settings.session_timeout_seconds)?;
+            }
+
+             // Lade die Transaktionshistorie und führe die Bereinigung durch
+             // Beim Login haben wir immer das Passwort, also Some(&password)
+             let mut history = load_history_from_disk(&mut service, Some(&password))?;
             let mut changed = false;
             let retention_duration = Duration::days(settings.bundle_retention_days as i64);
 
@@ -117,7 +124,7 @@ pub fn login(
                 let history_bytes = serde_json::to_vec(&history)
                     .map_err(|e| format!("Failed to serialize cleaned history: {}", e))?;
                 service
-                    .save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, &password)
+                    .save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, Some(&password))
                     .map_err(|e| format!("Failed to save cleaned history: {}", e))?;
             }
 
@@ -166,4 +173,27 @@ pub fn logout(state: tauri::State<AppState>) {
     let mut service = state.service.lock().unwrap();
     service.logout();
     info!("Logout complete.");
+}
+
+// NEUE SESSION COMMANDS
+
+#[tauri::command]
+pub fn unlock_session(password: String, duration_seconds: u64, state: tauri::State<AppState>) -> Result<(), String> {
+    info!("Unlocking session for {} seconds...", duration_seconds);
+    let mut service = state.service.lock().unwrap();
+    service.unlock_session(&password, duration_seconds)
+}
+
+#[tauri::command]
+pub fn lock_session(state: tauri::State<AppState>) {
+    info!("Locking session manually.");
+    let mut service = state.service.lock().unwrap();
+    service.lock_session();
+}
+
+#[tauri::command]
+pub fn refresh_session_activity(state: tauri::State<AppState>) {
+    // Loggt nicht, um Spam zu vermeiden
+    let mut service = state.service.lock().unwrap();
+    service.refresh_session_activity();
 }

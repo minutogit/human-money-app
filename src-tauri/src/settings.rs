@@ -6,14 +6,15 @@ pub const SETTINGS_KEY: &str = "app_settings";
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppSettings {
     pub bundle_retention_days: u64,
+    // NEU: 0 = Immer fragen, >0 = Session Dauer in Sekunden
+    pub session_timeout_seconds: u64,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            // Standard-Aufbewahrungsfrist: 30 Tage.
-            // Ein guter Kompromiss zwischen Verfügbarkeit und Speicherplatz.
             bundle_retention_days: 30,
+            session_timeout_seconds: 600, // Standard: 10 Minuten
         }
     }
 }

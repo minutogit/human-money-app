@@ -6,7 +6,8 @@ import { readFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../utils/log';
 import { VoucherStandardInfo, ReceiveSuccessPayload } from '../types';
 import { Button } from './ui/Button';
-import { Input } from './ui/Input';
+import { useSession } from '../context/SessionContext';
+import { ConfirmationModal } from './ui/ConfirmationModal'; // <--- NEU
 
 interface ReceiveViewProps {
     onBack: () => void;
@@ -14,12 +15,13 @@ interface ReceiveViewProps {
 }
 
 export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
+    const { protectAction } = useSession();
     const [bundlePath, setBundlePath] = useState<string | null>(null);
     const [bundleName, setBundleName] = useState<string | null>(null);
-    const [password, setPassword] = useState('');
     const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState('');
-    const [isProcessing, setIsProcessing] = useState(false);
+    const [showConfirm, setShowConfirm] = useState(false); // <--- NEU
+    const [isProcessing, setIsProcessing] = useState(false); // <--- NEU (lokaler State fehlte ggf. oder wird jetzt genutzt)
 
     useEffect(() => {
         async function fetchStandards() {
@@ -171,19 +173,23 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         }
     };
 
-    // Modify handleProcessBundle to handle dropped files
-    const handleProcessBundle = async (event: FormEvent) => {
+    // 1. Schritt: Validieren und Modal
+    const handleProcessClick = (event: FormEvent) => {
         event.preventDefault();
-        logger.info(`Attempting to process bundle...`);
         
-        if ((!bundlePath || !password) && !droppedFileContent) {
-            setFeedbackMsg("Please select a bundle file and enter your password.");
+        if ((!bundlePath) && !droppedFileContent) {
+            setFeedbackMsg("Please select a bundle file.");
             return;
         }
 
-        setIsProcessing(true);
         setFeedbackMsg('');
+        setShowConfirm(true);
+    };
 
+    // 2. Schritt: Ausführen
+    async function executeReceive() {
+        setIsProcessing(true);
+        logger.info(`Attempting to process bundle...`);
         try {
             let bundleData: number[];
             if (droppedFileContent) {
@@ -209,12 +215,17 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             });
 
             logger.info(`Calling receive_bundle with ${bundleData.length} bytes of data and ${Object.keys(standardDefinitionsToml).length} standards`);
-            
-            const payload = await invoke<ReceiveSuccessPayload>("receive_bundle", {
-                bundleData,
-                standardDefinitionsToml,
-                password
+
+            const payload = await protectAction(async (password) => {
+                return await invoke<ReceiveSuccessPayload>("receive_bundle", {
+                    bundleData,
+                    standardDefinitionsToml,
+                    password
+                });
             });
+
+            // protectAction kann undefined zurückgeben bei User Cancel, aber hier fängt catch das ab oder payload ist da.
+            if (!payload) return;
 
             logger.info("Bundle received and processed successfully.");
             onReceiveSuccess(payload);
@@ -225,10 +236,11 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             logger.error(msg);
             if (e instanceof Error && e.stack) logger.error(e.stack);
             setFeedbackMsg(`Error: ${msg}`);
-        } finally {
             setIsProcessing(false);
+            setShowConfirm(false);
+        } finally {
         }
-    };
+    }
 
     return (
         <div className="flex flex-col h-full max-w-2xl mx-auto">
@@ -241,7 +253,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             </header>
 
             <div className="flex-grow">
-                <form onSubmit={handleProcessBundle} className="space-y-6">
+                <form onSubmit={handleProcessClick} className="space-y-6">
                     {feedbackMsg && <p className="text-center text-red-500">{feedbackMsg}</p>}
 
                     <div
@@ -267,30 +279,28 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                                 <Button type="button" onClick={handleFileSelect}>Select Bundle File</Button>
                             </div>
                         )}
-                    </div>
+                     </div>
 
-                    {(bundlePath || droppedFileContent) && (
-                        <div className="space-y-4 bg-bg-card border border-theme-subtle rounded-lg p-4">
-                            <div>
-                                <label htmlFor="password" className="block text-sm font-medium text-theme-light mb-1">Your Wallet Password</label>
-                                <Input
-                                    id="password"
-                                    type="password"
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    required
-                                    autoComplete="current-password"
-                                    placeholder="Enter password to confirm"
-                                    disabled={isProcessing}
-                                />
-                            </div>
-                            <Button size="lg" type="submit" className="w-full" disabled={(!bundlePath && !droppedFileContent) || !password || isProcessing}>
-                                {isProcessing ? "Processing..." : "Process Bundle"}
-                            </Button>
-                        </div>
-                    )}
+                     {(bundlePath || droppedFileContent) && (
+                         <Button size="lg" type="submit" className="w-full">
+                             Process Bundle
+                         </Button>
+                     )}
+
                 </form>
             </div>
+
+            <ConfirmationModal
+                isOpen={showConfirm}
+                title="Process Transfer Bundle"
+                description={
+                    <p>Do you want to import and process the bundle <strong>{bundleName}</strong>?<br/>This will check for funds and add them to your wallet.</p>
+                }
+                confirmText="Yes, Process"
+                onConfirm={executeReceive}
+                onCancel={() => setShowConfirm(false)}
+                isProcessing={isProcessing}
+            />
         </div>
     );
 }

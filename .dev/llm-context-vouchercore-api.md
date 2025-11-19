@@ -18,6 +18,8 @@ Dies ist die Kontextdatei für die voucher_lib-Bibliothek, die für die Entwickl
 
 **Entkoppelte Speicherung:** Die `voucher_lib` nutzt ein `Storage`-Trait, um die Logik von der Speicherung zu trennen. Für Client-Anwendungen wird eine Standardimplementierung (`FileStorage`) bereitgestellt, die alle Daten sicher verschlüsselt im Dateisystem ablegt.
 
+**Prozess-Sperrung (Pessimistic Locking):** Um Dateninkonsistenzen bei gleichzeitig laufenden Instanzen zu verhindern, implementiert die `FileStorage` ein dateibasiertes Locking mit PID-Check (`.wallet.lock`). Schreibende Operationen erwerben automatisch eine exklusive Sperre. Wenn ein anderer Prozess das Wallet bereits sperrt, wird die Operation mit einem Fehler abgelehnt.
+
 ### 3. Öffentliche API: Das AppService-Modul
 Der `AppService` ist die einzige Schnittstelle, die für die Entwicklung der Client-Anwendung relevant ist. Er verwaltet den Zustand des Wallets (gesperrt/entsperrt) und stellt alle notwendigen Funktionen bereit.
 
@@ -58,7 +60,7 @@ Sperrt das Wallet und entfernt sensible Daten wie private Schlüssel aus dem Spe
 **`pub fn create_new_voucher(&mut self, standard_toml_content: &str, lang_preference: &str, data: NewVoucherData, password: &str) -> Result<Voucher, String>`**
 
 Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand. Verifiziert zuerst die Standard-Definition, bevor der Gutschein erstellt wird.
-
+*Hinweis: Diese Operation erwirbt eine exklusive Dateisperre. Schlägt fehl, wenn ein anderer Prozess das Wallet verwendet.*
 **`pub fn create_transfer_bundle(&mut self, request: MultiTransferRequest, standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<CreateBundleResult, String>`**
 
 Erstellt ein verschlüsseltes `SecureContainer`-Bundle für einen Transfer an einen Empfänger. Dies ist der Kernprozess zum Senden von Werten. Die Funktion akzeptiert eine `MultiTransferRequest`, die es ermöglicht, Guthaben von einem oder mehreren Quell-Gutscheinen in einer einzigen Transaktion zu bündeln.
@@ -71,6 +73,7 @@ Die `MultiTransferRequest`-Struktur enthält:
 
 Das Ergebnis (`CreateBundleResult`) ist eine Struktur, die die serialisierten Daten (`bundle_bytes: Vec<u8>`) für den Versand sowie detaillierte Informationen über die Transaktion (z.B. `involved_sources_details`) enthält.
 Die Wallet wird automatisch gespeichert.
+*Hinweis: Diese Operation erwirbt eine exklusive Dateisperre.*
 
 **`pub fn receive_bundle(&mut self, bundle_data: &[u8], standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<ProcessBundleResult, String>`**
 
@@ -235,7 +238,9 @@ Ein Gutschein ist ein JSON-Objekt mit folgenden Hauptfeldern:
 
 ## Fehlerbehandlung
 
-Alle Funktionen geben `Result<T, String>` zurück. Häufige Fehler: Wallet gesperrt, ungültige Eingaben, Speicherfehler. Für detaillierte Fehler siehe `VoucherCoreError` und `StorageError`.
+Alle Funktionen geben `Result<T, String>` zurück. Häufige Fehler: Wallet gesperrt (`WalletLocked`), ungültige Eingaben, Speicherfehler.
+
+**Locking-Fehler:** Wenn eine schreibende Operation fehlschlägt, weil ein anderer Prozess das Wallet verwendet, wird ein Fehler zurückgegeben (z.B. "Wallet-Sperre fehlgeschlagen: Wallet wird bereits von einem anderen Prozess (PID: 1234) verwendet."). Client-Anwendungen sollten diesen Fehler dem Benutzer anzeigen.
 
 ## Beispiel-Nutzung
 

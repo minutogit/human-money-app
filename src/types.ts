@@ -272,6 +272,7 @@ export interface TransactionRecord {
  */
 export interface AppSettings {
     bundle_retention_days: number;
+    session_timeout_seconds: number; // NEU
 }
 
 /**

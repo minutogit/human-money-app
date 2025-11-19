@@ -5,14 +5,15 @@ import { logger } from '../utils/log';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { AppSettings } from '../types';
+import { useSession } from '../context/SessionContext';
 
 interface SettingsViewProps {
     onBack: () => void;
 }
 
 export function SettingsView({ onBack }: SettingsViewProps) {
+    const { protectAction } = useSession();
     const [settings, setSettings] = useState<AppSettings | null>(null);
-    const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
@@ -37,8 +38,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
     const handleSave = async (event: FormEvent) => {
         event.preventDefault();
-        if (!settings || !password) {
-            setError("Please fill in all fields and provide your password.");
+        if (!settings) {
+            setError("Please fill in all fields.");
             return;
         }
 
@@ -48,7 +49,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
         try {
             logger.info("Attempting to save settings...");
-            await invoke('save_app_settings', { settings, password });
+            await protectAction(async (password) => { await invoke('save_app_settings', { settings, password }); });
             setSuccess("Settings saved successfully!");
             logger.info("Settings saved successfully.");
             setTimeout(() => setSuccess(''), 3000); // Clear success message after 3s
@@ -58,7 +59,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             setError(msg);
         } finally {
             setIsSaving(false);
-            setPassword(''); // Clear password field for security
         }
     };
 
@@ -94,17 +94,27 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     </p>
                 </div>
 
-                <div className="border-t border-theme-subtle pt-6">
-                    <p className="text-sm text-theme-secondary mb-2">Enter your password to confirm changes:</p>
+                <div>
+                    <label htmlFor="sessionTimeout" className="block text-sm font-medium text-theme-light mb-1">
+                        Session Timeout (Minutes)
+                    </label>
                     <Input
-                        type="password"
-                        placeholder="Your Wallet Password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
+                        id="sessionTimeout"
+                        type="number"
+                        value={settings ? Math.floor(settings.session_timeout_seconds / 60) : 10}
+                        onChange={(e) => {
+                            const minutes = parseInt(e.target.value, 10);
+                            setSettings(s => s ? { ...s, session_timeout_seconds: isNaN(minutes) ? 0 : minutes * 60 } : null);
+                        }}
+                        min="0"
                         required
-                        autoComplete="current-password"
                     />
+                    <p className="text-xs text-theme-light mt-2">
+                        Duration to keep the wallet unlocked after activity. Set to 0 to always ask for password (High Security).
+                    </p>
                 </div>
+
+
 
                 <div className="flex items-center justify-between">
                     <Button type="submit" disabled={isSaving}>

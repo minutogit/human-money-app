@@ -6,6 +6,8 @@ import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord,
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
+import { useSession } from "../context/SessionContext";
+import { ConfirmationModal } from "./ui/ConfirmationModal"; // <--- NEU
 
 interface SendViewProps {
     onBack: () => void;
@@ -28,6 +30,7 @@ function formatAmount(amountStr: string): string {
 
 
 export function SendView({ onBack, onTransferPrepared, profileName }: SendViewProps) {
+    const { protectAction } = useSession();
     const [recipientId, setRecipientId] = useState("");
     const [notes, setNotes] = useState(""); // NEU
     const [sendProfileName, setSendProfileName] = useState(true); // NEU
@@ -39,8 +42,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [selection, setSelection] = useState<Map<string, string>>(new Map());
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isProcessing, setIsProcessing] = useState(false);
-    const [password, setPassword] = useState("");
     const [standardIdToUuidMap, setStandardIdToUuidMap] = useState<Map<string, string>>(new Map());
+    const [showConfirm, setShowConfirm] = useState(false); // <--- NEU
 
     useEffect(() => {
         async function fetchData() {
@@ -189,14 +192,21 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         return { count, summableTotals, countableTotals };
     }, [selection, availableVouchers]);
 
-    async function handlePrepareTransfer(event: FormEvent) {
+    // 1. Schritt: Validierung und Modal öffnen
+    const handlePrepareTransferClick = (event: FormEvent) => {
         event.preventDefault();
-        if (!recipientId || selection.size === 0 || !password) {
-            setFeedbackMsg("Please provide a recipient ID, select vouchers, and enter your password.");
+        if (!recipientId || selection.size === 0) {
+            setFeedbackMsg("Please provide a recipient ID and select vouchers.");
             return;
         }
-        setIsProcessing(true);
         setFeedbackMsg("");
+        setShowConfirm(true);
+    };
+
+    // 2. Schritt: Die eigentliche Ausführung (wird vom Modal aufgerufen)
+    async function executeTransfer() {
+        setIsProcessing(true);
+        // Modal bleibt offen oder zeigt Loading, wir schließen es erst am Ende oder bei Fehler
         try {
             const senderProfileNameToSend = sendProfileName && profileName ? profileName : null;
             const notesToSend = notes.trim() === "" ? null : notes.trim();
@@ -207,18 +217,26 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             }));
             const standardDefinitionsToml: Record<string, string> = {};
             voucherStandards.forEach(standard => {
-                standardDefinitionsToml[standard.id] = standard.content;
+                //Das Backend erwartet die UUID als Key
+                const uuid = standardIdToUuidMap.get(standard.id) || standard.id;
+                standardDefinitionsToml[uuid] = standard.content;
             });
 
             // AKTUALISIERT: Erwarte ein Objekt statt nur bytes, um die bundle_id für den Record zu haben.
-            const bundleResult = await invoke<CreateBundleResult>("create_transfer_bundle", {
-                recipientId,
-                sources,
-                notes: notesToSend, // NEU
-                senderProfileName: senderProfileNameToSend, // NEU
-                standardDefinitionsToml,
-                password
+            const bundleResult = await protectAction(async (password) => {
+                return await invoke<CreateBundleResult>("create_transfer_bundle", {
+                    recipientId,
+                    sources,
+                    notes: notesToSend, // NEU
+                    senderProfileName: senderProfileNameToSend, // NEU
+                    standardDefinitionsToml,
+                    password
+                });
             });
+            if (!bundleResult) {
+                setIsProcessing(false);
+                return;
+            }
             
             // NEU: Definieren der vollständigen Rückgabe-Struktur
             interface CreateBundleResult {
@@ -254,7 +272,10 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 sender_profile_name: senderProfileNameToSend ?? undefined, // NEU
             };
 
-            await invoke("save_transaction_record", { record: record as TransactionRecord, password });
+            // Auch das Speichern des Records muss geschützt sein (nutzt die selbe Session/Passwort)
+            await protectAction(async (password) => {
+                 await invoke("save_transaction_record", { record: record as TransactionRecord, password });
+            });
             logger.info(`Transaction record ${record.id} saved successfully.`);
 
             // KORREKTUR (von 13:28): Detaillierte summaryString erstellen
@@ -267,7 +288,9 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         } catch (e) {
             const msg = `Failed to create transfer bundle: ${e}`;
             logger.error(msg);
+            setFeedbackMsg(msg);
             setIsProcessing(false);
+            setShowConfirm(false); // Modal schließen bei Fehler
         }
     }
 
@@ -281,7 +304,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 <p className="text-theme-light mt-1">Select vouchers and prepare a transfer for a recipient.</p>
             </header>
             <div className="flex-grow overflow-y-auto pr-4 -mr-4">
-                <form onSubmit={handlePrepareTransfer}>
+                <form onSubmit={handlePrepareTransferClick}>
                     {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
                     <section className="bg-bg-card border border-theme-subtle rounded-lg p-4 mb-6">
                         <h2 className="font-semibold text-theme-secondary mb-3">1. The Order</h2>
@@ -356,11 +379,9 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                     ) : <span>0.00</span>}
                                 </div>
                             </div>
+
                             <div className="md:col-span-1">
-                                <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required disabled={isProcessing} autoComplete="current-password" placeholder="Your Wallet Password"/>
-                            </div>
-                            <div className="md:col-span-1">
-                                <Button size="lg" type="submit" className="w-full" disabled={!recipientId || selection.size === 0 || isProcessing || !password}>
+                                 <Button size="lg" type="submit" className="w-full" disabled={!recipientId || selection.size === 0 || isProcessing}>
                                     {isProcessing ? "Processing..." : "Prepare Transfer"}
                                 </Button>
                             </div>
@@ -422,6 +443,18 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                     </section>
                 </form>
             </div>
+            
+            <ConfirmationModal 
+                isOpen={showConfirm}
+                title="Confirm Transfer"
+                description={
+                    <p>Are you sure you want to send vouchers worth <br/><span className="font-bold text-theme-primary">{Object.entries(checkoutSummary.summableTotals).map(([u, t]) => `${t.toFixed(2)} ${u}`).join(', ')} {Object.entries(checkoutSummary.countableTotals).map(([u, t]) => `${t} ${u}`).join(', ')}</span><br/> to <span className="font-mono text-xs">{recipientId}</span>?</p>
+                }
+                confirmText="Yes, Prepare Transfer"
+                onConfirm={executeTransfer}
+                onCancel={() => setShowConfirm(false)}
+                isProcessing={isProcessing}
+            />
         </div>
     );
 }
