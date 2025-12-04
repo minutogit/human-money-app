@@ -58,6 +58,24 @@ pub fn create_profile(
     match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password) {
         Ok(()) => {
             info!("Profile created successfully!");
+
+            // 1. Initialisiere und speichere Standard-Einstellungen für das neue Profil
+            let default_settings = AppSettings::default();
+            let settings_bytes = serde_json::to_vec(&default_settings).map_err(|e| e.to_string())?;
+            
+            service
+                .save_encrypted_data(SETTINGS_KEY, &settings_bytes, Some(&password))
+                .map_err(|e| format!("Failed to save default settings: {}", e))?;
+
+            // 2. Starte die Session direkt (wie beim Login)
+            if default_settings.session_timeout_seconds > 0 {
+                service.unlock_session(&password, default_settings.session_timeout_seconds)?;
+            }
+
+            // 3. Aktualisiere den globalen AppState (Settings & leere History)
+            *state.settings.lock().unwrap() = Some(default_settings);
+            *state.history.lock().unwrap() = Some(Vec::new());
+
             Ok(())
         }
         Err(e) => {

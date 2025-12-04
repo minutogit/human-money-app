@@ -93,7 +93,11 @@ function AppContent() {
                 );
             case "needs_profile":
                 return <CreateNewProfile
-                    onProfileCreated={() => setAppState({ view: "logged_in" })}
+                    onProfileCreated={() => {
+                        // SessionContext informieren, dass wir eingeloggt sind
+                        notifyLogin();
+                        setAppState({ view: "logged_in" });
+                    }}
                     onSwitchToRecreate={() => setAppState({ view: "recreate_profile" })}
                 />;
             case "needs_login":
