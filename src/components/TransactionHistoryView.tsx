@@ -90,7 +90,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
         try {
             // NEUE LOGIK: Format [RECIPIENT_NAME]_[DATUM-ZEIT].transfer
             // 1. Extrahiere den Teil vor dem "@" (z.B. hans-tRB)
-            const recipientNameMatch = record.recipient_id.match(/(.+)@/);
+            const recipientNameMatch = record.recipient_id?.match(/(.+)@/);
             const recipientName = recipientNameMatch ? recipientNameMatch[1] : 'transfer';
 
             // 2. Erzeuge den Zeitstempel aus dem Record: YYYYMMDD_HHmm (ohne Doppelpunkte)
@@ -162,9 +162,9 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                             {/* --- NEUES LAYOUT FÜR SENDER/EMPFÄNGER & NOTIZEN --- */}
                                             {record.direction === 'sent' ? (
                                                 (() => {
-                                                    const recipientNameMatch = record.recipient_id.match(/(.+)@/);
+                                                    const recipientNameMatch = record.recipient_id?.match(/(.+)@/);
                                                     const recipientName = recipientNameMatch ? recipientNameMatch[1] : null;
-                                                    const recipientIdPart = recipientNameMatch ? record.recipient_id.split('@')[1] : record.recipient_id;
+                                                    const recipientIdPart = recipientNameMatch ? record.recipient_id!.split('@')[1] : (record.recipient_id || 'Unknown');
 
                                                     return (
                                                         <div>
@@ -175,7 +175,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                                         <span className="font-mono text-xs ml-1.5">({truncateId(recipientIdPart)})</span>
                                                                     </>
                                                                 ) : (
-                                                                    <span className="font-mono">{truncateId(record.recipient_id)}</span>
+                                                                    <span className="font-mono">{truncateId(record.recipient_id || '')}</span>
                                                                 )}
                                                             </p>
                                                             {/* NEUES LAYOUT FÜR NOTIZEN */}
@@ -194,10 +194,10 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                         From: {record.sender_profile_name ? (
                                                             <>
                                                                 <span className="font-semibold text-theme-primary">{record.sender_profile_name}</span>
-                                                                <span className="font-mono text-xs ml-1.5">({truncateId(record.sender_id)})</span>
+                                                                <span className="font-mono text-xs ml-1.5">({truncateId(record.sender_id || 'Unknown')})</span>
                                                             </>
                                                         ) : (
-                                                            <span className="font-mono">{truncateId(record.sender_id)}</span>
+                                                            <span className="font-mono">{truncateId(record.sender_id || 'Unknown')}</span>
                                                         )}
                                                     </p>
                                                     {/* NEUES LAYOUT FÜR NOTIZEN */}
@@ -249,10 +249,10 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                             </p>
 
                                             {/* Fall 1: Wir haben reiche Details (NUR für "Sent" Transaktionen) */}
-                                            {record.involvedSourcesDetails && record.involvedSourcesDetails.length > 0 && (
+                                            {record.involved_sources_details && record.involved_sources_details.length > 0 && (
                                                 <div className="text-theme-light pt-2">
                                                     <span className="font-medium text-theme-secondary">
-                                                        {record.direction === 'sent' ? 'Sent from Vouchers' : 'Received into Vouchers'} ({record.involvedSourcesDetails.length}):
+                                                        {record.direction === 'sent' ? 'Sent from Vouchers' : 'Received into Vouchers'} ({record.involved_sources_details.length}):
                                                     </span>
                                                     <div className="mt-2 space-y-2 font-mono text-xs">
                                                         {/* Header für die "Tabelle" */}
@@ -264,12 +264,12 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                             <span>Local-ID</span>
                                                         </div>
                                                         {/* Datenzeilen */}
-                                                        {record.involvedSourcesDetails.map((detail, index) => (
+                                                        {record.involved_sources_details!.map((detail, index) => (
                                                             <div key={index} className="grid grid-cols-5 gap-2 p-1.5 bg-black/10 rounded items-center">
                                                                 <span className="truncate" title={detail.standard_name}>{detail.standard_name}</span>
                                                                 <span className="text-right font-semibold" title={detail.amount}>{detail.amount}</span>
                                                                 <span title={detail.unit}>{detail.unit}</span>
-                                                                <span className="truncate" title={detail.voucher_id}>{truncateId(detail.voucher_id)}</span>
+                                                                <span className="truncate" title={detail.voucher_id || ''}>{truncateId(detail.voucher_id || '')}</span>
                                                                 <span className="truncate" title={detail.local_instance_id}>{truncateId(detail.local_instance_id)}</span>
                                                             </div>
                                                         ))}
@@ -279,7 +279,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
 
                                             {/* Fall 2: Wir haben NUR IDs (NUR für "Received" Transaktionen) */}
                                             {/* Zeige dies nur an, wenn Fall 1 nicht zutrifft */}
-                                            {record.involved_vouchers && record.involved_vouchers.length > 0 && !(record.involvedSourcesDetails && record.involvedSourcesDetails.length > 0) && (
+                                            {record.involved_vouchers && record.involved_vouchers.length > 0 && !(record.involved_sources_details && record.involved_sources_details.length > 0) && (
                                                 <div className="text-theme-light pt-2">
                                                     <span className="font-medium text-theme-secondary">
                                                         Received into Vouchers ({record.involved_vouchers.length}):

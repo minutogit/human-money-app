@@ -52,7 +52,6 @@ pub struct FrontendNewVoucherData {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct ProfileInfo {
     pub profile_name: String,
     pub folder_name: String,

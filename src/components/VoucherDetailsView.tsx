@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "../utils/log";
-import { VoucherDetails, VoucherSignature, PublicProfile } from "../types"; // Importiert PublicProfile und VoucherSignature
+import { VoucherDetails } from "../types";
 import { Button } from "./ui/Button";
 
 // Props for the component

@@ -1,0 +1,150 @@
+name: Release Tauri App
+
+on:
+  push:
+    branches:
+      - action-workflow
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------
+  # JOB 1: BAUEN (BUILD)
+  # ---------------------------------------------------
+  build:
+    name: Build on ${{ matrix.platform }}
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: ""
+            # Wir suchen rekursiv im bundle Ordner, das ist sicherer
+            bundle_path: "src-tauri/target/release/bundle"
+            include_files: "deb,AppImage"
+
+          - platform: macos-latest
+            args: "-- --target universal-apple-darwin"
+            bundle_path: "src-tauri/target/universal-apple-darwin/release/bundle"
+            include_files: "dmg"
+
+          - platform: windows-latest
+            args: ""
+            bundle_path: "src-tauri/target/release/bundle"
+            include_files: "exe"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Sync Rust dependencies
+        run: |
+          cd src-tauri
+          cargo update
+
+      - name: Build Application
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+        run: npm run tauri build ${{ matrix.args }}
+
+      # Hier sammeln wir die fertigen Dateien ein und laden sie in den Temp-Speicher von GitHub
+      - name: Upload Artifacts (Temp Storage)
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.platform }}
+          # Sucht nach den passenden Endungen im Bundle-Ordner
+          path: |
+            ${{ matrix.bundle_path }}/**/*.deb
+            ${{ matrix.bundle_path }}/**/*.AppImage
+            ${{ matrix.bundle_path }}/**/*.dmg
+            ${{ matrix.bundle_path }}/**/*.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------
+  # JOB 2: VERÖFFENTLICHEN (RELEASE)
+  # ---------------------------------------------------
+  release:
+    name: Create Release
+    needs: build # Wartet zwingend, bis ALLE Builds fertig sind
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        # Wir checken aus, nur um die Version aus der Cargo.toml zu lesen
+
+      - name: Get Version and Date
+        id: get_version
+        shell: bash
+        run: |
+          # Version sicher auslesen
+          VERSION=$(grep "^version" src-tauri/Cargo.toml | head -n 1 | cut -d '"' -f 2)
+          DATE=$(date +'%Y-%m-%d %H:%M')
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "Version detected: $VERSION, Date: $DATE"
+
+      # Lädt ALLE Dateien von Linux, Mac und Windows herunter
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true # Wirft alle Dateien in einen Ordner (flach)
+
+      - name: List files (Debug)
+        run: ls -R release-assets
+
+      # NEU: Robustes Löschen mit offiziellem GitHub CLI
+      - name: Cleanup existing Nightly
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Versucht Release und Tag zu löschen. '|| true' verhindert Fehler, falls es noch nicht existiert.
+          gh release delete nightly --cleanup-tag --yes || true
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/action-workflow'
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'nightly' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('Nightly Build v{0}', env.APP_VERSION) }}
+          draft: false
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
+          files: release-assets/**/*
+          body: |
+            ${{ startsWith(github.ref, 'refs/tags/') && '## 🎉 Official Release' || '## 🚧 Nightly Development Build' }}
+            
+            ${{ startsWith(github.ref, 'refs/tags/') && 'This is a stable release of the Human Money App.' || 'This is an automated snapshot from the current development branch. **Use with caution.**' }}
+            
+            **Build Details:**
+            - ℹ️ Version: `${{ env.APP_VERSION }}`
+            - 📅 Built on: ${{ steps.get_version.outputs.date }}
+            - 🔨 Commit: `${{ github.sha }}`

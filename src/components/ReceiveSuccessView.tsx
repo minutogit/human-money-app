@@ -1,6 +1,6 @@
 // src/components/ReceiveSuccessView.tsx
 import { useEffect } from "react";
-import { ReceiveSuccessPayload, InvolvedVoucherInfo } from "../types"; // <--- NEU
+import { ReceiveSuccessPayload } from "../types"; // <--- NEU
 import { Button } from "./ui/Button";
 import { logger } from '../utils/log';
 

@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
-import { AggregatedBalance, VoucherSummary } from "../types";
+import { AggregatedBalance, VoucherSummary, VoucherStatus } from "../types";
 
 interface DashboardProps {
     onNavigateToCreateVoucher: () => void;
@@ -56,8 +56,8 @@ export function Dashboard(props: DashboardProps) {
         }
     }
 
-    function getVoucherStatus(status: object): { name: string; color: string; tooltip: string } {
-        const statusName = (typeof status === 'string' ? status : Object.keys(status)[0])?.toLowerCase() || 'unknown';
+    function getVoucherStatus(status: VoucherStatus): { name: string; color: string; tooltip: string } {
+        const statusName = (typeof status === 'string' ? status : Object.keys(status)[0] || 'unknown').toLowerCase();
         let color = 'text-gray-800 bg-gray-200';
         let tooltip = '';
 

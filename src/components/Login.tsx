@@ -30,7 +30,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
                 setProfiles(availableProfiles);
                 if (availableProfiles.length > 0) {
-                    setSelectedProfile(availableProfiles[0].folderName);
+                    setSelectedProfile(availableProfiles[0].folder_name);
                 }
                 info(`Frontend: Found ${availableProfiles.length} profiles.`);
             } catch (e) {
@@ -59,9 +59,9 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 cleanupOnLogin: true, // Perform storage cleanup on login
             });
             info("Frontend: Login successful.");
-            const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
+            const loggedInProfile = profiles.find(p => p.folder_name === selectedProfile);
             if (loggedInProfile) {
-                onLoginSuccess(loggedInProfile.profileName);
+                onLoginSuccess(loggedInProfile.profile_name);
             }
 
         } catch (e) {
@@ -93,8 +93,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                     className="w-full px-3 py-2 border rounded-md bg-bg-input border-theme-subtle text-theme-light focus:ring-2 focus:ring-theme-primary"
                                 >
                                     {profiles.map((profile) => (
-                                        <option key={profile.folderName} value={profile.folderName}>
-                                            {profile.profileName}
+                                        <option key={profile.folder_name} value={profile.folder_name}>
+                                            {profile.profile_name}
                                         </option>
                                     ))}
                                 </select>
