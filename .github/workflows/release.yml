@@ -61,6 +61,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      - name: Sync Rust dependencies
+        run: |
+          cd src-tauri
+          cargo update
+
       - name: Build Application
         env:
           # Setzt minimale macOS Version auf Catalina (10.15) für gute Rückwärtskompatibilität
