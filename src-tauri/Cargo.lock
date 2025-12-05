@@ -2118,6 +2118,7 @@ dependencies = [
 [[package]]
 name = "human_money_core"
 version = "0.2.0"
+source = "git+https://github.com/minutogit/human-money-core.git?branch=master#794098eb82601bd03357c7d293e072435046046f"
 dependencies = [
  "anyhow",
  "argon2",
