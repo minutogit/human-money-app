@@ -97,14 +97,16 @@ jobs:
         uses: actions/checkout@v4
         # Wir checken aus, nur um die Version aus der Cargo.toml zu lesen
 
-      - name: Get Version
+      - name: Get Version and Date
         id: get_version
         shell: bash
         run: |
           # Version sicher auslesen
           VERSION=$(grep "^version" src-tauri/Cargo.toml | head -n 1 | cut -d '"' -f 2)
+          DATE=$(date +'%Y-%m-%d %H:%M')
           echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Version detected: $VERSION"
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "Version detected: $VERSION, Date: $DATE"
 
       # Lädt ALLE Dateien von Linux, Mac und Windows herunter
       - name: Download all artifacts
@@ -127,4 +129,14 @@ jobs:
           draft: false
           # Überschreibt die Dateien im 'nightly' Release immer wieder
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
           files: release-assets/*
+          body: |
+            ${{ startsWith(github.ref, 'refs/tags/') && '## 🎉 Official Release' || '## 🚧 Nightly Development Build' }}
+            
+            ${{ startsWith(github.ref, 'refs/tags/') && 'This is a stable release of the Human Money App.' || 'This is an automated snapshot from the current development branch. **Use with caution.**' }}
+            
+            **Build Details:**
+            - ℹ️ Version: `${{ env.APP_VERSION }}`
+            - 📅 Built on: ${{ steps.get_version.outputs.date }}
+            - 🔨 Commit: `${{ github.sha }}`
