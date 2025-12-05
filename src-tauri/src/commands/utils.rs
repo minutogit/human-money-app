@@ -3,7 +3,7 @@ use bip39::Language;
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
 use log::{error, info, warn};
 use std::fs;
-use voucher_lib::app_service::AppService;
+use human_money_core::app_service::AppService;
 use tauri::Manager;
 
 #[tauri::command]

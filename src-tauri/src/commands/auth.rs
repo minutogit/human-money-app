@@ -213,5 +213,5 @@ pub fn lock_session(state: tauri::State<AppState>) {
 pub fn refresh_session_activity(state: tauri::State<AppState>) {
     // Loggt nicht, um Spam zu vermeiden
     let mut service = state.service.lock().unwrap();
-    service.refresh_session_activity();
+    let _ = service.refresh_session_activity();
 }

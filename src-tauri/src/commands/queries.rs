@@ -1,5 +1,5 @@
 use crate::AppState;
-use voucher_lib::{
+use human_money_core::{
     models::voucher::Voucher,
     wallet::{AggregatedBalance, VoucherSummary},
 };

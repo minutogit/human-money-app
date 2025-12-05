@@ -1,9 +1,9 @@
 .dev/llm-context-vouchercore-api.md
-### Kontext für Tauri-App-Entwicklung mit voucher_lib
-Dies ist die Kontextdatei für die voucher_lib-Bibliothek, die für die Entwicklung von Client-Anwendungen, wie z. B. Tauri-Apps, aufbereitet wurde. Sie bietet eine präzise und vollständige Referenz für die öffentliche API, die zur Interaktion mit der Kernlogik notwendig ist.
+### Kontext für Tauri-App-Entwicklung mit human_money_core
+Dies ist die Kontextdatei für die human_money_core-Bibliothek, die für die Entwicklung von Client-Anwendungen, wie z. B. Tauri-Apps, aufbereitet wurde. Sie bietet eine präzise und vollständige Referenz für die öffentliche API, die zur Interaktion mit der Kernlogik notwendig ist.
 
 ### 1. Projekt & Zweck
-**Projektname:** voucher_lib
+**Projektname:** human_money_core
 
 **Zweck:** Bereitstellung der Kernlogik für ein dezentrales, elektronisches Gutschein-System.
 
@@ -16,7 +16,7 @@ Dies ist die Kontextdatei für die voucher_lib-Bibliothek, die für die Entwickl
 
 **Betrugserkennung:** Das System ist darauf ausgelegt, "Double Spending" (das mehrfache Ausgeben desselben Gutscheins) kryptografisch nachweisbar zu machen. Die Client-Anwendung muss sich nicht um die Details der Erkennung kümmern, sondern nur auf die Ergebnisse reagieren, die der `AppService` liefert.
 
-**Entkoppelte Speicherung:** Die `voucher_lib` nutzt ein `Storage`-Trait, um die Logik von der Speicherung zu trennen. Für Client-Anwendungen wird eine Standardimplementierung (`FileStorage`) bereitgestellt, die alle Daten sicher verschlüsselt im Dateisystem ablegt.
+**Entkoppelte Speicherung:** Die `human_money_core` nutzt ein `Storage`-Trait, um die Logik von der Speicherung zu trennen. Für Client-Anwendungen wird eine Standardimplementierung (`FileStorage`) bereitgestellt, die alle Daten sicher verschlüsselt im Dateisystem ablegt.
 
 **Prozess-Sperrung (Pessimistic Locking):** Um Dateninkonsistenzen bei gleichzeitig laufenden Instanzen zu verhindern, implementiert die `FileStorage` ein dateibasiertes Locking mit PID-Check (`.wallet.lock`). Schreibende Operationen erwerben automatisch eine exklusive Sperre. Wenn ein anderer Prozess das Wallet bereits sperrt, wird die Operation mit einem Fehler abgelehnt.
 
@@ -245,7 +245,7 @@ Alle Funktionen geben `Result<T, String>` zurück. Häufige Fehler: Wallet gespe
 ## Beispiel-Nutzung
 
 ```rust
-use voucher_lib::app_service::AppService;
+use human_money_core::app_service::AppService;
 
 let mut app = AppService::new(Path::new("/tmp/wallets")).unwrap();
 app.create_profile("Mein Profil", &mnemonic, None, Some("user"), "pass").unwrap();

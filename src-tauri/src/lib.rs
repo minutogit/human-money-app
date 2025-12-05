@@ -17,13 +17,13 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_log::{
     log::LevelFilter, Builder as LogBuilder, Target, TargetKind, TimezoneStrategy,
 };
-use voucher_lib::app_service::AppService;
+use human_money_core::app_service::AppService;
 
 use crate::commands::{actions::*, auth::*, queries::*, utils::*};
 use crate::commands::actions::TransactionRecord;
 use crate::settings::AppSettings;
 
-const LOG_TARGET_NAME: &str = "voucher_wallet_client.log";
+const LOG_TARGET_NAME: &str = "human_money_app.log";
 
 /// This function is called at startup to implement a simple log rotation.
 fn setup_log_rotation(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
@@ -98,7 +98,7 @@ pub fn run() {
                 .targets([
                     Target::new(TargetKind::Stdout),
                     Target::new(TargetKind::Webview),
-                    Target::new(TargetKind::LogDir { file_name: Some("voucher_wallet_client".into()) }),
+                    Target::new(TargetKind::LogDir { file_name: Some("human_money_app".into()) }),
                 ])
                 .level(LevelFilter::Info)
                 .timezone_strategy(TimezoneStrategy::UseLocal)

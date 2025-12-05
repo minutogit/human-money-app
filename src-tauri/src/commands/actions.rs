@@ -5,7 +5,7 @@ use log::{info, error}; // <--- 'debug' wieder entfernt, wir nutzen info!
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use voucher_lib::{
+use human_money_core::{
     archive::VoucherArchive,
     app_service::AppService,
     models::voucher::Voucher,
@@ -103,7 +103,7 @@ pub fn create_transfer_bundle(
     // RUF DIE BIBLIOTHEK AUF UND VERARBEITE DIE CreateBundleResult ANTWORT
     match service.create_transfer_bundle(request, &standard_definitions_toml, archive, password.as_deref()) {
         Ok(result) => {
-            // 'result' ist die neue CreateBundleResult aus der voucher_lib
+            // 'result' ist die neue CreateBundleResult aus der human_money_core
             Ok(CreateBundleResult {
                 bundle_data: result.bundle_bytes, // Feld 'bundle_bytes' verwenden
                 bundle_id: result.bundle_id,     // Feld 'bundle_id' verwenden
@@ -199,7 +199,7 @@ pub fn receive_bundle(
 }
 
 // NEU: Eine lokale Struktur, die #[serde(rename_all = "camelCase")] erzwingt,
-// da die TransferSummary aus der voucher_lib dies nicht garantiert.
+// da die TransferSummary aus der human_money_core dies nicht garantiert.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendTransferSummary {
@@ -319,13 +319,13 @@ pub fn create_new_voucher(
     let user_id = service.get_user_id()?;
 
     let voucher_data = NewVoucherData {
-        nominal_value: voucher_lib::models::voucher::ValueDefinition {
+        nominal_value: human_money_core::models::voucher::ValueDefinition {
             amount: data.nominal_value.amount,
             unit: data.nominal_value.unit,
             ..Default::default()
         },
-        collateral: Some(voucher_lib::models::voucher::Collateral {
-            value: voucher_lib::models::voucher::ValueDefinition {
+        collateral: Some(human_money_core::models::voucher::Collateral {
+            value: human_money_core::models::voucher::ValueDefinition {
                 amount: data.collateral.amount,
                 unit: data.collateral.unit,
                 ..Default::default()
@@ -333,11 +333,11 @@ pub fn create_new_voucher(
             // collateral_type and redeem_condition are covered by ..Default::default()
             ..Default::default()
         }),
-        creator_profile: voucher_lib::models::profile::PublicProfile {
+        creator_profile: human_money_core::models::profile::PublicProfile {
             id: Some(user_id),
             first_name: Some(data.creator.first_name),
             last_name: Some(data.creator.last_name),
-            address: Some(voucher_lib::models::voucher::Address {
+            address: Some(human_money_core::models::voucher::Address {
                 street: data.creator.address.street,
                 house_number: data.creator.address.house_number,
                 zip_code: data.creator.address.zip_code,

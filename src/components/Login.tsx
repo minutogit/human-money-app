@@ -78,7 +78,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
         <div className="w-full h-full flex flex-col items-center justify-center">
             <div className="w-full max-w-xl min-w-[380px] bg-bg-card shadow-2xl rounded-2xl p-8 space-y-6 border border-theme-subtle">
                 <div className="text-center">
-                    <h1 className="text-4xl font-extrabold text-theme-primary">Voucher Wallet</h1>
+                    <h1 className="text-4xl font-extrabold text-theme-primary">Human Money App</h1>
                     <p className="text-lg text-theme-light">Login to Your Wallet</p>
                 </div>
 

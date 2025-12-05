@@ -3,7 +3,7 @@ Dieses Dokument dient als "Single Source of Truth" für alle Architekturentschei
 **1. Projektziel & Umfang**
 
 * **Ziel:** Entwicklung eines plattformübergreifenden Desktop-Prototyps (Windows, macOS, Linux) für das dezentrale Gutschein-System.
-* **Funktion:** Die Anwendung dient als Client-Frontend für die `voucher_lib`.
+* **Funktion:** Die Anwendung dient als Client-Frontend für die `human_money_core`.
 * **Anforderung:** Das UI muss responsiv sein, um eine spätere Portierung auf mobile Plattformen zu erleichtern.
 
 **2. Architektur & Technologiestack**
@@ -12,7 +12,7 @@ Die Anwendung folgt einer strikten Trennung von Backend und Frontend.
 **Backend (Rust - src-tauri)**
 
 * **Framework:** Tauri
-* **Kernlogik:** Nutzt ausschließlich die `AppService`-Fassade aus der `voucher_lib`.
+* **Kernlogik:** Nutzt ausschließlich die `AppService`-Fassade aus der `human_money_core`.
 * **Rolle:** Dient als dünne Brücke, die die `AppService`-Funktionen an das Frontend weiterleitet. Es wird keine neue Geschäftslogik implementiert.
 * **State Management:** Eine Instanz des `AppService` wird im globalen Tauri-State gehalten.
 * **Schnittstelle:** Funktionen werden über das `#[tauri::command]`-Makro für das Frontend zugänglich gemacht. Rust `Result`-Typen werden in für das Frontend verständliche Fehler umgewandelt.
@@ -39,7 +39,7 @@ Die Anwendung folgt einer strikten Trennung von Backend und Frontend.
 * **Plugins:** Das Projekt nutzt `@tailwindcss/postcss` und `autoprefixer` für erweiterte Funktionalitäten.
 
 **3. Kernfunktionalität (MVP)**
-Die folgenden Funktionen der `voucher_lib` sollen implementiert werden:
+Die folgenden Funktionen der `human_money_core` sollen implementiert werden:
 
 * **Profil & Login:**
   * `create_profile`
@@ -255,7 +255,7 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
   * `utils/log.ts`: Frontend-Logging-Utility für konsistentes Logging ins Backend
 
 * **Backend (src-tauri/)**
-  * `src/lib.rs`: Hauptdatei mit allen Tauri-Befehlen, die die `voucher_lib::AppService`-Fassade nutzen; erweitert um neue Befehle wie `get_bip39_wordlist`, `save_transaction_record`, `get_app_settings`, `save_app_settings`
+  * `src/lib.rs`: Hauptdatei mit allen Tauri-Befehlen, die die `human_money_core::AppService`-Fassade nutzen; erweitert um neue Befehle wie `get_bip39_wordlist`, `save_transaction_record`, `get_app_settings`, `save_app_settings`
   * `src/main.rs`: Einstiegspunkt, der die `run()`-Funktion aus `lib.rs` aufruft
   * `src/commands/actions.rs`: Implementierung von Voucher-Aktionen wie `create_new_voucher`, `create_transfer_bundle`, `receive_bundle`, `save_transaction_record`
   * `src/commands/auth.rs`: Authentifizierungsbezogene Befehle wie `create_profile`, `login`, `logout`, `list_profiles`

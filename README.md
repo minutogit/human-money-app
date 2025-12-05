@@ -1,8 +1,8 @@
- Voucher Wallet Client (Tauri Prototype)
+ Human Money App (Tauri Prototype)
 
-This repository contains the source code for a cross-platform desktop wallet for a decentralized voucher system. It is built as a prototype using the Tauri framework, ensuring it runs on Windows, macOS, and Linux from a single codebase.
+This repository contains the source code for a cross-platform desktop wallet for the human money core. It is built as a prototype using the Tauri framework, ensuring it runs on Windows, macOS, and Linux from a single codebase.
 
-The application serves as a client for the `voucher_lib` Rust library, which handles all core business logic for the voucher system.
+The application serves as a client for the `human_money_core` Rust library, which handles all core business logic for the voucher system.
 
 ## ✨ Core Features (MVP)
 
@@ -17,7 +17,7 @@ This prototype focuses on implementing the essential wallet functionalities:
 The project follows a strict separation between the backend and frontend, ensuring a clean and maintainable architecture.
 
 * **Framework:** [**Tauri**](https://tauri.app/) for building a lightweight and secure desktop application using web technologies for the frontend.
-* **Backend:** Written in **Rust**, the backend acts as a thin bridge, exposing functions from the `voucher_lib` to the frontend via Tauri commands. It contains no business logic itself.
+* **Backend:** Written in **Rust**, the backend acts as a thin bridge, exposing functions from the `human_money_core` to the frontend via Tauri commands. It contains no business logic itself.
 * **Frontend:** A modern, responsive UI built with **React**, **TypeScript**, and styled with **Tailwind CSS**.
 * **State Management:** Utilizes React's native `useState` hook for simplicity in this prototype stage.
 

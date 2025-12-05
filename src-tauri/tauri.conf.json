@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "voucher_wallet_client",
+  "productName": "human_money_app",
   "version": "0.1.0",
   "identifier": "prototype.voucher-wallet-client",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "voucher_wallet_client",
+        "title": "human_money_app",
         "width": 800,
         "height": 600,
         "dragDropEnabled": false

@@ -2095,6 +2095,64 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "human_money_app"
+version = "0.1.0"
+dependencies = [
+ "bip39",
+ "chrono",
+ "fs_extra",
+ "human_money_core",
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-log",
+ "tauri-plugin-opener",
+ "uuid",
+]
+
+[[package]]
+name = "human_money_core"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "base64 0.21.7",
+ "bincode",
+ "bip39",
+ "bs58",
+ "chacha20poly1305",
+ "chrono",
+ "clap",
+ "ed25519-dalek",
+ "hex",
+ "hkdf",
+ "hmac",
+ "lazy_static",
+ "pbkdf2",
+ "rand 0.8.5",
+ "rand_core 0.6.4",
+ "regex",
+ "rust_decimal",
+ "rust_decimal_macros",
+ "serde",
+ "serde_json",
+ "serde_json_canonicalizer",
+ "sha2",
+ "sha3",
+ "sysinfo",
+ "thiserror 1.0.69",
+ "toml 0.8.23",
+ "uuid",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "hyper"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5536,64 +5594,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "voucher_lib"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argon2",
- "base64 0.21.7",
- "bincode",
- "bip39",
- "bs58",
- "chacha20poly1305",
- "chrono",
- "clap",
- "ed25519-dalek",
- "hex",
- "hkdf",
- "hmac",
- "lazy_static",
- "pbkdf2",
- "rand 0.8.5",
- "rand_core 0.6.4",
- "regex",
- "rust_decimal",
- "rust_decimal_macros",
- "serde",
- "serde_json",
- "serde_json_canonicalizer",
- "sha2",
- "sha3",
- "sysinfo",
- "thiserror 1.0.69",
- "toml 0.8.23",
- "uuid",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
-name = "voucher_wallet_client"
-version = "0.1.0"
-dependencies = [
- "bip39",
- "chrono",
- "fs_extra",
- "log",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-log",
- "tauri-plugin-opener",
- "uuid",
- "voucher_lib",
-]
 
 [[package]]
 name = "vswhom"

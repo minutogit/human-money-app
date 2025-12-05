@@ -123,7 +123,7 @@ export interface Collateral {
 }
 
 // NEU: Definiert das öffentliche Profil für Ersteller und Bürgen
-// Entspricht `PublicProfile` in voucher_lib::models::profile
+// Entspricht `PublicProfile` in human_money_core::models::profile
 export interface PublicProfile {
     id?: string;
     first_name?: string;
@@ -214,7 +214,7 @@ export interface Transaction {
 
 /**
  * Definiert eine einzelne Quelle für einen Transfer.
- * Entspricht `SourceTransfer` in voucher_lib.
+ * Entspricht `SourceTransfer` in human_money_core.
  */
 export interface SourceTransfer {
     local_instance_id: string;
@@ -223,7 +223,7 @@ export interface SourceTransfer {
 
 /**
  * Definiert die Anfrage für einen Transfer mit mehreren Quellen.
- * Entspricht `MultiTransferRequest` in voucher_lib.
+ * Entspricht `MultiTransferRequest` in human_money_core.
  */
 export interface MultiTransferRequest {
     recipient_id: string;
@@ -234,7 +234,7 @@ export interface MultiTransferRequest {
 
 /**
  * NEU: Detaillierte Info zu einem beteiligten Gutschein.
- * Entspricht `InvolvedVoucherInfo` in voucher_lib.
+ * Entspricht `InvolvedVoucherInfo` in human_money_core.
  */
 export interface InvolvedVoucherInfo {
     local_instance_id: string;

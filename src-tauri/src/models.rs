@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// A local struct that mirrors `voucher_lib::...::NewVoucherData` but derives `Deserialize`.
+// A local struct that mirrors `human_money_core::...::NewVoucherData` but derives `Deserialize`.
 // This is necessary because Tauri needs to deserialize the JSON payload from the frontend,
 // and we cannot add `#[derive(Deserialize)]` to the original struct in the upstream library.
 #[derive(Deserialize, Debug)]

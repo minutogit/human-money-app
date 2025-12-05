@@ -3,5 +3,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    voucher_wallet_client_lib::run()
+    human_money_app_lib::run()
 }

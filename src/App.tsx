@@ -66,9 +66,9 @@ function AppContent() {
         async function updateTitle() {
             const win = getCurrentWindow();
             if (profileName) {
-                await win.setTitle(`Voucher Wallet - ${profileName}`);
+                await win.setTitle(`Human Money App - ${profileName}`);
             } else {
-                await win.setTitle('Voucher Wallet');
+                await win.setTitle('Human Money App');
             }
         }
 
@@ -184,7 +184,7 @@ function AppContent() {
                         >
                             <div className="flex h-full flex-col bg-white dark:bg-gray-800 p-4 shadow-lg">
                                 <div className="mb-8 text-center">
-                                    <h1 className="text-xl font-bold text-theme-primary">Voucher Wallet</h1>
+                                    <h1 className="text-xl font-bold text-theme-primary">Human Money App</h1>
                                     <p className="text-sm text-theme-light">Prototype v0.1</p>
                                 </div>
                                 <nav className="flex flex-grow flex-col space-y-2 text-left">
@@ -224,7 +224,7 @@ function AppContent() {
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path>
                                 </svg>
                             </button>
-                            <h1 className="text-lg font-bold text-theme-primary">Voucher Wallet</h1>
+                            <h1 className="text-lg font-bold text-theme-primary">Human Money App</h1>
                         </header>
                     )}
 
