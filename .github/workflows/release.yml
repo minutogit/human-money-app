@@ -118,14 +118,14 @@ jobs:
       - name: List files (Debug)
         run: ls -R release-assets
 
-      # FIX: Token muss unter 'with' stehen ("github_token")
-      - name: Delete existing Nightly (if present)
-        uses: dev-drprasad/delete-tag-and-release@v1.1
+      # NEU: Robustes Löschen mit offiziellem GitHub CLI
+      - name: Cleanup existing Nightly
         if: "!startsWith(github.ref, 'refs/tags/')"
-        with:
-          tag_name: nightly
-          delete_release: true
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Versucht Release und Tag zu löschen. '|| true' verhindert Fehler, falls es noch nicht existiert.
+          gh release delete nightly --cleanup-tag --yes || true
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
@@ -135,6 +135,7 @@ jobs:
           name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('Nightly Build v{0}', env.APP_VERSION) }}
           draft: false
           target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
           files: release-assets/*
