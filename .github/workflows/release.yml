@@ -118,26 +118,23 @@ jobs:
       - name: List files (Debug)
         run: ls -R release-assets
 
-      # NEU: Löscht das alte Nightly Release und den Tag, damit alles frisch ist
+      # FIX: Token muss unter 'with' stehen ("github_token")
       - name: Delete existing Nightly (if present)
         uses: dev-drprasad/delete-tag-and-release@v1.1
         if: "!startsWith(github.ref, 'refs/tags/')"
         with:
           tag_name: nightly
           delete_release: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/action-workflow'
         with:
-          # Tag-Logik: Echter Tag ODER 'nightly'
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'nightly' }}
-          # Namens-Logik: Echter Tag ODER 'Nightly Build v...'
           name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('Nightly Build v{0}', env.APP_VERSION) }}
           draft: false
-          # Überschreibt die Dateien im 'nightly' Release immer wieder
+          target_commitish: ${{ github.sha }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
           files: release-assets/*
