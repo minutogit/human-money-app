@@ -1,26 +1,68 @@
 // src/types.ts
 
-/**
- * Represents information about a user profile.
- * Matches the Rust struct `ProfileInfo`.
- */
+// --- Basis-Strukturen ---
+
 export interface ProfileInfo {
-    profileName: string;
-    folderName: string;
+    profile_name: string;
+    folder_name: string;
 }
 
-// The status of a voucher can be represented as an object with a single key,
-// e.g., { "Active": null } or { "Quarantined": "Reason why" }.
-export type VoucherStatus = { [key: string]: string | null };
+export interface Address {
+    street?: string;
+    house_number?: string;
+    zip_code?: string;
+    city?: string;
+    country?: string;
+    full_address?: string;
+}
 
-/**
- * Represents a summary of a voucher, suitable for list displays.
- * Matches the Rust struct `VoucherSummary`.
- */
+export interface PublicProfile {
+    id: string;
+    first_name?: string;
+    last_name?: string;
+    organization?: string;
+    community?: string;
+    address?: Address;
+    gender?: string;
+    email?: string;
+    phone?: string;
+    coordinates?: string;
+    url?: string;
+    service_offer?: string;
+    needs?: string;
+}
+
+// Struktur für das Erstellen neuer Gutscheine (CreateVoucher.tsx)
+export interface CreatorData {
+    first_name: string;
+    last_name: string;
+    address: Address;
+    organization?: string;
+    community?: string;
+    phone?: string;
+    email?: string;
+    url?: string;
+    gender: string;
+    service_offer?: string;
+    needs?: string;
+    coordinates: string;
+}
+
+export interface AggregatedBalance {
+    standard_name: string;
+    standard_uuid: string;
+    unit: string;
+    total_amount: string;
+}
+
+// --- Voucher Strukturen ---
+
+export type VoucherStatus = string | { [key: string]: any };
+
 export interface VoucherSummary {
     local_instance_id: string;
     status: VoucherStatus;
-    valid_until: string; // ISO 8601 format
+    valid_until: string;
     creator_id: string;
     description: string;
     current_amount: string;
@@ -31,254 +73,128 @@ export interface VoucherSummary {
     guarantor_signatures_count: number;
     additional_signatures_count: number;
     has_collateral: boolean;
-    creator_first_name: string;
-    creator_last_name: string;
-    creator_coordinates: string;
+    creator_first_name?: string;
+    creator_last_name?: string;
+    creator_coordinates?: string;
     non_redeemable_test_voucher: boolean;
-    divisible?: boolean; // Add optional divisible property
-}
-
-/**
- * Represents an aggregated balance for a specific voucher standard.
- * Matches the Rust struct `AggregatedBalance`.
- */
-export interface AggregatedBalance {
-    standard_name: string;
-    standard_uuid: string;
-    unit: string;
-    total_amount: string;
+    // Client-side enrichment
+    divisible?: boolean;
 }
 
 export interface VoucherStandardInfo {
     id: string;
     content: string;
-    decimal_places?: number; // NEU: Optionale Angabe der erlaubten Dezimalstellen
 }
 
-// NEU: Detaillierte Adress-Struktur
-export interface Address {
-    street: string;
-    house_number: string;
-    zip_code: string;
-    city: string;
-    country: string;
-    full_address: string; // Wird im Frontend konstruiert
+export interface VoucherTemplateData {
+    description: string;
+    primary_redemption_type?: string;
+    divisible: boolean;
+    standard_minimum_issuance_validity?: string;
+    signature_requirements_description?: string;
+    footnote?: string;
 }
 
-// NEU: Detaillierte Ersteller-Struktur
-export interface CreatorData {
-    first_name: string;
-    last_name: string;
-    address: Address;
-    organization?: string;
-    community?: string;
-    phone?: string;
-    email?: string;
-    url?: string;
-    gender: string; // ISO 5218: 0=Not known, 1=Male, 2=Female, 9=Not applicable
-    service_offer?: string;
-    needs?: string;
-    coordinates: string; // z.B. "Breitengrad, Längengrad"
+export interface VoucherStandardData {
+    name: string;
+    uuid: string;
+    standard_definition_hash: string;
+    template: VoucherTemplateData;
 }
 
-// NEU: Struktur für Besicherungsdaten
-export interface CollateralData {
-    amount: string;
+export interface NominalValueData {
     unit: string;
-    abbreviation: string;
+    amount: string;
+    abbreviation?: string;
+    description?: string;
 }
 
-// AKTUALISIERT: Die vollständige Struktur für neue Gutscheindaten
+export interface CollateralData {
+    unit: string;
+    amount: string;
+    abbreviation?: string; // Optional gemacht um Konflikte zu vermeiden
+    type?: string;
+    redeem_condition?: string;
+}
+
+export interface VoucherSignature {
+    voucher_id: string;
+    signature_id: string;
+    signer_id: string;
+    signature: string;
+    signature_time: string;
+    role: string;
+    details?: PublicProfile;
+}
+
 export interface NewVoucherData {
     validity_duration: string | null;
     non_redeemable_test_voucher: boolean;
     nominal_value: {
         amount: string;
-        unit: string; // Wird vom Prototyp fest auf "Minuto" gesetzt
+        unit: string;
     };
     collateral: CollateralData;
     creator: CreatorData;
 }
 
-// NEU: Definiert einen Wert (Betrag und Einheit)
-// Entspricht `ValueDefinition` in voucher.rs
-export interface ValueDefinition {
-    unit: string;
-    amount: string;
-    abbreviation?: string;
-    description?: string;
-}
 
-// NEU: Definiert die (optionale) Besicherung
-// Entspricht `Collateral` in voucher.rs
-export interface Collateral {
-    // ValueDefinition-Felder sind hier flach eingebettet
-    unit: string;
-    amount: string;
-    abbreviation?: string;
-    description?: string;
-    // Das JSON-Feld heißt 'type'
-    type?: string;
-    redeem_condition?: string;
-}
-
-// NEU: Definiert das öffentliche Profil für Ersteller und Bürgen
-// Entspricht `PublicProfile` in human_money_core::models::profile
-export interface PublicProfile {
-    id?: string;
-    first_name?: string;
-    last_name?: string;
-    address?: Address;
-    organization?: string;
-    community?: string;
-    phone?: string;
-    email?: string;
-    url?: string;
-    gender?: string;
-    coordinates?: string;
-    service_offer?: string; // Wieder hinzugefügt
-    needs?: string; // Wieder hinzugefügt
-}
-
-// NEU: Definiert die Template-Daten aus dem Standard
-// Entspricht `VoucherTemplateData` in voucher.rs
-export interface VoucherTemplateData {
-    description: string;
-    primary_redemption_type: string;
-    divisible: boolean;
-    standard_minimum_issuance_validity: string;
-    signature_requirements_description: string;
-    footnote: string;
-}
-
-/**
- * Represents the full, detailed structure of a voucher.
- * Matches the Rust struct `VoucherDetails` (and by extension, `Voucher`).
- */
-export interface VoucherDetails {
-    voucher_standard: {
-        name: string;
-        uuid: string;
-        standard_definition_hash: string;
-    };
-    voucher_id: string;
-    voucher_nonce: string;
-    description: string;
-    primary_redemption_type: string;
-    divisible: boolean;
-    creation_date: string; // ISO 8601
-    valid_until: string | null; // ISO 8601
-    standard_minimum_issuance_validity: string | null;
-    non_redeemable_test_voucher: boolean;
-    nominal_value: {
-        unit: string;
-        amount: string;
-    };
-    creator: {
-        id: string;
-        first_name: string;
-        last_name: string;
-        signature: string;
-    };
-    guarantor_requirements_description: string;
-    footnote: string;
-    guarantor_signatures: GuarantorSignature[];
-    needed_guarantors: number;
-    transactions: Transaction[];
-}
-
-export interface GuarantorSignature {
-    voucher_id: string;
-    signature_id: string;
-    guarantor_id: string;
-    first_name: string;
-    last_name: string;
-    gender: string;
-    signature: string;
-    signature_time: string; // ISO 8601
-}
-
-export interface Transaction {
+export interface TransactionHistoryEntry {
     t_id: string;
-    t_type: 'init' | 'split' | 'transfer' | 'merge_credit';
-    t_time: string; // ISO 8601
+    t_type: string;
+    t_time: string;
     sender_id: string;
     recipient_id: string;
     amount: string;
-    sender_remaining_amount?: string;
-    sender_signature: string;
-    prev_hash: string;
 }
 
-// NEU: Typen für die Transfer-Erstellung
+export interface VoucherDetails {
+    voucher_standard: VoucherStandardData;
+    voucher_id: string;
+    voucher_nonce: string;
+    creation_date: string;
+    valid_until?: string;
+    non_redeemable_test_voucher: boolean;
+    nominal_value: NominalValueData;
+    collateral?: CollateralData;
+    creator: PublicProfile;
+    signatures: VoucherSignature[];
+    transactions: TransactionHistoryEntry[];
+}
 
-/**
- * Definiert eine einzelne Quelle für einen Transfer.
- * Entspricht `SourceTransfer` in human_money_core.
- */
+// --- Transaktion & Transfer Strukturen ---
+
+export interface InvolvedVoucherInfo {
+    local_instance_id: string;
+    voucher_id?: string;
+    standard_name: string;
+    amount: string;
+    unit: string;
+}
+
 export interface SourceTransfer {
     local_instance_id: string;
     amount_to_send: string;
 }
 
-/**
- * Definiert die Anfrage für einen Transfer mit mehreren Quellen.
- * Entspricht `MultiTransferRequest` in human_money_core.
- */
-export interface MultiTransferRequest {
-    recipient_id: string;
-    sources: SourceTransfer[];
-    notes?: string;
-    sender_profile_name?: string;
-}
-
-/**
- * NEU: Detaillierte Info zu einem beteiligten Gutschein.
- * Entspricht `InvolvedVoucherInfo` in human_money_core.
- */
-export interface InvolvedVoucherInfo {
-    local_instance_id: string;
-    voucher_id: string;
-    standard_name: string;
-    unit: string;
-    amount: string;
-    is_divisible: boolean;
-}
-
-
-/**
- * Repräsentiert einen einzelnen Eintrag im Transaktionsverlauf ("Kontoauszug").
- * Entspricht der `TransactionRecord` Rust-Struktur.
- */
 export interface TransactionRecord {
-    id: string; // Eindeutige ID, z.B. UUID v4, im Frontend generiert
+    id: string;
     direction: 'sent' | 'received';
-    recipient_id: string;
-    sender_id: string; // Eigene User-ID bei 'sent'
-    timestamp: string; // ISO 8601 Zeitstempel
-    summableAmounts: Record<string, string>; // z.B. { "Minuto": "50.00" }
-    countableItems: Record<string, number>; // z.B. { "Brot": 3 }
-    involved_vouchers: string[]; // local_instance_ids (wird von "received" verwendet)
-    involvedSourcesDetails?: InvolvedVoucherInfo[]; // KORRIGIERT: (wird von "sent" verwendet)
-    bundle_data: number[]; // Das `Vec<u8>` Transfer-Bundle
-    bundle_id: string;
+    recipient_id?: string;
+    sender_id?: string;
+    timestamp: string;
+    summableAmounts: Record<string, string>;
+    countableItems: Record<string, number>;
+    involved_vouchers: string[];
+
+    // Optionale Felder für detaillierte Records
+    bundle_data?: number[];
+    bundle_id?: string;
     notes?: string;
     sender_profile_name?: string;
+    involved_sources_details?: InvolvedVoucherInfo[];
 }
 
-/**
- * Repräsentiert die anwendungsspezifischen Einstellungen.
- * Entspricht der `AppSettings` Rust-Struktur.
- */
-export interface AppSettings {
-    bundle_retention_days: number;
-    session_timeout_seconds: number; // NEU
-}
-
-/**
- * Represents the summary of a transfer, detailing summable and countable items.
- * Matches the Rust struct `TransferSummary`.
- */
 export interface TransferSummary {
     summableAmounts: Record<string, string>;
     countableItems: Record<string, number>;
@@ -290,5 +206,10 @@ export interface ReceiveSuccessPayload {
     notes?: string;
     transferSummary: TransferSummary;
     involvedVouchers: string[];
-    involvedVouchersDetails: InvolvedVoucherInfo[]; // <--- NEU
+    involvedVouchersDetails?: InvolvedVoucherInfo[];
+}
+
+export interface AppSettings {
+    bundle_retention_days: number;
+    session_timeout_seconds: number;
 }

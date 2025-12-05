@@ -49,7 +49,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
                 setProfiles(availableProfiles);
                 if (availableProfiles.length > 0) {
-                    setSelectedProfile(availableProfiles[0].folderName);
+                    setSelectedProfile(availableProfiles[0].folder_name);
                 } else {
                     setFeedbackMsg("Error: No profiles found to recover.");
                 }
@@ -258,8 +258,8 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                                     className="w-full px-3 py-2 border rounded-md bg-bg-input border-theme-subtle text-theme-light focus:ring-2 focus:ring-theme-primary"
                                 >
                                     {profiles.map((profile) => (
-                                        <option key={profile.folderName} value={profile.folderName}>
-                                            {profile.profileName}
+                                        <option key={profile.folder_name} value={profile.folder_name}>
+                                            {profile.profile_name}
                                         </option>
                                     ))}
                                 </select>
