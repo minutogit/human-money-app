@@ -138,7 +138,7 @@ jobs:
           fail_on_unmatched_files: true
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
-          files: release-assets/*
+          files: release-assets/**/*
           body: |
             ${{ startsWith(github.ref, 'refs/tags/') && '## 🎉 Official Release' || '## 🚧 Nightly Development Build' }}
             
