@@ -2,6 +2,8 @@ name: Release Tauri App
 
 on:
   push:
+    branches:
+      - action-workflow
     tags:
       - 'v*'
   workflow_dispatch:
