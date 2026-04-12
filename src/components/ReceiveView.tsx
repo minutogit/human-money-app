@@ -70,7 +70,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 
                 // Save directory for next time
                 if (settings) {
-                    updateLastUsedDirectory(selectedPath, settings, protectAction).then(success => {
+                    updateLastUsedDirectory(selectedPath, settings, protectAction).then(() => {
                         // Optionally refresh settings if update was successful
                         invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
                     });

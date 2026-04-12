@@ -53,7 +53,9 @@ Die folgenden Funktionen der `human_money_core` sollen implementiert werden:
   * `logout`
   * `generate_mnemonic`
   * `validate_mnemonic`
-  * `list_profiles` (neu für Multi-Profile-Unterstützung)
+  * `list_profiles`
+  * `get_user_profile` (neu: ruft das verschlüsselte PublicProfile ab)
+  * `update_user_profile` (neu: aktualisiert das verschlüsselte PublicProfile)
 * **Dashboard-Anzeige:**
   * `get_user_id`
   * `get_total_balance_by_currency`
@@ -249,15 +251,18 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
   * `components/Login.tsx`: Login-Formular mit Profilauswahl und Passwort-Eingabe
   * `components/VoucherDetailsView.tsx`: Detaillierte Ansicht für einen einzelnen Gutschein mit allen Eigenschaften, Transaktionshistorie und Signaturinformationen
   * `components/CreateVoucher.tsx`: Formular zur Erstellung neuer Gutscheine mit umfassenden Details zum Ersteller und zur Besicherung
-  * `components/WalletRecovery.tsx`: Formular zur Wiederherstellung des Wallets mit Profilauswahl und Mnemonic
+  * `components/RecreateProfile.tsx`: Formular zur Wiederherstellung von Profilen
   * `components/SendView.tsx`: Komponente zum Erstellen und Vorbereiten von Transfer-Bundles
-  * `components/ReceiveView.tsx`: Komponente zum Empfangen von Transfer-Bundles mit Datei-Dialog und Drag & Drop Unterstützung
+  * `components/ReceiveView.tsx`: Komponente zum Empfangen von Transfer-Bundles
+  * `components/ProfileSettings.tsx`: (neu) Editor für Benutzer-Metadaten (Name, Adresse, Koord., etc.)
+  * `components/SettingsView.tsx`: Ermöglicht die Konfiguration von Anwendungseinstellungen und Profilzugriff
   * `components/TransactionHistoryView.tsx`: Zeigt vergangene Sende-Transaktionen an
-  * `components/SettingsView.tsx`: Ermöglicht die Konfiguration von Anwendungseinstellungen wie Bundle-Retention-Period
   * `components/TransferSuccessView.tsx`: Zeigt Erfolgsmeldung nach erfolgreichem Versand und ermöglicht Bundle-Speicherung
   * `components/ReceiveSuccessView.tsx`: Zeigt Zusammenfassung nach erfolgreichem Empfang einer Transaktion
   * `types.ts`: TypeScript-Interfaces für `VoucherSummary`, `VoucherDetails`, `NewVoucherData`, `TransactionHistoryEntry`, `ProfileInfo` und andere komplexe Datentypen
-  * `utils/log.ts`: Frontend-Logging-Utility für konsistentes Logging ins Backend
+  * `utils/log.ts`: Frontend-Logging-Utility
+  * `utils/geoUtils.ts`: (neu) Normalisierung und Validierung von Geokoordinaten (Format: "lat, lon")
+  * `utils/settingsUtils.ts`: Hilfsfunktionen für Anwendungseinstellungen
 
 * **Backend (src-tauri/)**
   * `src/lib.rs`: Hauptdatei mit allen Tauri-Befehlen, die die `human_money_core::AppService`-Fassade nutzen; erweitert um neue Befehle wie `get_bip39_wordlist`, `save_transaction_record`, `get_app_settings`, `save_app_settings`

@@ -55,6 +55,12 @@ priority_tasks:
     priority: "medium"
     depends_on: ["APP-007"]
     description: "Remember the last used directory for all file open/save dialogs to improve workflow efficiency."
+  - id: "APP-009"
+    title: "User Profile Management"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Full user profile system with metadata encrypted in the wallet. Used for defaulting voucher creator and signature details."
 ---
 
 # Human Money App — Status
@@ -87,6 +93,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Multi-profile support and profile selection
 - [x] Flexible authentication and pessimistic locking
 - [x] Wallet recovery workflow
+- [x] User profile management (Encrypted metadata)
 
 ## Next Milestones
 

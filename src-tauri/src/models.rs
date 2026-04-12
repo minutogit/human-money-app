@@ -9,7 +9,7 @@ pub struct NominalValueData {
     pub unit: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FrontendAddressData {
     pub street: String,
     pub house_number: String,
@@ -19,14 +19,14 @@ pub struct FrontendAddressData {
     pub full_address: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FrontendCollateralData {
     pub amount: String,
     pub unit: String,
     pub abbreviation: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FrontendCreatorData {
     pub first_name: String,
     pub last_name: String,
@@ -40,6 +40,23 @@ pub struct FrontendCreatorData {
     pub service_offer: Option<String>,
     pub needs: Option<String>,
     pub coordinates: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct FrontendUserProfile {
+    pub id: Option<String>,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub organization: Option<String>,
+    pub community: Option<String>,
+    pub address: Option<FrontendAddressData>,
+    pub gender: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub coordinates: Option<String>,
+    pub url: Option<String>,
+    pub service_offer: Option<String>,
+    pub needs: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]

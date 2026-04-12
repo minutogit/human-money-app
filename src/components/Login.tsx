@@ -21,6 +21,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     const [password, setPassword] = useState("");
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
+    const [isLoggingIn, setIsLoggingIn] = useState(false);
 
     useEffect(() => {
         logger.info("Login component displayed");
@@ -50,29 +51,39 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             return;
         }
 
-        setIsLoading(true);
-        setFeedbackMsg("Logging in...");
-        try {
-            await invoke("login", {
-                folderName: selectedProfile,
-                password,
-                cleanupOnLogin: true, // Perform storage cleanup on login
-            });
-            info("Frontend: Login successful.");
-            const loggedInProfile = profiles.find(p => p.folder_name === selectedProfile);
-            if (loggedInProfile) {
-                onLoginSuccess(loggedInProfile.profile_name);
-            }
+        // Set loading states
+        setIsLoggingIn(true);
+        setFeedbackMsg(""); // Clear old errors
 
-        } catch (e) {
-            const msg = `Login failed: ${e}`;
-            setFeedbackMsg(`Error: ${msg}`);
-            error(`Frontend: ${msg}`);
-            setIsLoading(false);
-        }
+        // We use a slightly longer timeout to ensure React has finished the render cycle
+        // and the browser has had a chance to paint the loading state.
+        setTimeout(async () => {
+            try {
+                await invoke("login", {
+                    folderName: selectedProfile,
+                    password,
+                    cleanupOnLogin: true,
+                });
+                
+                info("Frontend: Login successful.");
+                const loggedInProfile = profiles.find(p => p.folder_name === selectedProfile);
+                if (loggedInProfile) {
+                    onLoginSuccess(loggedInProfile.profile_name);
+                }
+                // We keep isLoggingIn true while transitioning to the dashboard
+
+            } catch (e) {
+                const msg = `Login failed: ${e}`;
+                setFeedbackMsg(`Error: ${msg}`);
+                error(`Frontend: ${msg}`);
+                setIsLoggingIn(false);
+            }
+        }, 150);
     }
 
-    const feedbackClass = feedbackMsg.includes("Error") ? "text-theme-error" : "text-theme-success";
+    const feedbackClass = isLoggingIn 
+        ? "text-theme-secondary animate-pulse font-bold" 
+        : (feedbackMsg.includes("Error") ? "text-theme-error" : "text-theme-success");
 
     return (
         <div className="w-full h-full flex flex-col items-center justify-center">
@@ -121,10 +132,16 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     </div>
 
                     <div className="pt-3 text-center">
-                        {feedbackMsg && <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>}
+                        {isLoggingIn ? (
+                             <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>
+                                Signing in... Decrypting your wallet data. Please wait.
+                             </p>
+                        ) : (
+                            feedbackMsg && <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>
+                        )}
                         <div className="flex flex-col items-center gap-4">
-                            <Button type="submit" disabled={isLoading || profiles.length === 0}>
-                                {isLoading ? "Logging In..." : "Login"}
+                             <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0}>
+                                {isLoggingIn ? "Signing in..." : "Login"}
                             </Button>
                             <button
                                 type="button"

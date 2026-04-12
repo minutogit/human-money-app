@@ -1,5 +1,5 @@
 // src-tauri/src/commands/actions.rs
-use crate::{models::FrontendNewVoucherData, AppState, settings::{AppSettings, SETTINGS_KEY}};
+use crate::{models::{FrontendNewVoucherData, FrontendUserProfile}, AppState, settings::{AppSettings, SETTINGS_KEY}};
 use chrono::Utc;
 use log::{info, error}; // <--- 'debug' wieder entfernt, wir nutzen info!
 use uuid::Uuid;
@@ -451,4 +451,40 @@ pub fn get_allowed_signature_roles_from_standard(
     info!("Getting allowed signature roles from standard...");
     let service = state.service.lock().unwrap();
     service.get_allowed_signature_roles_from_standard(&toml_content)
+}
+
+#[tauri::command]
+pub fn update_user_profile(
+    profile: FrontendUserProfile,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    info!("Updating user profile...");
+    let mut service = state.service.lock().unwrap();
+    
+    // Map FrontendUserProfile back to core PublicProfile
+    let core_profile = human_money_core::models::profile::PublicProfile {
+        id: profile.id,
+        first_name: profile.first_name,
+        last_name: profile.last_name,
+        organization: profile.organization,
+        community: profile.community,
+        address: profile.address.map(|a| human_money_core::models::voucher::Address {
+            street: a.street,
+            house_number: a.house_number,
+            zip_code: a.zip_code,
+            city: a.city,
+            country: a.country,
+            full_address: a.full_address,
+        }),
+        gender: profile.gender,
+        email: profile.email,
+        phone: profile.phone,
+        coordinates: profile.coordinates,
+        url: profile.url,
+        service_offer: profile.service_offer,
+        needs: profile.needs,
+    };
+    
+    service.update_public_profile(core_profile, password.as_deref())
 }

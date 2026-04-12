@@ -1,63 +1,54 @@
- Human Money App (Tauri Prototype)
+# Human Money App (Tauri Desktop Wallet)
 
-This repository contains the source code for a cross-platform desktop wallet for the human money core. It is built as a prototype using the Tauri framework, ensuring it runs on Windows, macOS, and Linux from a single codebase.
+This repository contains the source code for a cross-platform desktop wallet for the human money ecosystem. Built with **Tauri v2**, **React 19**, and **Tailwind CSS v4**, it serves as a secure, high-performance client for the `human_money_core` Rust library.
 
-The application serves as a client for the `human_money_core` Rust library, which handles all core business logic for the voucher system.
+The application is designed as a thin bridge, ensuring that all core cryptographic and business logic resides in the shared core library while providing a premium desktop experience on Windows, macOS, and Linux.
 
-## ✨ Core Features (MVP)
+## ✨ Key Features
 
-This prototype focuses on implementing the essential wallet functionalities:
+This prototype implements the full lifecycle of a decentralized voucher wallet:
 
-* **Profile Management:** Create a new user profile or log in to an existing one.
-* **Dashboard View:** Display the user's total balance aggregated by currency and list all available vouchers.
-* **Transactions:** Create and receive voucher transfers through secure data bundles.
+*   **🔒 Secure Profile Management:** Multi-profile support with encrypted local storage. High-security authentication including pessimistic locking and configurable session timeouts.
+*   **👤 Encrypted User Profiles:** Store personal metadata (Names, Gender, Address, Service Offers, Needs) securely within the wallet file. Used to auto-populate voucher creator and signature details.
+*   **🎫 Voucher Lifecycle:** Create new vouchers based on extensible standards (e.g., Minuto, Silver), including full support for guarantor and notary signature roles.
+*   **💸 Secure Transactions:** Send and receive value through signed data bundles. Supports **flexible encryption modes** (DID-asymmetric, Password-symmetric, or Cleartext) to maximize interoperability.
+*   **📂 Multi-Signature Workflows:** Full GUI support for requesting, creating, and attaching additional signatures to incomplete vouchers.
+*   **📊 Transaction History:** Comprehensive history of sent and received transfers with detailed audit logs and balance aggregation by currency.
+*   **🛠️ Developer Productivity:** Context-aware development with Antigravity AI, integrated status tracking (`STATUS.md`), and automated release workflows.
 
 ## 🛠️ Tech Stack & Architecture
 
-The project follows a strict separation between the backend and frontend, ensuring a clean and maintainable architecture.
-
-* **Framework:** [**Tauri**](https://tauri.app/) for building a lightweight and secure desktop application using web technologies for the frontend.
-* **Backend:** Written in **Rust**, the backend acts as a thin bridge, exposing functions from the `human_money_core` to the frontend via Tauri commands. It contains no business logic itself.
-* **Frontend:** A modern, responsive UI built with **React**, **TypeScript**, and styled with **Tailwind CSS**.
-* **State Management:** Utilizes React's native `useState` hook for simplicity in this prototype stage.
+*   **Framework:** [Tauri v2](https://tauri.app/) for a tiny footprint and maximum security.
+*   **Frontend:** React 19 + TypeScript + Tailwind CSS v4 (using the `@tailwindcss/vite` plugin).
+*   **Backend:** Rust bridge to `human_money_core::AppService` facade.
+*   **Security:** Pessimistic directory locking to prevent stale state in multi-process environments.
 
 ## 🚀 Getting Started
 
 ### Prerequisites
 
-To build and run this project, you need to have the following installed on your system:
-
-* [Rust & Cargo](https://www.rust-lang.org/tools/install)
-* [Node.js & npm](https://nodejs.org/)
-* [Tauri development prerequisites](https://tauri.app/v1/guides/getting-started/prerequisites)
+*   [Rust & Cargo](https://www.rust-lang.org/tools/install)
+*   [Node.js (v20+) & npm](https://nodejs.org/)
+*   [Tauri v2 Prerequisites](https://v2.tauri.app/start/prerequisites/)
 
 ### Installation & Development
 
 1.  **Clone the repository:**
-
     ```sh
-    git clone <your-repository-url>
-    cd <repository-folder>
+    git clone https://github.com/minutogit/human-money-app.git
+    cd human-money-app
     ```
 
-2.  **Install frontend dependencies:**
-
+2.  **Install dependencies:**
     ```sh
     npm install
     ```
 
-3.  **Run the application in development mode:**
-    This command will start the frontend's Vite dev server and the Tauri backend process.
-
+3.  **Run in development mode:**
     ```sh
-    npm run tauri dev
+    npm run dev
     ```
-
-    Alternatively, you can use the provided shell script:
-
-    ```sh
-    ./start-dev.sh
-    ```
+    This starts the Vite dev server and the Tauri window simultaneously.
 
 ## 📄 License
 

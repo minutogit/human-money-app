@@ -125,10 +125,11 @@ pub fn run() {
             profile_exists, list_profiles, create_profile, login, recover_wallet_and_set_new_password, logout,
             unlock_session, lock_session, refresh_session_activity, // <--- NEU
             generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic,
-            get_user_id, get_total_balance_by_currency, get_voucher_summaries, get_voucher_details,
+            get_user_id, get_user_profile, get_total_balance_by_currency, get_voucher_summaries, get_voucher_details,
             create_new_voucher, create_transfer_bundle, receive_bundle, save_transaction_record,
             get_transaction_history,
             get_app_settings, save_app_settings,
+            update_user_profile,
             frontend_log, log_to_backend,
             // Multi-signature commands
             create_signing_request_bundle, open_voucher_signing_request, create_detached_signature_response_bundle,

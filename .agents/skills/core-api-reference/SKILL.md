@@ -105,6 +105,10 @@ These methods modify the wallet state and require authentication.
 * **Description:** The primary function for **receiving** value. It processes a `bundle_data` blob. It validates the transaction, checks for double-spending, and adds the new value to the wallet.
 * **Auth:** Requires `password: Option<&str>`.
 
+#### `pub fn update_public_profile(&mut self, profile: PublicProfile, password: Option<&str>) -> Result<(), String>`
+* **Description:** Updates the public profile metadata (first name, last name, address, gender, etc.) of the wallet owner and persists changes.
+* **Auth:** Requires `password: Option<&str>`.
+
 ---
 
 ### 4. Signature Workflows
@@ -153,6 +157,10 @@ These methods read data from the `Unlocked` wallet and do not require authentica
 
 #### `pub fn get_user_id(&self) -> Result<String, String>`
 * **Description:** Returns the unique user ID (e.g., `did:key:...`) of the unlocked profile.
+
+#### `pub fn get_public_profile(&self) -> Result<PublicProfile, String>`
+* **Description:** Extracts the public profile metadata (names, gender, address, etc.) from the internal wallet profile.
+* **Auth:** Read-only (if wallet is unlocked), no password needed.
 
 #### `pub fn get_voucher_summaries(...) -> Result<Vec<VoucherSummary>, String>`
 * **Description:** Returns a list of all vouchers in the wallet, with optional filters for status or standard UUID.
