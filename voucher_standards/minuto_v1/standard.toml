@@ -1,75 +1,68 @@
 # voucher_standards/minuto_v1/standard.toml
-[metadata]
+# ==============================================================================
+# IMMUTABLE-ZONE
+# ==============================================================================
+[immutable.identity]
+uuid = "MINUTO-V1-2025-09"
+name = "Minuto-Gutschein"
 abbreviation = "Minuto"
-documentation_url = "https://github.com/minuto/standards/tree/main/minuto_v1"
-homepage_url = "https://minuto.org/standard-info"
+
+[immutable.blueprint]
+unit = "Minuto"
+primary_redemption_type = "goods_or_services"
+collateral_type = "personal_guarantee"
+
+[immutable.features]
+allow_partial_transfers = true
+balances_are_summable = true
+amount_decimal_places = 0
+privacy_mode = "flexible"
+
+allowed_t_types = ["init", "transfer", "split", "merge"]
+[immutable.issuance]
+validity_duration_range = ["P1Y", "P10Y"]
+issuance_minimum_validity_duration = "P3Y"
+additional_signatures_range = [2, 2]
+allowed_signature_roles = ["guarantor"]
+
+
+[immutable.custom_rules.gender_balance_male]
+expression = "Voucher.signatures.filter(s, s.role != 'creator' && has(s.details.gender) && s.details.gender == '1').size() == 1"
+message = "Gemäß ISO 5218 wird genau ein männlicher (1) Bürge benötigt."
+
+[immutable.custom_rules.gender_balance_female]
+expression = "Voucher.signatures.filter(s, s.role != 'creator' && has(s.details.gender) && s.details.gender == '2').size() == 1"
+message = "Gemäß ISO 5218 wird genau eine weibliche (2) Bürgin benötigt."
+
+# ==============================================================================
+# MUTABLE-ZONE
+# ==============================================================================
+[mutable.metadata]
 issuer_name = "Minuto Community Council"
+homepage_url = "https://minuto.org/standard-info"
+documentation_url = "https://github.com/minuto/standards/tree/main/minuto_v1"
 keywords = [
     "community-currency",
     "time-based",
     "mutual-credit",
     "b2b",
 ]
-name = "Minuto-Gutschein"
-uuid = "MINUTO-V1-2025-09"
 
-[template.default]
+[mutable.app_config]
 default_validity_duration = "P5Y"
-
-[template.fixed]
-footnote = "Gutschein-Nutzung nur für Mitspieler/innen."
-is_divisible = true
-is_summable = true
-primary_redemption_type = "goods_or_services"
 round_up_validity_to = "P1Y"
+server_history_retention = "P3M"
 
-[template.fixed.collateral]
-description = ""
-redeem_condition = ""
-type = ""
+[mutable.i18n.descriptions]
+de = "Ein Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Minuten qualitativer Leistung."
+en = "A voucher for goods or services worth {{amount}} minutes of quality performance."
 
-[[template.fixed.description]]
-lang = "de"
-text = "Ein Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Minuten qualitativer Leistung."
-
-[[template.fixed.description]]
-lang = "en"
-text = "A voucher for goods or services worth {{amount}} minutes of quality performance."
-
-[template.fixed.guarantor_info]
-description = "Ein männlicher und ein weiblicher Bürge sind erforderlich."
-needed_count = 2
-
-[template.fixed.nominal_value]
-unit = "Minuto"
-
-[validation]
-[validation.counts]
-[validation.behavior_rules]
-allowed_t_types = [
-    "init",
-    "split",
-    "transfer",
-    "redeem",
-]
-amount_decimal_places = 0
-issuance_minimum_validity_duration = "P3Y"
-
-# NEU: Erzwingt, dass von den zwei Bürgen exakt einer männlich ('1')
-# und einer weiblich ('2') sein muss, gemäß ISO 5218.
-[validation.field_group_rules]
-[validation.field_group_rules.signatures]
-field = "details.gender"
-value_counts = [
-    # Erzwingt 1x Männlich (ISO 5218)
-    { value = "1", min = 1, max = 1 },
-    # Erzwingt 1x Weiblich (ISO 5218)
-    { value = "2", min = 1, max = 1 },
-]
+[mutable.i18n.footnotes]
+de = "Gutschein-Nutzung nur für Mitspieler/innen."
 
 [signature]
 # Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.
-issuer_id = "0-xXz@did:key:z6Mkoim7ZGcaKdoeD41USV5gmxfiVXXiPDeYt4T9rnEB5zfM"
+issuer_id = "0:riw@did:key:z6Mki8QqVMb66hjtTwcceVXbZuSHTk61jqiprRvEhuotZmSA"
 
 # Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).
-signature = "3ceXHE7eTpLAptURfcZnz8H4GPi3QtXfbpastT1ZPTxGZR3XMQgPAroTKHfi6XmXnh5EDPyb6wAt8FrC4RxFCrCq"
+signature = "5vkqeksRaoq7GyoEdMVGrxZgYYMDdpGnWTQNMumU5SsHrZ1o6tdz1yanKJZcrBABgfqUiwDhU5wexbEBLVgxg6br"

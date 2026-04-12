@@ -24,6 +24,18 @@ Dies ist die Kontextdatei für die human_money_core-Bibliothek, die für die Ent
 
 **Prozess-Sperrung (Pessimistic Locking):** Um Dateninkonsistenzen bei gleichzeitig laufenden Instanzen zu verhindern, implementiert die `FileStorage` ein dateibasiertes Locking mit PID-Check (`.wallet.lock`). Schreibende Operationen erwerben automatisch eine exklusive Sperre. Wenn ein anderer Prozess das Wallet bereits sperrt, wird die Operation mit einem Fehler abgelehnt.
 
+**Kernkonzept: Zustandsverwaltung (State Management)**
+Der `AppService` fungiert als Zustandsautomat mit zwei Zuständen:
+* `AppState::Locked`: Der Initialzustand. Keine Wallet-Daten befinden sich im Speicher. Nur Profil-Auflistung, Login und Wiederherstellung sind verfügbar.
+* `AppState::Unlocked`: Nach erfolgreichem `login`, `create_profile` oder `recover_wallet`. Alle Wallet-Operationen (Abfragen, Transfers) sind nun möglich.
+* `logout()`: Versetzt den Service zurück in den `Locked`-Zustand und löscht alle sensiblen Daten aus dem Speicher.
+
+**Authentifizierungs-Modell**
+Schreibvorgänge (Funktionen, die den Wallet-Zustand ändern) erfordern eine Authentifizierung. Dies wird über den Parameter `password: Option<&str>` gesteuert.
+
+* **Modus A (Immer Fragen):** Rufen Sie die Funktion mit `password: Some("users-password")` auf. Das Passwort wird nur für diesen einen Vorgang verwendet.
+* **Modus B (Session):** Rufen Sie einmalig `unlock_session("users-password", 900)` auf. Danach können schreibende Operationen für die angegebene Dauer (z.B. 900 Sekunden) mit `password: None` aufgerufen werden.
+
 ### 3. Öffentliche API: Das AppService-Modul
 Der `AppService` ist die einzige Schnittstelle, die für die Entwicklung der Client-Anwendung relevant ist. Er verwaltet den Zustand des Wallets (gesperrt/entsperrt) und stellt alle notwendigen Funktionen bereit.
 
@@ -60,12 +72,30 @@ Stellt ein Wallet mithilfe der Mnemonic-Phrase wieder her und setzt ein neues Pa
 **`pub fn logout(&mut self)`**
 
 Sperrt das Wallet und entfernt sensible Daten wie private Schlüssel aus dem Speicher. Diese Operation kann nicht fehlschlagen.
+Zustand: Wechselt von `Unlocked` -> `Locked`.
 
-**`pub fn create_new_voucher(&mut self, standard_toml_content: &str, lang_preference: &str, data: NewVoucherData, password: &str) -> Result<Voucher, String>`**
+---
+
+### 3.1 Session Management (Optional Auth)
+Diese Methoden steuern die "Passwort merken" Funktion (Modus B).
+
+**`pub fn unlock_session(&mut self, password: &str, duration_seconds: u64) -> Result<(), String>`**
+Verifiziert das Passwort und cached einen abgeleiteten Verschlüsselungsschlüssel im Speicher für `duration_seconds`. Nach diesem Aufruf können schreibende Operationen mit `password: None` aufgerufen werden.
+
+**`pub fn lock_session(&mut self)`**
+Löscht den zwischengespeicherten Session-Key sofort aus dem Speicher und erzwingt Modus A für die nächste Operation.
+
+**`pub fn refresh_session_activity(&mut self)`**
+Setzt den Inaktivitäts-Timer der Session zurück. Sollte bei UI-Aktivität (Klicks, Mausbewegungen) aufgerufen werden, um die Session am Leben zu erhalten.
+
+---
+
+**`pub fn create_new_voucher(&mut self, standard_toml_content: &str, lang_preference: &str, data: NewVoucherData, password: Option<&str>) -> Result<Voucher, String>`**
 
 Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand. Verifiziert zuerst die Standard-Definition, bevor der Gutschein erstellt wird.
-*Hinweis: Diese Operation erwirbt eine exklusive Dateisperre. Schlägt fehl, wenn ein anderer Prozess das Wallet verwendet.*
-**`pub fn create_transfer_bundle(&mut self, request: MultiTransferRequest, standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<CreateBundleResult, String>`**
+*Status-Verhalten:* Wenn der Standard zusätzliche Signaturen erfordert (z.B. Bürgen), wird der Gutschein mit `VoucherStatus::Incomplete` erstellt. Sind alle Anforderungen erfüllt, wird er `Active`.
+*Hinweis: Diese Operation erwirbt eine exklusive Dateisperre.*
+**`pub fn create_transfer_bundle(&mut self, request: MultiTransferRequest, standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: Option<&str>) -> Result<CreateBundleResult, String>`**
 
 Erstellt ein verschlüsseltes `SecureContainer`-Bundle für einen Transfer an einen Empfänger. Dies ist der Kernprozess zum Senden von Werten. Die Funktion akzeptiert eine `MultiTransferRequest`, die es ermöglicht, Guthaben von einem oder mehreren Quell-Gutscheinen in einer einzigen Transaktion zu bündeln.
 
@@ -79,7 +109,7 @@ Das Ergebnis (`CreateBundleResult`) ist eine Struktur, die die serialisierten Da
 Die Wallet wird automatisch gespeichert.
 *Hinweis: Diese Operation erwirbt eine exklusive Dateisperre.*
 
-**`pub fn receive_bundle(&mut self, bundle_data: &[u8], standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: &str) -> Result<ProcessBundleResult, String>`**
+**`pub fn receive_bundle(&mut self, bundle_data: &[u8], standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: Option<&str>) -> Result<ProcessBundleResult, String>`**
 
 Verarbeitet ein empfangenes Bundle. Die Funktion validiert die Transaktion, fügt die Gutscheine zum eigenen Wallet hinzu und gibt ein `ProcessBundleResult` zurück, das über den Erfolg und die Details der Transaktion informiert. Die Wallet wird automatisch gespeichert. Der Caller muss die benötigten Standard-Definitionen als TOML-Strings bereitstellen.
 
@@ -111,25 +141,30 @@ Fasst die Ergebnisse eines Transfers pro Währungseinheit zusammen.
 
 Erstellt ein Bundle, um eine Signaturanfrage für einen Gutschein an einen Bürgen zu senden. Diese Operation verändert den Wallet-Zustand nicht.
 
-**`pub fn create_detached_signature_response_bundle(&self, voucher_to_sign: &Voucher, role: &str, include_details: bool, original_sender_id: &str) -> Result<Vec<u8>, String>`**
+**`pub fn open_voucher_signing_request(container_bytes: &[u8]) -> Result<Voucher, String>`**
 
-Erstellt eine losgelöste Signatur als Antwort auf eine Signaturanfrage. Diese Operation wird vom Bürgen aufgerufen und verändert dessen Wallet-Zustand nicht.
+(Vom Bürgen aufgerufen). Öffnet ein empfangenes Signaturanfrage-Bundle und gibt den Gutschein-Teil zurück, damit der Benutzer vor dem Signieren eine Vorschau des Gutscheins sehen kann.
 
-**`pub fn process_and_attach_signature(&mut self, container_bytes: &[u8], standard_toml_content: &str, password: &str) -> Result<(), String>`**
+**`pub fn create_detached_signature_response_bundle(&self, voucher_to_sign: &Voucher, role: &str, include_details: bool, original_sender_id: &str, password: Option<&str>) -> Result<Vec<u8>, String>`**
 
-Verarbeitet eine empfangene losgelöste Signatur, fügt sie dem lokalen Gutschein hinzu und speichert den Wallet-Zustand.
+Erstellt eine losgelöste Signatur als Antwort auf eine Signaturanfrage. 
+*Wichtig:* Speichert den signierten Gutschein zusätzlich im Wallet des Signierers mit dem Status `Endorsed` als rechtlichen Beleg der Verpflichtung. Daher ist nun ein Passwort (oder eine Session) erforderlich.
 
-**`pub fn import_resolution_endorsement(&mut self, endorsement: ResolutionEndorsement, password: &str) -> Result<(), String>`**
+**`pub fn process_and_attach_signature(&mut self, container_bytes: &[u8], standard_toml_content: &str, password: Option<&str>) -> Result<(), String>`**
+
+Verarbeitet eine empfangene losgelöste Signatur, fügt sie dem lokalen Gutschein hinzu und speichert den Wallet-Zustand. Wechselt automatisch von `Incomplete` zu `Active`, wenn alle Bedingungen des Standards erfüllt sind.
+
+**`pub fn import_resolution_endorsement(&mut self, endorsement: ResolutionEndorsement, password: Option<&str>) -> Result<(), String>`**
 
 Importiert eine Beilegungserklärung für einen Double-Spend-Konflikt, fügt sie dem entsprechenden Beweis im Wallet hinzu und speichert den Zustand.
 
-**`pub fn save_encrypted_data(&mut self, name: &str, data: &[u8], password: &str) -> Result<(), String>`**
+**`pub fn save_encrypted_data(&mut self, name: &str, data: &[u8], password: Option<&str>) -> Result<(), String>`**
 
 Speichert einen beliebigen Byte-Slice verschlüsselt auf der Festplatte. Diese Methode nutzt den gleichen sicheren Verschlüsselungsmechanismus wie das Wallet selbst. Ideal, um anwendungsspezifische Daten (z.B. Konfigurationen, Kontakte) sicher abzulegen.
 
-**`pub fn load_encrypted_data(name: &str, password: &str) -> Result<Vec<u8>, String>`**
+**`pub fn load_encrypted_data(&mut self, name: &str, password: Option<&str>) -> Result<Vec<u8>, String>`**
 
-Lädt und entschlüsselt einen zuvor gespeicherten, beliebigen Datenblock. Aus Sicherheitsgründen wird das Passwort für jede Leseoperation benötigt, um den Entschlüsselungsschlüssel abzuleiten.
+Lädt und entschlüsselt einen zuvor gespeicherten Datenblock. Wird nun ebenfalls über den `AppService` (mutable) aufgerufen.
 
 #### Hilfsfunktionen (Statische Methoden)
 Diese Funktionen sind Teil des `AppService`, benötigen aber keinen initialisierten Zustand (weder `Locked` noch `Unlocked`) und können jederzeit aufgerufen werden.
@@ -190,7 +225,7 @@ Die Funktion ist ideal, um eine Übersicht aller Guthaben in einer UI anzuzeigen
 Die zurückgegebene `VoucherSummary`-Struktur enthält die folgenden Felder:
 
 * `local_instance_id`: Die eindeutige, lokale ID der Gutschein-Instanz im Wallet.
-* `status`: Der aktuelle Status des Gutscheins (`Active`, `Archived`, `Quarantined`, etc.).
+* `status`: Der aktuelle Status des Gutscheins (`Active`, `Archived`, `Quarantined`, `Incomplete`, `Endorsed`, etc.).
 * `valid_until`: Das Gültigkeitsdatum des Gutscheins im ISO 8601-Format.
 * `creator_id`: Die eindeutige ID des ursprünglichen Erstellers (oft ein Public Key).
 * `description`: Eine menschenlesbare Beschreibung des Gutscheins.
@@ -223,6 +258,10 @@ Die `AggregatedBalance`-Struktur enthält:
 **`pub fn get_voucher_details(&self, local_id: &str) -> Result<VoucherDetails, String>`**
 
 Ruft detaillierte Informationen zu einem einzelnen Gutschein ab, inklusive seiner Transaktionshistorie. `VoucherDetails` ist eine umfassende Struktur für eine Detailansicht.
+
+**`pub fn get_allowed_signature_roles_from_standard(toml: &str) -> Result<Vec<String>, String>`**
+
+Hilfsfunktion zum Extrahieren der erlaubten Rollen (z. B. `"guarantor"`) aus einer Standard-Definition.
 
 
 ## Gutschein-Struktur (Voucher)
