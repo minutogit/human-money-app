@@ -129,7 +129,10 @@ pub fn run() {
             create_new_voucher, create_transfer_bundle, receive_bundle, save_transaction_record,
             get_transaction_history,
             get_app_settings, save_app_settings,
-            frontend_log, log_to_backend
+            frontend_log, log_to_backend,
+            // Multi-signature commands
+            create_signing_request_bundle, open_voucher_signing_request, create_detached_signature_response_bundle,
+            process_and_attach_signature, get_allowed_signature_roles_from_standard
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

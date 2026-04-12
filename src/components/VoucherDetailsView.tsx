@@ -1,9 +1,11 @@
 // src/components/VoucherDetailsView.tsx
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../utils/log";
 import { VoucherDetails } from "../types";
 import { Button } from "./ui/Button";
+import { ConfirmationModal } from "./ui/ConfirmationModal";
 
 // Props for the component
 interface VoucherDetailsViewProps {
@@ -39,6 +41,13 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
     const [isLoading, setIsLoading] = useState(true);
     const [errorMsg, setErrorMsg] = useState("");
     const [showJson, setShowJson] = useState(false);
+    const [showExportModal, setShowExportModal] = useState(false);
+    const [recipientId, setRecipientId] = useState("");
+    const [encryptToDid, setEncryptToDid] = useState(true);
+    const [protectWithPassword, setProtectWithPassword] = useState(false);
+    const [exportPassword, setExportPassword] = useState("");
+    const [isExporting, setIsExporting] = useState(false);
+    const [exportError, setExportError] = useState("");
 
     useEffect(() => {
         logger.info(`VoucherDetailsView: Displayed for voucher ID: ${voucherId}`);
@@ -60,19 +69,23 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
     }, [voucherId]);
 
     function getDerivedVoucherStatus(voucher: VoucherDetails): { name: string; color: string; tooltip: string } {
-        // GEÄNDERT: Verwendet 'signatures' und prüft auf 'guarantor'
-        const guarantorSignatures = voucher.signatures.filter(s => s.role === 'guarantor').length;
-        if (guarantorSignatures === 0) { // 'needed_guarantors' existiert nicht mehr, prüfe nur ob > 0
+        const signatures = voucher.signatures;
+        // Count signatures that are NOT the issuer/creator
+        const extraSignatures = signatures.filter(s => s.role !== 'issuer' && s.role !== 'creator').length;
+
+        // Heuristic: If we have fewer than 3 extra signatures, we consider it incomplete for standards like Minuto.
+        // Ideally we would read the required count from the standard TOML.
+        if (extraSignatures < 3) {
             return {
                 name: 'Incomplete',
                 color: 'text-yellow-800 bg-yellow-200',
-                tooltip: 'This voucher is waiting for all required guarantor signatures.'
+                tooltip: 'This voucher is waiting for required extra signatures.'
             };
         }
         return {
             name: 'Ready',
             color: 'text-green-800 bg-green-200',
-            tooltip: 'This voucher is fully signed by guarantors and ready for use.'
+            tooltip: 'This voucher is fully signed and ready for use.'
         };
     }
 
@@ -99,8 +112,8 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
     if (!details) return <div className="p-4 sm:p-6 min-h-screen"><div className="text-center p-8 text-theme-light">No details found for this voucher.</div></div>;
 
     const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
-    const creator = details.creator; // 'as any' entfernt
-    const collateral = details.collateral; // 'as any' entfernt
+    const creator = details.creator;
+    const collateral = details.collateral;
     const statusInfo = getDerivedVoucherStatus(details);
 
     return (
@@ -108,11 +121,35 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
             <header className="flex justify-between items-center">
                 <Button onClick={onBack} variant="outline" size="sm">&larr; Back to Dashboard</Button>
                 <div className="flex items-center gap-4">
+                    {statusInfo.name === 'Incomplete' && (
+                        <Button 
+                            variant="primary" 
+                            size="sm" 
+                            onClick={() => setShowExportModal(true)}
+                            className="bg-theme-accent text-white shadow-md animate-pulse-subtle"
+                        >
+                            ✍️ Request Signature
+                        </Button>
+                    )}
                     <Button onClick={() => setShowJson(!showJson)} variant="secondary" size="sm">
                         {showJson ? "Show Formatted View" : "Show Raw JSON"}
                     </Button>
                 </div>
             </header>
+
+            {statusInfo.name === 'Incomplete' && (
+                <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">
+                    <div className="flex items-center">
+                        <div className="flex-shrink-0 text-yellow-400 text-xl">⚠️</div>
+                        <div className="ml-3">
+                            <p className="text-sm text-yellow-800">
+                                <strong>Action Required:</strong> This voucher needs more signatures to become valid and spendable. 
+                                Click the <strong>Request Signature</strong> button above to invite signers.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {showJson ? (
                 <Card title="Raw Voucher Data (JSON)">
@@ -133,13 +170,11 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                             <p className="text-xl text-theme-light">{details.nominal_value.unit}</p>
                         </div>
                         <h1 className="text-2xl font-bold text-theme-primary mt-1">{details.voucher_standard.name}</h1>
-                        {/* GEÄNDERT: Zugriff auf 'description' im template-Objekt */}
                         <p className="text-theme-secondary mt-2 max-w-2xl">{details.voucher_standard.template.description}</p>
                     </div>
 
                     <Card title="Creator Details">
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-4">
-                            {/* GEÄNDERT: Nullish Coalescing für optionale Felder */}
                             <InfoRow label="Name">{creator.first_name ?? ''} {creator.last_name ?? ''}</InfoRow>
                             <InfoRow label="Gender">{formatGender(creator.gender)}</InfoRow>
                             <InfoRow label="Address">
@@ -165,14 +200,11 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                         <span title={statusInfo.tooltip} className={`px-3 py-1 text-sm font-bold rounded-full capitalize ${statusInfo.color}`}>
                             {statusInfo.name}
                         </span>
-                        <div className="flex items-center gap-2 text-sm text-theme-secondary" title="Required guarantor signatures.">
-                            <span className="text-lg">✍️</span>
-                            {/* GEÄNDERT: Verwendet 'signatures' und entfernt 'needed_guarantors' */}
-                            <span><strong>{details.signatures.filter(s => s.role === 'guarantor').length}</strong> Guarantors</span>
+                        <div className="flex items-center gap-2 text-sm text-theme-secondary">
+                            <span><strong>{details.signatures.length}</strong> Signatures</span>
                         </div>
                         <div className="flex items-center gap-2 text-sm text-theme-secondary" title="Indicates if this voucher is backed by collateral.">
                             <span className="text-lg">🛡️</span>
-                            {/* KORRIGIERT: Greift direkt auf 'amount' zu, da das Feld 'value' im JSON nicht existiert (serde(flatten)) */}
                             <span>Collateral: <strong>{collateral?.amount ? 'Yes' : 'No'}</strong></span>
                         </div>
                         <div className="flex items-center gap-2 text-sm text-theme-secondary" title="Indicates if this voucher can be split into smaller amounts.">
@@ -189,29 +221,25 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                                     <InfoRow label="Creator ID" isMono>{creator.id}</InfoRow>
                                     <InfoRow label="Created On">{formatDateTime(details.creation_date)}</InfoRow>
                                     <InfoRow label="Valid Until">{formatDateTime(details.valid_until || undefined)}</InfoRow>
-                                    {/* GEÄNDERT: Zugriff auf 'footnote' im template-Objekt */}
                                     <InfoRow label="Footnote">{details.voucher_standard.template.footnote || 'None'}</InfoRow>
                                 </div>
                             </Card>
                         </div>
 
                         <div className="lg:col-span-1 space-y-6">
-                            <Card title="Guarantors">
-                                {/* GEÄNDERT: Zugriff auf 'signature_requirements_description' im template-Objekt */}
+                            <Card title="Signatures">
                                 <p className="text-sm text-theme-secondary pb-4">{details.voucher_standard.template.signature_requirements_description}</p>
-                                {/* GEÄNDERT: Filtert das 'signatures'-Array */}
-                                {details.signatures.filter(s => s.role === 'guarantor').length > 0 ? (
+                                {details.signatures.length > 0 ? (
                                     <div className="space-y-4">
-                                        {details.signatures.filter(s => s.role === 'guarantor').map(g => (
+                                        {details.signatures.map(g => (
                                             <div key={g.signature_id} className="bg-theme-subtle/30 rounded p-2 border-t border-theme-subtle pt-3">
-                                                {/* GEÄNDERT: Greift auf das verschachtelte 'details'-Objekt zu */}
-                                                <p className="font-semibold">{g.details?.first_name ?? ''} {g.details?.last_name ?? ''}</p>
-                                                <p className="text-xs font-mono text-theme-light">{g.signer_id}</p>
-                                                <p className="text-xs text-theme-light mt-1">Signed on: {formatDateTime(g.signature_time)}</p>
+                                                <p className="font-semibold text-sm">{g.role.charAt(0).toUpperCase() + g.role.slice(1)}: {g.details?.first_name ?? ''} {g.details?.last_name ?? ''}</p>
+                                                <p className="text-[10px] font-mono text-theme-light break-all">{g.signer_id}</p>
+                                                <p className="text-[10px] text-theme-light mt-1">Signed on: {formatDateTime(g.signature_time)}</p>
                                             </div>
                                         ))}
                                     </div>
-                                ) : <p className="text-sm text-theme-light">No 'guarantor' signatures yet.</p>}
+                                ) : <p className="text-sm text-theme-light">No signatures yet.</p>}
                             </Card>
                         </div>
                     </div>
@@ -235,6 +263,130 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                     </Card>
                 </div>
             )}
+
+            <ConfirmationModal
+                isOpen={showExportModal}
+                title="Export Signature Request"
+                description={
+                    <div className="space-y-4">
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="checkbox"
+                                id="encryptToDid"
+                                checked={encryptToDid}
+                                onChange={(e) => setEncryptToDid(e.target.checked)}
+                                className="h-4 w-4 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                            />
+                            <label htmlFor="encryptToDid" className="text-sm font-medium text-theme-primary">
+                                Encrypt for a specific contact (DID required)
+                            </label>
+                        </div>
+
+                        {encryptToDid ? (
+                            <div>
+                                <p className="text-xs text-theme-light mb-1">Enter the signer's DID:</p>
+                                <input
+                                    type="text"
+                                    value={recipientId}
+                                    onChange={(e) => setRecipientId(e.target.value)}
+                                    placeholder="did:key:z..."
+                                    className="w-full px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
+                                    autoFocus
+                                />
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        id="protectWithPassword"
+                                        checked={protectWithPassword}
+                                        onChange={(e) => setProtectWithPassword(e.target.checked)}
+                                        className="h-4 w-4 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                                    />
+                                    <label htmlFor="protectWithPassword" className="text-sm font-medium text-theme-primary">
+                                        Protect with password (Optional)
+                                    </label>
+                                </div>
+
+                                {protectWithPassword && (
+                                    <div>
+                                        <p className="text-xs text-theme-light mb-1">Enter a password for encryption:</p>
+                                        <input
+                                            type="password"
+                                            value={exportPassword}
+                                            onChange={(e) => setExportPassword(e.target.value)}
+                                            placeholder="Password"
+                                            className="w-full px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {exportError && <p className="text-red-500 text-sm mt-2">{exportError}</p>}
+                    </div>
+                }
+                confirmText="Export"
+                onConfirm={handleExportSigningRequest}
+                onCancel={() => {
+                    setShowExportModal(false);
+                    setRecipientId("");
+                    setExportPassword("");
+                    setExportError("");
+                }}
+                isProcessing={isExporting}
+            />
         </div>
     );
+
+    async function handleExportSigningRequest() {
+        setIsExporting(true);
+        setExportError("");
+        try {
+            let config;
+            if (encryptToDid) {
+                if (!recipientId.trim()) {
+                    setExportError("Please enter a recipient DID.");
+                    setIsExporting(false);
+                    return;
+                }
+                config = { type: "TargetDid", value: recipientId.trim() };
+            } else if (protectWithPassword) {
+                if (!exportPassword) {
+                    setExportError("Please enter a password.");
+                    setIsExporting(false);
+                    return;
+                }
+                config = { type: "Password", value: exportPassword };
+            } else {
+                config = { type: "Cleartext" };
+            }
+
+            logger.info(`Creating signing request bundle for voucher ${voucherId} with config: ${JSON.stringify(config)}`);
+            const bundleBytes = await invoke<number[]>("create_signing_request_bundle", {
+                localInstanceId: voucherId,
+                config: config
+            });
+
+            const filePath = await save({
+                defaultPath: `signature-request-${voucherId.slice(0, 8)}.humocoreq`,
+                filters: [{ name: 'Signature Request', extensions: ['humocoreq'] }]
+            });
+
+            if (filePath) {
+                const uint8Array = new Uint8Array(bundleBytes);
+                const { writeFile } = await import("@tauri-apps/plugin-fs");
+                await writeFile(filePath, uint8Array);
+                logger.info(`Signing request bundle saved to ${filePath}`);
+                setShowExportModal(false);
+                setRecipientId("");
+            }
+        } catch (e) {
+            const msg = `Failed to export signing request: ${e}`;
+            logger.error(msg);
+            setExportError(msg);
+        } finally {
+            setIsExporting(false);
+        }
+    }
 }

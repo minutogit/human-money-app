@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../utils/log';
-import { VoucherStandardInfo, ReceiveSuccessPayload } from '../types';
+import { VoucherStandardInfo, ReceiveSuccessPayload, VoucherDetails } from '../types';
 import { Button } from './ui/Button';
 import { useSession } from '../context/SessionContext';
 import { ConfirmationModal } from './ui/ConfirmationModal'; // <--- NEU
@@ -20,8 +20,10 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     const [bundleName, setBundleName] = useState<string | null>(null);
     const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState('');
-    const [showConfirm, setShowConfirm] = useState(false); // <--- NEU
-    const [isProcessing, setIsProcessing] = useState(false); // <--- NEU (lokaler State fehlte ggf. oder wird jetzt genutzt)
+    const [showConfirm, setShowConfirm] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [fileType, setFileType] = useState<'transfer' | 'humocoreq' | 'humocosig' | null>(null);
+    const [bundlePassword, setBundlePassword] = useState("");
 
     useEffect(() => {
         async function fetchStandards() {
@@ -43,13 +45,26 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         try {
             const selectedPath = await open({
                 multiple: false,
-                filters: [{ name: 'Transfer Bundle', extensions: ['transfer'] }]
+                filters: [
+                    { name: 'Transfer Bundle', extensions: ['transfer'] },
+                    { name: 'Signature Request', extensions: ['humocoreq'] },
+                    { name: 'Signature Response', extensions: ['humocosig'] }
+                ]
             });
 
             if (typeof selectedPath === 'string') {
                 logger.info(`File selected via dialog: ${selectedPath}`);
                 setBundlePath(selectedPath);
-                setBundleName(selectedPath.split(/[/\\]/).pop() || 'bundle.transfer');
+                const fileName = selectedPath.split(/[/\\]/).pop() || '';
+                setBundleName(fileName);
+                
+                if (fileName.endsWith('.transfer')) {
+                    setFileType('transfer');
+                } else if (fileName.endsWith('.humocoreq')) {
+                    setFileType('humocoreq');
+                } else if (fileName.endsWith('.humocosig')) {
+                    setFileType('humocosig');
+                }
             }
         } catch (e) {
             const msg = `Error selecting file: ${e}`;
@@ -63,6 +78,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     const clearSelection = () => {
         setBundlePath(null);
         setBundleName(null);
+        setFileType(null);
+        setDroppedFileContent(null);
     }
 
     // Drag and drop functionality
@@ -140,21 +157,25 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             const file = files[0];
             logger.info(`Processing dropped file: ${file.name} (Size: ${file.size})`);
             
-            // Check if the file is a .transfer file
-            if (file.name.endsWith('.transfer')) {
+            if (file.name.endsWith('.transfer') || file.name.endsWith('.humocoreq') || file.name.endsWith('.humocosig')) {
                 try {
-                    // Read the file content as ArrayBuffer
                     const fileBuffer = await file.arrayBuffer();
                     const uint8Array = new Uint8Array(fileBuffer);
-                    
-                    // Convert to number array for compatibility with our backend
                     const bundleData = Array.from(uint8Array);
-                    logger.info(`Bundle data length: ${bundleData.length}`);
+                    logger.info(`File data length: ${bundleData.length}`);
                     
-                    // Set the file info and content
-                    setBundlePath(file.name); // Using filename as path indicator
+                    setBundlePath(file.name);
                     setBundleName(file.name);
                     setDroppedFileContent(bundleData);
+                    
+                    if (file.name.endsWith('.transfer')) {
+                        setFileType('transfer');
+                    } else if (file.name.endsWith('.humocoreq')) {
+                        setFileType('humocoreq');
+                    } else if (file.name.endsWith('.humocosig')) {
+                        setFileType('humocosig');
+                    }
+                    
                     logger.info(`Successfully set dropped file: ${file.name}`);
                 } catch (error) {
                     const msg = `Error processing dropped file: ${error}`;
@@ -162,7 +183,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     setFeedbackMsg(msg);
                 }
             } else {
-                const msg = `Invalid file type. Please drop a '.transfer' file. Got: ${file.name}`;
+                const msg = `Invalid file type. Please drop a '.transfer', '.humocoreq', or '.humocosig' file. Got: ${file.name}`;
                 logger.warn(msg);
                 setFeedbackMsg(msg);
             }
@@ -173,12 +194,16 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         }
     };
 
-    // 1. Schritt: Validieren und Modal
     const handleProcessClick = (event: FormEvent) => {
         event.preventDefault();
         
         if ((!bundlePath) && !droppedFileContent) {
-            setFeedbackMsg("Please select a bundle file.");
+            setFeedbackMsg("Please select a file.");
+            return;
+        }
+
+        if (!fileType) {
+            setFeedbackMsg("Unable to determine file type.");
             return;
         }
 
@@ -186,59 +211,92 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         setShowConfirm(true);
     };
 
-    // 2. Schritt: Ausführen
     async function executeReceive() {
         setIsProcessing(true);
-        logger.info(`Attempting to process bundle...`);
+        logger.info(`Attempting to process file of type: ${fileType}`);
         try {
-            let bundleData: number[];
+            let fileData: number[];
             if (droppedFileContent) {
-                // Use the dropped file content
-                bundleData = droppedFileContent;
+                fileData = droppedFileContent;
             } else if (bundlePath) {
-                // Read file from path (original logic)
-                const bundleUint8Array = await readFile(bundlePath);
-                bundleData = Array.from(bundleUint8Array);
+                const fileUint8Array = await readFile(bundlePath);
+                fileData = Array.from(fileUint8Array);
             } else {
-                throw new Error("No bundle file provided");
+                throw new Error("No file provided");
             }
 
-            // KORREKTUR: Das Backend benötigt eine Map, die von der Standard-UUID (aus dem TOML-Inhalt)
-            // auf den TOML-Inhalt abbildet, nicht vom Ordnernamen.
-            const standardDefinitionsToml: Record<string, string> = {};
-            voucherStandards.forEach(standard => {
-                const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
-                if (uuidMatch && uuidMatch[1]) {
-                    const uuid = uuidMatch[1];
-                    standardDefinitionsToml[uuid] = standard.content;
-                }
-            });
-
-            logger.info(`Calling receive_bundle with ${bundleData.length} bytes of data and ${Object.keys(standardDefinitionsToml).length} standards`);
-
-            const payload = await protectAction(async (password) => {
-                return await invoke<ReceiveSuccessPayload>("receive_bundle", {
-                    bundleData,
-                    standardDefinitionsToml,
-                    password
+            if (fileType === 'transfer') {
+                const standardDefinitionsToml: Record<string, string> = {};
+                voucherStandards.forEach(standard => {
+                    const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
+                    if (uuidMatch && uuidMatch[1]) {
+                        const uuid = uuidMatch[1];
+                        standardDefinitionsToml[uuid] = standard.content;
+                    }
                 });
-            });
 
-            // protectAction kann undefined zurückgeben bei User Cancel, aber hier fängt catch das ab oder payload ist da.
-            if (!payload) return;
+                logger.info(`Calling receive_bundle with ${fileData.length} bytes`);
 
-            logger.info("Bundle received and processed successfully.");
-            onReceiveSuccess(payload);
+                const payload = await protectAction(async (password) => {
+                    return await invoke<ReceiveSuccessPayload>("receive_bundle", {
+                        bundleData: fileData,
+                        standardDefinitionsToml,
+                        password
+                    });
+                });
+
+                if (!payload) return;
+                logger.info("Bundle received and processed successfully.");
+                onReceiveSuccess(payload);
+            } else if (fileType === 'humocoreq') {
+                const voucher = await invoke<VoucherDetails>("open_voucher_signing_request", {
+                    containerBytes: fileData,
+                    password: bundlePassword || null
+                });
+                logger.info("Signature request opened successfully.");
+                (onReceiveSuccess as any)({
+                    senderId: voucher.creator.id,
+                    transferSummary: { summableAmounts: {}, countableItems: {} },
+                    involvedVouchers: [],
+                    voucherData: voucher
+                });
+            } else if (fileType === 'humocosig') {
+                const standardDefinitionsToml: Record<string, string> = {};
+                voucherStandards.forEach(standard => {
+                    const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
+                    if (uuidMatch && uuidMatch[1]) {
+                        const uuid = uuidMatch[1];
+                        standardDefinitionsToml[uuid] = standard.content;
+                    }
+                });
+                
+                const standardTomlContent = Object.values(standardDefinitionsToml)[0];
+                if (!standardTomlContent) {
+                    throw new Error("No voucher standards available");
+                }
+
+                await protectAction(async (password) => {
+                    await invoke("process_and_attach_signature", {
+                        containerBytes: fileData,
+                        standardTomlContent,
+                        containerPassword: bundlePassword || null,
+                        walletPassword: password
+                    });
+                });
+                
+                logger.info("Signature processed and attached successfully.");
+                setFeedbackMsg("Signature successfully attached to voucher!");
+                setTimeout(() => onBack(), 2000);
+            }
 
         } catch (e) {
-            // Verbessertes Logging für detailliertere Fehler
-            const msg = `Failed during bundle processing. Error: ${e instanceof Error ? e.message : String(e)}`;
+            const msg = `Failed during file processing. Error: ${e instanceof Error ? e.message : String(e)}`;
             logger.error(msg);
             if (e instanceof Error && e.stack) logger.error(e.stack);
             setFeedbackMsg(`Error: ${msg}`);
+        } finally {
             setIsProcessing(false);
             setShowConfirm(false);
-        } finally {
         }
     }
 
@@ -246,10 +304,10 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         <div className="flex flex-col h-full max-w-2xl mx-auto">
             <header className="flex-shrink-0 mb-6">
                 <div className="flex items-center justify-between">
-                    <h1 className="text-2xl font-bold text-theme-primary">Receive Funds</h1>
+                    <h1 className="text-2xl font-bold text-theme-primary">Receive & Process</h1>
                     <Button variant="secondary" onClick={onBack}>Cancel</Button>
                 </div>
-                <p className="text-theme-light mt-1">Process a transfer bundle you have received.</p>
+                <p className="text-theme-light mt-1">Process transfers, signature requests, or responses you have received.</p>
             </header>
 
             <div className="flex-grow">
@@ -274,7 +332,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                             </div>
                         ) : (
                             <div>
-                                <p className="text-theme-light mb-4">Drag & Drop your '.transfer' file here</p>
+                                <p className="text-theme-light mb-4">Drag & Drop your '.transfer', '.humocoreq', or '.humocosig' file here</p>
                                 <p className="text-theme-light text-sm mb-4">or</p>
                                 <Button type="button" onClick={handleFileSelect}>Select Bundle File</Button>
                             </div>
@@ -283,7 +341,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
                      {(bundlePath || droppedFileContent) && (
                          <Button size="lg" type="submit" className="w-full">
-                             Process Bundle
+                             Process File
                          </Button>
                      )}
 
@@ -292,13 +350,39 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
             <ConfirmationModal
                 isOpen={showConfirm}
-                title="Process Transfer Bundle"
+                title={`Process ${fileType === 'transfer' ? 'Transfer Bundle' : fileType === 'humocoreq' ? 'Signature Request' : 'Signature Response'}`}
                 description={
-                    <p>Do you want to import and process the bundle <strong>{bundleName}</strong>?<br/>This will check for funds and add them to your wallet.</p>
+                    <p>
+                        Do you want to process the file <strong>{bundleName}</strong>?<br/>
+                        {fileType === 'transfer' && 'This will check for funds and add them to your wallet.'}
+                        {fileType === 'humocoreq' && 'This will open a signature request for you to review and sign.'}
+                        {fileType === 'humocosig' && 'This will attach the signature to the corresponding voucher in your wallet.'}
+                        
+                        {(fileType === 'humocoreq' || fileType === 'humocosig') && (
+                            <div className="mt-4">
+                                <label className="block text-sm font-medium text-theme-primary mb-1">
+                                    Bundle Password (optional)
+                                </label>
+                                <input
+                                    type="password"
+                                    value={bundlePassword}
+                                    onChange={(e) => setBundlePassword(e.target.value)}
+                                    placeholder="Only if encrypted with password"
+                                    className="w-full px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary text-sm"
+                                />
+                                <p className="text-[10px] text-theme-light mt-1">
+                                    If the sender protected the bundle with a password, enter it here.
+                                </p>
+                            </div>
+                        )}
+                    </p>
                 }
                 confirmText="Yes, Process"
                 onConfirm={executeReceive}
-                onCancel={() => setShowConfirm(false)}
+                onCancel={() => {
+                    setShowConfirm(false);
+                    setBundlePassword("");
+                }}
                 isProcessing={isProcessing}
             />
         </div>

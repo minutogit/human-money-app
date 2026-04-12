@@ -9,6 +9,7 @@ use human_money_core::{
     archive::VoucherArchive,
     app_service::AppService,
     models::voucher::Voucher,
+    models::secure_container::ContainerConfig,
     services::voucher_manager::NewVoucherData,
     wallet::{MultiTransferRequest, SourceTransfer, InvolvedVoucherInfo},
 };
@@ -361,4 +362,93 @@ pub fn create_new_voucher(
     };
 
     service.create_new_voucher(&standard_toml_content, lang_preference, voucher_data, password.as_deref())
+}
+
+// ===== Multi-Signature Commands =====
+
+#[tauri::command]
+pub fn create_signing_request_bundle(
+    local_instance_id: String,
+    config: ContainerConfig,
+    state: tauri::State<AppState>,
+) -> Result<Vec<u8>, String> {
+    info!(
+        "Creating signing request bundle for voucher {} with config {:?}",
+        local_instance_id, config
+    );
+    let service = state.service.lock().unwrap();
+    service.create_signing_request_bundle(&local_instance_id, config)
+}
+
+#[tauri::command]
+pub fn open_voucher_signing_request(
+    container_bytes: Vec<u8>,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<Voucher, String> {
+    info!("Opening voucher signing request bundle...");
+    let service = state.service.lock().unwrap();
+    service.open_voucher_signing_request(&container_bytes, password.as_deref())
+}
+
+#[tauri::command]
+pub fn create_detached_signature_response_bundle(
+    voucher: Voucher,
+    role: String,
+    include_details: bool,
+    config: ContainerConfig,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<Vec<u8>, String> {
+    info!(
+        "Creating detached signature response for role {} with config {:?}",
+        role, config
+    );
+    let mut service = state.service.lock().unwrap();
+    
+    // Diagnostic logging
+    if !service.is_wallet_unlocked() {
+        error!("SIGNING ERROR: AppService is in LOCKED state. No profile is currently loaded in the backend.");
+        return Err("Wallet is completely locked. Please log out and log in again to refresh your session.".to_string());
+    }
+
+    // If a password is provided, try to unlock the session if it's currently session-locked
+    if let Some(ref pwd) = password {
+        // Note: AppService::get_session_key handles the timeout check. 
+        // We can just try to unlock it here to be sure.
+        if let Err(e) = service.unlock_session(pwd, 300) {
+            error!("Failed to unlock session during signature creation: {}", e);
+            // We continue anyway, as create_detached_signature_response_bundle takes the password directly
+        }
+    }
+
+    service.create_detached_signature_response_bundle(&voucher, &role, include_details, config, password.as_deref())
+}
+
+#[tauri::command]
+pub fn process_and_attach_signature(
+    container_bytes: Vec<u8>,
+    standard_toml_content: String,
+    container_password: Option<String>,
+    wallet_password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    info!("Processing and attaching signature from bundle...");
+    let mut service = state.service.lock().unwrap();
+    service.process_and_attach_signature(
+        &container_bytes,
+        &standard_toml_content,
+        container_password.as_deref(),
+        wallet_password.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub fn get_allowed_signature_roles_from_standard(
+    toml_content: String,
+    state: tauri::State<AppState>,
+) -> Result<Vec<String>, String> {
+    info!("Getting allowed signature roles from standard...");
+    let service = state.service.lock().unwrap();
+    service.get_allowed_signature_roles_from_standard(&toml_content)
 }

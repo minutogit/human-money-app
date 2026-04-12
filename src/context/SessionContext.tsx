@@ -88,8 +88,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             } catch (error: any) {
                 const errMsg = String(error);
                 // Prüfen auf typische Backend-Fehler bei abgelaufener Session
-                if (errMsg.includes("Password required") || errMsg.includes("Session timed out")) {
-                    logger.warn("Backend rejected session (expired). Resetting frontend session state.");
+                if (errMsg.includes("Password required") || errMsg.includes("Session timed out") || errMsg.includes("Wallet is locked")) {
+                    logger.warn("Backend rejected action (wallet locked/session expired). Resetting frontend session state.");
                     setIsSessionActive(false);
                     isSessionActiveRef.current = false;
                     throw new Error("SESSION_EXPIRED_RETRY");

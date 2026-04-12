@@ -3,292 +3,216 @@ name: core-api-reference
 description: Reference documentation for the human_money_core AppService API as used from Tauri commands. Includes all public functions, data structures, and error handling. Note - always verify against actual code for latest API.
 ---
 
-# human_money_core API Reference for App Development
-Dies ist die Kontextdatei für die human_money_core-Bibliothek, die für die Entwicklung von Client-Anwendungen, wie z. B. Tauri-Apps, aufbereitet wurde. Sie bietet eine präzise und vollständige Referenz für die öffentliche API, die zur Interaktion mit der Kernlogik notwendig ist.
+# AppService: Public API Facade
 
-### 1. Projekt & Zweck
-**Projektname:** human_money_core
+This directory contains the `AppService`, which is the primary public-facing API for the `human_money_core`. It is designed as a high-level **facade** to simplify all interactions for client applications (e.g., Tauri, mobile apps).
 
-**Zweck:** Bereitstellung der Kernlogik für ein dezentrales, elektronisches Gutschein-System.
+**Key Responsibilities:**
+* Manages the wallet state (`Locked` vs. `Unlocked`).
+* Abstracts all complex cryptographic operations.
+* Handles all persistent storage (encryption and saving) automatically.
+* Provides a simple, transactional interface for all wallet operations.
 
-**Ziel:** Die Bibliothek stellt eine `AppService`-Fassade bereit, die alle komplexen Operationen kapselt und eine einfache, sichere Schnittstelle für die Anwendungsentwicklung bietet.
+## Core Concept: State Management
 
-### 2. Architektur & Kernkonzepte
-**Dezentraler Ansatz:** Das System basiert auf digitalen Gutscheinen (im Grunde signierte Textdateien), die ihre eigene Transaktionshistorie enthalten. Es gibt kein zentrales, globales Ledger.
+The `AppService` operates as a state machine with two states:
+* `AppState::Locked`: The initial state. No wallet data is in memory. Only profile listing and login/creation operations are available.
+* `AppState::Unlocked`: After a successful `login`, `create_profile`, or `recover_wallet`. All wallet operations (querying, transferring) are now possible.
+* `logout()`: Securely transitions the service back to the `Locked` state, clearing all sensitive data from memory.
 
-**Offline-Fähigkeit:** Transaktionen können offline durchgeführt werden, indem die aktualisierte Gutschein-Datei direkt an den neuen Halter übergeben wird.
+## Thread Safety and Locking
 
-**Betrugserkennung:** Das System ist darauf ausgelegt, "Double Spending" (das mehrfache Ausgeben desselben Gutscheins) kryptografisch nachweisbar zu machen. Die Client-Anwendung muss sich nicht um die Details der Erkennung kümmern, sondern nur auf die Ergebnisse reagieren, die der `AppService` liefert.
+The `AppService` implements a pessimistic locking mechanism to prevent concurrent modifications of the same wallet by multiple processes, closing a potential "stale state" double-spending vulnerability. All state-changing operations automatically acquire an exclusive lock on the wallet directory during execution and release it upon completion. This ensures thread-safety and data consistency in multi-process environments.
 
-**Entkoppelte Speicherung:** Die `human_money_core` nutzt ein `Storage`-Trait, um die Logik von der Speicherung zu trennen. Für Client-Anwendungen wird eine Standardimplementierung (`FileStorage`) bereitgestellt, die alle Daten sicher verschlüsselt im Dateisystem ablegt.
 
-**Prozess-Sperrung (Pessimistic Locking):** Um Dateninkonsistenzen bei gleichzeitig laufenden Instanzen zu verhindern, implementiert die `FileStorage` ein dateibasiertes Locking mit PID-Check (`.wallet.lock`). Schreibende Operationen erwerben automatisch eine exklusive Sperre. Wenn ein anderer Prozess das Wallet bereits sperrt, wird die Operation mit einem Fehler abgelehnt.
 
-**Kernkonzept: Zustandsverwaltung (State Management)**
-Der `AppService` fungiert als Zustandsautomat mit zwei Zuständen:
-* `AppState::Locked`: Der Initialzustand. Keine Wallet-Daten befinden sich im Speicher. Nur Profil-Auflistung, Login und Wiederherstellung sind verfügbar.
-* `AppState::Unlocked`: Nach erfolgreichem `login`, `create_profile` oder `recover_wallet`. Alle Wallet-Operationen (Abfragen, Transfers) sind nun möglich.
-* `logout()`: Versetzt den Service zurück in den `Locked`-Zustand und löscht alle sensiblen Daten aus dem Speicher.
+## Authentication Model
 
-**Authentifizierungs-Modell**
-Schreibvorgänge (Funktionen, die den Wallet-Zustand ändern) erfordern eine Authentifizierung. Dies wird über den Parameter `password: Option<&str>` gesteuert.
+Write operations (any function that modifies wallet state) require authentication. This is handled by the `password: Option<&str>` parameter.
 
-* **Modus A (Immer Fragen):** Rufen Sie die Funktion mit `password: Some("users-password")` auf. Das Passwort wird nur für diesen einen Vorgang verwendet.
-* **Modus B (Session):** Rufen Sie einmalig `unlock_session("users-password", 900)` auf. Danach können schreibende Operationen für die angegebene Dauer (z.B. 900 Sekunden) mit `password: None` aufgerufen werden.
-
-### 3. Öffentliche API: Das AppService-Modul
-Der `AppService` ist die einzige Schnittstelle, die für die Entwicklung der Client-Anwendung relevant ist. Er verwaltet den Zustand des Wallets (gesperrt/entsperrt) und stellt alle notwendigen Funktionen bereit.
-
-**`pub struct AppService`**
-**Zustandsverwaltung:** Hält den Zustand des Wallets (`Locked` oder `Unlocked`). Nach einem `login` ist der Service im `Unlocked`-Zustand und alle Operationen sind möglich. `logout` versetzt ihn zurück in den `Locked`-Zustand.
-
-**Automatische Speicherung:** Alle Operationen, die den Wallet-Zustand verändern (z.B. ein Transfer), werden automatisch persistent gespeichert.
-
-#### Hauptfunktionen (Befehle)
-**`pub fn new(base_storage_path: &Path) -> Result<Self, String>`**
-
-Initialisiert einen neuen `AppService` im `Locked`-Zustand. Erstellt eine `FileStorage`-Instanz für den angegebenen Pfad. Das Verzeichnis wird bei Bedarf erstellt.
-
-**`pub fn list_profiles(&self) -> Result<Vec<ProfileInfo>, String>`**
-
-Listet alle verfügbaren, im Basisverzeichnis konfigurierten Profile auf. Liest die zentrale `profiles.json`-Datei und gibt eine Liste von `ProfileInfo`-Objekten zurück, die für die Anzeige in einem Login-Screen verwendet werden kann.
-
-Die `ProfileInfo`-Struktur enthält:
-* `profile_name: String`: Der vom Benutzer gewählte, menschenlesbare Name.
-* `folder_name: String`: Der anonyme Ordnername, der für `login` benötigt wird.
-
-**`pub fn create_profile(&mut self, profile_name: &str, mnemonic: &str, passphrase: Option<&str>, user_prefix: Option<&str>, password: &str) -> Result<(), String>`**
-
-Erstellt ein komplett neues Benutzerprofil. Diese Funktion leitet einen anonymen Ordnernamen aus den Secrets ab, speichert das Wallet in diesem Ordner und fügt einen Eintrag mit dem `profile_name` zur zentralen `profiles.json` hinzu. Bei Erfolg wird der Service in den `Unlocked`-Zustand versetzt.
-
-**`pub fn login(&mut self, folder_name: &str, password: &str, cleanup_on_login: bool) -> Result<(), String>`**
-
-Entsperrt ein existierendes Wallet. Der `folder_name` wird typischerweise über die `list_profiles`-Funktion bezogen. Bei Bedarf kann eine Speicherbereinigung direkt beim Login durchgeführt werden.
-
-**`pub fn recover_wallet_and_set_new_password(&mut self, folder_name: &str, mnemonic: &str, passphrase: Option<&str>, new_password: &str) -> Result<(), String>`**
-
-Stellt ein Wallet mithilfe der Mnemonic-Phrase wieder her und setzt ein neues Passwort. Der `folder_name` gibt an, welches Profil wiederhergestellt werden soll. Bei Erfolg wird der Service in den `Unlocked`-Zustand versetzt.
-
-**`pub fn logout(&mut self)`**
-
-Sperrt das Wallet und entfernt sensible Daten wie private Schlüssel aus dem Speicher. Diese Operation kann nicht fehlschlagen.
-Zustand: Wechselt von `Unlocked` -> `Locked`.
+* **Mode A (Always Ask):** Call the function with `password: Some("users-password")`. The password is used for this single operation.
+* **Mode B (Session):** Call `unlock_session("users-password", 900)` once. You can then call write operations with `password: None` for the specified duration (e.g., 900 seconds).
 
 ---
 
-### 3.1 Session Management (Optional Auth)
-Diese Methoden steuern die "Passwort merken" Funktion (Modus B).
+## API Reference
 
-**`pub fn unlock_session(&mut self, password: &str, duration_seconds: u64) -> Result<(), String>`**
-Verifiziert das Passwort und cached einen abgeleiteten Verschlüsselungsschlüssel im Speicher für `duration_seconds`. Nach diesem Aufruf können schreibende Operationen mit `password: None` aufgerufen werden.
+All methods return a `Result<T, String>`, where `String` is a user-friendly error message.
 
-**`pub fn lock_session(&mut self)`**
-Löscht den zwischengespeicherten Session-Key sofort aus dem Speicher und erzwingt Modus A für die nächste Operation.
+### 1. Lifecycle & Authentication
 
-**`pub fn refresh_session_activity(&mut self)`**
-Setzt den Inaktivitäts-Timer der Session zurück. Sollte bei UI-Aktivität (Klicks, Mausbewegungen) aufgerufen werden, um die Session am Leben zu erhalten.
+These methods manage the application state and user profiles.
 
----
+#### `pub fn new(base_storage_path: &Path) -> Result<Self, String>`
+* **Description:** Initializes a new `AppService` in the `Locked` state.
+* **Parameters:**
+    * `base_storage_path`: The root directory where all user profile sub-directories will be stored.
+* **Usage:** This is the first function you must call.
 
-**`pub fn create_new_voucher(&mut self, standard_toml_content: &str, lang_preference: &str, data: NewVoucherData, password: Option<&str>) -> Result<Voucher, String>`**
+#### `pub fn list_profiles(&self) -> Result<Vec<ProfileInfo>, String>`
+* **Description:** Lists all available user profiles found in the `base_storage_path`.
+* **Usage:** Call this in the `Locked` state to populate a login screen.
 
-Erstellt einen brandneuen Gutschein, fügt ihn zum Wallet hinzu und speichert den Zustand. Verifiziert zuerst die Standard-Definition, bevor der Gutschein erstellt wird.
-*Status-Verhalten:* Wenn der Standard zusätzliche Signaturen erfordert (z.B. Bürgen), wird der Gutschein mit `VoucherStatus::Incomplete` erstellt. Sind alle Anforderungen erfüllt, wird er `Active`.
-*Hinweis: Diese Operation erwirbt eine exklusive Dateisperre.*
-**`pub fn create_transfer_bundle(&mut self, request: MultiTransferRequest, standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: Option<&str>) -> Result<CreateBundleResult, String>`**
+#### `pub fn create_profile(...) -> Result<(), String>`
+* **Description:** Creates a new user profile, encrypts the wallet, and logs in.
+* **State:** Transitions from `Locked` -> `Unlocked`.
 
-Erstellt ein verschlüsseltes `SecureContainer`-Bundle für einen Transfer an einen Empfänger. Dies ist der Kernprozess zum Senden von Werten. Die Funktion akzeptiert eine `MultiTransferRequest`, die es ermöglicht, Guthaben von einem oder mehreren Quell-Gutscheinen in einer einzigen Transaktion zu bündeln.
+#### `pub fn login(...) -> Result<(), String>`
+* **Description:** Unlocks an existing wallet using its `folder_name` and `password`.
+* **State:** Transitions from `Locked` -> `Unlocked`.
 
-Die `MultiTransferRequest`-Struktur enthält:
-* `recipient_id: String`: Die User-ID des Empfängers.
-* `sources: Vec<SourceTransfer>`: Eine Liste von Quell-Gutscheinen, die für die Zahlung verwendet werden sollen. Jede `SourceTransfer` definiert `local_instance_id` und `amount_to_send`.
-* `notes: Option<String>`: Optionale Notizen für den Empfänger.
-* `sender_profile_name: Option<String>`: Optionaler Anzeigename des Senders.
+#### `pub fn recover_wallet_and_set_new_password(...) -> Result<(), String>`
+* **Description:** Recovers an existing wallet using its mnemonic phrase and sets a new password.
+* **State:** Transitions from `Locked` -> `Unlocked`.
 
-Das Ergebnis (`CreateBundleResult`) ist eine Struktur, die die serialisierten Daten (`bundle_bytes: Vec<u8>`) für den Versand sowie detaillierte Informationen über die Transaktion (z.B. `involved_sources_details`) enthält.
-Die Wallet wird automatisch gespeichert.
-*Hinweis: Diese Operation erwirbt eine exklusive Dateisperre.*
-
-**`pub fn receive_bundle(&mut self, bundle_data: &[u8], standard_definitions_toml: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: Option<&str>) -> Result<ProcessBundleResult, String>`**
-
-Verarbeitet ein empfangenes Bundle. Die Funktion validiert die Transaktion, fügt die Gutscheine zum eigenen Wallet hinzu und gibt ein `ProcessBundleResult` zurück, das über den Erfolg und die Details der Transaktion informiert. Die Wallet wird automatisch gespeichert. Der Caller muss die benötigten Standard-Definitionen als TOML-Strings bereitstellen.
+#### `pub fn logout(&mut self)`
+* **Description:** Locks the wallet and clears all sensitive data (like private keys and session keys) from memory.
+* **State:** Transitions from `Unlocked` -> `Locked`.
 
 ---
 
-### 3.1 Wichtige Rückgabe-Strukturen
+### 2. Session Management (Optional Auth)
 
-**`pub struct ProcessBundleResult`**
-Dies ist die Rückgabestruktur von `receive_bundle` und enthält eine Zusammenfassung der Transaktion.
+These methods control the "Remember Password" feature (Mode B).
 
-* `header: TransactionBundleHeader`: Metadaten des Bundles (Absender, Empfänger, Notizen, etc.).
-* `check_result: DoubleSpendCheckResult`: Ergebnis der Double-Spend-Prüfung.
-* `transfer_summary: TransferSummary`: Detaillierte Aufschlüsselung der empfangenen Werte.
-* `involved_vouchers: Vec<String>`: Liste der lokalen IDs der Gutscheine, die im Wallet neu erstellt/aktualisiert wurden.
+#### `pub fn unlock_session(&mut self, password: &str, duration_seconds: u64) -> Result<(), String>`
+* **Description:** Verifies the password and caches a derived encryption key in memory for `duration_seconds`.
+* **Usage:** After calling this, write-operations can be called with `password: None`.
 
-**`pub struct TransferSummary`**
-Fasst die Ergebnisse eines Transfers pro Währungseinheit zusammen.
+#### `pub fn lock_session(&mut self)`
+* **Description:** Immediately clears the cached session key from memory, forcing Mode A for the next operation.
 
-* `summable_amounts: HashMap<String, String>`:
-  * Aufsummierte Beträge für teilbare/summierbare Gutscheine (z.B. "10.50 Minuto").
-  * Key: Währungseinheit (z.B. "Minuto"), Value: Summe als String.
-* `countable_items: HashMap<String, u32>`:
-  * Gezählte Einheiten für nicht-teilbare/nicht-summierbare Gutscheine (z.B. "3 Brote").
-  * Key: Währungseinheit (z.B. "Brot"), Value: Anzahl.
+#### `pub fn refresh_session_activity(&mut self)`
+* **Description:** Resets the inactivity timer of the "Remember Password" session.
+* **Usage:** Call this on UI activity (clicks, mouse movements) to keep the session alive while the user is active.
 
 ---
 
-**`pub fn create_signing_request_bundle(&self, local_instance_id: &str, recipient_id: &str) -> Result<Vec<u8>, String>`**
+### 3. Core Wallet Operations (Commands)
 
-Erstellt ein Bundle, um eine Signaturanfrage für einen Gutschein an einen Bürgen zu senden. Diese Operation verändert den Wallet-Zustand nicht.
+These methods modify the wallet state and require authentication.
 
-**`pub fn open_voucher_signing_request(container_bytes: &[u8]) -> Result<Voucher, String>`**
+#### `pub fn create_new_voucher(standard_toml_content: &str, lang_preference: &str, data: NewVoucherData, password: Option<&str>) -> Result<Voucher, String>`
+* **Description:** Creates a new voucher (e.g., "Minuto") based on a standard definition.
+* **Status Behavior:** If the standard requires additional signatures (e.g., guarantors, notaries) that are not yet present, the voucher is created with `VoucherStatus::Incomplete`. If all required signatures are present (rare during initial creation), it becomes `VoucherStatus::Active`.
+* **Auth:** Requires `password: Option<&str>`.
 
-(Vom Bürgen aufgerufen). Öffnet ein empfangenes Signaturanfrage-Bundle und gibt den Gutschein-Teil zurück, damit der Benutzer vor dem Signieren eine Vorschau des Gutscheins sehen kann.
+#### `pub fn create_transfer_bundle(...) -> Result<CreateBundleResult, String>`
+* **Description:** The primary function for **sending** value. It bundles one or more voucher `sources` into an encrypted `SecureContainer` (returned as `bundle_bytes: Vec<u8>`) for the recipient.
+* **Auth:** Requires `password: Option<&str>`.
 
-**`pub fn create_detached_signature_response_bundle(&self, voucher_to_sign: &Voucher, role: &str, include_details: bool, original_sender_id: &str, password: Option<&str>) -> Result<Vec<u8>, String>`**
-
-Erstellt eine losgelöste Signatur als Antwort auf eine Signaturanfrage. 
-*Wichtig:* Speichert den signierten Gutschein zusätzlich im Wallet des Signierers mit dem Status `Endorsed` als rechtlichen Beleg der Verpflichtung. Daher ist nun ein Passwort (oder eine Session) erforderlich.
-
-**`pub fn process_and_attach_signature(&mut self, container_bytes: &[u8], standard_toml_content: &str, password: Option<&str>) -> Result<(), String>`**
-
-Verarbeitet eine empfangene losgelöste Signatur, fügt sie dem lokalen Gutschein hinzu und speichert den Wallet-Zustand. Wechselt automatisch von `Incomplete` zu `Active`, wenn alle Bedingungen des Standards erfüllt sind.
-
-**`pub fn import_resolution_endorsement(&mut self, endorsement: ResolutionEndorsement, password: Option<&str>) -> Result<(), String>`**
-
-Importiert eine Beilegungserklärung für einen Double-Spend-Konflikt, fügt sie dem entsprechenden Beweis im Wallet hinzu und speichert den Zustand.
-
-**`pub fn save_encrypted_data(&mut self, name: &str, data: &[u8], password: Option<&str>) -> Result<(), String>`**
-
-Speichert einen beliebigen Byte-Slice verschlüsselt auf der Festplatte. Diese Methode nutzt den gleichen sicheren Verschlüsselungsmechanismus wie das Wallet selbst. Ideal, um anwendungsspezifische Daten (z.B. Konfigurationen, Kontakte) sicher abzulegen.
-
-**`pub fn load_encrypted_data(&mut self, name: &str, password: Option<&str>) -> Result<Vec<u8>, String>`**
-
-Lädt und entschlüsselt einen zuvor gespeicherten Datenblock. Wird nun ebenfalls über den `AppService` (mutable) aufgerufen.
-
-#### Hilfsfunktionen (Statische Methoden)
-Diese Funktionen sind Teil des `AppService`, benötigen aber keinen initialisierten Zustand (weder `Locked` noch `Unlocked`) und können jederzeit aufgerufen werden.
-
-**`pub fn generate_mnemonic(word_count: u32) -> Result<String, String>`**
-
-Erzeugt eine neue, kryptografisch sichere BIP-39 Mnemonic-Phrase (Seed-Wörter). Ideal, um einem neuen Benutzer bei der Profilerstellung eine Phrase vorzuschlagen. `word_count` ist typischerweise 12 oder 24.
-
-**`pub fn validate_mnemonic(mnemonic: &str) -> Result<(), String>`**
-
-Überprüft eine gegebene Mnemonic-Phrase auf ihre Gültigkeit (korrekte Wörter, gültige Prüfsumme). Dies ist nützlich, um dem Benutzer bei der Eingabe zur Wiederherstellung eines Wallets sofortiges Feedback zu geben, bevor der eigentliche Login-Versuch unternommen wird.
-
-
-#### Konflikt-Management
-Diese Funktionen dienen der Verwaltung von Double-Spend-Konflikten.
-
-**`pub fn list_conflicts(&self) -> Result<Vec<ProofOfDoubleSpendSummary>, String>`**
-
-Gibt eine Liste von Zusammenfassungen aller bekannten Double-Spend-Konflikte im Wallet zurück.
-
-**`pub fn get_proof_of_double_spend(&self, proof_id: &str) -> Result<ProofOfDoubleSpend, String>`**
-
-Ruft einen vollständigen `ProofOfDoubleSpend` (den Beweis für einen Double-Spend-Versuch) anhand seiner ID ab. Ideal, um Details anzuzeigen oder den Beweis zu exportieren.
-
-**`pub fn create_resolution_endorsement(&self, proof_id: &str, notes: Option<String>) -> Result<ResolutionEndorsement, String>`**
-
-Erstellt eine signierte Beilegungserklärung für einen Konflikt. Dies ist eine vom Wallet-Inhaber (dem Opfer) signierte Nachricht, die bestätigt, dass der Konflikt aus seiner Sicht gelöst wurde. Diese Operation verändert den Wallet-Zustand nicht.
-
-**`pub fn run_storage_cleanup(&mut self) -> Result<CleanupReport, VoucherCoreError>`**
-
-Führt eine manuelle Bereinigung des Speichers für Transaktions-Fingerprints durch. Dies löscht abgelaufene und, falls nötig, die ältesten Fingerprints, um das Speicherlimit einzuhalten.
+#### `pub fn receive_bundle(...) -> Result<ProcessBundleResult, String>`
+* **Description:** The primary function for **receiving** value. It processes a `bundle_data` blob. It validates the transaction, checks for double-spending, and adds the new value to the wallet.
+* **Auth:** Requires `password: Option<&str>`.
 
 ---
 
-#### Abfragen (Queries)
-Diese Funktionen dienen dem reinen Lesezugriff auf das entsperrte Wallet und sind ideal, um die Benutzeroberfläche mit Daten zu befüllen. Sie benötigen keine Passwörter, da sie den Zustand des Wallets nicht verändern.
+### 4. Signature Workflows
 
-**`pub fn get_user_id(&self) -> Result<String, String>`**
+Methods for handling multi-role signatures (e.g., guarantors, notaries).
 
-Gibt die eindeutige ID des aktuellen Benutzers zurück (z.B. `did:key:z...`).
+#### `pub fn create_signing_request_bundle(local_instance_id: &str, config: ContainerConfig) -> Result<Vec<u8>, String>`
+* **Description:** Creates an encrypted bundle to send a voucher to another user (e.g., a guarantor) requesting their signature.
+* **Parameters:**
+    * `local_instance_id`: The local ID of the voucher to be signed.
+    * `config`: The encryption configuration. Use `ContainerConfig::TargetDid(did)` for a specific recipient, `TargetDids(vec)` for multiple, `Password(pass)` for symmetric encryption, or `Cleartext` for unencrypted transmission.
+* **Auth:** Read-only (if wallet is unlocked), no password needed.
 
-`pub fn get_voucher_summaries(
-    &self,
-    voucher_standard_uuid_filter: Option<&[String]>,
-    status_filter: Option<&[VoucherStatus]>,
-) -> Result<Vec<VoucherSummary>, String>`
+#### `pub fn open_voucher_signing_request(container_bytes: &[u8], password: Option<&str>) -> Result<Voucher, String>`
+* **Description:** (Called by the signer). Opens a received signature request bundle and returns the voucher part so the user can preview what they are signing.
+* **Parameters:**
+    * `container_bytes`: The received encrypted bundle.
+    * `password`: Optional password if the container was symmetrically encrypted.
+* **Auth:** Read-only, no password needed.
 
-Die Funktion akzeptiert die folgenden optionalen Filter:
+#### `pub fn create_detached_signature_response_bundle(voucher_to_sign: &Voucher, role: &str, include_details: bool, config: ContainerConfig, password: Option<&str>) -> Result<Vec<u8>, String>`
+* **Description:** (Called by the signer). Creates an encrypted response bundle containing only the detached signature. Additionally, stores the endorsed voucher in the signer's wallet with status `Endorsed` as a legal record.
+* **Parameters:**
+    * `voucher_to_sign`: The voucher object received in the signing request.
+    * `role`: The semantic role of the signer (e.g., `"guarantor"`, `"notary"`).
+    * `include_details`: If `true`, the signer's public profile is embedded.
+    * `config`: Encryption configuration for the response (usually returning to the requester).
+    * `password`: The password for authentication (Wallet Password).
+* **Auth:** Requires `password: Option<&str>`.
 
-* `voucher_standard_uuid_filter`: Ein optionaler Slice (`&[String]`) von UUIDs. Wenn vorhanden, werden nur Gutscheine zurückgegeben, deren Standard-UUID in diesem Slice enthalten ist. Wenn `None` oder ein leerer Slice übergeben wird, werden alle Gutscheine, unabhängig vom Standard, berücksichtigt.
-
-* `status_filter`: Ein optionaler Slice (`&[VoucherStatus]`) von Status-Enums. Wenn vorhanden, werden nur Gutscheine mit einem dieser Status-Werte zurückgegeben. Wenn `None` oder ein leerer Slice übergeben wird, werden alle Gutschein-Status berücksichtigt.
-
-Die Funktion ist ideal, um eine Übersicht aller Guthaben in einer UI anzuzeigen und diese nach bestimmten Kriterien zu filtern.
+#### `pub fn process_and_attach_signature(container_bytes: &[u8], standard_toml_content: &str, container_password: Option<&str>, wallet_password: Option<&str>) -> Result<(), String>`
+* **Description:** Receives a signature response bundle, validates it, and attaches it locally.
+* **Parameters:**
+    * `container_bytes`: The received encrypted signature bundle.
+    * `standard_toml_content`: The voucher's standard definition (TOML).
+    * `container_password`: Optional password to decrypt the response bundle.
+    * `wallet_password`: Optional password to unlock the local wallet for saving.
+* **Status Behavior:** If this signature fulfills the last missing requirement, status transitions to `Active`.
+* **Auth:** Requires `wallet_password: Option<&str>`.
 
 ---
 
-Die zurückgegebene `VoucherSummary`-Struktur enthält die folgenden Felder:
+### 5. Data Queries (Read-Only)
 
-* `local_instance_id`: Die eindeutige, lokale ID der Gutschein-Instanz im Wallet.
-* `status`: Der aktuelle Status des Gutscheins (`Active`, `Archived`, `Quarantined`, `Incomplete`, `Endorsed`, etc.).
-* `valid_until`: Das Gültigkeitsdatum des Gutscheins im ISO 8601-Format.
-* `creator_id`: Die eindeutige ID des ursprünglichen Erstellers (oft ein Public Key).
-* `description`: Eine menschenlesbare Beschreibung des Gutscheins.
-* `current_amount`: Der aktuelle verfügbare Betrag des Gutscheins als String.
-* `unit`: Die Abkürzung der Währungseinheit (z.B. "m" für Minuten).
-* `voucher_standard_name`: Der Name des Gutschein-Standards (z.B. "Minuto-Gutschein").
-* `voucher_standard_uuid`: Die eindeutige Kennung (UUID) des Standards.
-* `transaction_count`: Die Anzahl der Transaktionen, exklusive der initialen `init`-Transaktion.
-* `guarantor_signatures_count`: Die Anzahl der vorhandenen Bürgen-Signaturen.
-* `additional_signatures_count`: Die Anzahl der vorhandenen zusätzlichen, optionalen Signaturen.
-* `has_collateral`: Ein boolesches Flag, das anzeigt, ob der Gutschein besichert ist.
-* `creator_first_name`: Der Vorname des ursprünglichen Erstellers.
-* `creator_last_name`: Der Nachname des ursprünglichen Erstellers.
-* `creator_coordinates`: Die geografischen Koordinaten des Erstellers.
+These methods read data from the `Unlocked` wallet and do not require authentication.
 
+#### `pub fn get_user_id(&self) -> Result<String, String>`
+* **Description:** Returns the unique user ID (e.g., `did:key:...`) of the unlocked profile.
 
-**`pub fn get_total_balance_by_currency(&self) -> Result<Vec<AggregatedBalance>, String>`**
+#### `pub fn get_voucher_summaries(...) -> Result<Vec<VoucherSummary>, String>`
+* **Description:** Returns a list of all vouchers in the wallet, with optional filters for status or standard UUID.
+* **Usage:** Ideal for displaying the main wallet dashboard or voucher list.
 
-Gibt einen Vektor von `AggregatedBalance`-Strukturen zurück, die das aggregierte Gesamtguthaben für jede Währung (z.B. "Minuto", "EUR") enthalten. Perfekt für eine Dashboard-Anzeige.
+#### `pub fn get_total_balance_by_currency(&self) -> Result<Vec<AggregatedBalance>, String>`
+* **Description:** Returns the sum of all `Active` vouchers, grouped by currency (e.g., "Minuto", "EUR").
 
-Die `AggregatedBalance`-Struktur enthält:
-* `standard_name: String`: Der Name des Gutschein-Standards (z.B. "Minuto-Gutschein").
-* `standard_uuid: String`: Die eindeutige UUID des Gutschein-Standards.
-* `unit: String`: Die Währungseinheit (z.B. `Minuten`, `EUR`).
-* `total_amount: String`: Der aufsummierte Gesamtbetrag als kanonischer String.
+#### `pub fn get_voucher_details(&self, local_id: &str) -> Result<VoucherDetails, String>`
+* **Description:** Gets all details for a single voucher, including its full transaction history.
 
+#### `pub fn get_allowed_signature_roles_from_standard(toml: &str) -> Result<Vec<String>, String>`
+* **Description:** Helper to extract allowed roles (like `"guarantor"`) from a standard definition.
 
+---
 
+### 6. Conflict Management
 
-**`pub fn get_voucher_details(&self, local_id: &str) -> Result<VoucherDetails, String>`**
+Methods for handling double-spend conflicts.
 
-Ruft detaillierte Informationen zu einem einzelnen Gutschein ab, inklusive seiner Transaktionshistorie. `VoucherDetails` ist eine umfassende Struktur für eine Detailansicht.
+#### `pub fn list_conflicts(&self) -> Result<Vec<ProofOfDoubleSpendSummary>, String>`
+* **Description:** Lists summaries of all known double-spend conflicts in the wallet.
+* **Auth:** Read-only, no password needed.
 
-**`pub fn get_allowed_signature_roles_from_standard(toml: &str) -> Result<Vec<String>, String>`**
+#### `pub fn get_proof_of_double_spend(&self, proof_id: &str) -> Result<ProofOfDoubleSpend, String>`
+* **Description:** Retrieves the full details of a specific double-spend proof by its ID.
+* **Auth:** Read-only, no password needed.
 
-Hilfsfunktion zum Extrahieren der erlaubten Rollen (z. B. `"guarantor"`) aus einer Standard-Definition.
+#### `pub fn create_resolution_endorsement(...) -> Result<ResolutionEndorsement, String>`
+* **Description:** Creates a signed resolution endorsement for a conflict, indicating that the conflict is resolved from the wallet owner's perspective.
+* **Auth:** Read-only, no password needed.
 
+#### `pub fn import_resolution_endorsement(...) -> Result<(), String>`
+* **Description:** Imports a `ResolutionEndorsement` from another party (e.g., the victim) to mark a local conflict proof as resolved.
+* **Auth:** Requires `password: Option<&str>`.
 
-## Gutschein-Struktur (Voucher)
+---
 
-Ein Gutschein ist ein JSON-Objekt mit folgenden Hauptfeldern:
+### 7. Encrypted Data Storage
 
-- **`voucher_standard`**: Name, UUID, Hash der Definition.
-- **`voucher_id`**: Eindeutige ID (Hash der Stammdaten).
-- **`voucher_nonce`**: Zufälliger Nonce für Anonymität.
-- **`creation_date`**: Erstellungsdatum (ISO 8601).
-- **`valid_until`**: Gültigkeitsdatum (ISO 8601).
-- **`nominal_value`**: Wert mit `unit`, `amount`, `abbreviation`, `description`.
-- **`collateral`** (optional): Besicherung mit `unit`, `amount`, `type`, `redeem_condition`.
-- **`creator_profile`**: Öffentliches Profil des Erstellers.
-- **`signatures`**: Array von Signaturen (inkl. Bürgen) mit `signature_id`, `signer_id`, `signature`, `role`, `details`.
-- **`transactions`**: Verkettete Liste von Transaktionen mit `t_id`, `prev_hash`, `t_type`, `sender_id`, `recipient_id`, `amount`, `sender_remaining_amount`, `sender_signature`.
+Securely save and load arbitrary application data (like contact lists or settings) using the wallet's encryption.
 
-## Fehlerbehandlung
+#### `pub fn save_encrypted_data(...) -> Result<(), String>`
+* **Description:** Encrypts and saves a byte slice under a specific name.
+* **Auth:** Requires `password: Option<&str>`.
 
-Alle Funktionen geben `Result<T, String>` zurück. Häufige Fehler: Wallet gesperrt (`WalletLocked`), ungültige Eingaben, Speicherfehler.
+#### `pub fn load_encrypted_data(...) -> Result<Vec<u8>, String>`
+* **Description:** Loads and decrypts a previously saved byte slice.
+* **Auth:** Requires `password: Option<&str>`.
 
-**Locking-Fehler:** Wenn eine schreibende Operation fehlschlägt, weil ein anderer Prozess das Wallet verwendet, wird ein Fehler zurückgegeben (z.B. "Wallet-Sperre fehlgeschlagen: Wallet wird bereits von einem anderen Prozess (PID: 1234) verwendet."). Client-Anwendungen sollten diesen Fehler dem Benutzer anzeigen.
+---
 
-## Beispiel-Nutzung
+### 8. Static Utility Functions
 
-```rust
-use human_money_core::app_service::AppService;
+These helper functions can be called at any time, even when the service is `Locked`.
 
-let mut app = AppService::new(Path::new("/tmp/wallets")).unwrap();
-app.create_profile("Mein Profil", &mnemonic, None, Some("user"), "pass").unwrap();
+#### `pub fn generate_mnemonic(word_count: u32) -> Result<String, String>`
+* **Description:** Generates a new, cryptographically secure BIP-39 mnemonic phrase.
+* **Usage:** Used during new profile creation.
+
+#### `pub fn validate_mnemonic(mnemonic: &str) -> Result<(), String>`
+* **Description:** Validates a given mnemonic phrase for correctness.
+* **Usage:** Used for input validation in recovery or creation forms.

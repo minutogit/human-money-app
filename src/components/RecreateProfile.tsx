@@ -73,12 +73,22 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     useEffect(() => {
         if (inputMode !== 'phrase') return;
         const prevPhrase = prevRawPhraseRef.current;
-        const needsCleaning = /[0-9]+\.|\n|\r/.test(rawPhrase);
+        
+        // --- PRO-MODE CLEANING (Same as CreateNewProfile) ---
+        const cleanSeedText = (text: string) => {
+            return text
+                .toLowerCase()
+                .replace(/[0-9\.\,\-\:]/g, ' ') // Remove digits and punctuation
+                .replace(/[\r\n\t]/g, ' ')      // Replace tabs and newlines with space
+                .replace(/\s+/g, ' ')          // Collapse multiple spaces
+                .trim();
+        };
 
-        if (needsCleaning) {
-            const singleLine = rawPhrase.replace(/(\r\n|\n|\r)/gm, " ");
-            const cleaned = singleLine.replace(/[0-9]+\./g, '').trim().replace(/\s+/g, ' ');
-            if (cleaned !== rawPhrase) {
+        const cleaned = cleanSeedText(rawPhrase);
+        if (cleaned !== rawPhrase && rawPhrase.length > 0) {
+            // Check if we should auto-apply cleaning. 
+            // For recreate, we apply it if there are numbers or multiple spaces.
+            if (/[0-9\.\,\-\:]/.test(rawPhrase) || /\s\s/.test(rawPhrase)) {
                 setRawPhrase(cleaned);
                 return;
             }
@@ -282,10 +292,11 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                             id="phrase-input"
                                             value={rawPhrase}
                                             onChange={(e) => { setRawPhrase(e.target.value); }}
-                                            placeholder="Enter your 12 or 24 word seed phrase here..."
-                                            rows={4}
-                                            className="font-mono"
+                                            placeholder="Paste full seed phrase here... Numbers and punctuation are cleaned automatically."
+                                            rows={6}
+                                            className="font-mono text-sm"
                                         />
+                                        <p className="text-[10px] text-theme-light mt-1">Automatic cleaning handles numbers (e.g. 1. 2.), dots, newlines and extra spaces.</p>
                                     </div>
                                 )}
                             </div>

@@ -1,6 +1,7 @@
 // src/App.tsx
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { error } from "@tauri-apps/plugin-log";
 import { logger } from "./utils/log";
@@ -16,6 +17,7 @@ import { VoucherDetailsView } from './components/VoucherDetailsView';
 import { ReceiveView } from './components/ReceiveView';
 import { ReceiveSuccessView } from './components/ReceiveSuccessView';
 import { Dashboard } from './components/Dashboard';
+import { SignRequestView } from './components/SignRequestView';
 import { WalletRecovery } from './components/WalletRecovery';
 import { RecreateProfile } from './components/RecreateProfile';
 import { ProfileInfo, ReceiveSuccessPayload } from './types';
@@ -36,14 +38,21 @@ type AppState =
     | { view: "receive_bundle" }
     | { view: "transaction_history" }
     | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string }
-    | { view: "receive_success"; payload: ReceiveSuccessPayload };
+    | { view: "receive_success"; payload: ReceiveSuccessPayload & { voucherData?: any } }
+    | { view: "sign_request"; voucherData: any };
 
 function AppContent() {
     const [appState, setAppState] = useState<AppState>({ view: "loading" });
     const [profileName, setProfileName] = useState<string>("");
     const [isSidebarOpen, setSidebarOpen] = useState(false);
+    const [appVersion, setAppVersion] = useState<string>("");
+    
     // Zugriff auf SessionContext
     const { notifyLogin } = useSession();
+
+    useEffect(() => {
+        getVersion().then(setAppVersion);
+    }, []);
 
     useEffect(() => {
         // Log that the frontend application is starting
@@ -149,7 +158,12 @@ function AppContent() {
                 return <ReceiveView
                     onBack={() => setAppState({ view: "logged_in" })}
                     onReceiveSuccess={(payload) => {
-                        setAppState({ view: "receive_success", payload })
+                        // Check if this is a signature request (contains voucherData)
+                        if ((payload as any).voucherData) {
+                            setAppState({ view: "sign_request", voucherData: (payload as any).voucherData });
+                        } else {
+                            setAppState({ view: "receive_success", payload });
+                        }
                     }}
                 />;
             case "transaction_history":
@@ -163,6 +177,11 @@ function AppContent() {
                 />;
             case "receive_success":
                 return <ReceiveSuccessView payload={appState.payload} onDone={() => setAppState({ view: "logged_in" })} />;
+            case "sign_request":
+                return <SignRequestView
+                    voucherData={appState.voucherData}
+                    onBack={() => setAppState({ view: "logged_in" })}
+                />;
             default:
                 return (
                     <div className="flex h-full w-full items-center justify-center">
@@ -185,12 +204,12 @@ function AppContent() {
                             <div className="flex h-full flex-col bg-white dark:bg-gray-800 p-4 shadow-lg">
                                 <div className="mb-8 text-center">
                                     <h1 className="text-xl font-bold text-theme-primary">Human Money App</h1>
-                                    <p className="text-sm text-theme-light">Prototype v0.1</p>
+                                    <p className="text-sm text-theme-light">V{appVersion}</p>
                                 </div>
                                 <nav className="flex flex-grow flex-col space-y-2 text-left">
                                     <button onClick={() => setAppState({ view: "logged_in" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Dashboard</button>
                                     <button onClick={() => setAppState({ view: "send_vouchers" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Send</button>
-                                    <button onClick={() => setAppState({ view: "receive_bundle" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Receive</button>
+                                    <button onClick={() => setAppState({ view: "receive_bundle" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Receive / Process</button>
                                     <a href="#" onClick={() => setAppState({ view: 'settings' })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Settings</a>
                                 </nav>
                                 <div className="mt-auto border-t border-theme-subtle pt-4">

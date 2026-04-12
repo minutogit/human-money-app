@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0-alpha.0"
+version: "0.1.0-alpha.1"
 phase: "alpha"
 health: "yellow"
-last_updated: "2026-04-05"
+last_updated: "2026-04-12"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -43,6 +43,12 @@ priority_tasks:
     priority: "high"
     depends_on: []
     description: "Add frontend (Vitest/RTL) and backend (Rust) tests for existing features to ensure stability during future changes"
+  - id: "APP-007"
+    title: "Multi-Signature Workflows"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Implement GUI for requesting, creating, and attaching additional signatures. Supports flexible encryption (DID, Password, or Cleartext) for .humocoreq/sig bundles."
 ---
 
 # Human Money App — Status

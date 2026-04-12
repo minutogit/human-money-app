@@ -2,8 +2,10 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
+import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { AggregatedBalance, VoucherSummary, VoucherStatus } from "../types";
 
 interface DashboardProps {
@@ -21,6 +23,16 @@ export function Dashboard(props: DashboardProps) {
     const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [copied, setCopied] = useState(false);
+
+    // Export state for Dashboard
+    const [showExportModal, setShowExportModal] = useState(false);
+    const [exportId, setExportId] = useState("");
+    const [recipientId, setRecipientId] = useState("");
+    const [encryptToDid, setEncryptToDid] = useState(true);
+    const [protectWithPassword, setProtectWithPassword] = useState(false);
+    const [exportPassword, setExportPassword] = useState("");
+    const [isExporting, setIsExporting] = useState(false);
+    const [exportError, setExportError] = useState("");
 
     useEffect(() => {
         logger.info("Dashboard component displayed");
@@ -107,6 +119,59 @@ export function Dashboard(props: DashboardProps) {
 
     const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Lade...";
 
+    async function handleExportSigningRequest() {
+        if (!exportId) return;
+        setIsExporting(true);
+        setExportError("");
+        try {
+            let config;
+            if (encryptToDid) {
+                if (!recipientId.trim()) {
+                    setExportError("Please enter a recipient DID.");
+                    setIsExporting(false);
+                    return;
+                }
+                config = { type: "TargetDid", value: recipientId.trim() };
+            } else if (protectWithPassword) {
+                if (!exportPassword) {
+                    setExportError("Please enter a password.");
+                    setIsExporting(false);
+                    return;
+                }
+                config = { type: "Password", value: exportPassword };
+            } else {
+                config = { type: "Cleartext" };
+            }
+
+            logger.info(`Creating signing request bundle for voucher ${exportId} from Dashboard with config: ${JSON.stringify(config)}`);
+            const bundleBytes = await invoke<number[]>("create_signing_request_bundle", {
+                localInstanceId: exportId,
+                config: config
+            });
+
+            const filePath = await save({
+                defaultPath: `signature-request-${exportId.slice(0, 8)}.humocoreq`,
+                filters: [{ name: 'Signature Request', extensions: ['humocoreq'] }]
+            });
+
+            if (filePath) {
+                const uint8Array = new Uint8Array(bundleBytes);
+                const { writeFile } = await import("@tauri-apps/plugin-fs");
+                await writeFile(filePath, uint8Array);
+                logger.info(`Signing request bundle saved to ${filePath}`);
+                setShowExportModal(false);
+                setRecipientId("");
+                setExportPassword("");
+            }
+        } catch (e) {
+            const msg = `Failed to export signing request: ${e}`;
+            logger.error(msg);
+            setExportError(msg);
+        } finally {
+            setIsExporting(false);
+        }
+    }
+
     return (
         <div className="flex flex-col h-full">
             {/* Fixierte Kopfleiste */}
@@ -167,7 +232,7 @@ export function Dashboard(props: DashboardProps) {
                     {/* Hauptaktionen */}
                     <section className="grid grid-cols-2 md:grid-cols-4 justify-center gap-4 mb-8">
                         <Button onClick={props.onNavigateToSend} className="flex-1">Send</Button>
-                        <Button onClick={props.onNavigateToReceive} className="flex-1">Receive</Button>
+                        <Button onClick={props.onNavigateToReceive} className="flex-1">Receive / Process</Button>
                         <Button onClick={props.onNavigateToHistory} variant="secondary" className="flex-1">History</Button>
                         <Button onClick={props.onNavigateToCreateVoucher} className="flex-1">Create Voucher</Button>
                     </section>
@@ -212,8 +277,7 @@ export function Dashboard(props: DashboardProps) {
                                                     <p>Valid until: <span className="font-semibold">{formatDate(v.valid_until)}</span></p>
                                                     <div className="flex items-center space-x-3 text-sm">
                                                         {v.has_collateral && <span title="Has Collateral">🛡️</span>}
-                                                        <span title="Guarantor Signatures">✍️ {v.guarantor_signatures_count}</span>
-                                                        <span title="Additional Signatures">➕ {v.additional_signatures_count}</span>
+                                                        <span title="Signatures">✍️ {v.guarantor_signatures_count + v.additional_signatures_count}</span>
                                                     </div>
                                                     <div className="flex items-center gap-2">
                                                         <span className={`px-2 py-1 text-xs font-bold rounded-full capitalize ${status.color}`} title={status.tooltip}>
@@ -224,6 +288,27 @@ export function Dashboard(props: DashboardProps) {
                                                         )}
                                                     </div>
                                                 </div>
+
+                                                {/* Help text and action for incomplete vouchers */}
+                                                {status.name === 'incomplete' && (
+                                                    <div className="mt-3 p-3 bg-yellow-50 rounded-md border border-yellow-100 flex flex-col sm:flex-row items-center justify-between gap-3 animate-in fade-in zoom-in duration-300">
+                                                        <p className="text-sm text-yellow-800 leading-tight">
+                                                            <strong>Missing Signatures:</strong> This voucher needs more signatures to become active.
+                                                        </p>
+                                                        <Button 
+                                                            size="xs" 
+                                                            variant="primary" 
+                                                            className="bg-theme-accent text-white whitespace-nowrap shadow-sm text-xs py-1.5 px-3"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setExportId(v.local_instance_id);
+                                                                setShowExportModal(true);
+                                                            }}
+                                                        >
+                                                            ✍️ Request Signature
+                                                        </Button>
+                                                    </div>
+                                                )}
                                             </div>
                                         </button>
                                     </div>
@@ -237,6 +322,80 @@ export function Dashboard(props: DashboardProps) {
                     </section>
                 </div>
             </div>
+
+            <ConfirmationModal
+                isOpen={showExportModal}
+                title="Export Signature Request"
+                description={
+                    <div className="space-y-4">
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="checkbox"
+                                id="dashboard-encryptToDid"
+                                checked={encryptToDid}
+                                onChange={(e) => setEncryptToDid(e.target.checked)}
+                                className="h-4 w-4 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                            />
+                            <label htmlFor="dashboard-encryptToDid" className="text-sm font-medium text-theme-primary">
+                                Encrypt for a specific contact (DID required)
+                            </label>
+                        </div>
+
+                        {encryptToDid ? (
+                            <div>
+                                <p className="text-xs text-theme-light mb-1">Enter the signer's DID:</p>
+                                <input
+                                    type="text"
+                                    value={recipientId}
+                                    onChange={(e) => setRecipientId(e.target.value)}
+                                    placeholder="did:key:z..."
+                                    className="w-full px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
+                                    autoFocus
+                                />
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        id="dashboard-protectWithPassword"
+                                        checked={protectWithPassword}
+                                        onChange={(e) => setProtectWithPassword(e.target.checked)}
+                                        className="h-4 w-4 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                                    />
+                                    <label htmlFor="dashboard-protectWithPassword" className="text-sm font-medium text-theme-primary">
+                                        Protect with password (Optional)
+                                    </label>
+                                </div>
+
+                                {protectWithPassword && (
+                                    <div>
+                                        <p className="text-xs text-theme-light mb-1">Enter a password for encryption:</p>
+                                        <input
+                                            type="password"
+                                            value={exportPassword}
+                                            onChange={(e) => setExportPassword(e.target.value)}
+                                            placeholder="Password"
+                                            className="w-full px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {exportError && <p className="text-red-500 text-sm mt-2">{exportError}</p>}
+                    </div>
+                }
+                confirmText="Export"
+                onConfirm={handleExportSigningRequest}
+                onCancel={() => {
+                    setShowExportModal(false);
+                    setExportId("");
+                    setRecipientId("");
+                    setExportPassword("");
+                    setExportError("");
+                }}
+                isProcessing={isExporting}
+            />
         </div>
     );
 }
