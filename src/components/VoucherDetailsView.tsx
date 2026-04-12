@@ -3,9 +3,11 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../utils/log";
-import { VoucherDetails } from "../types";
 import { Button } from "./ui/Button";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
+import { useSession } from "../context/SessionContext";
+import { AppSettings, VoucherDetails } from "../types";
+import { updateLastUsedDirectory } from "../utils/settingsUtils";
 
 // Props for the component
 interface VoucherDetailsViewProps {
@@ -38,6 +40,8 @@ const InfoRow: React.FC<{ label: string; children: React.ReactNode; isMono?: boo
 
 export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProps) {
     const [details, setDetails] = useState<VoucherDetails | null>(null);
+    const [settings, setSettings] = useState<AppSettings | null>(null);
+    const { protectAction } = useSession();
     const [isLoading, setIsLoading] = useState(true);
     const [errorMsg, setErrorMsg] = useState("");
     const [showJson, setShowJson] = useState(false);
@@ -55,8 +59,12 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
             setIsLoading(true);
             setErrorMsg("");
             try {
-                const result = await invoke<VoucherDetails>("get_voucher_details", { localId: voucherId });
+                const [result, currentSettings] = await Promise.all([
+                    invoke<VoucherDetails>("get_voucher_details", { localId: voucherId }),
+                    invoke<AppSettings>('get_app_settings').catch(() => null)
+                ]);
                 setDetails(result);
+                setSettings(currentSettings);
             } catch (e) {
                 const msg = `Failed to fetch voucher details: ${e}`;
                 logger.error(msg);
@@ -369,8 +377,13 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
             });
 
             const filePath = await save({
-                defaultPath: `signature-request-${voucherId.slice(0, 8)}.humocoreq`,
-                filters: [{ name: 'Signature Request', extensions: ['humocoreq'] }]
+                defaultPath: settings?.last_used_directory 
+                    ? `${settings.last_used_directory}/signature-request-${voucherId.slice(0, 8)}.ask`
+                    : `signature-request-${voucherId.slice(0, 8)}.ask`,
+                filters: [
+                    { name: 'Signature Request (.ask)', extensions: ['ask'] },
+                    { name: 'All Files', extensions: ['*'] }
+                ]
             });
 
             if (filePath) {
@@ -378,6 +391,14 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                 const { writeFile } = await import("@tauri-apps/plugin-fs");
                 await writeFile(filePath, uint8Array);
                 logger.info(`Signing request bundle saved to ${filePath}`);
+                
+                // Save directory for next time
+                if (settings) {
+                    updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
+                        invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
+                    });
+                }
+
                 setShowExportModal(false);
                 setRecipientId("");
             }

@@ -212,4 +212,5 @@ export interface ReceiveSuccessPayload {
 export interface AppSettings {
     bundle_retention_days: number;
     session_timeout_seconds: number;
+    last_used_directory?: string;
 }

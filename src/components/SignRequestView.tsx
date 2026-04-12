@@ -3,7 +3,8 @@ import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { save } from '@tauri-apps/plugin-dialog';
 import { logger } from '../utils/log';
-import { VoucherDetails, VoucherStandardInfo } from '../types';
+import { VoucherDetails, VoucherStandardInfo, AppSettings } from '../types';
+import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
 import { useSession } from '../context/SessionContext';
 
@@ -19,12 +20,17 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
     const [includeDetails, setIncludeDetails] = useState(true);
     const [feedbackMsg, setFeedbackMsg] = useState('');
     const [isSigning, setIsSigning] = useState(false);
+    const [settings, setSettings] = useState<AppSettings | null>(null);
 
     useEffect(() => {
-        async function fetchStandardsAndRoles() {
+        async function fetchData() {
             try {
-                logger.info("SignRequestView opened, fetching standards and determining roles.");
-                const standards = await invoke<VoucherStandardInfo[]>("get_voucher_standards");
+                logger.info("SignRequestView opened, fetching standards and roles.");
+                const [standards, currentSettings] = await Promise.all([
+                    invoke<VoucherStandardInfo[]>("get_voucher_standards"),
+                    invoke<AppSettings>('get_app_settings').catch(() => null)
+                ]);
+                setSettings(currentSettings);
 
                 // Find the standard that matches the voucher's standard UUID
                 const matchingStandard = standards.find((s: VoucherStandardInfo) => {
@@ -42,12 +48,12 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     }
                 }
             } catch (e) {
-                const msg = `Failed to fetch voucher standards or roles: ${e}`;
+                const msg = `Failed to fetch voucher standards, roles or settings: ${e}`;
                 logger.error(msg);
                 setFeedbackMsg(`Error: ${msg}`);
             }
         }
-        fetchStandardsAndRoles();
+        fetchData();
     }, [voucherData.voucher_standard.uuid]);
 
     async function handleSign() {
@@ -73,8 +79,13 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
             if (!bundleBytes) return;
 
             const filePath = await save({
-                defaultPath: `signature-response-${voucherData.voucher_id.slice(0, 8)}.humocosig`,
-                filters: [{ name: 'Signature Response', extensions: ['humocosig'] }]
+                defaultPath: settings?.last_used_directory
+                    ? `${settings.last_used_directory}/signature-response-${voucherData.voucher_id.slice(0, 8)}.sig`
+                    : `signature-response-${voucherData.voucher_id.slice(0, 8)}.sig`,
+                filters: [
+                    { name: 'Signature Response (.sig)', extensions: ['sig'] },
+                    { name: 'All Files', extensions: ['*'] }
+                ]
             });
 
             if (filePath) {
@@ -82,6 +93,14 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 const { writeFile } = await import("@tauri-apps/plugin-fs");
                 await writeFile(filePath, uint8Array);
                 logger.info(`Signature response bundle saved to ${filePath}`);
+                
+                // Save directory for next time
+                if (settings) {
+                    updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
+                        invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
+                    });
+                }
+
                 setFeedbackMsg("Signature response saved successfully!");
                 setTimeout(() => onBack(), 2000);
             }

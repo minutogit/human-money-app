@@ -48,7 +48,13 @@ priority_tasks:
     status: "completed"
     priority: "high"
     depends_on: []
-    description: "Implement GUI for requesting, creating, and attaching additional signatures. Supports flexible encryption (DID, Password, or Cleartext) for .humocoreq/sig bundles."
+    description: "Implement GUI for requesting, creating, and attaching additional signatures. Supports flexible encryption (DID, Password, or Cleartext) for .ask/.sig bundles."
+  - id: "APP-008"
+    title: "Directory Memory for File Dialogs"
+    status: "completed"
+    priority: "medium"
+    depends_on: ["APP-007"]
+    description: "Remember the last used directory for all file open/save dialogs to improve workflow efficiency."
 ---
 
 # Human Money App — Status

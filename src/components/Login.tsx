@@ -104,7 +104,19 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     <div>
                         <label className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
                         <div className="max-w-md mx-auto">
-                            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" required />
+                            <Input 
+                                type="password" 
+                                value={password} 
+                                onChange={(e) => {
+                                    setPassword(e.target.value);
+                                    if (feedbackMsg.includes("Error")) setFeedbackMsg("");
+                                }} 
+                                onFocus={() => {
+                                    if (feedbackMsg.includes("Error")) setFeedbackMsg("");
+                                }}
+                                placeholder="Enter your password" 
+                                required 
+                            />
                         </div>
                     </div>
 

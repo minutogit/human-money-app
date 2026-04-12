@@ -5,6 +5,11 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
+import { AppSettings } from '../types';
+import { updateLastUsedDirectory } from '../utils/settingsUtils';
+import { useSession } from '../context/SessionContext';
+import { invoke } from '@tauri-apps/api/core';
+import { useEffect } from 'react';
 
 interface TransferSuccessViewProps {
     bundleData: number[];
@@ -14,8 +19,22 @@ interface TransferSuccessViewProps {
 }
 
 export function TransferSuccessView({ bundleData, recipientId, summary, onDone }: TransferSuccessViewProps) {
+    const { protectAction } = useSession();
     const [feedback, setFeedback] = useState('');
     const [isSaving, setIsSaving] = useState(false);
+    const [settings, setSettings] = useState<AppSettings | null>(null);
+
+    useEffect(() => {
+        async function fetchSettings() {
+            try {
+                const currentSettings = await invoke<AppSettings>('get_app_settings').catch(() => null);
+                setSettings(currentSettings);
+            } catch (e) {
+                console.error("Failed to load settings in TransferSuccessView:", e);
+            }
+        }
+        fetchSettings();
+    }, []);
 
     async function handleSaveFile() {
         setIsSaving(true);
@@ -35,7 +54,9 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
 
             const filePath = await save({
                 title: 'Save Transfer Bundle',
-                defaultPath: suggestedFilename,
+                defaultPath: settings?.last_used_directory 
+                    ? `${settings.last_used_directory}/${suggestedFilename}`
+                    : suggestedFilename,
                 filters: [{
                     name: 'Transfer Bundle',
                     extensions: ['transfer']
@@ -47,6 +68,14 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                 // CORRECTED: Use `writeFile`
                 await writeFile(filePath, content);
                 logger.info(`Successfully saved transfer bundle to ${filePath}`);
+                
+                // Save directory for next time
+                if (settings) {
+                    updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
+                        invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
+                    });
+                }
+
                 setFeedback(`File saved successfully to ${filePath}`);
             } else {
                 logger.info('File save dialog was cancelled by the user.');

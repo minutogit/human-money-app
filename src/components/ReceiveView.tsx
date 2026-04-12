@@ -4,10 +4,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../utils/log';
-import { VoucherStandardInfo, ReceiveSuccessPayload, VoucherDetails } from '../types';
 import { Button } from './ui/Button';
+import { ConfirmationModal } from './ui/ConfirmationModal';
+import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
-import { ConfirmationModal } from './ui/ConfirmationModal'; // <--- NEU
+import { AppSettings, VoucherStandardInfo, ReceiveSuccessPayload, VoucherDetails } from '../types';
 
 interface ReceiveViewProps {
     onBack: () => void;
@@ -22,22 +23,30 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     const [feedbackMsg, setFeedbackMsg] = useState('');
     const [showConfirm, setShowConfirm] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [fileType, setFileType] = useState<'transfer' | 'humocoreq' | 'humocosig' | null>(null);
+    const [fileType, setFileType] = useState<'transfer' | 'ask' | 'sig' | null>(null);
     const [bundlePassword, setBundlePassword] = useState("");
+    const [settings, setSettings] = useState<AppSettings | null>(null);
 
     useEffect(() => {
-        async function fetchStandards() {
+        async function fetchData() {
             try {
-                logger.info("ReceiveView opened, fetching standards.");
-                const standards = await invoke<VoucherStandardInfo[]>("get_voucher_standards");
+                logger.info("ReceiveView opened, fetching initial data.");
+                const [standards, currentSettings] = await Promise.all([
+                    invoke<VoucherStandardInfo[]>("get_voucher_standards"),
+                    invoke<AppSettings>('get_app_settings').catch(e => {
+                        logger.warn(`Failed to fetch app settings: ${e}`);
+                        return null;
+                    })
+                ]);
                 setVoucherStandards(standards);
+                setSettings(currentSettings);
             } catch (e) {
-                const msg = `Failed to fetch voucher standards: ${e}`;
+                const msg = `Failed to fetch initial data: ${e}`;
                 logger.error(msg);
                 setFeedbackMsg(`Error: ${msg}`);
             }
         }
-        fetchStandards();
+        fetchData();
     }, []);
 
     const handleFileSelect = async () => {
@@ -45,25 +54,37 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         try {
             const selectedPath = await open({
                 multiple: false,
+                defaultPath: settings?.last_used_directory,
                 filters: [
-                    { name: 'Transfer Bundle', extensions: ['transfer'] },
-                    { name: 'Signature Request', extensions: ['humocoreq'] },
-                    { name: 'Signature Response', extensions: ['humocosig'] }
+                    { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'humocoreq', 'humocosig'] },
+                    { name: 'Transfer Bundle (.transfer)', extensions: ['transfer'] },
+                    { name: 'Signature Request (.ask)', extensions: ['ask', 'humocoreq'] },
+                    { name: 'Signature Response (.sig)', extensions: ['sig', 'humocosig'] },
+                    { name: 'All Files', extensions: ['*'] }
                 ]
             });
 
             if (typeof selectedPath === 'string') {
                 logger.info(`File selected via dialog: ${selectedPath}`);
                 setBundlePath(selectedPath);
+                
+                // Save directory for next time
+                if (settings) {
+                    updateLastUsedDirectory(selectedPath, settings, protectAction).then(success => {
+                        // Optionally refresh settings if update was successful
+                        invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
+                    });
+                }
+
                 const fileName = selectedPath.split(/[/\\]/).pop() || '';
                 setBundleName(fileName);
                 
                 if (fileName.endsWith('.transfer')) {
                     setFileType('transfer');
-                } else if (fileName.endsWith('.humocoreq')) {
-                    setFileType('humocoreq');
-                } else if (fileName.endsWith('.humocosig')) {
-                    setFileType('humocosig');
+                } else if (fileName.endsWith('.ask') || fileName.endsWith('.humocoreq')) {
+                    setFileType('ask');
+                } else if (fileName.endsWith('.sig') || fileName.endsWith('.humocosig')) {
+                    setFileType('sig');
                 }
             }
         } catch (e) {
@@ -157,7 +178,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             const file = files[0];
             logger.info(`Processing dropped file: ${file.name} (Size: ${file.size})`);
             
-            if (file.name.endsWith('.transfer') || file.name.endsWith('.humocoreq') || file.name.endsWith('.humocosig')) {
+            const validExtensions = ['.transfer', '.ask', '.sig', '.humocoreq', '.humocosig'];
+            if (validExtensions.some(ext => file.name.endsWith(ext))) {
                 try {
                     const fileBuffer = await file.arrayBuffer();
                     const uint8Array = new Uint8Array(fileBuffer);
@@ -170,10 +192,10 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     
                     if (file.name.endsWith('.transfer')) {
                         setFileType('transfer');
-                    } else if (file.name.endsWith('.humocoreq')) {
-                        setFileType('humocoreq');
-                    } else if (file.name.endsWith('.humocosig')) {
-                        setFileType('humocosig');
+                    } else if (file.name.endsWith('.ask') || file.name.endsWith('.humocoreq')) {
+                        setFileType('ask');
+                    } else if (file.name.endsWith('.sig') || file.name.endsWith('.humocosig')) {
+                        setFileType('sig');
                     }
                     
                     logger.info(`Successfully set dropped file: ${file.name}`);
@@ -183,7 +205,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     setFeedbackMsg(msg);
                 }
             } else {
-                const msg = `Invalid file type. Please drop a '.transfer', '.humocoreq', or '.humocosig' file. Got: ${file.name}`;
+                const msg = `Invalid file type. Please drop a '.transfer', '.ask', or '.sig' file. Got: ${file.name}`;
                 logger.warn(msg);
                 setFeedbackMsg(msg);
             }
@@ -248,7 +270,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 if (!payload) return;
                 logger.info("Bundle received and processed successfully.");
                 onReceiveSuccess(payload);
-            } else if (fileType === 'humocoreq') {
+            } else if (fileType === 'ask') {
                 const voucher = await invoke<VoucherDetails>("open_voucher_signing_request", {
                     containerBytes: fileData,
                     password: bundlePassword || null
@@ -260,7 +282,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     involvedVouchers: [],
                     voucherData: voucher
                 });
-            } else if (fileType === 'humocosig') {
+            } else if (fileType === 'sig') {
                 const standardDefinitionsToml: Record<string, string> = {};
                 voucherStandards.forEach(standard => {
                     const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
@@ -332,7 +354,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                             </div>
                         ) : (
                             <div>
-                                <p className="text-theme-light mb-4">Drag & Drop your '.transfer', '.humocoreq', or '.humocosig' file here</p>
+                                <p className="text-theme-light mb-4">Drag & Drop your '.transfer', '.ask', or '.sig' file here</p>
                                 <p className="text-theme-light text-sm mb-4">or</p>
                                 <Button type="button" onClick={handleFileSelect}>Select Bundle File</Button>
                             </div>
@@ -350,15 +372,15 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
             <ConfirmationModal
                 isOpen={showConfirm}
-                title={`Process ${fileType === 'transfer' ? 'Transfer Bundle' : fileType === 'humocoreq' ? 'Signature Request' : 'Signature Response'}`}
+                title={`Process ${fileType === 'transfer' ? 'Transfer Bundle' : fileType === 'ask' ? 'Signature Request' : 'Signature Response'}`}
                 description={
                     <p>
                         Do you want to process the file <strong>{bundleName}</strong>?<br/>
                         {fileType === 'transfer' && 'This will check for funds and add them to your wallet.'}
-                        {fileType === 'humocoreq' && 'This will open a signature request for you to review and sign.'}
-                        {fileType === 'humocosig' && 'This will attach the signature to the corresponding voucher in your wallet.'}
+                        {fileType === 'ask' && 'This will open a signature request for you to review and sign.'}
+                        {fileType === 'sig' && 'This will attach the signature to the corresponding voucher in your wallet.'}
                         
-                        {(fileType === 'humocoreq' || fileType === 'humocosig') && (
+                        {(fileType === 'ask' || fileType === 'sig') && (
                             <div className="mt-4">
                                 <label className="block text-sm font-medium text-theme-primary mb-1">
                                     Bundle Password (optional)

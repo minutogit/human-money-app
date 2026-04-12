@@ -6,7 +6,9 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
-import { AggregatedBalance, VoucherSummary, VoucherStatus } from "../types";
+import { AggregatedBalance, VoucherSummary, VoucherStatus, AppSettings } from "../types";
+import { updateLastUsedDirectory } from "../utils/settingsUtils";
+import { useSession } from "../context/SessionContext";
 
 interface DashboardProps {
     onNavigateToCreateVoucher: () => void;
@@ -18,9 +20,11 @@ interface DashboardProps {
 }
 
 export function Dashboard(props: DashboardProps) {
+    const { protectAction } = useSession();
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<AggregatedBalance[]>([]);
     const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
+    const [settings, setSettings] = useState<AppSettings | null>(null);
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [copied, setCopied] = useState(false);
 
@@ -38,14 +42,16 @@ export function Dashboard(props: DashboardProps) {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, voucherList] = await Promise.all([
+                const [id, balanceList, voucherList, currentSettings] = await Promise.all([
                     invoke<string>("get_user_id"),
                     invoke<AggregatedBalance[]>("get_total_balance_by_currency"),
-                    invoke<VoucherSummary[]>("get_voucher_summaries")
+                    invoke<VoucherSummary[]>("get_voucher_summaries"),
+                    invoke<AppSettings>('get_app_settings').catch(() => null)
                 ]);
                 setUserId(id);
                 setBalances(balanceList);
                 setVouchers(voucherList);
+                setSettings(currentSettings);
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${e}`;
                 console.error(msg);
@@ -71,7 +77,7 @@ export function Dashboard(props: DashboardProps) {
     function getVoucherStatus(status: VoucherStatus): { name: string; color: string; tooltip: string } {
         const statusName = (typeof status === 'string' ? status : Object.keys(status)[0] || 'unknown').toLowerCase();
         let color = 'text-gray-800 bg-gray-200';
-        let tooltip = '';
+        let tooltip: string;
 
         switch (statusName) {
             case 'active':
@@ -150,8 +156,13 @@ export function Dashboard(props: DashboardProps) {
             });
 
             const filePath = await save({
-                defaultPath: `signature-request-${exportId.slice(0, 8)}.humocoreq`,
-                filters: [{ name: 'Signature Request', extensions: ['humocoreq'] }]
+                defaultPath: settings?.last_used_directory 
+                    ? `${settings.last_used_directory}/signature-request-${exportId.slice(0, 8)}.ask`
+                    : `signature-request-${exportId.slice(0, 8)}.ask`,
+                filters: [
+                    { name: 'Signature Request (.ask)', extensions: ['ask'] },
+                    { name: 'All Files', extensions: ['*'] }
+                ]
             });
 
             if (filePath) {
@@ -159,6 +170,14 @@ export function Dashboard(props: DashboardProps) {
                 const { writeFile } = await import("@tauri-apps/plugin-fs");
                 await writeFile(filePath, uint8Array);
                 logger.info(`Signing request bundle saved to ${filePath}`);
+                
+                // Save directory for next time
+                if (settings) {
+                    updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
+                        invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
+                    });
+                }
+
                 setShowExportModal(false);
                 setRecipientId("");
                 setExportPassword("");
@@ -298,7 +317,7 @@ export function Dashboard(props: DashboardProps) {
                                                         <Button 
                                                             size="xs" 
                                                             variant="primary" 
-                                                            className="bg-theme-accent text-white whitespace-nowrap shadow-sm text-xs py-1.5 px-3"
+                                                            className="bg-theme-accent text-white whitespace-nowrap"
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 setExportId(v.local_instance_id);

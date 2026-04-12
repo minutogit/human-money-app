@@ -13,6 +13,7 @@ const sizes = {
     lg: 'px-6 py-3 text-lg font-bold rounded-lg',
     md: 'px-4 py-2 text-base font-semibold rounded-md',
     sm: 'px-3 py-1.5 text-sm font-medium rounded-md',
+    xs: 'px-2 py-1 text-[11px] font-bold rounded',
 };
 
 // Define the component's props, including the new variant and size props
