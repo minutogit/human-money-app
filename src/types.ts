@@ -30,6 +30,15 @@ export interface PublicProfile {
     url?: string;
     service_offer?: string;
     needs?: string;
+    picture_url?: string;
+}
+
+export interface Contact {
+    did: string;
+    profile: PublicProfile;
+    tags: string[];
+    added_at: string;
+    notes?: string;
 }
 
 // Struktur für das Erstellen neuer Gutscheine (CreateVoucher.tsx)

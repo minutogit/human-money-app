@@ -30,6 +30,7 @@ pub fn get_user_profile(state: tauri::State<AppState>) -> Result<FrontendUserPro
         url: profile.url,
         service_offer: profile.service_offer,
         needs: profile.needs,
+        picture_url: profile.picture_url,
     })
 }
 

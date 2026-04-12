@@ -2,12 +2,13 @@
 import { useState, useEffect, useMemo, FormEvent, ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "../utils/log";
-import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord, InvolvedVoucherInfo } from "../types"; // NEU
+import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord, InvolvedVoucherInfo, Contact } from "../types"; // AKTUALISIERT
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
 import { useSession } from "../context/SessionContext";
-import { ConfirmationModal } from "./ui/ConfirmationModal"; // <--- NEU
+import { ConfirmationModal } from "./ui/ConfirmationModal";
+import Avatar from "boring-avatars"; // NEU
 
 interface SendViewProps {
     onBack: () => void;
@@ -43,7 +44,13 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isProcessing, setIsProcessing] = useState(false);
     const [standardIdToUuidMap, setStandardIdToUuidMap] = useState<Map<string, string>>(new Map());
-    const [showConfirm, setShowConfirm] = useState(false); // <--- NEU
+    const [showConfirm, setShowConfirm] = useState(false);
+    
+    // Adressebuch & Vorschläge
+    const [contacts, setContacts] = useState<Contact[]>([]);
+    const [suggestions, setSuggestions] = useState<Contact[]>([]);
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [showContactPicker, setShowContactPicker] = useState(false);
 
     useEffect(() => {
         async function fetchData() {
@@ -76,10 +83,16 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 // Die 'divisible'-Eigenschaft kommt noch nicht vom Backend-Summary.
                 const enrichedVouchers = activeVouchers.map(v => ({ ...v, divisible: true }));
 
+                setFeedbackMsg("");
                 setAvailableVouchers(enrichedVouchers);
                 setVoucherStandards(standards);
                 setOwnUserId(userId);
-                logger.info(`3. Set state with ${enrichedVouchers.length} vouchers to be displayed.`);
+                
+                // Kontakte laden
+                const fetchedContacts = await invoke<Contact[]>("get_contacts");
+                setContacts(fetchedContacts);
+                
+                logger.info(`3. Set state with ${enrichedVouchers.length} vouchers and ${fetchedContacts.length} contacts.`);
             } catch (e) {
                 const msg = `Failed to fetch data for SendView: ${e}`;
                 logger.error(msg);
@@ -148,6 +161,32 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         }
         setSelection(newSelection);
     }, [targetAmountStr, selectedStandardId, filteredVouchers]);
+
+    // Vorschlaggs-Logik
+    const handleRecipientChange = (e: ChangeEvent<HTMLInputElement>) => {
+        const value = e.target.value;
+        setRecipientId(value);
+        
+        if (value.length > 0) {
+            const filtered = contacts.filter(c => 
+                c.did.toLowerCase().includes(value.toLowerCase()) || 
+                (c.profile.first_name || '').toLowerCase().includes(value.toLowerCase()) ||
+                (c.profile.last_name || '').toLowerCase().includes(value.toLowerCase()) ||
+                (c.profile.organization || '').toLowerCase().includes(value.toLowerCase())
+            );
+            setSuggestions(filtered.slice(0, 5)); // Max 5 Vorschläge
+            setShowSuggestions(filtered.length > 0);
+        } else {
+            setSuggestions([]);
+            setShowSuggestions(false);
+        }
+    };
+
+    const selectContact = (contact: Contact) => {
+        setRecipientId(contact.did);
+        setShowSuggestions(false);
+        setShowContactPicker(false);
+    };
 
 
     const handleManualVoucherSelect = (voucher: VoucherSummary) => {
@@ -309,9 +348,56 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                     <section className="bg-bg-card border border-theme-subtle rounded-lg p-4 mb-6">
                         <h2 className="font-semibold text-theme-secondary mb-3">1. The Order</h2>
                         <div className="space-y-4">
-                            <div>
+                            <div className="relative">
                                 <label htmlFor="recipientId" className="block text-sm font-medium text-theme-light mb-1">Recipient User ID</label>
-                                <Input id="recipientId" placeholder="did:key:z..." value={recipientId} onChange={(e: ChangeEvent<HTMLInputElement>) => setRecipientId(e.target.value)} required />
+                                <div className="flex gap-2">
+                                    <div className="relative flex-1">
+                                        <Input 
+                                            id="recipientId" 
+                                            placeholder="did:key:z..." 
+                                            value={recipientId} 
+                                            onChange={handleRecipientChange} 
+                                            onFocus={() => recipientId.length > 0 && suggestions.length > 0 && setShowSuggestions(true)}
+                                            onBlur={() => setTimeout(() => setShowSuggestions(false), 200) /* Klein Verzögerung für Click */}
+                                            required 
+                                        />
+                                        {/* Suggestions List */}
+                                        {showSuggestions && (
+                                            <div className="absolute z-30 w-full mt-1 bg-white border border-theme-subtle rounded-xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                {suggestions.map(contact => (
+                                                    <button
+                                                        key={contact.did}
+                                                        type="button"
+                                                        onClick={() => selectContact(contact)}
+                                                        className="w-full flex items-center gap-3 p-3 hover:bg-bg-app text-left transition-colors border-b border-theme-subtle last:border-0"
+                                                    >
+                                                        <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0">
+                                                            <Avatar size={32} name={contact.did} variant="beam" colors={["#E63946", "#2B1B17", "#E76F51", "#F4A261", "#2A9D8F"]} />
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-sm font-bold text-theme-secondary truncate">
+                                                                {contact.profile.first_name || contact.profile.last_name 
+                                                                    ? `${contact.profile.first_name || ''} ${contact.profile.last_name || ''}`.trim()
+                                                                    : contact.profile.organization || 'Anonymous'}
+                                                            </p>
+                                                            <p className="text-[10px] text-theme-light font-mono truncate">{contact.did}</p>
+                                                        </div>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowContactPicker(true)}
+                                        className="bg-white border border-theme-subtle p-2.5 rounded-xl text-theme-light hover:text-theme-primary hover:border-theme-primary transition-all shadow-sm active:scale-95"
+                                        title="Open Address Book"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                                        </svg>
+                                    </button>
+                                </div>
                             </div>
                             {/* --- NEU START --- */}
                             <div>
@@ -455,6 +541,50 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 onCancel={() => setShowConfirm(false)}
                 isProcessing={isProcessing}
             />
+
+            {/* Contact Picker Modal */}
+            {showContactPicker && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px] p-4">
+                    <div className="w-full max-w-lg bg-bg-app border border-theme-subtle rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col max-h-[80vh]">
+                        <div className="p-4 border-b border-theme-subtle bg-white flex justify-between items-center">
+                            <h2 className="text-xl font-extrabold text-theme-secondary">Select Contact</h2>
+                            <button onClick={() => setShowContactPicker(false)} className="p-1 hover:bg-bg-app rounded-full transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div className="flex-grow overflow-y-auto p-4 space-y-2">
+                            {contacts.length === 0 ? (
+                                <p className="text-center text-theme-light py-8">No contacts in address book.</p>
+                            ) : (
+                                contacts.map(contact => (
+                                    <button
+                                        key={contact.did}
+                                        onClick={() => selectContact(contact)}
+                                        className="w-full flex items-center gap-4 p-4 bg-white hover:bg-bg-input-readonly border border-theme-subtle rounded-xl transition-all shadow-sm hover:shadow-md text-left"
+                                    >
+                                        <div className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0 border border-theme-subtle">
+                                            <Avatar size={40} name={contact.did} variant="beam" colors={["#E63946", "#2B1B17", "#E76F51", "#F4A261", "#2A9D8F"]} />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="font-bold text-theme-secondary truncate">
+                                                {contact.profile.first_name || contact.profile.last_name 
+                                                    ? `${contact.profile.first_name || ''} ${contact.profile.last_name || ''}`.trim()
+                                                    : contact.profile.organization || 'Anonymous'}
+                                            </p>
+                                            <p className="text-xs text-theme-light font-mono truncate">{contact.did}</p>
+                                        </div>
+                                    </button>
+                                ))
+                            )}
+                        </div>
+                        <div className="p-4 bg-white border-t border-theme-subtle">
+                            <Button variant="secondary" onClick={() => setShowContactPicker(false)} className="w-full">Close</Button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

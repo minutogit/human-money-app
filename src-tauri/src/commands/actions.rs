@@ -484,6 +484,7 @@ pub fn update_user_profile(
         url: profile.url,
         service_offer: profile.service_offer,
         needs: profile.needs,
+        picture_url: profile.picture_url,
     };
     
     service.update_public_profile(core_profile, password.as_deref())

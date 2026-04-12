@@ -20,6 +20,7 @@ import { Dashboard } from './components/Dashboard';
 import { SignRequestView } from './components/SignRequestView';
 import { WalletRecovery } from './components/WalletRecovery';
 import { RecreateProfile } from './components/RecreateProfile';
+import AddressBook from './components/AddressBook';
 import { ProfileInfo, ReceiveSuccessPayload } from './types';
 // WICHTIG: Der Import für den Provider
 import { SessionProvider, useSession } from './context/SessionContext';
@@ -39,6 +40,7 @@ type AppState =
     | { view: "transaction_history" }
     | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string }
     | { view: "receive_success"; payload: ReceiveSuccessPayload & { voucherData?: any } }
+    | { view: "address_book" }
     | { view: "sign_request"; voucherData: any };
 
 function AppContent() {
@@ -146,6 +148,8 @@ function AppContent() {
                     voucherId={appState.voucherId}
                     onBack={() => setAppState({ view: "logged_in" })}
                 />;
+            case "address_book":
+                return <AddressBook onBack={() => setAppState({ view: "logged_in" })} />;
             case "send_vouchers":
                 return <SendView
                     profileName={profileName}
@@ -210,6 +214,7 @@ function AppContent() {
                                     <button onClick={() => setAppState({ view: "logged_in" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Dashboard</button>
                                     <button onClick={() => setAppState({ view: "send_vouchers" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Send</button>
                                     <button onClick={() => setAppState({ view: "receive_bundle" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Receive / Process</button>
+                                    <button onClick={() => setAppState({ view: "address_book" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Address Book</button>
                                     <a href="#" onClick={() => setAppState({ view: 'settings' })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Settings</a>
                                 </nav>
                                 <div className="mt-auto border-t border-theme-subtle pt-4">

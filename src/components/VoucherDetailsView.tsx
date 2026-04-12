@@ -6,8 +6,9 @@ import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { useSession } from "../context/SessionContext";
-import { AppSettings, VoucherDetails } from "../types";
+import { AppSettings, VoucherDetails, Contact } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
+import ContactDialog from "./ContactDialog";
 
 // Props for the component
 interface VoucherDetailsViewProps {
@@ -52,6 +53,7 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
     const [exportPassword, setExportPassword] = useState("");
     const [isExporting, setIsExporting] = useState(false);
     const [exportError, setExportError] = useState("");
+    const [showContactDialog, setShowContactDialog] = useState(false);
 
     useEffect(() => {
         logger.info(`VoucherDetailsView: Displayed for voucher ID: ${voucherId}`);
@@ -139,6 +141,14 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                             ✍️ Request Signature
                         </Button>
                     )}
+                    <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => setShowContactDialog(true)}
+                        className="flex items-center gap-1"
+                    >
+                        👤 Add Creator
+                    </Button>
                     <Button onClick={() => setShowJson(!showJson)} variant="secondary" size="sm">
                         {showJson ? "Show Formatted View" : "Show Raw JSON"}
                     </Button>
@@ -343,6 +353,16 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                     setExportError("");
                 }}
                 isProcessing={isExporting}
+            />
+            
+            <ContactDialog
+                isOpen={showContactDialog}
+                onClose={() => setShowContactDialog(false)}
+                onSave={async (contact: Contact) => {
+                    await invoke('save_contact', { contact });
+                }}
+                initialProfile={details.creator}
+                initialDid={details.creator.id}
             />
         </div>
     );

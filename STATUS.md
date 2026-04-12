@@ -1,15 +1,15 @@
 ---
 project: human-money-app
-version: "0.1.0-alpha.1"
+version: "0.1.0-alpha.2"
 phase: "alpha"
-health: "yellow"
+health: "green"
 last_updated: "2026-04-12"
 blocks: []
 blocked_by: []
 priority_tasks:
   - id: "APP-001"
-    title: "Contact list / address book UI"
-    status: "open"
+    title: "Encrypted Address Book"
+    status: "completed"
     priority: "high"
     depends_on: ["CORE-001", "WOT-005"]
     description: "Address book component for managing known contacts with trust levels"
@@ -80,7 +80,6 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 ## Known Issues
 
 - No automated tests (frontend or backend) — high risk during refactoring
-- No contact management / address book
 - No WoT integration (depends on CORE-001 and WOT-005)
 - Alpha stability — some UI edge cases unpolished
 
@@ -94,6 +93,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Flexible authentication and pessimistic locking
 - [x] Wallet recovery workflow
 - [x] User profile management (Encrypted metadata)
+- [x] Encrypted Address Book (App-side persistence)
 
 ## Next Milestones
 

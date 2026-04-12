@@ -57,6 +57,21 @@ pub struct FrontendUserProfile {
     pub url: Option<String>,
     pub service_offer: Option<String>,
     pub needs: Option<String>,
+    pub picture_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FrontendContact {
+    pub did: String,
+    pub profile: FrontendUserProfile,
+    pub tags: Vec<String>,
+    pub added_at: String,
+    pub notes: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct FrontendAddressBook {
+    pub contacts: std::collections::HashMap<String, FrontendContact>,
 }
 
 #[derive(Deserialize, Debug)]

@@ -19,7 +19,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{actions::*, auth::*, queries::*, utils::*};
+use crate::commands::{actions::*, auth::*, queries::*, utils::*, contacts::*};
 use crate::commands::actions::TransactionRecord;
 use crate::settings::AppSettings;
 
@@ -133,7 +133,9 @@ pub fn run() {
             frontend_log, log_to_backend,
             // Multi-signature commands
             create_signing_request_bundle, open_voucher_signing_request, create_detached_signature_response_bundle,
-            process_and_attach_signature, get_allowed_signature_roles_from_standard
+            process_and_attach_signature, get_allowed_signature_roles_from_standard,
+            // Address Book
+            get_contacts, save_contact, delete_contact
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
