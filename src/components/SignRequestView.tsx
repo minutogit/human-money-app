@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { save } from '@tauri-apps/plugin-dialog';
 import { logger } from '../utils/log';
-import { VoucherDetails, VoucherStandardInfo, AppSettings } from '../types';
+import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
 import { useSession } from '../context/SessionContext';
@@ -21,6 +21,9 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
     const [feedbackMsg, setFeedbackMsg] = useState('');
     const [isSigning, setIsSigning] = useState(false);
     const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [standardContent, setStandardContent] = useState<string | null>(null);
+    const [impact, setImpact] = useState<SignatureImpact | null>(null);
+    const [isImpactLoading, setIsImpactLoading] = useState(false);
 
     useEffect(() => {
         async function fetchData() {
@@ -39,6 +42,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 });
 
                 if (matchingStandard) {
+                    setStandardContent(matchingStandard.content);
                     const roles = await invoke<string[]>("get_allowed_signature_roles_from_standard", {
                         tomlContent: matchingStandard.content
                     });
@@ -55,6 +59,32 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
         }
         fetchData();
     }, [voucherData.voucher_standard.uuid]);
+
+    useEffect(() => {
+        if (!selectedRole || !standardContent) {
+            setImpact(null);
+            return;
+        }
+
+        async function fetchImpact() {
+            setIsImpactLoading(true);
+            try {
+                const impactResult = await invoke<SignatureImpact>("evaluate_signature_suitability", {
+                    voucher: voucherData,
+                    role: selectedRole,
+                    standardTomlContent: standardContent
+                });
+                setImpact(impactResult);
+            } catch (e) {
+                logger.error(`Failed to evaluate signature impact: ${e}`);
+                setImpact(null);
+            } finally {
+                setIsImpactLoading(false);
+            }
+        }
+        
+        fetchImpact();
+    }, [selectedRole, standardContent, voucherData]);
 
     async function handleSign() {
         if (!selectedRole) {
@@ -178,12 +208,76 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                         </label>
                     </div>
                 </div>
+
+                {/* Impact Evaluation UI */}
+                <div className="mt-6 pt-4 border-t border-theme-subtle">
+                    {isImpactLoading ? (
+                        <p className="text-sm text-theme-light italic">Evaluating signature impact...</p>
+                    ) : impact ? (
+                        <div className="space-y-3">
+                            {!impact.is_allowed_role && (
+                                <div className="p-3 bg-red-100 text-red-800 rounded-md flex items-start gap-2">
+                                    <span className="text-lg">🛑</span>
+                                    <p className="text-sm">The standard does not permit this role.</p>
+                                </div>
+                            )}
+                            
+                            {impact.fatal_conflicts.length > 0 && (
+                                <div className="p-3 bg-red-100 text-red-800 rounded-md flex items-start gap-2">
+                                    <span className="text-lg">🚫</span>
+                                    <div>
+                                        <p className="text-sm font-semibold mb-1">Warning: Profile conflict</p>
+                                        <ul className="list-disc pl-4 text-sm space-y-1">
+                                            {impact.fatal_conflicts.map((conflict, i) => (
+                                                <li key={i}>{conflict}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            )}
+
+                            {impact.resolved_rules.length > 0 && (
+                                <div className="p-3 bg-green-100 text-green-800 rounded-md flex items-start gap-2">
+                                    <span className="text-lg">🌟</span>
+                                    <div>
+                                        <p className="text-sm font-semibold mb-1">Your signature will successfully fulfill:</p>
+                                        <ul className="list-disc pl-4 text-sm space-y-1">
+                                            {impact.resolved_rules.map((rule, i) => (
+                                                <li key={i}>{rule}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            )}
+
+                            {impact.gentle_hints.length > 0 && impact.fatal_conflicts.length === 0 && (
+                                <div className="p-3 bg-blue-50 text-blue-800 border border-blue-200 rounded-md flex flex-col gap-2">
+                                    {impact.gentle_hints.map((hint, i) => (
+                                        <div key={i} className="flex items-start gap-2">
+                                            <span className="text-lg">💡</span>
+                                            <p className="text-sm">{hint}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {impact.is_allowed_role && impact.fatal_conflicts.length === 0 && impact.resolved_rules.length === 0 && impact.gentle_hints.length === 0 && (
+                                <div className="p-3 bg-gray-100 text-gray-700 rounded-md flex items-start gap-2">
+                                    <span className="text-lg">⚠️</span>
+                                    <p className="text-sm">This signature does not directly resolve any pending rules.</p>
+                                </div>
+                            )}
+                        </div>
+                    ) : selectedRole ? (
+                        <p className="text-sm text-theme-light italic">No evaluation data available.</p>
+                    ) : null}
+                </div>
             </div>
 
             <Button
                 size="lg"
                 onClick={handleSign}
-                disabled={!selectedRole || isSigning}
+                disabled={!selectedRole || isSigning || (impact !== null && (!impact.is_allowed_role || impact.fatal_conflicts.length > 0))}
                 className="w-full"
             >
                 {isSigning ? 'Signing...' : 'Accept & Sign'}

@@ -223,3 +223,10 @@ export interface AppSettings {
     session_timeout_seconds: number;
     last_used_directory?: string;
 }
+
+export interface SignatureImpact {
+    is_allowed_role: boolean;
+    fatal_conflicts: string[];
+    resolved_rules: string[];
+    gentle_hints: string[];
+}

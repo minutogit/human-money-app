@@ -11,6 +11,7 @@ use human_money_core::{
     models::voucher::Voucher,
     models::secure_container::ContainerConfig,
     services::voucher_manager::NewVoucherData,
+    services::signature_manager::SignatureImpact,
     wallet::{MultiTransferRequest, SourceTransfer, InvolvedVoucherInfo},
 };
 
@@ -451,6 +452,18 @@ pub fn get_allowed_signature_roles_from_standard(
     info!("Getting allowed signature roles from standard...");
     let service = state.service.lock().unwrap();
     service.get_allowed_signature_roles_from_standard(&toml_content)
+}
+
+#[tauri::command]
+pub fn evaluate_signature_suitability(
+    voucher: Voucher,
+    role: String,
+    standard_toml_content: String,
+    state: tauri::State<AppState>,
+) -> Result<SignatureImpact, String> {
+    info!("Evaluating signature suitability for role: {}", role);
+    let service = state.service.lock().unwrap();
+    service.evaluate_signature_suitability(&voucher, &role, &standard_toml_content)
 }
 
 #[tauri::command]

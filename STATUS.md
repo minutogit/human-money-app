@@ -61,6 +61,12 @@ priority_tasks:
     priority: "high"
     depends_on: []
     description: "Full user profile system with metadata encrypted in the wallet. Used for defaulting voucher creator and signature details."
+  - id: "APP-010"
+    title: "Signature Impact Evaluation Engine"
+    status: "completed"
+    priority: "medium"
+    depends_on: ["APP-007", "APP-009"]
+    description: "Real-time evaluation of signature impact against dynamic CEL standard rules with lexical hinting."
 ---
 
 # Human Money App — Status
@@ -94,6 +100,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Wallet recovery workflow
 - [x] User profile management (Encrypted metadata)
 - [x] Encrypted Address Book (App-side persistence)
+- [x] Signature Impact Evaluation Engine (Real-time hypothesis testing in UI)
 
 ## Next Milestones
 
