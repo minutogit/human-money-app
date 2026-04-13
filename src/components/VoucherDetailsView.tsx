@@ -51,6 +51,8 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
     const [encryptToDid, setEncryptToDid] = useState(true);
     const [protectWithPassword, setProtectWithPassword] = useState(false);
     const [exportPassword, setExportPassword] = useState("");
+    const [exportPasswordConfirm, setExportPasswordConfirm] = useState("");
+    const [showExportPassword, setShowExportPassword] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     const [exportError, setExportError] = useState("");
     const [showContactDialog, setShowContactDialog] = useState(false);
@@ -328,15 +330,51 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                                 </div>
 
                                 {protectWithPassword && (
-                                    <div>
-                                        <p className="text-xs text-theme-light mb-1">Enter a password for encryption:</p>
-                                        <input
-                                            type="password"
-                                            value={exportPassword}
-                                            onChange={(e) => setExportPassword(e.target.value)}
-                                            placeholder="Password"
-                                            className="w-full px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
-                                        />
+                                    <div className="space-y-3">
+                                        <div>
+                                            <p className="text-xs text-theme-light mb-1">Enter a password for encryption:</p>
+                                            <div className="relative">
+                                                <input
+                                                    type={showExportPassword ? "text" : "password"}
+                                                    value={exportPassword}
+                                                    onChange={(e) => {
+                                                        setExportPassword(e.target.value);
+                                                        setExportError("");
+                                                    }}
+                                                    placeholder="Password"
+                                                    className="w-full px-3 py-2 pr-20 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowExportPassword(!showExportPassword)}
+                                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-theme-light hover:text-theme-primary"
+                                                >
+                                                    {showExportPassword ? "Hide" : "Show"}
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs text-theme-light mb-1">Confirm password:</p>
+                                            <div className="relative">
+                                                <input
+                                                    type={showExportPassword ? "text" : "password"}
+                                                    value={exportPasswordConfirm}
+                                                    onChange={(e) => {
+                                                        setExportPasswordConfirm(e.target.value);
+                                                        setExportError("");
+                                                    }}
+                                                    placeholder="Confirm Password"
+                                                    className="w-full px-3 py-2 pr-20 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowExportPassword(!showExportPassword)}
+                                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-theme-light hover:text-theme-primary"
+                                                >
+                                                    {showExportPassword ? "Hide" : "Show"}
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -350,6 +388,7 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                     setShowExportModal(false);
                     setRecipientId("");
                     setExportPassword("");
+                    setExportPasswordConfirm("");
                     setExportError("");
                 }}
                 isProcessing={isExporting}
@@ -382,6 +421,16 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
             } else if (protectWithPassword) {
                 if (!exportPassword) {
                     setExportError("Please enter a password.");
+                    setIsExporting(false);
+                    return;
+                }
+                if (!exportPasswordConfirm) {
+                    setExportError("Please confirm your password.");
+                    setIsExporting(false);
+                    return;
+                }
+                if (exportPassword !== exportPasswordConfirm) {
+                    setExportError("Passwords do not match.");
                     setIsExporting(false);
                     return;
                 }
