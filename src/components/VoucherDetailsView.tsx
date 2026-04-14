@@ -56,6 +56,9 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
     const [isExporting, setIsExporting] = useState(false);
     const [exportError, setExportError] = useState("");
     const [showContactDialog, setShowContactDialog] = useState(false);
+    const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+    const [showRemoveSignatureModal, setShowRemoveSignatureModal] = useState<string | null>(null); // contains signature_id
+    const [isRemovingSignature, setIsRemovingSignature] = useState(false);
 
     useEffect(() => {
         logger.info(`VoucherDetailsView: Displayed for voucher ID: ${voucherId}`);
@@ -63,12 +66,14 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
             setIsLoading(true);
             setErrorMsg("");
             try {
-                const [result, currentSettings] = await Promise.all([
+                const [result, currentSettings, userId] = await Promise.all([
                     invoke<VoucherDetails>("get_voucher_details", { localId: voucherId }),
-                    invoke<AppSettings>('get_app_settings').catch(() => null)
+                    invoke<AppSettings>('get_app_settings').catch(() => null),
+                    invoke<string>("get_user_id").catch(() => null)
                 ]);
                 setDetails(result);
                 setSettings(currentSettings);
+                setCurrentUserId(userId);
             } catch (e) {
                 const msg = `Failed to fetch voucher details: ${e}`;
                 logger.error(msg);
@@ -79,6 +84,15 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
         }
         fetchDetails();
     }, [voucherId]);
+
+    const refreshDetails = async () => {
+        try {
+            const result = await invoke<VoucherDetails>("get_voucher_details", { localId: voucherId });
+            setDetails(result);
+        } catch (e) {
+            logger.error(`Failed to refresh voucher details: ${e}`);
+        }
+    };
 
     function getDerivedVoucherStatus(voucher: VoucherDetails): { name: string; color: string; tooltip: string } {
         const signatures = voucher.signatures;
@@ -251,13 +265,37 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                                 <p className="text-sm text-theme-secondary pb-4">{details.voucher_standard.template.signature_requirements_description}</p>
                                 {details.signatures.length > 0 ? (
                                     <div className="space-y-4">
-                                        {details.signatures.map(g => (
-                                            <div key={g.signature_id} className="bg-theme-subtle/30 rounded p-2 border-t border-theme-subtle pt-3">
-                                                <p className="font-semibold text-sm">{g.role.charAt(0).toUpperCase() + g.role.slice(1)}: {g.details?.first_name ?? ''} {g.details?.last_name ?? ''}</p>
-                                                <p className="text-[10px] font-mono text-theme-light break-all">{g.signer_id}</p>
-                                                <p className="text-[10px] text-theme-light mt-1">Signed on: {formatDateTime(g.signature_time)}</p>
-                                            </div>
-                                        ))}
+                                        {details.signatures.map(g => {
+                                            const isDeletable = 
+                                                currentUserId === details.creator.id && 
+                                                details.transactions.length === 1 && 
+                                                details.transactions[0].t_type === "init" && 
+                                                g.role !== "creator" && 
+                                                g.role !== "issuer";
+
+                                            return (
+                                                <div key={g.signature_id} className="bg-theme-subtle/30 rounded p-2 border-t border-theme-subtle pt-3 group relative">
+                                                    <div className="flex justify-between items-start">
+                                                        <div className="pr-8">
+                                                            <p className="font-semibold text-sm">{g.role.charAt(0).toUpperCase() + g.role.slice(1)}: {g.details?.first_name ?? ''} {g.details?.last_name ?? ''}</p>
+                                                            <p className="text-[10px] font-mono text-theme-light break-all">{g.signer_id}</p>
+                                                            <p className="text-[10px] text-theme-light mt-1">Signed on: {formatDateTime(g.signature_time)}</p>
+                                                        </div>
+                                                        {isDeletable && (
+                                                            <button
+                                                                onClick={() => setShowRemoveSignatureModal(g.signature_id)}
+                                                                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-red-500 hover:text-red-700 hover:bg-red-100/50 rounded-full transition-all duration-200 border border-transparent hover:border-red-200 shadow-sm bg-white/40"
+                                                                title="Remove this signature"
+                                                            >
+                                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                                </svg>
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 ) : <p className="text-sm text-theme-light">No signatures yet.</p>}
                             </Card>
@@ -403,8 +441,42 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                 initialProfile={details.creator}
                 initialDid={details.creator.id}
             />
+
+            <ConfirmationModal
+                isOpen={showRemoveSignatureModal !== null}
+                title="Remove Signature"
+                description="Are you sure you want to remove this signature? This will revert the voucher's status to incomplete if the minimum signature requirements are no longer met."
+                confirmText="Remove"
+                confirmVariant="danger"
+                onConfirm={handleRemoveSignature}
+                onCancel={() => setShowRemoveSignatureModal(null)}
+                isProcessing={isRemovingSignature}
+            />
         </div>
     );
+
+    async function handleRemoveSignature() {
+        if (!showRemoveSignatureModal) return;
+        setIsRemovingSignature(true);
+        try {
+            await protectAction(async (pwd) => {
+                await invoke("remove_voucher_signature", {
+                    localInstanceId: voucherId,
+                    signatureId: showRemoveSignatureModal,
+                    password: pwd
+                });
+            });
+            logger.info(`Signature ${showRemoveSignatureModal} removed from voucher ${voucherId}`);
+            setShowRemoveSignatureModal(null);
+            await refreshDetails();
+        } catch (e) {
+            const msg = `Failed to remove signature: ${e}`;
+            logger.error(msg);
+            alert(msg);
+        } finally {
+            setIsRemovingSignature(false);
+        }
+    }
 
     async function handleExportSigningRequest() {
         setIsExporting(true);

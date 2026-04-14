@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0-alpha.2"
 phase: "alpha"
 health: "green"
-last_updated: "2026-04-12"
+last_updated: "2026-04-14"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -67,6 +67,12 @@ priority_tasks:
     priority: "medium"
     depends_on: ["APP-007", "APP-009"]
     description: "Real-time evaluation of signature impact against dynamic CEL standard rules with lexical hinting."
+  - id: "APP-011"
+    title: "Signature Management"
+    status: "completed"
+    priority: "medium"
+    depends_on: ["APP-007"]
+    description: "Allow creators to remove additional signatures from vouchers before they enter circulation."
 ---
 
 # Human Money App — Status
@@ -101,6 +107,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] User profile management (Encrypted metadata)
 - [x] Encrypted Address Book (App-side persistence)
 - [x] Signature Impact Evaluation Engine (Real-time hypothesis testing in UI)
+- [x] Voucher Signature Management (Removal of uncirculated signatures)
 
 ## Next Milestones
 

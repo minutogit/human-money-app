@@ -134,6 +134,7 @@ pub fn run() {
             // Multi-signature commands
             create_signing_request_bundle, open_voucher_signing_request, create_detached_signature_response_bundle,
             process_and_attach_signature, get_allowed_signature_roles_from_standard, evaluate_signature_suitability,
+            remove_voucher_signature,
             // Address Book
             get_contacts, save_contact, delete_contact
         ])

@@ -467,6 +467,25 @@ pub fn evaluate_signature_suitability(
 }
 
 #[tauri::command]
+pub fn remove_voucher_signature(
+    local_instance_id: String,
+    signature_id: String,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    info!(
+        "Removing signature {} from voucher {}...",
+        signature_id, local_instance_id
+    );
+    let mut service = state.service.lock().unwrap();
+    service.remove_voucher_signature(
+        &local_instance_id,
+        &signature_id,
+        password.as_deref(),
+    )
+}
+
+#[tauri::command]
 pub fn update_user_profile(
     profile: FrontendUserProfile,
     password: Option<String>,

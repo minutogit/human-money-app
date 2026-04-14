@@ -6,6 +6,7 @@ const variants = {
     primary: 'bg-theme-primary text-white border-transparent hover:bg-theme-accent focus:ring-theme-primary',
     secondary: 'bg-theme-subtle text-theme-secondary border-theme-subtle/50 hover:bg-bg-app hover:border-theme-light focus:ring-theme-primary',
     outline: 'bg-transparent text-theme-primary border-current hover:bg-theme-primary hover:text-white focus:ring-theme-primary',
+    danger: 'bg-theme-error text-white border-transparent hover:opacity-90 focus:ring-theme-error',
 };
 
 // Define the sizes and their corresponding styles

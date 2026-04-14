@@ -4,6 +4,7 @@ interface ConfirmationModalProps {
     isOpen: boolean;
     title: string;
     description: React.ReactNode; // ReactNode erlaubt auch HTML/JSX im Text
+    confirmVariant?: "primary" | "secondary" | "outline" | "danger";
     confirmText?: string;
     cancelText?: string;
     onConfirm: () => void;
@@ -15,6 +16,7 @@ export function ConfirmationModal({
     isOpen, 
     title, 
     description, 
+    confirmVariant = "primary",
     confirmText = "Confirm", 
     cancelText = "Cancel", 
     onConfirm, 
@@ -32,7 +34,7 @@ export function ConfirmationModal({
                     <Button variant="secondary" onClick={onCancel} disabled={isProcessing}>
                         {cancelText}
                     </Button>
-                    <Button onClick={onConfirm} disabled={isProcessing}>
+                    <Button variant={confirmVariant} onClick={onConfirm} disabled={isProcessing}>
                         {isProcessing ? "Processing..." : confirmText}
                     </Button>
                 </div>

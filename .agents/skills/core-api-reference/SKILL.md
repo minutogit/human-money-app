@@ -139,14 +139,28 @@ Methods for handling multi-role signatures (e.g., guarantors, notaries).
     * `password`: The password for authentication (Wallet Password).
 * **Auth:** Requires `password: Option<&str>`.
 
-#### `pub fn process_and_attach_signature(container_bytes: &[u8], standard_toml_content: &str, container_password: Option<&str>, wallet_password: Option<&str>) -> Result<(), String>`
+#### `pub fn process_and_attach_signature(container_bytes: &[u8], standard_toml_content: &str, container_password: Option<&str>, wallet_password: Option<&str>) -> Result<String, String>`
 * **Description:** Receives a signature response bundle, validates it, and attaches it locally.
 * **Parameters:**
     * `container_bytes`: The received encrypted signature bundle.
     * `standard_toml_content`: The voucher's standard definition (TOML).
     * `container_password`: Optional password to decrypt the response bundle.
     * `wallet_password`: Optional password to unlock the local wallet for saving.
+* **Returns:** The updated voucher instance ID (String).
 * **Status Behavior:** If this signature fulfills the last missing requirement, status transitions to `Active`.
+* **Auth:** Requires `wallet_password: Option<&str>`.
+
+#### `pub fn remove_voucher_signature(local_instance_id: &str, signature_id: &str, wallet_password: Option<&str>) -> Result<(), String>`
+* **Description:** Removes an additional signature (e.g., from a guarantor or witness) from a voucher.
+* **Constraints:** 
+    * Can only be performed by the voucher's creator.
+    * Can only be performed if the voucher is not yet in circulation (exactly one transaction of type `init`).
+    * Cannot remove the primary creator signature.
+* **Parameters:**
+    * `local_instance_id`: The local ID of the voucher.
+    * `signature_id`: The ID of the signature to be removed.
+    * `wallet_password`: Optional password to unlock the local wallet for saving.
+* **Status Behavior:** If the removal of a signature causes the voucher to no longer meet the minimum requirements of its standard, the status reverts to `Incomplete`.
 * **Auth:** Requires `wallet_password: Option<&str>`.
 
 ---
