@@ -88,7 +88,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate }: Creat
     const cleanSeedText = (text: string) => {
         return text
             .toLowerCase()
-            .replace(/[0-9\.\,\-\:]/g, ' ') // Remove digits and punctuation
+            .replace(/[0-9.,\-:]/g, ' ') // Remove digits and punctuation
             .replace(/[\r\n\t]/g, ' ')      // Replace tabs and newlines with space
             .replace(/\s+/g, ' ')          // Collapse multiple spaces
             .trim();

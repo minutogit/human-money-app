@@ -72,9 +72,17 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     return (
         <div className="max-w-3xl mx-auto pb-12">
             <header className="flex-shrink-0 mb-8">
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-4 mb-4">
+                    <button
+                        onClick={onBack}
+                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
+                        title="Back to Dashboard"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                        </svg>
+                    </button>
                     <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-theme-primary to-theme-secondary">Settings</h1>
-                    <Button variant="secondary" onClick={onBack}>Back to Dashboard</Button>
                 </div>
                 
                 <div className="flex border-b border-theme-subtle gap-8">

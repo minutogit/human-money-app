@@ -2,17 +2,12 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
-import { ConfirmationModal } from "./ui/ConfirmationModal";
-import { AggregatedBalance, VoucherSummary, VoucherStatus, AppSettings } from "../types";
-import { updateLastUsedDirectory } from "../utils/settingsUtils";
-import { useSession } from "../context/SessionContext";
+import { AggregatedBalance, TransactionRecord } from "../types";
 
 interface DashboardProps {
     onNavigateToCreateVoucher: () => void;
-    onShowDetails: (voucherId: string) => void;
     onNavigateToSend: () => void;
     onNavigateToHistory: () => void;
     onNavigateToReceive: () => void;
@@ -20,40 +15,28 @@ interface DashboardProps {
 }
 
 export function Dashboard(props: DashboardProps) {
-    const { protectAction } = useSession();
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<AggregatedBalance[]>([]);
-    const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
-    const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [recentTransactions, setRecentTransactions] = useState<TransactionRecord[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [copied, setCopied] = useState(false);
-
-    // Export state for Dashboard
-    const [showExportModal, setShowExportModal] = useState(false);
-    const [exportId, setExportId] = useState("");
-    const [recipientId, setRecipientId] = useState("");
-    const [encryptToDid, setEncryptToDid] = useState(true);
-    const [protectWithPassword, setProtectWithPassword] = useState(false);
-    const [exportPassword, setExportPassword] = useState("");
-    const [exportPasswordConfirm, setExportPasswordConfirm] = useState("");
-    const [showExportPassword, setShowExportPassword] = useState(false);
-    const [isExporting, setIsExporting] = useState(false);
-    const [exportError, setExportError] = useState("");
 
     useEffect(() => {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, voucherList, currentSettings] = await Promise.all([
+                const [id, balanceList, history] = await Promise.all([
                     invoke<string>("get_user_id"),
                     invoke<AggregatedBalance[]>("get_total_balance_by_currency"),
-                    invoke<VoucherSummary[]>("get_voucher_summaries"),
-                    invoke<AppSettings>('get_app_settings').catch(() => null)
+                    invoke<TransactionRecord[]>("get_transaction_history").catch(() => [])
                 ]);
                 setUserId(id);
-                setBalances(balanceList);
-                setVouchers(voucherList);
-                setSettings(currentSettings);
+                setBalances(balanceList || []);
+                // Sort by timestamp, newest first, and take only the first 5
+                const sortedHistory = (history || [])
+                    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                    .slice(0, 5);
+                setRecentTransactions(sortedHistory);
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${e}`;
                 console.error(msg);
@@ -76,396 +59,191 @@ export function Dashboard(props: DashboardProps) {
         }
     }
 
-    function getVoucherStatus(status: VoucherStatus): { name: string; color: string; tooltip: string } {
-        const statusName = (typeof status === 'string' ? status : Object.keys(status)[0] || 'unknown').toLowerCase();
-        let color = 'text-gray-800 bg-gray-200';
-        let tooltip: string;
-
-        switch (statusName) {
-            case 'active':
-                color = 'text-green-800 bg-green-200';
-                tooltip = 'This voucher is active and ready to be used or transferred.';
-                break;
-            case 'quarantined':
-                color = 'text-red-800 bg-red-200';
-                tooltip = 'This voucher has been identified as an illegal copy (double-spend) and is no longer usable.';
-                break;
-            case 'archived':
-                color = 'text-indigo-800 bg-indigo-200';
-                tooltip = 'This voucher has been fully used or archived. It cannot be used for new transfers.';
-                break;
-            case 'incomplete':
-                color = 'text-gray-800 bg-gray-200';
-                tooltip = 'This voucher cannot be used yet because not all conditions have been met (e.g., missing guarantor signatures).';
-                break;
-            default:
-                tooltip = `Status: ${statusName}`;
-                break;
-        }
-        return { name: statusName, color: color, tooltip: tooltip };
-    }
-
-    function formatDate(isoString: string): string {
-        if (!isoString) return 'N/A';
-        return new Date(isoString).toLocaleDateString(undefined, {
-            year: 'numeric', month: 'short', day: 'numeric'
-        });
-    }
-
-
-    function truncate(text: string, length: number): string {
-        if (text.length <= length) return text;
-        return text.substring(0, length) + '...';
-    }
-
-
     function formatAmount(amountStr: string): string {
         const num = parseFloat(amountStr);
         if (isNaN(num)) return amountStr;
         return num.toString();
     }
 
-    const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Lade...";
-
-    async function handleExportSigningRequest() {
-        if (!exportId) return;
-        setIsExporting(true);
-        setExportError("");
-        try {
-            let config;
-            if (encryptToDid) {
-                if (!recipientId.trim()) {
-                    setExportError("Please enter a recipient DID.");
-                    setIsExporting(false);
-                    return;
-                }
-                config = { type: "TargetDid", value: recipientId.trim() };
-            } else if (protectWithPassword) {
-                if (!exportPassword) {
-                    setExportError("Please enter a password.");
-                    setIsExporting(false);
-                    return;
-                }
-                if (!exportPasswordConfirm) {
-                    setExportError("Please confirm your password.");
-                    setIsExporting(false);
-                    return;
-                }
-                if (exportPassword !== exportPasswordConfirm) {
-                    setExportError("Passwords do not match.");
-                    setIsExporting(false);
-                    return;
-                }
-                config = { type: "Password", value: exportPassword };
-            } else {
-                config = { type: "Cleartext" };
-            }
-
-            logger.info(`Creating signing request bundle for voucher ${exportId} from Dashboard with config: ${JSON.stringify(config)}`);
-            const bundleBytes = await invoke<number[]>("create_signing_request_bundle", {
-                localInstanceId: exportId,
-                config: config
-            });
-
-            const filePath = await save({
-                defaultPath: settings?.last_used_directory 
-                    ? `${settings.last_used_directory}/signature-request-${exportId.slice(0, 8)}.ask`
-                    : `signature-request-${exportId.slice(0, 8)}.ask`,
-                filters: [
-                    { name: 'Signature Request (.ask)', extensions: ['ask'] },
-                    { name: 'All Files', extensions: ['*'] }
-                ]
-            });
-
-            if (filePath) {
-                const uint8Array = new Uint8Array(bundleBytes);
-                const { writeFile } = await import("@tauri-apps/plugin-fs");
-                await writeFile(filePath, uint8Array);
-                logger.info(`Signing request bundle saved to ${filePath}`);
-                
-                // Save directory for next time
-                if (settings) {
-                    updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
-                        invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
-                    });
-                }
-
-                setShowExportModal(false);
-                setExportId("");
-                setRecipientId("");
-                setExportPassword("");
-                setExportPasswordConfirm("");
-                setExportError("");
-            }
-        } catch (e) {
-            const msg = `Failed to export signing request: ${e}`;
-            logger.error(msg);
-            setExportError(msg);
-        } finally {
-            setIsExporting(false);
-        }
+    function formatTimestamp(isoString: string): string {
+        return new Date(isoString).toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric'
+        });
     }
+
+    function formatSummary(
+        summable: Record<string, string> | undefined,
+        countable: Record<string, number> | undefined
+    ): string {
+        const s = Object.entries(summable || {}).map(([unit, amount]) => `${amount} ${unit}`);
+        const c = Object.entries(countable || {}).map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`);
+        const all = [...s, ...c];
+        return all.length > 0 ? all.join(', ') : '0.00';
+    }
+
+    // Group balances by currency unit
+    const balancesByUnit = balances.reduce((acc, bal) => {
+        const unit = bal.unit;
+        if (!acc[unit]) {
+            acc[unit] = { total: 0, balances: [] };
+        }
+        acc[unit].total += parseFloat(bal.total_amount);
+        acc[unit].balances.push(bal);
+        return acc;
+    }, {} as Record<string, { total: number; balances: AggregatedBalance[] }>);
+
+    const uniqueUnits = Object.keys(balancesByUnit);
+    const singleCurrency = uniqueUnits.length === 1;
+    const primaryUnit = singleCurrency ? uniqueUnits[0] : '';
+
+    const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Lade...";
 
     return (
         <div className="flex flex-col h-full">
             {/* Fixierte Kopfleiste */}
             <header className="flex-shrink-0 border-b border-theme-subtle px-6 py-0.5 bg-bg-card">
-                <div className="flex items-center gap-3 text-xs text-theme-light">
-                    <span className="relative flex h-2 w-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                    </span>
-                    <span>Profile:</span>
-                    <span className="font-semibold text-theme-secondary">{props.profileName}</span>
+                <div className="flex items-center justify-between gap-3 text-xs text-theme-light">
+                    <div className="flex items-center gap-3">
+                        <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                        </span>
+                        <div className="flex items-center gap-1">
+                            <span>Profile:</span>
+                            <span className="font-semibold text-theme-secondary">{props.profileName}</span>
+                        </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                        <span>ID:</span>
+                        <button 
+                            onClick={handleCopyUserId}
+                            title={copied ? "Copied!" : "Click to copy User ID"}
+                            className={`font-mono text-[10px] sm:text-xs transition-all duration-200 border px-2 py-0.5 rounded ${
+                                copied 
+                                ? 'bg-theme-success/10 text-theme-success border-theme-success/30' 
+                                : 'bg-transparent text-theme-light border-theme-subtle hover:border-theme-primary hover:text-theme-primary'
+                            }`}
+                        >
+                            {copied ? "Copied!" : truncatedUserId}
+                        </button>
+                    </div>
                 </div>
             </header>
 
-            {/* Haupt-Inhaltsbereich, der scrollbar ist */}
+            {/* Main content area that is scrollable */}
             <div className="flex-grow overflow-y-auto p-4 sm:p-6">
                 <div className="mx-auto max-w-4xl">
                     {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
 
-                    {/* User ID Anzeige */}
-                    <div className="mb-8 flex h-12 items-center justify-between gap-4 rounded-full bg-input-readonly px-4 shadow-sm border border-theme-subtle">
-                        <div className="flex items-center gap-3 overflow-hidden">
-                            <span className="text-sm font-bold text-theme-secondary flex-shrink-0">User ID</span>
-                            <span className="text-sm font-mono text-theme-light bg-card px-3 py-1 rounded-full truncate">
-                                {truncatedUserId}
-                            </span>
-                        </div>
-                        <button onClick={handleCopyUserId} title="Copy User ID" className="p-2 rounded-full hover:bg-card focus:outline-none focus:ring-2 focus:ring-theme-accent flex-shrink-0">
-                            {copied ? (
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-theme-success" viewBox="0 0 20 20" fill="currentColor">
-                                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                </svg>
-                            ) : (
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-theme-light" viewBox="0 0 20 20" fill="currentColor">
-                                    <path d="M7 9a2 2 0 012-2h6a2 2 0 012 2v6a2 2 0 01-2 2H9a2 2 0 01-2-2V9z" />
-                                    <path d="M5 3a2 2 0 00-2 2v6a2 2 0 002 2V5h6a2 2 0 00-2-2H5z" />
-                                </svg>
-                            )}
-                        </button>
-                    </div>
-
-                    {/* Guthaben-Übersicht */}
-                    <section className="grid grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] gap-6 mb-8">
-                        {balances.length > 0 ? (
-                            balances.map((balance) => (
-                                <div key={balance.standard_uuid} className="bg-input-readonly shadow-lg rounded-lg p-4 text-center border border-theme-subtle">
-                                    <p className="text-base font-semibold text-theme-light">{balance.standard_name}</p>
-                                    <p className="text-3xl font-bold text-theme-primary mt-1">{formatAmount(balance.total_amount)} <span className="text-xl font-normal">{balance.unit}</span></p>
-                                </div>
-                            ))
+                    {/* Hero-Section: Centered Total Balance */}
+                    <section className="text-center mb-12">
+                        <h1 className="text-sm font-semibold text-theme-light uppercase tracking-wider mb-2">Total Balance</h1>
+                        {singleCurrency && primaryUnit ? (
+                            <div className="flex items-center justify-center">
+                                <p className="text-6xl md:text-7xl font-bold text-theme-primary">
+                                    {formatAmount(balancesByUnit[primaryUnit].total.toString())}
+                                </p>
+                                <span className="text-3xl md:text-4xl font-normal text-theme-light ml-3">{primaryUnit}</span>
+                            </div>
                         ) : (
-                            <div className="md:col-span-2 bg-input-readonly shadow-lg rounded-xl p-6 text-center border border-theme-subtle">
-                                <p className="text-lg text-theme-light">No balance available</p>
+                            <div className="flex flex-wrap justify-center gap-6">
+                                {uniqueUnits.map(unit => (
+                                    <div key={unit} className="flex items-baseline">
+                                        <p className="text-5xl md:text-6xl font-bold text-theme-primary">
+                                            {formatAmount(balancesByUnit[unit].total.toString())}
+                                        </p>
+                                        <span className="text-2xl md:text-3xl font-normal text-theme-light ml-2">{unit}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        {balances.length > 1 && (
+                            <div className="mt-4 flex flex-wrap justify-center gap-4">
+                                {balances.map((balance) => (
+                                    <div key={balance.standard_uuid} className="bg-bg-card-alternate rounded-lg px-4 py-2 border border-theme-subtle">
+                                        <p className="text-xs text-theme-light">{balance.standard_name}</p>
+                                        <p className="text-lg font-semibold text-theme-secondary">
+                                            {formatAmount(balance.total_amount)} {balance.unit}
+                                        </p>
+                                    </div>
+                                ))}
                             </div>
                         )}
                     </section>
 
-                    {/* Hauptaktionen */}
-                    <section className="grid grid-cols-2 md:grid-cols-4 justify-center gap-4 mb-8">
-                        <Button onClick={props.onNavigateToSend} className="flex-1">Send</Button>
-                        <Button onClick={props.onNavigateToReceive} className="flex-1">Receive / Process</Button>
-                        <Button onClick={props.onNavigateToHistory} variant="secondary" className="flex-1">History</Button>
-                        <Button onClick={props.onNavigateToCreateVoucher} className="flex-1">Create Voucher</Button>
+                    {/* Quick Actions */}
+                    <section className="flex justify-center gap-4 mb-12">
+                        <Button 
+                            onClick={props.onNavigateToReceive} 
+                            className="px-8 py-4 text-lg"
+                            variant="primary"
+                        >
+                            Receive
+                        </Button>
+                        <Button 
+                            onClick={props.onNavigateToSend} 
+                            className="px-8 py-4 text-lg"
+                            variant="secondary"
+                        >
+                            Send
+                        </Button>
+                        <Button 
+                            onClick={props.onNavigateToCreateVoucher}
+                            className="px-4 py-4 text-lg"
+                            variant="secondary"
+                            title="Create Voucher"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                        </Button>
                     </section>
 
-                    {/* Gutschein-Liste */}
-                    <section>
-                        <h2 className="text-2xl font-semibold mb-4 text-theme-secondary">My Vouchers</h2>
-                        <div className="space-y-4">
-                            {vouchers.length > 0 ? vouchers.map(v => {
-                                const status = getVoucherStatus(v.status);
-                                return (
-                                    <div key={v.local_instance_id} className="relative">
-                                        {v.non_redeemable_test_voucher && (
-                                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-                                                <span className="text-[90px] font-bold text-gray-800/20 transform -rotate-12 select-none pointer-events-none">TEST</span>
+                    {/* Optional History Preview */}
+                    {recentTransactions.length > 0 && (
+                        <section className="mb-8">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-lg font-semibold text-theme-secondary">Recent Activity</h2>
+                                <button 
+                                    onClick={props.onNavigateToHistory}
+                                    className="text-sm text-theme-accent hover:underline"
+                                >
+                                    View All
+                                </button>
+                            </div>
+                            <div className="space-y-3">
+                                {recentTransactions.map(record => (
+                                    <button 
+                                        key={record.id} 
+                                        onClick={props.onNavigateToHistory}
+                                        className="w-full bg-bg-card-alternate rounded-lg p-3 border border-theme-subtle flex items-center justify-between hover:border-theme-primary hover:shadow-sm transition-all text-left group"
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <div className={`flex items-center justify-center h-8 w-8 rounded-full transition-transform group-hover:scale-110 ${record.direction === 'sent' ? 'bg-red-200 text-red-800' : 'bg-green-200 text-green-800'}`}>
+                                                {record.direction === 'sent' ? '↑' : '↓'}
                                             </div>
-                                        )}
-                                        <button
-                                            onClick={() => props.onShowDetails(v.local_instance_id)}
-                                            className="w-full text-left bg-bg-card-alternate rounded-lg border border-theme-subtle shadow-sm p-4 space-y-3 transition-all duration-200 ease-in-out hover:shadow-md hover:border-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary focus:ring-opacity-50 relative z-10"
-                                        >
-                                            {/* Header: Amount and Voucher Name */}
-                                            <div className="flex justify-between items-start">
-                                                <div>
-                                                    <div className="flex items-baseline text-2xl font-bold text-theme-primary">
-                                                        <span className="inline-block min-w-[4rem] text-right">{formatAmount(v.current_amount)}</span>
-                                                        <span className="ml-2 text-lg font-normal text-theme-light">{v.unit}</span>
-                                                    </div>
-                                                    <p className="text-xs text-theme-light font-mono">by {v.creator_first_name} {v.creator_last_name}</p>
-                                                </div>
-                                                <div className="text-right">
-                                                    <p className="text-xl font-normal text-theme-light">{v.voucher_standard_name}</p>
-                                                </div>
+                                            <div>
+                                                <p className="font-semibold text-sm text-theme-primary capitalize">
+                                                    {record.direction === 'sent' ? 'Sent' : 'Received'}
+                                                </p>
+                                                <p className="text-xs text-theme-light">
+                                                    {formatTimestamp(record.timestamp)}
+                                                </p>
                                             </div>
-
-                                            {/* Body: Description */}
-                                            <p className="text-sm text-theme-secondary">{truncate(v.description, 120)}</p>
-
-                                            {/* Footer: Validity and Indicators */}
-                                            <div className="border-t border-theme-subtle pt-2">
-                                                <div className="flex justify-between items-center text-xs text-theme-light">
-                                                    <p>Valid until: <span className="font-semibold">{formatDate(v.valid_until)}</span></p>
-                                                    <div className="flex items-center space-x-3 text-sm">
-                                                        {v.has_collateral && <span title="Has Collateral">🛡️</span>}
-                                                        <span title="Signatures">✍️ {v.guarantor_signatures_count + v.additional_signatures_count}</span>
-                                                    </div>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={`px-2 py-1 text-xs font-bold rounded-full capitalize ${status.color}`} title={status.tooltip}>
-                                                            {status.name}
-                                                        </span>
-                                                        {v.non_redeemable_test_voucher && (
-                                                            <span className="px-3 py-1 text-xs font-bold rounded-full text-purple-800 bg-purple-200" title="Non-redeemable test voucher">Test</span>
-                                                        )}
-                                                    </div>
-                                                </div>
-
-                                                {/* Help text and action for incomplete vouchers */}
-                                                {status.name === 'incomplete' && (
-                                                    <div className="mt-3 p-3 bg-yellow-50 rounded-md border border-yellow-100 flex flex-col sm:flex-row items-center justify-between gap-3 animate-in fade-in zoom-in duration-300">
-                                                        <p className="text-sm text-yellow-800 leading-tight">
-                                                            <strong>Missing Signatures:</strong> This voucher needs more signatures to become active.
-                                                        </p>
-                                                        <Button 
-                                                            size="xs" 
-                                                            variant="primary" 
-                                                            className="bg-theme-accent text-white whitespace-nowrap"
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                setExportId(v.local_instance_id);
-                                                                setShowExportModal(true);
-                                                            }}
-                                                        >
-                                                            ✍️ Request Signature
-                                                        </Button>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </button>
-                                    </div>
-                                );
-                            }) : (
-                                <div className="text-center text-theme-light py-8 bg-input-readonly rounded-lg border border-theme-subtle">
-                                    <p>No vouchers found.</p>
-                                </div>
-                            )}
-                        </div>
-                    </section>
+                                        </div>
+                                        <p className="font-semibold text-theme-secondary">
+                                            {formatSummary(record.summableAmounts, record.countableItems)}
+                                        </p>
+                                    </button>
+                                ))}
+                            </div>
+                        </section>
+                    )}
                 </div>
             </div>
 
-            <ConfirmationModal
-                isOpen={showExportModal}
-                title="Export Signature Request"
-                description={
-                    <div className="space-y-4">
-                        <div className="flex items-center gap-2">
-                            <input
-                                type="checkbox"
-                                id="dashboard-encryptToDid"
-                                checked={encryptToDid}
-                                onChange={(e) => setEncryptToDid(e.target.checked)}
-                                className="h-4 w-4 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
-                            />
-                            <label htmlFor="dashboard-encryptToDid" className="text-sm font-medium text-theme-primary">
-                                Encrypt for a specific contact (DID required)
-                            </label>
-                        </div>
-
-                        {encryptToDid ? (
-                            <div>
-                                <p className="text-xs text-theme-light mb-1">Enter the signer's DID:</p>
-                                <input
-                                    type="text"
-                                    value={recipientId}
-                                    onChange={(e) => setRecipientId(e.target.value)}
-                                    placeholder="did:key:z..."
-                                    className="w-full px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
-                                    autoFocus
-                                />
-                            </div>
-                        ) : (
-                            <div className="space-y-4">
-                                <div className="flex items-center gap-2">
-                                    <input
-                                        type="checkbox"
-                                        id="dashboard-protectWithPassword"
-                                        checked={protectWithPassword}
-                                        onChange={(e) => setProtectWithPassword(e.target.checked)}
-                                        className="h-4 w-4 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
-                                    />
-                                    <label htmlFor="dashboard-protectWithPassword" className="text-sm font-medium text-theme-primary">
-                                        Protect with password (Optional)
-                                    </label>
-                                </div>
-
-                                {protectWithPassword && (
-                                    <div className="space-y-3">
-                                        <div>
-                                            <p className="text-xs text-theme-light mb-1">Enter a password for encryption:</p>
-                                            <div className="relative">
-                                                <input
-                                                    type={showExportPassword ? "text" : "password"}
-                                                    value={exportPassword}
-                                                    onChange={(e) => {
-                                                        setExportPassword(e.target.value);
-                                                        setExportError("");
-                                                    }}
-                                                    placeholder="Password"
-                                                    className="w-full px-3 py-2 pr-20 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setShowExportPassword(!showExportPassword)}
-                                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-theme-light hover:text-theme-primary"
-                                                >
-                                                    {showExportPassword ? "Hide" : "Show"}
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <p className="text-xs text-theme-light mb-1">Confirm password:</p>
-                                            <div className="relative">
-                                                <input
-                                                    type={showExportPassword ? "text" : "password"}
-                                                    value={exportPasswordConfirm}
-                                                    onChange={(e) => {
-                                                        setExportPasswordConfirm(e.target.value);
-                                                        setExportError("");
-                                                    }}
-                                                    placeholder="Confirm Password"
-                                                    className="w-full px-3 py-2 pr-20 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setShowExportPassword(!showExportPassword)}
-                                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-theme-light hover:text-theme-primary"
-                                                >
-                                                    {showExportPassword ? "Hide" : "Show"}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                        {exportError && <p className="text-red-500 text-sm mt-2">{exportError}</p>}
-                    </div>
-                }
-                confirmText="Export"
-                onConfirm={handleExportSigningRequest}
-                onCancel={() => {
-                    setShowExportModal(false);
-                    setExportId("");
-                    setRecipientId("");
-                    setExportPassword("");
-                    setExportError("");
-                }}
-                isProcessing={isExporting}
-            />
         </div>
     );
 }

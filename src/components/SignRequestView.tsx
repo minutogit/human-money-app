@@ -147,9 +147,17 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
 
     return (
         <div className="max-w-4xl mx-auto space-y-6 p-4 sm:p-6">
-            <header className="flex justify-between items-center">
+            <header className="flex items-center gap-4">
+                <button
+                    onClick={onBack}
+                    className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
+                    title="Cancel"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                </button>
                 <h1 className="text-2xl font-bold text-theme-primary">Signature Request</h1>
-                <Button variant="outline" size="sm" onClick={onBack}>Cancel</Button>
             </header>
 
             {feedbackMsg && (

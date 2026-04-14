@@ -251,7 +251,10 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 const fileUint8Array = await readFile(bundlePath);
                 fileData = Array.from(fileUint8Array);
             } else {
-                throw new Error("No file provided");
+                setFeedbackMsg("No file provided");
+                setIsProcessing(false);
+                setShowConfirm(false);
+                return;
             }
 
             if (fileType === 'transfer') {
@@ -301,7 +304,10 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 
                 const standardTomlContent = Object.values(standardDefinitionsToml)[0];
                 if (!standardTomlContent) {
-                    throw new Error("No voucher standards available");
+                    setFeedbackMsg("No voucher standards available");
+                    setIsProcessing(false);
+                    setShowConfirm(false);
+                    return;
                 }
 
                 const updatedInstanceId = await protectAction(async (password) => {
@@ -336,7 +342,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             // Check for "already attached" case
             if (errorStr.includes("already attached to voucher")) {
                 // Extract local ID from our new [LOCAL_ID:...] format
-                const match = errorStr.match(/\[LOCAL_ID:([\w-]+)\]/);
+                const match = errorStr.match(/\[LOCAL_ID:([\w-]+)]/);
                 const voucherId = match ? match[1] : null;
                 
                 if (voucherId) {
@@ -368,13 +374,21 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     }
 
     return (
-        <div className="flex flex-col h-full max-w-2xl mx-auto">
+        <div className="flex flex-col h-full max-w-4xl mx-auto">
             <header className="flex-shrink-0 mb-6">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4 mb-2">
+                    <button
+                        onClick={onBack}
+                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
+                        title="Cancel"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                        </svg>
+                    </button>
                     <h1 className="text-2xl font-bold text-theme-primary">Receive & Process</h1>
-                    <Button variant="secondary" onClick={onBack}>Cancel</Button>
                 </div>
-                <p className="text-theme-light mt-1">Process transfers, signature requests, or responses you have received.</p>
+                <p className="text-theme-light ml-14">Process transfers, signature requests, or responses you have received.</p>
             </header>
 
             <div className="flex-grow">

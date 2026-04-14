@@ -78,7 +78,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
         const cleanSeedText = (text: string) => {
             return text
                 .toLowerCase()
-                .replace(/[0-9\.\,\-\:]/g, ' ') // Remove digits and punctuation
+                .replace(/[0-9.,\-:]/g, ' ') // Remove digits and punctuation
                 .replace(/[\r\n\t]/g, ' ')      // Replace tabs and newlines with space
                 .replace(/\s+/g, ' ')          // Collapse multiple spaces
                 .trim();
@@ -88,7 +88,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
         if (cleaned !== rawPhrase && rawPhrase.length > 0) {
             // Check if we should auto-apply cleaning. 
             // For recreate, we apply it if there are numbers or multiple spaces.
-            if (/[0-9\.\,\-\:]/.test(rawPhrase) || /\s\s/.test(rawPhrase)) {
+            if (/[0-9.,\-:]/.test(rawPhrase) || /\s\s/.test(rawPhrase)) {
                 setRawPhrase(cleaned);
                 return;
             }
@@ -361,7 +361,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
 
     return (
         <div className="w-full h-full flex flex-col items-center justify-center">
-            <div className="w-full max-w-2xl min-w-[420px] bg-bg-card shadow-2xl rounded-2xl p-8 border border-theme-subtle">
+            <div className="w-full max-w-4xl min-w-[420px] bg-bg-card shadow-2xl rounded-2xl p-8 border border-theme-subtle">
                 <div className="text-center mb-6">
                     <h1 className="text-4xl font-extrabold text-theme-primary">Human Money App</h1>
                     <p className="text-lg text-theme-light mt-1">Recreate Profile from Seed</p>

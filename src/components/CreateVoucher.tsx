@@ -16,7 +16,7 @@ interface CreateVoucherProps {
 
 // Hilfs-Komponente zur Strukturierung des Formulars
 const Fieldset: React.FC<{ legend: string; children: React.ReactNode }> = ({ legend, children }) => (
-    <fieldset className="rounded-lg border border-theme-subtle p-4 mb-6">
+    <fieldset className="rounded-lg border border-theme-subtle p-5 mb-6">
         <legend className="px-2 text-lg font-semibold text-theme-primary">{legend}</legend>
         <div className="space-y-4 pt-2">
             {children}
@@ -209,8 +209,19 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const inputClass = "block w-full rounded-md border-theme-subtle bg-bg-app px-3 py-2 text-theme-secondary shadow-sm focus:border-theme-accent focus:ring focus:ring-theme-accent focus:ring-opacity-50";
 
     return (
-        <div className="mx-auto max-w-2xl">
-            <h1 className="text-3xl font-bold text-center mb-6 text-theme-primary">Create New Voucher</h1>
+        <div className="mx-auto max-w-4xl">
+            <header className="flex items-center gap-4 mb-4">
+                <button
+                    onClick={onCancel}
+                    className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
+                    title="Cancel"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                </button>
+                <h1 className="text-2xl font-bold text-theme-primary">Create New Voucher</h1>
+            </header>
             <div className="rounded-lg border border-theme-subtle bg-bg-card-alternate p-6 shadow-lg">
                 <form onSubmit={handleCreateClick}>
                     <Fieldset legend="Basic Information">
@@ -363,7 +374,6 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                     )}
 
                     <div className="flex justify-end gap-4 pt-6">
-                        <Button type="button" onClick={onCancel} variant="secondary" disabled={isLoading}>Cancel</Button>
                         <Button type="submit" disabled={isLoading}>{isLoading ? "Creating..." : "Create Voucher"}</Button>
                     </div>
                 </form>

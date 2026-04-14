@@ -131,11 +131,19 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
             <div className="text-center p-8 text-theme-error bg-red-100 rounded-lg">
                 <p className="font-bold">Error Loading Voucher</p>
                 <p className="text-sm mt-2 font-mono">{errorMsg}</p>
-                <Button onClick={onBack} variant="secondary" className="mt-6">Back to Dashboard</Button>
+                <button
+                    onClick={onBack}
+                    className="mt-6 p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
+                    title="Back"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                </button>
             </div>
         </div>
     );
-    if (!details) return <div className="p-4 sm:p-6 min-h-screen"><div className="text-center p-8 text-theme-light">No details found for this voucher.</div></div>;
+    if (!details) return <div className="min-h-screen"><div className="text-center p-8 text-theme-light">No details found for this voucher.</div></div>;
 
     const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
     const creator = details.creator;
@@ -143,9 +151,19 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
     const statusInfo = getDerivedVoucherStatus(details);
 
     return (
-        <div className="max-w-6xl mx-auto space-y-6 p-4 sm:p-6">
-            <header className="flex justify-between items-center">
-                <Button onClick={onBack} variant="outline" size="sm">&larr; Back to Dashboard</Button>
+        <div className="max-w-6xl mx-auto space-y-6">
+            <header className="flex items-center gap-4">
+                <button
+                    onClick={onBack}
+                    className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
+                    title="Back"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                </button>
+                <h1 className="text-2xl font-bold text-theme-primary">Voucher Details</h1>
+                <div className="flex-grow"></div>
                 <div className="flex items-center gap-4">
                     {statusInfo.name === 'Incomplete' && (
                         <Button 

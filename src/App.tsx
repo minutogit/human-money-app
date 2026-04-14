@@ -17,6 +17,7 @@ import { VoucherDetailsView } from './components/VoucherDetailsView';
 import { ReceiveView } from './components/ReceiveView';
 import { ReceiveSuccessView } from './components/ReceiveSuccessView';
 import { Dashboard } from './components/Dashboard';
+import { WalletView } from './components/WalletView';
 import { SignRequestView } from './components/SignRequestView';
 import { WalletRecovery } from './components/WalletRecovery';
 import { RecreateProfile } from './components/RecreateProfile';
@@ -33,15 +34,16 @@ type AppState =
     | { view: "recreate_profile" }
     | { view: "needs_recovery" }
     | { view: "settings" }
-    | { view: "create_voucher" }
-    | { view: "voucher_details"; voucherId: string }
+    | { view: "create_voucher"; previousView?: AppState }
+    | { view: "voucher_details"; voucherId: string; previousView?: AppState }
     | { view: "send_vouchers" }
     | { view: "receive_bundle" }
     | { view: "transaction_history" }
     | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string }
     | { view: "receive_success"; payload: ReceiveSuccessPayload & { voucherData?: any } }
     | { view: "address_book" }
-    | { view: "sign_request"; voucherData: any };
+    | { view: "sign_request"; voucherData: any }
+    | { view: "wallet" };
 
 function AppContent() {
     const [appState, setAppState] = useState<AppState>({ view: "loading" });
@@ -130,7 +132,6 @@ function AppContent() {
                     onNavigateToSend={() => setAppState({ view: "send_vouchers" })}
                     onNavigateToReceive={() => setAppState({ view: "receive_bundle" })}
                     onNavigateToHistory={() => setAppState({ view: "transaction_history" })}
-                    onShowDetails={(voucherId) => setAppState({ view: "voucher_details", voucherId })}
                 />;
             case "recreate_profile":
                 return <RecreateProfile
@@ -142,11 +143,11 @@ function AppContent() {
             case "needs_recovery":
                 return <WalletRecovery onRecoverySuccess={() => setAppState({ view: "logged_in" })} onSwitchToLogin={() => setAppState({ view: "needs_login" })} />;
             case "create_voucher":
-                return <CreateVoucher onVoucherCreated={() => setAppState({ view: "logged_in" })} onCancel={() => setAppState({ view: "logged_in" })} />;
+                return <CreateVoucher onVoucherCreated={() => setAppState(appState.previousView || { view: "logged_in" })} onCancel={() => setAppState(appState.previousView || { view: "logged_in" })} />;
             case "voucher_details":
                 return <VoucherDetailsView
                     voucherId={appState.voucherId}
-                    onBack={() => setAppState({ view: "logged_in" })}
+                    onBack={() => setAppState(appState.previousView || { view: "logged_in" })}
                 />;
             case "address_book":
                 return <AddressBook onBack={() => setAppState({ view: "logged_in" })} />;
@@ -190,6 +191,13 @@ function AppContent() {
                     voucherData={appState.voucherData}
                     onBack={() => setAppState({ view: "logged_in" })}
                 />;
+            case "wallet":
+                return <WalletView
+                    profileName={profileName}
+                    onShowDetails={(voucherId: string) => setAppState({ view: "voucher_details", voucherId, previousView: appState })}
+                    onBack={() => setAppState({ view: "logged_in" })}
+                    onNavigateToCreateVoucher={() => setAppState({ view: "create_voucher", previousView: appState })}
+                />;
             default:
                 return (
                     <div className="flex h-full w-full items-center justify-center">
@@ -216,8 +224,16 @@ function AppContent() {
                                 </div>
                                 <nav className="flex flex-grow flex-col space-y-2 text-left">
                                     <button onClick={() => setAppState({ view: "logged_in" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Dashboard</button>
+                                    <button onClick={() => setAppState({ view: "wallet" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Wallet</button>
+                                    <button onClick={() => setAppState({ view: "create_voucher", previousView: appState })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left flex items-center gap-2">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                        </svg>
+                                        Create Voucher
+                                    </button>
                                     <button onClick={() => setAppState({ view: "send_vouchers" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Send</button>
                                     <button onClick={() => setAppState({ view: "receive_bundle" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Receive / Process</button>
+                                    <button onClick={() => setAppState({ view: "transaction_history" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">History</button>
                                     <button onClick={() => setAppState({ view: "address_book" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Address Book</button>
                                     <a href="#" onClick={() => setAppState({ view: 'settings' })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Settings</a>
                                 </nav>
