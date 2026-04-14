@@ -162,8 +162,12 @@ function AppContent() {
                 return <ReceiveView
                     onBack={() => setAppState({ view: "logged_in" })}
                     onReceiveSuccess={(payload) => {
+                        // Check if this is a signature attached feedback
+                        if (payload.isSignatureAttached && payload.voucherId) {
+                            setAppState({ view: "voucher_details", voucherId: payload.voucherId });
+                        }
                         // Check if this is a signature request (contains voucherData)
-                        if ((payload as any).voucherData) {
+                        else if ((payload as any).voucherData) {
                             setAppState({ view: "sign_request", voucherData: (payload as any).voucherData });
                         } else {
                             setAppState({ view: "receive_success", payload });

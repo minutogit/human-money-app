@@ -216,6 +216,8 @@ export interface ReceiveSuccessPayload {
     transferSummary: TransferSummary;
     involvedVouchers: string[];
     involvedVouchersDetails?: InvolvedVoucherInfo[];
+    isSignatureAttached?: boolean;
+    voucherId?: string;
 }
 
 export interface AppSettings {

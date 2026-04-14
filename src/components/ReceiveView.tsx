@@ -26,6 +26,13 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     const [fileType, setFileType] = useState<'transfer' | 'ask' | 'sig' | null>(null);
     const [bundlePassword, setBundlePassword] = useState("");
     const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [resultModal, setResultModal] = useState<{
+        isOpen: boolean;
+        title: string;
+        content: React.ReactNode;
+        confirmText: string;
+        voucherId?: string;
+    } | null>(null);
 
     useEffect(() => {
         async function fetchData() {
@@ -297,8 +304,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     throw new Error("No voucher standards available");
                 }
 
-                await protectAction(async (password) => {
-                    await invoke("process_and_attach_signature", {
+                const updatedInstanceId = await protectAction(async (password) => {
+                    return await invoke<string>("process_and_attach_signature", {
                         containerBytes: fileData,
                         standardTomlContent,
                         containerPassword: bundlePassword || null,
@@ -306,13 +313,51 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     });
                 });
                 
-                logger.info("Signature processed and attached successfully.");
-                setFeedbackMsg("Signature successfully attached to voucher!");
-                setTimeout(() => onBack(), 2000);
+                if (updatedInstanceId) {
+                    logger.info(`Signature processed and attached successfully to voucher: ${updatedInstanceId}`);
+                    setResultModal({
+                        isOpen: true,
+                        title: "Signature Attached",
+                        content: (
+                            <div>
+                                <p className="mb-2">The signature has been successfully attached to the voucher.</p>
+                                <p className="text-theme-subtle">You will now be redirected to the voucher details.</p>
+                            </div>
+                        ),
+                        confirmText: "Go to Voucher",
+                        voucherId: updatedInstanceId
+                    });
+                }
             }
 
         } catch (e) {
-            const msg = `Failed during file processing. Error: ${e instanceof Error ? e.message : String(e)}`;
+            const errorStr = e instanceof Error ? e.message : String(e);
+            
+            // Check for "already attached" case
+            if (errorStr.includes("already attached to voucher")) {
+                // Extract local ID from our new [LOCAL_ID:...] format
+                const match = errorStr.match(/\[LOCAL_ID:([\w-]+)\]/);
+                const voucherId = match ? match[1] : null;
+                
+                if (voucherId) {
+                    logger.info(`Detected duplicate signature for voucher: ${voucherId}. Navigating there.`);
+                    setResultModal({
+                        isOpen: true,
+                        title: "Signature Already Exists",
+                        content: (
+                            <div>
+                                <p className="mb-2">This signature was already added previously to the voucher.</p>
+                                <p className="text-theme-subtle">Redirecting to the voucher details.</p>
+                            </div>
+                        ),
+                        confirmText: "Go to Voucher",
+                        voucherId: voucherId
+                    });
+                    return;
+                }
+            }
+
+            const msg = `Failed during file processing. Error: ${errorStr}`;
             logger.error(msg);
             if (e instanceof Error && e.stack) logger.error(e.stack);
             setFeedbackMsg(`Error: ${msg}`);
@@ -407,6 +452,32 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 }}
                 isProcessing={isProcessing}
             />
+
+            {resultModal && (
+                <ConfirmationModal
+                    isOpen={resultModal.isOpen}
+                    title={resultModal.title}
+                    description={resultModal.content}
+                    confirmText={resultModal.confirmText}
+                    cancelText="Close"
+                    onConfirm={() => {
+                        if (resultModal.voucherId) {
+                            onReceiveSuccess({
+                                senderId: "",
+                                transferSummary: { summableAmounts: {}, countableItems: {} },
+                                involvedVouchers: [resultModal.voucherId],
+                                isSignatureAttached: true,
+                                voucherId: resultModal.voucherId
+                            });
+                        }
+                        setResultModal(null);
+                    }}
+                    onCancel={() => {
+                        setResultModal(null);
+                        onBack();
+                    }}
+                />
+            )}
         </div>
     );
 }

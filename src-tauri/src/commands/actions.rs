@@ -433,7 +433,7 @@ pub fn process_and_attach_signature(
     container_password: Option<String>,
     wallet_password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     info!("Processing and attaching signature from bundle...");
     let mut service = state.service.lock().unwrap();
     service.process_and_attach_signature(
