@@ -299,3 +299,18 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 * **Automatisches Bereinigen:** Beim Login werden automatisch abgelaufene Transfer-Bundle-Daten aus dem Verlauf gelöscht, basierend auf dem konfigurierten Aufbewahrungszeitraum.
 * **Log-Rotation:** Implementierung einer Log-Rotationsfunktion, die beim Start die Größe der Logdatei prüft und diese bei Überschreitung eines definierten Limits kürzt. Logging wird zusätzlich in eine Datei im Anwendungs-Log-Verzeichnis geschrieben.
 * **Erweiterte Logging-Utility:** Neue Frontend-Logging-Funktionen (`logger.info`, `logger.warn`, `logger.error`) senden Logs direkt ins Rust-Terminal für besseres Debugging.
+
+**9. Development & CI Workflow**
+
+Um eine reibungslose Entwicklung im Team und automatische Builds auf GitHub zu gewährleisten, müssen folgende Regeln beachtet werden:
+
+*   **Lokale Core-Entwicklung:**
+    *   Die `human_money_core` wird lokal oft parallel zur App entwickelt.
+    *   **Regel:** Verwende NIEMALS einen `[patch]`-Block in der `src-tauri/Cargo.toml`. Dies führt zu Fehlern auf GitHub, da der Pfad dort nicht existiert.
+    *   **Lösung:** Nutze stattdessen die Datei `src-tauri/.cargo/config.toml` (diese ist in der `.gitignore` enthalten). Dort wird der lokale Pfad für Cargo registriert, ohne das Repository für andere zu korrumpieren.
+*   **Cargo.lock Konsistenz:**
+    *   Wenn die Core-Abhängigkeiten geändert werden, muss die `src-tauri/Cargo.lock` synchronisiert werden.
+    *   **Befehl:** `cd src-tauri && cargo update -p human_money_core`. Dieser Befehl aktualisiert den Cache in der Lock-Datei auf die neue Quelle/den neuen Pfad. Ohne diesen Schritt schlägt der GitHub-Build mit "failed to load source" fehl.
+*   **GitHub Releases:**
+    *   Ein Release wird automatisch durch das Pushen eines Version-Tags ausgelöst (Format: `v*`, z. B. `v0.1.0-alpha.3`).
+    *   Voraussetzung: Der `master`-Zweig im `human-money-core` Repository muss auf dem Stand sein, den die App benötigt.

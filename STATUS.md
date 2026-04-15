@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0-alpha.2"
+version: "0.1.0-alpha.4"
 phase: "alpha"
 health: "green"
-last_updated: "2026-04-14"
+last_updated: "2026-04-15"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -85,7 +85,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 - **Frontend**: React 19 + TypeScript + Tailwind CSS v4
 - **Backend**: Rust (Tauri v2), thin bridge to `human_money_core` via Tauri commands
-- **Core dependency**: `human_money_core` via git with local `[patch]` to `../../human-money-core`
+- **Core dependency**: `human_money_core` via git in `Cargo.toml`. Local development uses git-ignored `src-tauri/.cargo/config.toml` for `[patch]` to ensure CI compatibility.
 - **13 UI components**: Dashboard, CreateVoucher, SendView, ReceiveView, TransactionHistory, Settings, Login, etc.
 - **5 Tauri command modules**: actions, auth, queries, utils
 
@@ -108,6 +108,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Encrypted Address Book (App-side persistence)
 - [x] Signature Impact Evaluation Engine (Real-time hypothesis testing in UI)
 - [x] Voucher Signature Management (Removal of uncirculated signatures)
+- [x] CI/Release workflow stabilization (git-ignored local patches)
 
 ## Next Milestones
 
