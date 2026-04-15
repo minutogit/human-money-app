@@ -34,6 +34,3 @@ tauri-plugin-dialog = "2.4.0"
 tauri-plugin-fs = "2.4.2"
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
 
-[patch."https://github.com/minutogit/human-money-core.git"]
-human_money_core = { path = "../../human-money-core" }
-
