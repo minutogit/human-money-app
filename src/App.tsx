@@ -22,6 +22,8 @@ import { SignRequestView } from './components/SignRequestView';
 import { WalletRecovery } from './components/WalletRecovery';
 import { RecreateProfile } from './components/RecreateProfile';
 import AddressBook from './components/AddressBook';
+import { ConflictDetailsView } from './components/ConflictDetailsView';
+import { ConflictListView } from './components/ConflictListView';
 import { ProfileInfo, ReceiveSuccessPayload } from './types';
 // WICHTIG: Der Import für den Provider
 import { SessionProvider, useSession } from './context/SessionContext';
@@ -43,6 +45,8 @@ type AppState =
     | { view: "receive_success"; payload: ReceiveSuccessPayload & { voucherData?: any } }
     | { view: "address_book" }
     | { view: "sign_request"; voucherData: any }
+    | { view: "conflict_details"; proofId: string; previousView?: AppState }
+    | { view: "conflict_list" }
     | { view: "wallet" };
 
 function AppContent() {
@@ -132,6 +136,7 @@ function AppContent() {
                     onNavigateToSend={() => setAppState({ view: "send_vouchers" })}
                     onNavigateToReceive={() => setAppState({ view: "receive_bundle" })}
                     onNavigateToHistory={() => setAppState({ view: "transaction_history" })}
+                    onNavigateToConflicts={() => setAppState({ view: "conflict_list" })}
                 />;
             case "recreate_profile":
                 return <RecreateProfile
@@ -148,6 +153,7 @@ function AppContent() {
                 return <VoucherDetailsView
                     voucherId={appState.voucherId}
                     onBack={() => setAppState(appState.previousView || { view: "logged_in" })}
+                    onViewConflict={(proofId) => setAppState({ view: "conflict_details", proofId, previousView: appState })}
                 />;
             case "address_book":
                 return <AddressBook onBack={() => setAppState({ view: "logged_in" })} />;
@@ -190,6 +196,16 @@ function AppContent() {
                 return <SignRequestView
                     voucherData={appState.voucherData}
                     onBack={() => setAppState({ view: "logged_in" })}
+                />;
+            case "conflict_details":
+                return <ConflictDetailsView
+                    proofId={appState.proofId}
+                    onBack={() => setAppState(appState.previousView || { view: "logged_in" })}
+                />;
+            case "conflict_list":
+                return <ConflictListView
+                    onBack={() => setAppState({ view: "logged_in" })}
+                    onViewConflict={(proofId) => setAppState({ view: "conflict_details", proofId, previousView: { view: "conflict_list" } })}
                 />;
             case "wallet":
                 return <WalletView
@@ -235,6 +251,12 @@ function AppContent() {
                                     <button onClick={() => setAppState({ view: "receive_bundle" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Receive / Process</button>
                                     <button onClick={() => setAppState({ view: "transaction_history" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">History</button>
                                     <button onClick={() => setAppState({ view: "address_book" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Address Book</button>
+                                    <button onClick={() => setAppState({ view: "conflict_list" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left flex items-center gap-2">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                        Fraud Reports
+                                    </button>
                                     <a href="#" onClick={() => setAppState({ view: 'settings' })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Settings</a>
                                 </nav>
                                 <div className="mt-auto border-t border-theme-subtle pt-4">

@@ -14,6 +14,7 @@ import ContactDialog from "./ContactDialog";
 interface VoucherDetailsViewProps {
     voucherId: string;
     onBack: () => void;
+    onViewConflict?: (proofId: string) => void;
 }
 
 // ===== Helper Components for Structure & Style =====
@@ -39,7 +40,7 @@ const InfoRow: React.FC<{ label: string; children: React.ReactNode; isMono?: boo
 
 // ===== Main Component =====
 
-export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProps) {
+export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: VoucherDetailsViewProps) {
     const [details, setDetails] = useState<VoucherDetails | null>(null);
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const { protectAction } = useSession();
@@ -59,6 +60,12 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [showRemoveSignatureModal, setShowRemoveSignatureModal] = useState<string | null>(null); // contains signature_id
     const [isRemovingSignature, setIsRemovingSignature] = useState(false);
+    const [proofId, setProofId] = useState<string | null>(null);
+    const [isFetchingProofId, setIsFetchingProofId] = useState(false);
+
+    // Derived states
+    const voucher = details?.voucher;
+    const isQuarantined = details && typeof details.status === 'object' && 'Quarantined' in details.status;
 
     useEffect(() => {
         logger.info(`VoucherDetailsView: Displayed for voucher ID: ${voucherId}`);
@@ -85,6 +92,23 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
         fetchDetails();
     }, [voucherId]);
 
+    useEffect(() => {
+        if (isQuarantined && !proofId && !isFetchingProofId) {
+            const fetchProofId = async () => {
+                setIsFetchingProofId(true);
+                try {
+                    const id = await invoke<string | null>("get_proof_id_for_voucher", { localId: voucherId });
+                    setProofId(id);
+                } catch (e) {
+                    logger.error(`Failed to fetch proof ID for voucher ${voucherId}: ${e}`);
+                } finally {
+                    setIsFetchingProofId(false);
+                }
+            };
+            fetchProofId();
+        }
+    }, [details, proofId, voucherId]);
+
     const refreshDetails = async () => {
         try {
             const result = await invoke<VoucherDetails>("get_voucher_details", { localId: voucherId });
@@ -94,24 +118,68 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
         }
     };
 
-    function getDerivedVoucherStatus(voucher: VoucherDetails): { name: string; color: string; tooltip: string } {
-        const signatures = voucher.signatures;
-        // Count signatures that are NOT the issuer/creator
-        const extraSignatures = signatures.filter(s => s.role !== 'issuer' && s.role !== 'creator').length;
+    function getDerivedVoucherStatus(details: VoucherDetails): { name: string; color: string; tooltip: string } {
+        const { status } = details;
+        const voucher = details.voucher;
 
-        // Heuristic: If we have fewer than 3 extra signatures, we consider it incomplete for standards like Minuto.
-        // Ideally we would read the required count from the standard TOML.
+        if (status === "Active") {
+            return {
+                name: 'Active',
+                color: 'text-green-800 bg-green-200',
+                tooltip: 'This voucher is fully signed and ready for use.'
+            };
+        }
+
+        if (status === "Archived") {
+            return {
+                name: 'Archived',
+                color: 'text-gray-800 bg-gray-200',
+                tooltip: 'This voucher has been spent and is kept for history.'
+            };
+        }
+
+        if (typeof status === 'object') {
+            if ('Incomplete' in status) {
+                return {
+                    name: 'Incomplete',
+                    color: 'text-yellow-800 bg-yellow-200',
+                    tooltip: status.Incomplete.reasons.map(r => {
+                        if (r.BusinessRule) return r.BusinessRule.message;
+                        if (r.AdditionalSignatureCountLow) return `Missing signatures: ${r.AdditionalSignatureCountLow.current}/${r.AdditionalSignatureCountLow.required}`;
+                        if (r.RequiredSignatureMissing) return `Missing role: ${r.RequiredSignatureMissing.role_description}`;
+                        return "Unknown reason";
+                    }).join(", ")
+                };
+            }
+            if ('Quarantined' in status) {
+                return {
+                    name: 'Quarantined',
+                    color: 'text-red-800 bg-red-200',
+                    tooltip: `Sperrung: ${status.Quarantined.reason}`
+                };
+            }
+            if ('Endorsed' in status) {
+                return {
+                    name: 'Endorsed',
+                    color: 'text-blue-800 bg-blue-200',
+                    tooltip: `Signed as: ${status.Endorsed.role}`
+                };
+            }
+        }
+
+        // Fallback to signature counting if status is unclear
+        const extraSignatures = voucher.signatures.filter(s => s.role !== 'issuer' && s.role !== 'creator').length;
         if (extraSignatures < 3) {
             return {
                 name: 'Incomplete',
                 color: 'text-yellow-800 bg-yellow-200',
-                tooltip: 'This voucher is waiting for required extra signatures.'
+                tooltip: 'Waiting for required signatures.'
             };
         }
         return {
             name: 'Ready',
             color: 'text-green-800 bg-green-200',
-            tooltip: 'This voucher is fully signed and ready for use.'
+            tooltip: 'Fully signed.'
         };
     }
 
@@ -143,11 +211,11 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
             </div>
         </div>
     );
-    if (!details) return <div className="min-h-screen"><div className="text-center p-8 text-theme-light">No details found for this voucher.</div></div>;
+    if (!details || !voucher) return <div className="min-h-screen"><div className="text-center p-8 text-theme-light">No details found for this voucher.</div></div>;
 
     const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
-    const creator = details.creator;
-    const collateral = details.collateral;
+    const creator = voucher.creator;
+    const collateral = voucher.collateral;
     const statusInfo = getDerivedVoucherStatus(details);
 
     return (
@@ -173,6 +241,17 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                             className="bg-theme-accent text-white shadow-md animate-pulse-subtle"
                         >
                             ✍️ Request Signature
+                        </Button>
+                    )}
+                    {isQuarantined && onViewConflict && (
+                        <Button 
+                            variant="primary" 
+                            size="sm" 
+                            disabled={!proofId || isFetchingProofId}
+                            onClick={() => proofId && onViewConflict(proofId)}
+                            className="bg-red-600 hover:bg-red-700 text-white shadow-md"
+                        >
+                            {isFetchingProofId ? "Loading..." : "🚫 View Double-Spend Proof"}
                         </Button>
                     )}
                     <Button 
@@ -203,26 +282,58 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                 </div>
             )}
 
+            {isQuarantined && (
+                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">
+                    <div className="flex items-start justify-between">
+                        <div className="flex items-start">
+                            <div className="flex-shrink-0 text-red-500 text-2xl">🚫</div>
+                            <div className="ml-3">
+                                <p className="text-sm text-red-800 font-bold">
+                                    SECURITY WARNING: Double-Spend Detected!
+                                </p>
+                                <p className="text-sm text-red-700 mt-1">
+                                    This voucher has been invalidated because a conflicting transaction was discovered in the network.
+                                </p>
+                                {isFetchingProofId && (
+                                    <p className="text-xs text-red-600 mt-2 italic">
+                                        Determining proof ID...
+                                    </p>
+                                )}
+                                {!proofId && !isFetchingProofId && (
+                                    <p className="text-xs text-red-600 mt-2 italic">
+                                        Unable to locate proof ID. Check Fraud Reports for details.
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                        {onViewConflict && (
+                            <Button 
+                                variant="primary" 
+                                size="sm" 
+                                disabled={!proofId || isFetchingProofId}
+                                onClick={() => proofId && onViewConflict(proofId)}
+                                className="bg-red-600 hover:bg-red-700 text-white shadow-md flex-shrink-0"
+                            >
+                                {isFetchingProofId ? "Loading..." : "View Cryptographic Proof"}
+                            </Button>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {showJson ? (
                 <Card title="Raw Voucher Data (JSON)">
                     <pre className="text-xs whitespace-pre-wrap break-all font-mono">{JSON.stringify(details, null, 2)}</pre>
                 </Card>
             ) : (
                 <div className="space-y-6">
-                    {details.non_redeemable_test_voucher && (
-                        <div className="bg-purple-100 border-l-4 border-purple-500 text-purple-800 p-4 rounded-md" role="alert">
-                            <p className="font-bold">Test Voucher</p>
-                            <p className="text-sm">This is a non-redeemable test voucher. It has no real value and is intended for testing and demonstration purposes only.</p>
-                        </div>
-                    )}
-
                     <div className="bg-bg-card-alternate border border-theme-subtle rounded-lg shadow-sm p-6">
                         <div className="flex items-baseline gap-3">
-                            <p className="text-4xl font-bold text-theme-accent">{details.nominal_value.amount}</p>
-                            <p className="text-xl text-theme-light">{details.nominal_value.unit}</p>
+                            <p className="text-4xl font-bold text-theme-accent">{voucher.nominal_value.amount}</p>
+                            <p className="text-xl text-theme-light">{voucher.nominal_value.unit}</p>
                         </div>
-                        <h1 className="text-2xl font-bold text-theme-primary mt-1">{details.voucher_standard.name}</h1>
-                        <p className="text-theme-secondary mt-2 max-w-2xl">{details.voucher_standard.template.description}</p>
+                        <h1 className="text-2xl font-bold text-theme-primary mt-1">{voucher.voucher_standard.name}</h1>
+                        <p className="text-theme-secondary mt-2 max-w-2xl">{voucher.voucher_standard.template.description}</p>
                     </div>
 
                     <Card title="Creator Details">
@@ -253,7 +364,7 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                             {statusInfo.name}
                         </span>
                         <div className="flex items-center gap-2 text-sm text-theme-secondary">
-                            <span><strong>{details.signatures.length}</strong> Signatures</span>
+                            <span><strong>{voucher.signatures.length}</strong> Signatures</span>
                         </div>
                         <div className="flex items-center gap-2 text-sm text-theme-secondary" title="Indicates if this voucher is backed by collateral.">
                             <span className="text-lg">🛡️</span>
@@ -261,7 +372,7 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                         </div>
                         <div className="flex items-center gap-2 text-sm text-theme-secondary" title="Indicates if this voucher can be split into smaller amounts.">
                             <span className="text-lg">✂️</span>
-                            <span>Divisible: <strong>{details.voucher_standard.template.divisible ? 'Yes' : 'No'}</strong></span>
+                            <span>Divisible: <strong>{voucher.voucher_standard.template.divisible ? 'Yes' : 'No'}</strong></span>
                         </div>
                     </div>
 
@@ -269,25 +380,25 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                         <div className="lg:col-span-2 space-y-6">
                             <Card title="General Information">
                                 <div className="space-y-4">
-                                    <InfoRow label="Voucher ID" isMono>{details.voucher_id}</InfoRow>
+                                    <InfoRow label="Voucher ID" isMono>{voucher.voucher_id}</InfoRow>
                                     <InfoRow label="Creator ID" isMono>{creator.id}</InfoRow>
-                                    <InfoRow label="Created On">{formatDateTime(details.creation_date)}</InfoRow>
-                                    <InfoRow label="Valid Until">{formatDateTime(details.valid_until || undefined)}</InfoRow>
-                                    <InfoRow label="Footnote">{details.voucher_standard.template.footnote || 'None'}</InfoRow>
+                                    <InfoRow label="Created On">{formatDateTime(voucher.creation_date)}</InfoRow>
+                                    <InfoRow label="Valid Until">{formatDateTime(voucher.valid_until || undefined)}</InfoRow>
+                                    <InfoRow label="Footnote">{voucher.voucher_standard.template.footnote || 'None'}</InfoRow>
                                 </div>
                             </Card>
                         </div>
 
                         <div className="lg:col-span-1 space-y-6">
                             <Card title="Signatures">
-                                <p className="text-sm text-theme-secondary pb-4">{details.voucher_standard.template.signature_requirements_description}</p>
-                                {details.signatures.length > 0 ? (
+                                <p className="text-sm text-theme-secondary pb-4">{voucher.voucher_standard.template.signature_requirements_description}</p>
+                                {voucher.signatures.length > 0 ? (
                                     <div className="space-y-4">
-                                        {details.signatures.map(g => {
+                                        {voucher.signatures.map(g => {
                                             const isDeletable = 
-                                                currentUserId === details.creator.id && 
-                                                details.transactions.length === 1 && 
-                                                details.transactions[0].t_type === "init" && 
+                                                currentUserId === voucher.creator.id && 
+                                                voucher.transactions.length === 1 && 
+                                                voucher.transactions[0].t_type === "init" && 
                                                 g.role !== "creator" && 
                                                 g.role !== "issuer";
 
@@ -322,11 +433,11 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
 
                     <Card title="Transaction History">
                         <div className="space-y-3 max-h-96 overflow-y-auto pr-2 -mr-2">
-                            {details.transactions.slice().reverse().map(t => (
+                            {voucher.transactions.slice().reverse().map(t => (
                                 <div key={t.t_id} className="border-t border-theme-subtle pt-3">
                                     <div className="flex justify-between items-center mb-1">
                                         <p className="font-semibold capitalize text-theme-primary bg-theme-subtle/30 px-2 py-1 rounded-md text-sm">{t.t_type}</p>
-                                        <p className="text-lg font-semibold">{t.amount} <span className="text-base text-theme-light">{details.nominal_value.unit}</span></p>
+                                        <p className="text-lg font-semibold">{t.amount} <span className="text-base text-theme-light">{voucher.nominal_value.unit}</span></p>
                                     </div>
                                     <p className="text-xs text-theme-light mb-2">{formatDateTime(t.t_time)}</p>
                                     <div className="text-xs font-mono bg-theme-subtle/30 p-2 rounded">
@@ -456,8 +567,8 @@ export function VoucherDetailsView({ voucherId, onBack }: VoucherDetailsViewProp
                 onSave={async (contact: Contact) => {
                     await invoke('save_contact', { contact });
                 }}
-                initialProfile={details.creator}
-                initialDid={details.creator.id}
+                initialProfile={voucher.creator}
+                initialDid={voucher.creator.id}
             />
 
             <ConfirmationModal

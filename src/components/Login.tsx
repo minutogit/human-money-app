@@ -126,7 +126,6 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                     if (feedbackMsg.includes("Error")) setFeedbackMsg("");
                                 }}
                                 placeholder="Enter your password" 
-                                required 
                             />
                         </div>
                     </div>

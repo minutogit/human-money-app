@@ -11,6 +11,7 @@ interface DashboardProps {
     onNavigateToSend: () => void;
     onNavigateToHistory: () => void;
     onNavigateToReceive: () => void;
+    onNavigateToConflicts?: () => void;
     profileName: string;
 }
 
@@ -20,15 +21,17 @@ export function Dashboard(props: DashboardProps) {
     const [recentTransactions, setRecentTransactions] = useState<TransactionRecord[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [copied, setCopied] = useState(false);
+    const [conflictCount, setConflictCount] = useState(0);
 
     useEffect(() => {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, history] = await Promise.all([
+                const [id, balanceList, history, conflicts] = await Promise.all([
                     invoke<string>("get_user_id"),
                     invoke<AggregatedBalance[]>("get_total_balance_by_currency"),
-                    invoke<TransactionRecord[]>("get_transaction_history").catch(() => [])
+                    invoke<TransactionRecord[]>("get_transaction_history").catch(() => []),
+                    invoke<any[]>("get_double_spend_conflicts").catch(() => [])
                 ]);
                 setUserId(id);
                 setBalances(balanceList || []);
@@ -37,6 +40,9 @@ export function Dashboard(props: DashboardProps) {
                     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                     .slice(0, 5);
                 setRecentTransactions(sortedHistory);
+                // Count unresolved conflicts
+                const unresolvedConflicts = conflicts.filter((c: any) => !c.is_resolved).length;
+                setConflictCount(unresolvedConflicts);
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${e}`;
                 console.error(msg);
@@ -136,6 +142,33 @@ export function Dashboard(props: DashboardProps) {
             <div className="flex-grow overflow-y-auto p-4 sm:p-6">
                 <div className="mx-auto max-w-4xl">
                     {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
+
+                    {/* Fraud Warning Badge */}
+                    {conflictCount > 0 && (
+                        <div className="mb-6 bg-red-50 border-l-4 border-red-500 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center">
+                                    <div className="flex-shrink-0 text-red-500 text-2xl">🚫</div>
+                                    <div className="ml-3">
+                                        <p className="text-sm font-bold text-red-800">
+                                            Fraud Warning: {conflictCount} Unresolved Conflict{conflictCount > 1 ? 's' : ''}
+                                        </p>
+                                        <p className="text-xs text-red-700">
+                                            Double-spend detected. Review cryptographic proofs in Fraud Reports.
+                                        </p>
+                                    </div>
+                                </div>
+                                {props.onNavigateToConflicts && (
+                                    <button
+                                        onClick={props.onNavigateToConflicts}
+                                        className="px-3 py-1.5 text-sm font-semibold text-red-800 bg-red-100 hover:bg-red-200 rounded-md transition-colors"
+                                    >
+                                        View Reports
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Hero-Section: Centered Total Balance */}
                     <section className="text-center mb-12">

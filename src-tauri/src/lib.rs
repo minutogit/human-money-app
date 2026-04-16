@@ -135,6 +135,7 @@ pub fn run() {
             create_signing_request_bundle, open_voucher_signing_request, create_detached_signature_response_bundle,
             process_and_attach_signature, get_allowed_signature_roles_from_standard, evaluate_signature_suitability,
             remove_voucher_signature,
+            get_double_spend_conflicts, get_proof_of_double_spend, get_proof_id_for_voucher,
             // Address Book
             get_contacts, save_contact, delete_contact
         ])

@@ -56,6 +56,7 @@ pub struct ReceiveSuccessPayload {
     pub transfer_summary: FrontendTransferSummary, // <--- Geändert
     pub involved_vouchers: Vec<String>,
     pub involved_vouchers_details: Vec<InvolvedVoucherInfo>,
+    pub verifiable_conflicts: HashMap<String, Vec<human_money_core::models::conflict::TransactionFingerprint>>,
 }
 
 // NEU: Diese Struktur wird an das Frontend zurückgegeben, wenn ein Bundle ERSTELLT wurde.
@@ -133,9 +134,7 @@ pub fn receive_bundle(
             info!("Bundle processed successfully. Creating transaction record.");
 
             if !result.check_result.verifiable_conflicts.is_empty() {
-                let msg = "Bundle processing failed due to verifiable double-spend conflicts.".to_string();
-                error!("{}", msg);
-                return Err(msg);
+                info!("Bundle processed with {} double-spend conflicts.", result.check_result.verifiable_conflicts.len());
             }
 
             // Entferne alte Summenberechnung. Nutze Daten direkt aus dem ProcessBundleResult.
@@ -191,6 +190,7 @@ pub fn receive_bundle(
                 transfer_summary: fe_transfer_summary, // <--- Geändert
                 involved_vouchers: involved_vouchers_ids, // <--- KORRIGIERT
                 involved_vouchers_details, // <--- KORRIGIERT
+                verifiable_conflicts: result.check_result.verifiable_conflicts,
             })
         }
         Err(e) => {

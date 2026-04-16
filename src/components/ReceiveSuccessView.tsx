@@ -81,6 +81,21 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                         </div>
                     )}
                     {/* --- ENDE --- */}
+
+                    {/* --- NEU: ANZEIGE DER KONFLIKTE (DOUBLE SPEND) --- */}
+                    {payload.verifiableConflicts && Object.keys(payload.verifiableConflicts).length > 0 && (
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-3 mt-4 animate-pulse-subtle">
+                            <div className="flex items-start gap-2">
+                                <span className="text-xl">🚫</span>
+                                <div className="text-left">
+                                    <p className="text-sm font-bold text-red-800">Double-Spend detected!</p>
+                                    <p className="text-[11px] text-red-700 leading-tight mt-1">
+                                        Fraud was detected during processing. Some vouchers have been quarantined and are not spendable.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 <Button size="lg" onClick={onDone} className="w-full">Back to Dashboard</Button>

@@ -66,7 +66,18 @@ export interface AggregatedBalance {
 
 // --- Voucher Strukturen ---
 
-export type VoucherStatus = string | { [key: string]: any };
+export type VoucherStatus = 
+    | "Active" 
+    | "Archived" 
+    | { Incomplete: { reasons: ValidationFailureReason[] } } 
+    | { Quarantined: { reason: string } }
+    | { Endorsed: { role: string } };
+
+export interface ValidationFailureReason {
+    BusinessRule?: { message: string };
+    AdditionalSignatureCountLow?: { required: number; current: number };
+    RequiredSignatureMissing?: { role_description: string };
+}
 
 export interface VoucherSummary {
     local_instance_id: string;
@@ -158,6 +169,12 @@ export interface TransactionHistoryEntry {
 }
 
 export interface VoucherDetails {
+    local_instance_id: string;
+    status: VoucherStatus;
+    voucher: Voucher;
+}
+
+export interface Voucher {
     voucher_standard: VoucherStandardData;
     voucher_id: string;
     voucher_nonce: string;
@@ -218,6 +235,48 @@ export interface ReceiveSuccessPayload {
     involvedVouchersDetails?: InvolvedVoucherInfo[];
     isSignatureAttached?: boolean;
     voucherId?: string;
+    verifiableConflicts?: Record<string, TransactionFingerprint[]>;
+}
+
+export interface TransactionFingerprint {
+    ds_tag: string;
+    u: string;
+    blinded_id: string;
+    t_id: string;
+    encrypted_timestamp: string; // u128 usually serializes to string
+    layer2_signature: string;
+    deletable_at: string;
+}
+
+export interface ProofOfDoubleSpendSummary {
+    proof_id: string;
+    offender_id: string;
+    fork_point_prev_hash: string;
+    report_timestamp: string;
+    is_resolved: boolean;
+    has_l2_verdict: boolean;
+}
+
+export interface ProofOfDoubleSpend {
+    proof_id: string;
+    offender_id: string;
+    fork_point_prev_hash: string;
+    conflicting_transactions: TransactionHistoryEntry[];
+    deletable_at: string;
+    reporter_id: string;
+    report_timestamp: string;
+    reporter_signature: string;
+    resolutions?: ResolutionEndorsement[];
+    layer2_verdict?: any;
+}
+
+export interface ResolutionEndorsement {
+    endorsement_id: string;
+    proof_id: string;
+    victim_id: string;
+    resolution_timestamp: string;
+    notes?: string;
+    victim_signature: string;
 }
 
 export interface AppSettings {
