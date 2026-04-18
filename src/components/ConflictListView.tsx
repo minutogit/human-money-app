@@ -64,6 +64,87 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
         );
     }
 
+    const victimConflicts = conflicts.filter(c => c.conflict_role === "Victim");
+    const witnessConflicts = conflicts.filter(c => c.conflict_role === "Witness");
+
+    const ConflictCard = ({ conflict }: { conflict: ProofOfDoubleSpendSummary }) => (
+        <div
+            key={conflict.proof_id}
+            className={`border rounded-lg shadow-sm hover:shadow-md transition-all ${
+                conflict.conflict_role === 'Victim' 
+                    ? 'bg-red-50 border-red-200 hover:border-red-400' 
+                    : 'bg-bg-card-alternate border-theme-subtle hover:border-theme-primary'
+            }`}
+        >
+            <div className="p-6">
+                <div className="flex items-start justify-between mb-4">
+                    <div className="flex-grow">
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                            <span className={`px-3 py-1 text-xs font-bold rounded-full ${
+                                conflict.conflict_role === 'Victim'
+                                    ? 'bg-red-600 text-white'
+                                    : 'bg-gray-500 text-white'
+                            }`}>
+                                {conflict.conflict_role === 'Victim' ? 'URGENT: Affected Your Vouchers' : 'Network Observation'}
+                            </span>
+                            {conflict.is_resolved ? (
+                                <span className="px-3 py-1 text-xs font-bold rounded-full bg-green-100 text-green-800 border border-green-200">
+                                    ✓ Officially Resolved
+                                </span>
+                            ) : conflict.local_override ? (
+                                <span className="px-3 py-1 text-xs font-bold rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                                    ✓ Locally Settled
+                                </span>
+                            ) : (
+                                <span className="px-3 py-1 text-xs font-bold rounded-full bg-red-100 text-red-800 border border-red-200">
+                                    ⚠ Unresolved
+                                </span>
+                            )}
+                            {conflict.has_l2_verdict && (
+                                <span className="px-3 py-1 text-xs font-bold rounded-full bg-purple-100 text-purple-800">
+                                    L2 Verdict Available
+                                </span>
+                            )}
+                        </div>
+                        <h3 className="font-semibold text-theme-primary mb-1">
+                            {conflict.affected_voucher_name || "Unknown Voucher"}
+                        </h3>
+                        {conflict.local_note && (
+                             <div className="mb-3">
+                                <p className="text-[10px] font-bold text-blue-600 uppercase tracking-tight mb-1">Personal Note:</p>
+                                <p className="text-xs italic text-blue-800 bg-blue-50 px-2 py-1.5 rounded border border-blue-100 line-clamp-1 max-w-lg">
+                                   "{conflict.local_note}"
+                                </p>
+                             </div>
+                        )}
+                        <p className="text-sm text-theme-light">
+                            ID: <span className="font-mono text-xs">{truncateId(conflict.proof_id)}</span>
+                        </p>
+                        <p className="text-sm text-theme-light">
+                            Offender: <span className="font-mono text-xs">{truncateId(conflict.offender_id)}</span>
+                        </p>
+                        <p className="text-sm text-theme-light">
+                            Reported: {formatTimestamp(conflict.report_timestamp)}
+                        </p>
+                    </div>
+                    <Button
+                        onClick={() => onViewConflict(conflict.proof_id)}
+                        variant={conflict.conflict_role === 'Victim' && !conflict.local_override && !conflict.is_resolved ? 'primary' : 'secondary'}
+                        size="sm"
+                        className="whitespace-nowrap"
+                    >
+                        View Details
+                    </Button>
+                </div>
+                <div className="border-t border-theme-subtle pt-3">
+                    <p className="text-xs text-theme-light">
+                        <strong>Fork Point:</strong> <span className="font-mono">{truncateId(conflict.fork_point_prev_hash)}</span>
+                    </p>
+                </div>
+            </div>
+        </div>
+    );
+
     return (
         <div className="flex flex-col h-full">
             <header className="flex items-center gap-4 border-b border-theme-subtle px-6 py-4 bg-bg-card">
@@ -79,11 +160,11 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                 <h1 className="text-2xl font-bold text-theme-primary">Fraud Reports</h1>
                 <div className="flex-grow"></div>
                 <div className="text-sm text-theme-light">
-                    {conflicts.length} {conflicts.length === 1 ? 'conflict' : 'conflicts'} detected
+                    {conflicts.length} {conflicts.length === 1 ? 'report' : 'reports'} total
                 </div>
             </header>
 
-            <div className="flex-grow overflow-y-auto p-4 sm:p-6">
+            <div className="flex-grow overflow-y-auto p-4 sm:p-6 bg-bg-main">
                 {conflicts.length === 0 ? (
                     <div className="text-center py-12">
                         <div className="text-6xl mb-4">✅</div>
@@ -91,56 +172,37 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                         <p className="text-theme-light">No double-spend conflicts have been detected.</p>
                     </div>
                 ) : (
-                    <div className="max-w-4xl mx-auto space-y-4">
-                        {conflicts.map((conflict) => (
-                            <div
-                                key={conflict.proof_id}
-                                className="bg-bg-card-alternate border border-theme-subtle rounded-lg shadow-sm hover:border-theme-primary hover:shadow-md transition-all"
-                            >
-                                <div className="p-6">
-                                    <div className="flex items-start justify-between mb-4">
-                                        <div className="flex-grow">
-                                            <div className="flex items-center gap-3 mb-2">
-                                                <span className={`px-3 py-1 text-xs font-bold rounded-full ${
-                                                    conflict.is_resolved 
-                                                        ? 'bg-green-100 text-green-800' 
-                                                        : 'bg-red-100 text-red-800'
-                                                }`}>
-                                                    {conflict.is_resolved ? '✓ Resolved' : '⚠ Unresolved'}
-                                                </span>
-                                                {conflict.has_l2_verdict && (
-                                                    <span className="px-3 py-1 text-xs font-bold rounded-full bg-blue-100 text-blue-800">
-                                                        L2 Verdict Available
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <h3 className="font-semibold text-theme-primary mb-1">
-                                                Conflict ID: <span className="font-mono text-sm">{truncateId(conflict.proof_id)}</span>
-                                            </h3>
-                                            <p className="text-sm text-theme-light">
-                                                Offender: <span className="font-mono text-xs">{truncateId(conflict.offender_id)}</span>
-                                            </p>
-                                            <p className="text-sm text-theme-light">
-                                                Reported: {formatTimestamp(conflict.report_timestamp)}
-                                            </p>
-                                        </div>
-                                        <Button
-                                            onClick={() => onViewConflict(conflict.proof_id)}
-                                            variant="primary"
-                                            size="sm"
-                                            className="whitespace-nowrap"
-                                        >
-                                            View Details
-                                        </Button>
-                                    </div>
-                                    <div className="border-t border-theme-subtle pt-3">
-                                        <p className="text-xs text-theme-light">
-                                            <strong>Fork Point:</strong> <span className="font-mono">{truncateId(conflict.fork_point_prev_hash)}</span>
-                                        </p>
-                                    </div>
+                    <div className="max-w-4xl mx-auto space-y-8">
+                        {victimConflicts.length > 0 && (
+                            <section className="space-y-4">
+                                <h2 className="text-lg font-bold text-red-700 flex items-center gap-2">
+                                    <span className="flex h-3 w-3 rounded-full bg-red-600 animate-pulse"></span>
+                                    Requires Action: Your Payments ({victimConflicts.length})
+                                </h2>
+                                <div className="space-y-4">
+                                    {victimConflicts.map(c => <ConflictCard key={c.proof_id} conflict={c} />)}
                                 </div>
-                            </div>
-                        ))}
+                            </section>
+                        )}
+
+                        {witnessConflicts.length > 0 && (
+                            <section className="space-y-4">
+                                <h2 className="text-lg font-bold text-theme-light flex items-center gap-2">
+                                    Network Safety Reports ({witnessConflicts.length})
+                                </h2>
+                                <details className="group">
+                                    <summary className="list-none cursor-pointer flex items-center gap-2 text-theme-light hover:text-theme-primary transition-colors py-2 font-medium">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 transform group-open:rotate-180 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                        </svg>
+                                        Show indirect network observations
+                                    </summary>
+                                    <div className="space-y-4 mt-4 pt-4 border-t border-theme-subtle">
+                                        {witnessConflicts.map(c => <ConflictCard key={c.proof_id} conflict={c} />)}
+                                    </div>
+                                </details>
+                            </section>
+                        )}
                     </div>
                 )}
             </div>

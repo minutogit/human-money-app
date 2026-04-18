@@ -133,8 +133,22 @@ pub fn receive_bundle(
         Ok(result) => {
             info!("Bundle processed successfully. Creating transaction record.");
 
-            if !result.check_result.verifiable_conflicts.is_empty() {
-                info!("Bundle processed with {} double-spend conflicts.", result.check_result.verifiable_conflicts.len());
+            let conflict_count = result.check_result.verifiable_conflicts.len();
+            let warning_count = result.check_result.unverifiable_warnings.len();
+
+            if conflict_count > 0 || warning_count > 0 {
+                info!(
+                    "FRAUD DETECTION: Processed bundle from {} | Confirmed Conflicts: {} | Gossip Warnings: {}",
+                    result.header.sender_id, conflict_count, warning_count
+                );
+                
+                if conflict_count > 0 {
+                    info!("CRITICAL ALERT: Your wallet balance is directly affected by {} double-spend(s). Affected vouchers have been moved to quarantine.", conflict_count);
+                }
+                
+                if warning_count > 0 {
+                    info!("SECURITY WARNING: Received {} unverifiable gossip report(s) about potential offenders in the network.", warning_count);
+                }
             }
 
             // Entferne alte Summenberechnung. Nutze Daten direkt aus dem ProcessBundleResult.
@@ -520,4 +534,24 @@ pub fn update_user_profile(
     };
     
     service.update_public_profile(core_profile, password.as_deref())
+}
+#[tauri::command]
+pub fn set_conflict_local_override(
+    proof_id: String,
+    value: bool,
+    note: Option<String>,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    info!("Setting local override for conflict {} to {} with note: {:?}", proof_id, value, note);
+    let mut service = state.service.lock().unwrap();
+    
+    // We try to unlock the session if a password is provided
+    if let Some(ref pwd) = password {
+        if let Err(e) = service.unlock_session(pwd, 300) {
+            error!("Failed to unlock session for local override: {}", e);
+        }
+    }
+    
+    service.set_conflict_local_override(&proof_id, value, note, password.as_deref())
 }

@@ -87,10 +87,19 @@ pub struct FrontendNewVoucherData {
 pub struct ProfileInfo {
     pub profile_name: String,
     pub folder_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_used: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
 pub struct VoucherStandardInfo {
     pub id: String,
     pub content: String,
+}
+#[derive(Serialize, Clone)]
+pub struct FullProofDetails {
+    pub proof: human_money_core::models::conflict::ProofOfDoubleSpend,
+    pub local_override: bool,
+    pub local_note: Option<String>,
+    pub conflict_role: human_money_core::models::conflict::ConflictRole,
 }

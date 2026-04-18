@@ -1,7 +1,6 @@
 use crate::{AppState, models::{FrontendUserProfile, FrontendAddressData}};
 use human_money_core::{
     wallet::{AggregatedBalance, VoucherSummary, VoucherDetails, ProofOfDoubleSpendSummary},
-    models::conflict::ProofOfDoubleSpend,
 };
 
 #[tauri::command]
@@ -66,9 +65,20 @@ pub fn get_double_spend_conflicts(state: tauri::State<AppState>) -> Result<Vec<P
 }
 
 #[tauri::command]
-pub fn get_proof_of_double_spend(proof_id: String, state: tauri::State<AppState>) -> Result<ProofOfDoubleSpend, String> {
+pub fn get_proof_of_double_spend(proof_id: String, state: tauri::State<AppState>) -> Result<crate::models::FullProofDetails, String> {
     let service = state.service.lock().unwrap();
-    service.get_proof_of_double_spend(&proof_id)
+    let summaries = service.list_conflicts()?;
+    let summary = summaries.into_iter().find(|s| s.proof_id == proof_id)
+        .ok_or_else(|| format!("Conflict proof {} not found", proof_id))?;
+    
+    let proof = service.get_proof_of_double_spend(&proof_id)?;
+    
+    Ok(crate::models::FullProofDetails {
+        proof,
+        local_override: summary.local_override,
+        local_note: summary.local_note,
+        conflict_role: summary.conflict_role,
+    })
 }
 
 #[tauri::command]
@@ -144,4 +154,14 @@ pub fn get_proof_id_for_voucher(local_id: String, state: tauri::State<AppState>)
     
     log::warn!("=== No proof found for quarantined voucher {} after checking {} conflicts ===", local_id, conflicts.len());
     Ok(None)
+}
+
+#[tauri::command]
+pub fn check_reputation(
+    offender_id: String,
+    state: tauri::State<AppState>,
+) -> Result<human_money_core::models::conflict::TrustStatus, String> {
+    log::info!("Checking reputation for offender: {}", offender_id);
+    let service = state.service.lock().unwrap();
+    service.check_reputation(&offender_id)
 }

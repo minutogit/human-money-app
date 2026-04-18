@@ -78,6 +78,12 @@ Die folgenden Funktionen der `human_money_core` sollen implementiert werden:
   * `get_bip39_wordlist`
   * `frontend_log`
   * `log_to_backend`
+* **Konflikt- & Reputationsmanagement (NEU):**
+  * `list_conflicts` / `get_double_spend_conflicts`
+  * `check_reputation` (Gedächtnis-basierter Web of Trust)
+  * `set_conflict_local_override` (Manuelle Beilegung)
+  * `import_proof_from_json` / `import_proof_from_container`
+  * VIP-Gossip-Priorisierung (im Core)
 
 **4. Datentypen & Fehlerbehandlung**
 
@@ -269,9 +275,9 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
   * `src/main.rs`: Einstiegspunkt, der die `run()`-Funktion aus `lib.rs` aufruft
   * `src/commands/actions.rs`: Implementierung von Voucher-Aktionen wie `create_new_voucher`, `create_transfer_bundle`, `receive_bundle`, `save_transaction_record`
   * `src/commands/auth.rs`: Authentifizierungsbezogene Befehle wie `create_profile`, `login`, `logout`, `list_profiles`
-  * `src/commands/queries.rs`: Abfragebezogene Befehle wie `get_voucher_summaries`, `get_voucher_details`, `get_transaction_history`
+  * `src/commands/queries.rs`: Abfragebezogene Befehle wie `get_voucher_summaries`, `get_voucher_details`, `get_transaction_history`, `get_double_spend_conflicts`, `get_proof_of_double_spend`, `check_reputation`
   * `src/commands/utils.rs`: Hilfsfunktionen wie `generate_mnemonic`, `get_voucher_standards`, `get_bip39_wordlist`, `frontend_log`, `log_to_backend`
-  * `src/models.rs`: Datenstrukturdefinitionen für den Austausch zwischen Frontend und Backend; neue Strukturen wie `NominalValueData`, `FrontendAddressData`, `FrontendCollateralData`, `FrontendCreatorData`, `FrontendNewVoucherData`
+  * `src/models.rs`: Datenstrukturdefinitionen für den Austausch zwischen Frontend und Backend; neue Strukturen wie `NominalValueData`, `FrontendAddressData`, `FrontendCollateralData`, `FrontendCreatorData`, `FrontendNewVoucherData`, `ProofStoreEntry`, `ConflictRole`, `TrustStatus`
   * `src/settings.rs`: Implementierung der Einstellungs- und Konfigurationsverwaltung mit Speicherung in verschlüsselter Datei; `AppSettings` mit `bundle_retention_days`
 
 **7. Logging**

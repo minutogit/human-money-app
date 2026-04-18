@@ -5,6 +5,7 @@
 export interface ProfileInfo {
     profile_name: string;
     folder_name: string;
+    last_used?: string; // ISO 8601 timestamp
 }
 
 export interface Address {
@@ -248,6 +249,9 @@ export interface TransactionFingerprint {
     deletable_at: string;
 }
 
+export type ConflictRole = "Victim" | "Witness";
+export type TrustStatus = "Clean" | { KnownOffender: string } | { Resolved: [string, boolean] };
+
 export interface ProofOfDoubleSpendSummary {
     proof_id: string;
     offender_id: string;
@@ -255,6 +259,10 @@ export interface ProofOfDoubleSpendSummary {
     report_timestamp: string;
     is_resolved: boolean;
     has_l2_verdict: boolean;
+    local_override: boolean;
+    conflict_role: ConflictRole;
+    affected_voucher_name?: string;
+    voucher_standard_uuid?: string;
 }
 
 export interface ProofOfDoubleSpend {
@@ -268,6 +276,8 @@ export interface ProofOfDoubleSpend {
     reporter_signature: string;
     resolutions?: ResolutionEndorsement[];
     layer2_verdict?: any;
+    affected_voucher_name?: string;
+    voucher_standard_uuid?: string;
 }
 
 export interface ResolutionEndorsement {
@@ -290,4 +300,9 @@ export interface SignatureImpact {
     fatal_conflicts: string[];
     resolved_rules: string[];
     gentle_hints: string[];
+}
+export interface FullProofDetails {
+    proof: ProofOfDoubleSpend;
+    local_override: boolean;
+    conflict_role: ConflictRole;
 }

@@ -40,8 +40,8 @@ export function Dashboard(props: DashboardProps) {
                     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                     .slice(0, 5);
                 setRecentTransactions(sortedHistory);
-                // Count unresolved conflicts
-                const unresolvedConflicts = conflicts.filter((c: any) => !c.is_resolved).length;
+                // Count unresolved conflicts (neither officially resolved nor locally overridden)
+                const unresolvedConflicts = (conflicts || []).filter((c: any) => !c.is_resolved && !c.local_override).length;
                 setConflictCount(unresolvedConflicts);
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${e}`;

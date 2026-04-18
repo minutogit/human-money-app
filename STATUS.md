@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0-alpha.4"
+version: "0.1.0-alpha.5"
 phase: "alpha"
 health: "green"
-last_updated: "2026-04-15"
+last_updated: "2026-04-18"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -73,6 +73,12 @@ priority_tasks:
     priority: "medium"
     depends_on: ["APP-007"]
     description: "Allow creators to remove additional signatures from vouchers before they enter circulation."
+  - id: "APP-012"
+    title: "Decentralized Conflict & Reputation"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Multi-layered fraud protection: VIP Gossip for propagation, visual reputation checks (KnownOffender warnings), and local conflict overrides (forgiveness)."
 ---
 
 # Human Money App — Status
@@ -108,6 +114,9 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Encrypted Address Book (App-side persistence)
 - [x] Signature Impact Evaluation Engine (Real-time hypothesis testing in UI)
 - [x] Voucher Signature Management (Removal of uncirculated signatures)
+- [x] Decentralized Conflict Management (VIP Gossip, Reputation, Local Notes, Tested Role Detection)
+- [x] Conflict management integration tests (Victim vs. Witness roles)
+- [x] Persistent Local Conflict Overrides with Resolution Notes
 - [x] CI/Release workflow stabilization (git-ignored local patches)
 
 ## Next Milestones

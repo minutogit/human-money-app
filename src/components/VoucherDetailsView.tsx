@@ -6,7 +6,7 @@ import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { useSession } from "../context/SessionContext";
-import { AppSettings, VoucherDetails, Contact } from "../types";
+import { AppSettings, VoucherDetails, Contact, TrustStatus } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import ContactDialog from "./ContactDialog";
 
@@ -62,10 +62,19 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     const [isRemovingSignature, setIsRemovingSignature] = useState(false);
     const [proofId, setProofId] = useState<string | null>(null);
     const [isFetchingProofId, setIsFetchingProofId] = useState(false);
+    const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
 
     // Derived states
     const voucher = details?.voucher;
     const isQuarantined = details && typeof details.status === 'object' && 'Quarantined' in details.status;
+
+    useEffect(() => {
+        if (voucher?.creator.id) {
+            invoke<TrustStatus>("check_reputation", { offenderId: voucher.creator.id })
+                .then(setTrustStatus)
+                .catch(e => logger.error(`Reputation check error: ${e}`));
+        }
+    }, [voucher?.creator.id]);
 
     useEffect(() => {
         logger.info(`VoucherDetailsView: Displayed for voucher ID: ${voucherId}`);
@@ -357,6 +366,20 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                             <InfoRow label="Service Offer">{creator.service_offer}</InfoRow>
                             <InfoRow label="Needs">{creator.needs}</InfoRow>
                         </div>
+                        
+                        {typeof trustStatus === 'object' && 'KnownOffender' in trustStatus && (
+                            <div className="mt-6 bg-red-50 border border-red-200 rounded-lg p-4 flex gap-3 animate-in fade-in duration-300">
+                                <span className="text-xl">⚠️</span>
+                                <div>
+                                    <p className="text-sm font-bold text-red-800">Security Warning: Creator Integrity</p>
+                                    <p className="text-xs text-red-700 leading-relaxed mt-1">
+                                        The creator of this voucher has a history of double-spend conflicts in this network. 
+                                        There is a significantly higher risk that this voucher might be fraudulent or lose its value.
+                                        Proceed with extreme caution.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
                     </Card>
 
                     <div className="bg-bg-card-alternate border border-theme-subtle rounded-lg shadow-sm p-4 flex flex-wrap items-center justify-start gap-x-6 gap-y-2">
