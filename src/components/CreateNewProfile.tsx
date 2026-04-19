@@ -99,6 +99,28 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
         generateNewSeed();
     }, [wordCount, selectedLanguage]);
 
+    // Auto-clean bulk seed input (same logic as RecreateProfile)
+    useEffect(() => {
+        if (!isBulkMode) return;
+
+        const cleanSeedText = (text: string) => {
+            return text
+                .toLowerCase()
+                .replace(/[0-9.,\-:]/g, ' ') // Remove digits and punctuation
+                .replace(/[\r\n\t]/g, ' ')      // Replace tabs and newlines with space
+                .replace(/\s+/g, ' ')          // Collapse multiple spaces
+                .trim();
+        };
+
+        const cleaned = cleanSeedText(bulkSeedInput);
+        if (cleaned !== bulkSeedInput && bulkSeedInput.length > 0) {
+            // Auto-apply cleaning if there are numbers or multiple spaces
+            if (/[0-9.,\-:]/.test(bulkSeedInput) || /\s\s/.test(bulkSeedInput)) {
+                setBulkSeedInput(cleaned);
+            }
+        }
+    }, [bulkSeedInput, isBulkMode]);
+
 
     // --- Helper Functions ---
 
@@ -236,7 +258,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                         </div>
                         <div className="flex flex-col gap-3 mt-4">
                             <div className="flex justify-between items-center">
-                                <label className="text-sm font-semibold text-theme-secondary">Mnemonic Language / Sprache der Seed-Wörter</label>
+                                <label className="text-sm font-semibold text-theme-secondary">Mnemonic Language</label>
                                 <select 
                                     value={selectedLanguage} 
                                     onChange={handleLanguageChange} 

@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0-alpha.5"
 phase: "alpha"
 health: "green"
-last_updated: "2026-04-18"
+last_updated: "2026-04-19"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -125,6 +125,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Persistent Local Conflict Overrides with Resolution Notes
 - [x] CI/Release workflow stabilization (git-ignored local patches)
 - [x] Multi-Language Mnemonic Support (BIP-39, custom German wordlists, smart language detection)
+- [x] Synchronized with human_money_core (Protocol version support in public profiles)
 
 ## Next Milestones
 

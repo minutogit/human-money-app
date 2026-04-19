@@ -63,6 +63,7 @@ pub struct FrontendCollateralData {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FrontendCreatorData {
+    pub protocol_version: Option<String>,
     pub first_name: String,
     pub last_name: String,
     pub address: FrontendAddressData,
@@ -79,6 +80,7 @@ pub struct FrontendCreatorData {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct FrontendUserProfile {
+    pub protocol_version: Option<String>,
     pub id: Option<String>,
     pub first_name: Option<String>,
     pub last_name: Option<String>,

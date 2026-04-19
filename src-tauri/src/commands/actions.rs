@@ -350,6 +350,7 @@ pub fn create_new_voucher(
             ..Default::default()
         }),
         creator_profile: human_money_core::models::profile::PublicProfile {
+            protocol_version: data.creator.protocol_version,
             id: Some(user_id),
             first_name: Some(data.creator.first_name),
             last_name: Some(data.creator.last_name),
@@ -510,6 +511,7 @@ pub fn update_user_profile(
     
     // Map FrontendUserProfile back to core PublicProfile
     let core_profile = human_money_core::models::profile::PublicProfile {
+        protocol_version: profile.protocol_version,
         id: profile.id,
         first_name: profile.first_name,
         last_name: profile.last_name,
@@ -531,6 +533,7 @@ pub fn update_user_profile(
         service_offer: profile.service_offer,
         needs: profile.needs,
         picture_url: profile.picture_url,
+        ..Default::default()
     };
     
     service.update_public_profile(core_profile, password.as_deref())

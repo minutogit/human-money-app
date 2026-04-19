@@ -9,6 +9,7 @@ pub fn get_user_profile(state: tauri::State<AppState>) -> Result<FrontendUserPro
     let profile = service.get_public_profile()?;
     
     Ok(FrontendUserProfile {
+        protocol_version: profile.protocol_version,
         id: profile.id,
         first_name: profile.first_name,
         last_name: profile.last_name,
@@ -30,6 +31,7 @@ pub fn get_user_profile(state: tauri::State<AppState>) -> Result<FrontendUserPro
         service_offer: profile.service_offer,
         needs: profile.needs,
         picture_url: profile.picture_url,
+        ..Default::default()
     })
 }
 
