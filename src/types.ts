@@ -1,5 +1,19 @@
 // src/types.ts
 
+// --- Mnemonic Language Support ---
+export type MnemonicLanguage =
+    | "english"
+    | "german"
+    | "spanish"
+    | "french"
+    | "italian"
+    | "japanese"
+    | "korean"
+    | "portuguese"
+    | "czech"
+    | "chineseSimplified"
+    | "chineseTraditional";
+
 // --- Basis-Strukturen ---
 
 export interface ProfileInfo {

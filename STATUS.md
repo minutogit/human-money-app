@@ -79,6 +79,12 @@ priority_tasks:
     priority: "high"
     depends_on: []
     description: "Multi-layered fraud protection: VIP Gossip for propagation, visual reputation checks (KnownOffender warnings), and local conflict overrides (forgiveness)."
+  - id: "APP-013"
+    title: "Multi-Language Mnemonic Support"
+    status: "completed"
+    priority: "medium"
+    depends_on: []
+    description: "Support for multi-language seed phrases (BIP-39) including custom high-security German wordlist."
 ---
 
 # Human Money App — Status
@@ -118,6 +124,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Conflict management integration tests (Victim vs. Witness roles)
 - [x] Persistent Local Conflict Overrides with Resolution Notes
 - [x] CI/Release workflow stabilization (git-ignored local patches)
+- [x] Multi-Language Mnemonic Support (BIP-39, custom German wordlists, smart language detection)
 
 ## Next Milestones
 

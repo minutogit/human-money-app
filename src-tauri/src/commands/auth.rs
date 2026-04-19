@@ -1,4 +1,4 @@
-use crate::models::ProfileInfo;
+use crate::models::{ProfileInfo, MnemonicLanguage};
 use crate::settings::{AppSettings, SETTINGS_KEY};
 use crate::{
     commands::actions::{load_history_from_disk, TRANSACTION_HISTORY_KEY},
@@ -137,12 +137,14 @@ pub fn create_profile(
     passphrase: Option<String>,
     user_prefix: Option<String>,
     password: String,
+    language: MnemonicLanguage,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    info!("Attempting to create profile '{}'...", profile_name);
+    info!("Attempting to create profile '{}' with language {:?}...", profile_name, language);
     let mut service = state.service.lock().unwrap();
-    match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password) {
+    let core_language = language.into();
+    match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password, core_language) {
         Ok(()) => {
             info!("Profile created successfully!");
 
@@ -273,11 +275,13 @@ pub fn recover_wallet_and_set_new_password(
     mnemonic: String,
     passphrase: Option<String>,
     new_password: String,
+    language: MnemonicLanguage,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
-    info!("Attempting to recover wallet and set new password...");
+    info!("Attempting to recover wallet and set new password with language {:?}...", language);
     let mut service = state.service.lock().unwrap();
-    match service.recover_wallet_and_set_new_password(&folder_name, &mnemonic, passphrase.as_deref(), &new_password) {
+    let core_language = language.into();
+    match service.recover_wallet_and_set_new_password(&folder_name, &mnemonic, passphrase.as_deref(), &new_password, core_language) {
         Ok(()) => {
             info!("Wallet recovered and new password set successfully!");
             Ok(())

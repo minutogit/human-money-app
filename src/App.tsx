@@ -116,6 +116,7 @@ function AppContent() {
                         setAppState({ view: "logged_in" });
                     }}
                     onSwitchToRecreate={() => setAppState({ view: "recreate_profile" })}
+                    onSwitchToLogin={() => setAppState({ view: "needs_login" })}
                 />;
             case "needs_login":
                 return <Login
