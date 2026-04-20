@@ -277,6 +277,7 @@ export interface ProofOfDoubleSpendSummary {
     conflict_role: ConflictRole;
     affected_voucher_name?: string;
     voucher_standard_uuid?: string;
+    local_note?: string;
 }
 
 export interface ProofOfDoubleSpend {
@@ -292,6 +293,7 @@ export interface ProofOfDoubleSpend {
     layer2_verdict?: any;
     affected_voucher_name?: string;
     voucher_standard_uuid?: string;
+    is_resolved?: boolean;
 }
 
 export interface ResolutionEndorsement {
@@ -319,4 +321,5 @@ export interface FullProofDetails {
     proof: ProofOfDoubleSpend;
     local_override: boolean;
     conflict_role: ConflictRole;
+    local_note?: string;
 }

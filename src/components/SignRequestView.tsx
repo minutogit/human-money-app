@@ -38,7 +38,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 // Find the standard that matches the voucher's standard UUID
                 const matchingStandard = standards.find((s: VoucherStandardInfo) => {
                     const uuidMatch = s.content.match(/uuid\s*=\s*"([^"]+)"/);
-                    return uuidMatch && uuidMatch[1] === voucherData.voucher_standard.uuid;
+                    return uuidMatch && uuidMatch[1] === voucherData.voucher.voucher_standard.uuid;
                 });
 
                 if (matchingStandard) {
@@ -58,7 +58,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
             }
         }
         fetchData();
-    }, [voucherData.voucher_standard.uuid]);
+    }, [voucherData.voucher.voucher_standard.uuid]);
 
     useEffect(() => {
         if (!selectedRole || !standardContent) {
@@ -101,7 +101,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     voucher: voucherData,
                     role: selectedRole,
                     includeDetails: includeDetails,
-                    config: { type: "TargetDid", value: voucherData.creator.id! },
+                    config: { type: "TargetDid", value: [voucherData.voucher.creator.id!, "TrialDecryption"] },
                     password
                 });
             });
@@ -110,8 +110,8 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
 
             const filePath = await save({
                 defaultPath: settings?.last_used_directory
-                    ? `${settings.last_used_directory}/signature-response-${voucherData.voucher_id.slice(0, 8)}.sig`
-                    : `signature-response-${voucherData.voucher_id.slice(0, 8)}.sig`,
+                    ? `${settings.last_used_directory}/signature-response-${voucherData.voucher.voucher_id.slice(0, 8)}.sig`
+                    : `signature-response-${voucherData.voucher.voucher_id.slice(0, 8)}.sig`,
                 filters: [
                     { name: 'Signature Response (.sig)', extensions: ['sig'] },
                     { name: 'All Files', extensions: ['*'] }
@@ -169,11 +169,11 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
             <div className="bg-bg-card-alternate border border-theme-subtle rounded-lg shadow-sm p-6">
                 <h2 className="text-lg font-semibold text-theme-primary mb-4">Voucher Details</h2>
                 <div className="space-y-2">
-                    <p><span className="font-semibold">Standard:</span> {voucherData.voucher_standard.name}</p>
-                    <p><span className="font-semibold">Value:</span> {voucherData.nominal_value.amount} {voucherData.nominal_value.unit}</p>
-                    <p><span className="font-semibold">Creator:</span> {voucherData.creator.first_name} {voucherData.creator.last_name}</p>
-                    <p><span className="font-semibold">Created:</span> {formatDateTime(voucherData.creation_date)}</p>
-                    <p><span className="font-semibold">Valid Until:</span> {formatDateTime(voucherData.valid_until)}</p>
+                    <p><span className="font-semibold">Standard:</span> {voucherData.voucher.voucher_standard.name}</p>
+                    <p><span className="font-semibold">Value:</span> {voucherData.voucher.nominal_value.amount} {voucherData.voucher.nominal_value.unit}</p>
+                    <p><span className="font-semibold">Creator:</span> {voucherData.voucher.creator.first_name} {voucherData.voucher.creator.last_name}</p>
+                    <p><span className="font-semibold">Created:</span> {formatDateTime(voucherData.voucher.creation_date)}</p>
+                    <p><span className="font-semibold">Valid Until:</span> {formatDateTime(voucherData.voucher.valid_until)}</p>
                 </div>
             </div>
 

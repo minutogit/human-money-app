@@ -283,9 +283,9 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                                 className="flex-1" 
                                 variant="primary" 
                                 onClick={handleLocalOverride}
-                                isLoading={isOverriding}
+                                disabled={isOverriding}
                             >
-                                Confirm
+                                {isOverriding ? 'Confirming...' : 'Confirm'}
                             </Button>
                         </div>
                     </div>

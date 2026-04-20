@@ -641,7 +641,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                     setIsExporting(false);
                     return;
                 }
-                config = { type: "TargetDid", value: recipientId.trim() };
+                config = { type: "TargetDid", value: [recipientId.trim(), "TrialDecryption"] };
             } else if (protectWithPassword) {
                 if (!exportPassword) {
                     setExportError("Please enter a password.");
