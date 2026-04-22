@@ -2,13 +2,14 @@
 import { useState, useEffect, useMemo, FormEvent, ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "../utils/log";
-import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord, InvolvedVoucherInfo, Contact, TrustStatus } from "../types"; 
+import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord, InvolvedVoucherInfo, Contact, TrustStatus } from "../types";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
 import { useSession } from "../context/SessionContext";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
-import Avatar from "boring-avatars"; // NEU
+import { ContactBadge } from "./ui/ContactBadge";
+import Avatar from "boring-avatars";
 
 interface SendViewProps {
     onBack: () => void;
@@ -44,6 +45,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isProcessing, setIsProcessing] = useState(false);
     const [standardIdToUuidMap, setStandardIdToUuidMap] = useState<Map<string, string>>(new Map());
+    const [standardIdToNameMap, setStandardIdToNameMap] = useState<Map<string, string>>(new Map());
     const [showConfirm, setShowConfirm] = useState(false);
     const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
     
@@ -52,6 +54,15 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [suggestions, setSuggestions] = useState<Contact[]>([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [showContactPicker, setShowContactPicker] = useState(false);
+    const [recipientError, setRecipientError] = useState(false);
+
+    // Reset error indicator after short delay
+    useEffect(() => {
+        if (recipientError) {
+            const timer = setTimeout(() => setRecipientError(false), 2000);
+            return () => clearTimeout(timer);
+        }
+    }, [recipientError]);
 
     // Reputation Check useEffect
     useEffect(() => {
@@ -91,13 +102,19 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 const userId = await invoke<string>("get_user_id");
                 const standards = await invoke<VoucherStandardInfo[]>("get_voucher_standards");
                 const newMap = new Map<string, string>();
+                const newNameMap = new Map<string, string>();
                 standards.forEach(s => {
                     const uuidMatch = s.content.match(/uuid\s*=\s*"([^"]+)"/);
                     if (uuidMatch && uuidMatch[1]) {
                         newMap.set(s.id, uuidMatch[1]);
                     }
+                    const nameMatch = s.content.match(/name\s*=\s*"([^"]+)"/);
+                    if (nameMatch && nameMatch[1]) {
+                        newNameMap.set(s.id, nameMatch[1]);
+                    }
                 });
                 setStandardIdToUuidMap(newMap);
+                setStandardIdToNameMap(newNameMap);
 
                 // KORREKTUR (von 13:31): Die Annahme des Prototyps wiederherstellen.
                 // Die 'divisible'-Eigenschaft kommt noch nicht vom Backend-Summary.
@@ -186,10 +203,10 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const handleRecipientChange = (e: ChangeEvent<HTMLInputElement>) => {
         const value = e.target.value;
         setRecipientId(value);
-        
+
         if (value.length > 0) {
-            const filtered = contacts.filter(c => 
-                c.did.toLowerCase().includes(value.toLowerCase()) || 
+            const filtered = contacts.filter(c =>
+                c.did.toLowerCase().includes(value.toLowerCase()) ||
                 (c.profile.first_name || '').toLowerCase().includes(value.toLowerCase()) ||
                 (c.profile.last_name || '').toLowerCase().includes(value.toLowerCase()) ||
                 (c.profile.organization || '').toLowerCase().includes(value.toLowerCase())
@@ -201,6 +218,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             setShowSuggestions(false);
         }
     };
+
+    const currentContact = contacts.find(c => c.did === recipientId);
 
     const selectContact = (contact: Contact) => {
         setRecipientId(contact.did);
@@ -254,8 +273,16 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     // 1. Schritt: Validierung und Modal öffnen
     const handlePrepareTransferClick = (event: FormEvent) => {
         event.preventDefault();
-        if (!recipientId || selection.size === 0) {
-            setFeedbackMsg("Please provide a recipient ID and select vouchers.");
+        // Prüfe zuerst recipient
+        if (!recipientId) {
+            setRecipientError(true);
+            // Scroll zum recipient Feld
+            document.getElementById('recipientId')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
+        // Dann prüfe selection
+        if (selection.size === 0) {
+            setFeedbackMsg("Please select at least one voucher");
             return;
         }
         setFeedbackMsg("");
@@ -380,15 +407,38 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                 <label htmlFor="recipientId" className="block text-sm font-medium text-theme-light mb-1">Recipient User ID</label>
                                 <div className="flex gap-2">
                                     <div className="relative flex-1">
-                                        <Input 
-                                            id="recipientId" 
-                                            placeholder="did:key:z..." 
-                                            value={recipientId} 
-                                            onChange={handleRecipientChange} 
-                                            onFocus={() => recipientId.length > 0 && suggestions.length > 0 && setShowSuggestions(true)}
-                                            onBlur={() => setTimeout(() => setShowSuggestions(false), 200) /* Klein Verzögerung für Click */}
-                                            required 
-                                        />
+                                        {currentContact ? (
+                                            // Badge display when contact is selected
+                                            <div className="flex items-center gap-2">
+                                                <ContactBadge did={currentContact.did} contacts={contacts} size="md" />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setRecipientId('')}
+                                                    className="flex-shrink-0 p-1 rounded hover:bg-theme-accent/20 text-theme-light hover:text-red-500 transition-colors"
+                                                    title="Remove contact"
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6 v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            // Normal input when no contact is selected
+                                            <input
+                                                id="recipientId"
+                                                type="text"
+                                                placeholder="did:key:z..."
+                                                value={recipientId}
+                                                onChange={handleRecipientChange}
+                                                onFocus={() => recipientId.length > 0 && suggestions.length > 0 && setShowSuggestions(true)}
+                                                onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                                                className={`w-full p-3 border rounded-lg text-base transition-all duration-150 ease-in-out focus:outline-none focus:ring-2 focus:border-transparent placeholder-theme-placeholder ${
+                                                    recipientError
+                                                        ? 'border-4 border-red-500 focus:ring-red-500 text-red-900'
+                                                        : 'border border-theme-light-border text-theme-secondary focus:ring-theme-primary'
+                                                }`}
+                                            />
+                                        )}
                                         {/* Suggestions List */}
                                         {showSuggestions && (
                                             <div className="absolute z-30 w-full mt-1 bg-white border border-theme-subtle rounded-xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
@@ -444,7 +494,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                             </div>
                             {/* --- NEU START --- */}
                             <div>
-                                <label htmlFor="notes" className="block text-sm font-medium text-theme-light mb-1">Notes / Verwendungszweck (Optional)</label>
+                                <label htmlFor="notes" className="block text-sm font-medium text-theme-light mb-1">Notes / Purpose (Optional)</label>
                                 <Textarea
                                     id="notes"
                                     placeholder="e.g., Monthly contribution, Coffee..."
@@ -474,9 +524,12 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                 <label className="block text-sm font-medium text-theme-light mb-1">Filter by Standard</label>
                                 <div className="flex flex-wrap gap-2">
                                     <button type="button" onClick={() => setSelectedStandardId(null)} className={`px-3 py-1 text-sm rounded-full ${selectedStandardId === null ? 'bg-theme-accent text-white font-semibold' : 'bg-input-readonly hover:bg-theme-subtle'}`}>All</button>
-                                    {voucherStandards.map(standard => (
-                                        <button type="button" key={standard.id} onClick={() => setSelectedStandardId(standard.id)} className={`px-3 py-1 text-sm rounded-full ${selectedStandardId === standard.id ? 'bg-theme-accent text-white font-semibold' : 'bg-input-readonly hover:bg-theme-subtle'}`}>{standard.id}</button>
-                                    ))}
+                                    {voucherStandards.map(standard => {
+                                        const displayName = standardIdToNameMap.get(standard.id) || standard.id;
+                                        return (
+                                            <button type="button" key={standard.id} onClick={() => setSelectedStandardId(standard.id)} className={`px-3 py-1 text-sm rounded-full ${selectedStandardId === standard.id ? 'bg-theme-accent text-white font-semibold' : 'bg-input-readonly hover:bg-theme-subtle'}`}>{displayName}</button>
+                                        );
+                                    })}
                                 </div>
                                 <p className="text-xs text-theme-light mt-2">Select a specific standard to enable automatic mode by entering an amount.</p>
                             </div>
@@ -510,7 +563,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                             </div>
 
                             <div className="md:col-span-1">
-                                 <Button size="lg" type="submit" className="w-full" disabled={!recipientId || selection.size === 0 || isProcessing}>
+                                 <Button size="lg" type="button" onClick={handlePrepareTransferClick} className="w-full" disabled={isProcessing}>
                                     {isProcessing ? "Processing..." : "Prepare Transfer"}
                                 </Button>
                             </div>
@@ -577,7 +630,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 isOpen={showConfirm}
                 title="Confirm Transfer"
                 description={
-                    <p>Are you sure you want to send vouchers worth <br/><span className="font-bold text-theme-primary">{Object.entries(checkoutSummary.summableTotals).map(([u, t]) => `${t.toFixed(2)} ${u}`).join(', ')} {Object.entries(checkoutSummary.countableTotals).map(([u, t]) => `${t} ${u}`).join(', ')}</span><br/> to <span className="font-mono text-xs">{recipientId}</span>?</p>
+                    <p>Are you sure you want to send vouchers worth <br/><span className="font-bold text-theme-primary">{Object.entries(checkoutSummary.summableTotals).map(([u, t]) => `${t.toFixed(2)} ${u}`).join(', ')} {Object.entries(checkoutSummary.countableTotals).map(([u, t]) => `${t} ${u}`).join(', ')}</span><br/> to <span className="font-mono text-xs break-all">{recipientId}</span>?</p>
                 }
                 confirmText="Yes, Prepare Transfer"
                 onConfirm={executeTransfer}

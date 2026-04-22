@@ -43,7 +43,7 @@ type AppState =
     | { view: "transaction_history" }
     | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string }
     | { view: "receive_success"; payload: ReceiveSuccessPayload & { voucherData?: any } }
-    | { view: "address_book" }
+    | { view: "address_book"; initialSearchQuery?: string; previousView?: AppState }
     | { view: "sign_request"; voucherData: any }
     | { view: "conflict_details"; proofId: string; previousView?: AppState }
     | { view: "conflict_list" }
@@ -159,7 +159,10 @@ function AppContent() {
                     onViewConflict={(proofId) => setAppState({ view: "conflict_details", proofId, previousView: appState })}
                 />;
             case "address_book":
-                return <AddressBook onBack={() => setAppState({ view: "logged_in" })} />;
+                return <AddressBook 
+                    onBack={() => setAppState(appState.previousView || { view: "logged_in" })} 
+                    initialSearchQuery={appState.initialSearchQuery}
+                />;
             case "send_vouchers":
                 return <SendView
                     profileName={profileName}

@@ -10,6 +10,7 @@ import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, Vouch
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import ContactDialog from "./ContactDialog";
+import { ContactBadge } from "./ui/ContactBadge";
 
 // Props for the component
 interface VoucherDetailsViewProps {
@@ -21,9 +22,9 @@ interface VoucherDetailsViewProps {
 // ===== Helper Components for Structure & Style =====
 
 // A reusable Card component for a consistent look
-const Card: React.FC<{ title: string; children: React.ReactNode; className?: string }> = ({ title, children, className = '' }) => (
+const Card: React.FC<{ title: string | React.ReactNode; children: React.ReactNode; className?: string }> = ({ title, children, className = '' }) => (
     <div className={`bg-bg-card-alternate border border-theme-subtle rounded-lg shadow-sm ${className}`}>
-        <h3 className="text-lg font-semibold text-theme-primary px-6 py-4 border-b border-theme-subtle">{title}</h3>
+        <h3 className="text-lg font-semibold text-theme-primary px-6 py-4 border-b border-theme-subtle flex items-center justify-between">{title}</h3>
         <div className="p-6">{children}</div>
     </div>
 );
@@ -58,6 +59,8 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     const [isExporting, setIsExporting] = useState(false);
     const [exportError, setExportError] = useState("");
     const [showContactDialog, setShowContactDialog] = useState(false);
+    const [pendingContactDID, setPendingContactDID] = useState<string | null>(null);
+    const [existingContact, setExistingContact] = useState<Contact | null>(null);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [showRemoveSignatureModal, setShowRemoveSignatureModal] = useState<string | null>(null); // contains signature_id
     const [isRemovingSignature, setIsRemovingSignature] = useState(false);
@@ -66,6 +69,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
     const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
+    const [contacts, setContacts] = useState<Contact[]>([]);
 
     // Derived states
     const voucher = details?.voucher;
@@ -107,6 +111,18 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
         }
         fetchDetails();
     }, [voucherId]);
+
+    useEffect(() => {
+        async function fetchContacts() {
+            try {
+                const result = await invoke<Contact[]>('get_contacts');
+                setContacts(result);
+            } catch (e) {
+                logger.error(`Failed to fetch contacts: ${e}`);
+            }
+        }
+        fetchContacts();
+    }, []);
 
     useEffect(() => {
         if (isQuarantined && !proofId && !isFetchingProofId) {
@@ -251,53 +267,48 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
         : null;
 
     return (
-        <div className="max-w-6xl mx-auto space-y-6">
-            <header className="flex items-center gap-4">
-                <button
-                    onClick={onBack}
-                    className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
-                    title="Back"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                    </svg>
-                </button>
-                <h1 className="text-2xl font-bold text-theme-primary">Voucher Details</h1>
-                <div className="flex-grow"></div>
-                <div className="flex items-center gap-4">
-                    {statusInfo.name === 'Incomplete' && (
-                        <Button 
-                            variant="primary" 
-                            size="sm" 
-                            onClick={() => setShowExportModal(true)}
-                            className="bg-theme-accent text-white shadow-md animate-pulse-subtle"
-                        >
-                            ✍️ Request Signature
-                        </Button>
-                    )}
-                    {isQuarantined && onViewConflict && (
-                        <Button 
-                            variant="primary" 
-                            size="sm" 
-                            disabled={!proofId || isFetchingProofId}
-                            onClick={() => proofId && onViewConflict(proofId)}
-                            className="bg-red-600 hover:bg-red-700 text-white shadow-md"
-                        >
-                            {isFetchingProofId ? "Loading..." : "🚫 View Double-Spend Proof"}
-                        </Button>
-                    )}
-                    <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={() => setShowContactDialog(true)}
-                        className="flex items-center gap-1"
+        <div className="flex flex-col h-full">
+            <header className="flex-shrink-0 mb-6">
+                <div className="flex items-center gap-4 mb-2">
+                    <button
+                        onClick={onBack}
+                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
+                        title="Back"
                     >
-                        👤 Add Creator
-                    </Button>
-                    <Button onClick={() => setShowJson(!showJson)} variant="secondary" size="sm">
-                        {showJson ? "Show Formatted View" : "Show Raw JSON"}
-                    </Button>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                        </svg>
+                    </button>
+                    <h1 className="text-2xl font-bold text-theme-primary">Voucher Details</h1>
+                    <div className="flex-grow"></div>
+                    <div className="flex items-center gap-4">
+                        {statusInfo.name === 'Incomplete' && (
+                            <Button 
+                                variant="primary" 
+                                size="sm" 
+                                onClick={() => setShowExportModal(true)}
+                                className="bg-theme-accent text-white shadow-md animate-pulse-subtle"
+                            >
+                                ✍️ Request Signature
+                            </Button>
+                        )}
+                        {isQuarantined && onViewConflict && (
+                            <Button 
+                                variant="primary" 
+                                size="sm" 
+                                disabled={!proofId || isFetchingProofId}
+                                onClick={() => proofId && onViewConflict(proofId)}
+                                className="bg-red-600 hover:bg-red-700 text-white shadow-md"
+                            >
+                                {isFetchingProofId ? "Loading..." : "🚫 View Double-Spend Proof"}
+                            </Button>
+                        )}
+                        <Button onClick={() => setShowJson(!showJson)} variant="secondary" size="sm">
+                            {showJson ? "Show Formatted View" : "Show Raw JSON"}
+                        </Button>
+                    </div>
                 </div>
+                <p className="text-theme-light ml-14">View voucher information and signatures.</p>
             </header>
 
             {statusInfo.name === 'Incomplete' && (
@@ -382,7 +393,24 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                         <p className="text-theme-secondary mt-2 max-w-2xl">{voucher.voucher_standard.template.description}</p>
                     </div>
 
-                    <Card title="Creator Details">
+                    <Card title={
+                        <span className="flex items-center gap-3">
+                            Creator Details
+                            <Button 
+                                variant="outline" 
+                                size="sm" 
+                                onClick={() => {
+                                    const contact = contacts.find(c => c.did === voucher?.creator?.id);
+                                    setPendingContactDID(voucher?.creator?.id || null);
+                                    setExistingContact(contact || null);
+                                    setShowContactDialog(true);
+                                }}
+                                className="flex items-center gap-1"
+                            >
+                                {contacts.some(c => c.did === voucher?.creator?.id) ? '✏️ Edit Contact' : '👤 Add to Address Book'}
+                            </Button>
+                        </span>
+                    }>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-4">
                             <InfoRow label="Name">{creator.first_name ?? ''} {creator.last_name ?? ''}</InfoRow>
                             <InfoRow label="Gender">{formatGender(creator.gender)}</InfoRow>
@@ -436,44 +464,56 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        <div className="lg:col-span-2 space-y-6">
-                            <Card title="General Information">
+                    <Card title="General Information">
                                 <div className="space-y-4">
                                     <InfoRow label="Voucher ID" isMono>{voucher.voucher_id}</InfoRow>
-                                    <InfoRow label="Creator ID" isMono>{creator.id}</InfoRow>
+                                    <div>
+                                        <p className="text-sm font-semibold text-theme-light">Creator ID</p>
+                                        <ContactBadge did={creator.id} contacts={contacts} size="sm" onEdit={() => {
+                                            const contact = contacts.find(c => c.did === creator.id);
+                                            setPendingContactDID(creator.id);
+                                            setExistingContact(contact || null);
+                                            setShowContactDialog(true);
+                                        }} />
+                                    </div>
                                     <InfoRow label="Created On">{formatDateTime(voucher.creation_date)}</InfoRow>
                                     <InfoRow label="Valid Until">{formatDateTime(voucher.valid_until || undefined)}</InfoRow>
                                     <InfoRow label="Footnote">{voucher.voucher_standard.template.footnote || 'None'}</InfoRow>
                                 </div>
                             </Card>
-                        </div>
 
-                        <div className="lg:col-span-1 space-y-6">
                             <Card title="Signatures">
                                 <p className="text-sm text-theme-secondary pb-4">{voucher.voucher_standard.template.signature_requirements_description}</p>
                                 {voucher.signatures.length > 0 ? (
                                     <div className="space-y-4">
                                         {voucher.signatures.map(g => {
                                             const isDeletable = 
+                                                statusInfo.name === 'Incomplete' &&
                                                 currentUserId === voucher.creator.id && 
                                                 voucher.transactions.length === 1 && 
                                                 voucher.transactions[0].t_type === "init" && 
                                                 g.role !== "creator" && 
                                                 g.role !== "issuer";
 
+                                            const isSignerInAddressBook = contacts.some(c => c.did === g.signer_id);
+
                                             return (
-                                                <div key={g.signature_id} className="bg-theme-subtle/30 rounded p-2 border-t border-theme-subtle pt-3 group relative">
-                                                    <div className="flex justify-between items-start">
-                                                        <div className="pr-8">
+                                                <div key={g.signature_id} className="bg-theme-subtle/30 rounded p-4 border border-theme-subtle">
+                                                    <div className="flex justify-between items-start mb-3">
+                                                        <div className="flex-1">
                                                             <p className="font-semibold text-sm">{g.role.charAt(0).toUpperCase() + g.role.slice(1)}: {g.details?.first_name ?? ''} {g.details?.last_name ?? ''}</p>
-                                                            <p className="text-[10px] font-mono text-theme-light break-all">{g.signer_id}</p>
+                                                            <ContactBadge did={g.signer_id} contacts={contacts} size="sm" onEdit={() => {
+                                                                const contact = contacts.find(c => c.did === g.signer_id);
+                                                                setPendingContactDID(g.signer_id);
+                                                                setExistingContact(contact || null);
+                                                                setShowContactDialog(true);
+                                                            }} />
                                                             <p className="text-[10px] text-theme-light mt-1">Signed on: {formatDateTime(g.signature_time)}</p>
                                                         </div>
                                                         {isDeletable && (
                                                             <button
                                                                 onClick={() => setShowRemoveSignatureModal(g.signature_id)}
-                                                                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-red-500 hover:text-red-700 hover:bg-red-100/50 rounded-full transition-all duration-200 border border-transparent hover:border-red-200 shadow-sm bg-white/40"
+                                                                className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-100/50 rounded-full transition-all duration-200 border border-transparent hover:border-red-200 shadow-sm bg-white/40"
                                                                 title="Remove this signature"
                                                             >
                                                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -482,14 +522,27 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                                             </button>
                                                         )}
                                                     </div>
+                                                    {g.role !== "creator" && g.role !== "issuer" && (
+                                                        <Button 
+                                                            variant="outline" 
+                                                            size="sm" 
+                                                            onClick={() => {
+                                                                const contact = contacts.find(c => c.did === g.signer_id);
+                                                                setPendingContactDID(g.signer_id);
+                                                                setExistingContact(contact || null);
+                                                                setShowContactDialog(true);
+                                                            }}
+                                                            className="flex items-center gap-1"
+                                                        >
+                                                            {isSignerInAddressBook ? '✏️ Edit Contact' : '👤 Add to Address Book'}
+                                                        </Button>
+                                                    )}
                                                 </div>
                                             );
                                         })}
                                     </div>
                                 ) : <p className="text-sm text-theme-light">No signatures yet.</p>}
                             </Card>
-                        </div>
-                    </div>
 
                     <Card title="Transaction History">
                         <div className="space-y-3 max-h-96 overflow-y-auto pr-2 -mr-2">
@@ -500,9 +553,25 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                         <p className="text-lg font-semibold">{t.amount} <span className="text-base text-theme-light">{voucher.nominal_value.unit}</span></p>
                                     </div>
                                     <p className="text-xs text-theme-light mb-2">{formatDateTime(t.t_time)}</p>
-                                    <div className="text-xs font-mono bg-theme-subtle/30 p-2 rounded">
-                                        <p><strong>From:</strong> {t.sender_id}</p>
-                                        <p><strong>To: </strong> {t.recipient_id}</p>
+                                    <div className="bg-theme-subtle/30 p-2 rounded space-y-2">
+                                        <div>
+                                            <p className="text-xs font-semibold text-theme-light mb-1">From:</p>
+                                            <ContactBadge did={t.sender_id} contacts={contacts} size="sm" onEdit={() => {
+                                                const contact = contacts.find(c => c.did === t.sender_id);
+                                                setPendingContactDID(t.sender_id);
+                                                setExistingContact(contact || null);
+                                                setShowContactDialog(true);
+                                            }} />
+                                        </div>
+                                        <div>
+                                            <p className="text-xs font-semibold text-theme-light mb-1">To:</p>
+                                            <ContactBadge did={t.recipient_id} contacts={contacts} size="sm" onEdit={() => {
+                                                const contact = contacts.find(c => c.did === t.recipient_id);
+                                                setPendingContactDID(t.recipient_id);
+                                                setExistingContact(contact || null);
+                                                setShowContactDialog(true);
+                                            }} />
+                                        </div>
                                     </div>
                                 </div>
                             ))}
@@ -623,12 +692,18 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             
             <ContactDialog
                 isOpen={showContactDialog}
-                onClose={() => setShowContactDialog(false)}
+                onClose={() => {
+                    setShowContactDialog(false);
+                    setPendingContactDID(null);
+                    setExistingContact(null);
+                }}
                 onSave={async (contact: Contact) => {
                     await invoke('save_contact', { contact });
+                    await invoke<Contact[]>('get_contacts').then(setContacts);
                 }}
-                initialProfile={voucher.creator}
-                initialDid={voucher.creator.id}
+                existingContact={existingContact}
+                initialProfile={pendingContactDID ? voucher.signatures.find(s => s.signer_id === pendingContactDID)?.details : voucher.creator}
+                initialDid={pendingContactDID || voucher.creator.id}
             />
 
             <ConfirmationModal

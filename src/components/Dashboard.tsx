@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
-import { AggregatedBalance, TransactionRecord, VoucherSummary } from "../types";
+import { AggregatedBalance, TransactionRecord, VoucherSummary, Contact } from "../types";
 
 interface DashboardProps {
     onNavigateToCreateVoucher: () => void;
@@ -21,6 +21,7 @@ export function Dashboard(props: DashboardProps) {
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<AggregatedBalance[]>([]);
     const [recentTransactions, setRecentTransactions] = useState<TransactionRecord[]>([]);
+    const [contacts, setContacts] = useState<Contact[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [copied, setCopied] = useState(false);
     const [activeVouchersCount, setActiveVouchersCount] = useState(0);
@@ -34,15 +35,17 @@ export function Dashboard(props: DashboardProps) {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, history, voucherSummaries, userProfile] = await Promise.all([
+                const [id, balanceList, history, voucherSummaries, userProfile, contactsList] = await Promise.all([
                     invoke<string>("get_user_id"),
                     invoke<AggregatedBalance[]>("get_total_balance_by_currency"),
                     invoke<TransactionRecord[]>("get_transaction_history").catch(() => []),
                     invoke<VoucherSummary[]>("get_voucher_summaries").catch(() => []),
-                    invoke<any>("get_user_profile").catch(() => null)
+                    invoke<any>("get_user_profile").catch(() => null),
+                    invoke<Contact[]>("get_contacts").catch(() => [])
                 ]);
                 setUserId(id);
                 setBalances(balanceList || []);
+                setContacts(contactsList || []);
                 // Sort by timestamp, newest first, and take only the first 5
                 const sortedHistory = (history || [])
                     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -122,6 +125,29 @@ export function Dashboard(props: DashboardProps) {
         const c = Object.entries(countable || {}).map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`);
         const all = [...s, ...c];
         return all.length > 0 ? all.join(', ') : '0.00';
+    }
+
+    function getContactName(did: string, contacts: Contact[]): string {
+        const contact = contacts.find(c => c.did === did);
+        if (contact) {
+            const firstName = contact.profile.first_name || '';
+            const lastName = contact.profile.last_name || '';
+            const org = contact.profile.organization || '';
+            if (firstName || lastName) {
+                return `${firstName} ${lastName}`.trim();
+            }
+            if (org) {
+                return org;
+            }
+        }
+        return did.substring(0, 10) + '...';
+    }
+
+    function getContactForTransaction(record: TransactionRecord, contacts: Contact[]): { name: string; notes?: string } {
+        const did = record.direction === 'sent' ? record.recipient_id : record.sender_id;
+        const name = did ? getContactName(did, contacts) : 'Unknown';
+        const notes = record.notes;
+        return { name, notes };
     }
 
     const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Lade...";
@@ -236,7 +262,7 @@ export function Dashboard(props: DashboardProps) {
                                         return (
                                             <div
                                                 key={balance.standard_uuid}
-                                                onClick={() => props.onNavigateToWallet({ standard: balance.standard_name })}
+                                                onClick={() => props.onNavigateToWallet({ standard: balance.standard_name, status: 'active' })}
                                                 className="flex flex-col items-center hover:opacity-80 transition-opacity cursor-pointer group"
                                             >
                                                 <div className="flex items-baseline mb-2">
@@ -355,30 +381,39 @@ export function Dashboard(props: DashboardProps) {
                                 </button>
                             </div>
                             <div className="space-y-3">
-                                {recentTransactions.map(record => (
-                                    <button 
-                                        key={record.id} 
-                                        onClick={props.onNavigateToHistory}
-                                        className="w-full bg-bg-card-alternate rounded-lg p-3 border border-theme-subtle flex items-center justify-between hover:border-theme-primary hover:shadow-sm transition-all text-left group"
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <div className={`flex items-center justify-center h-8 w-8 rounded-full transition-transform group-hover:scale-110 ${record.direction === 'sent' ? 'bg-red-200 text-red-800' : 'bg-green-200 text-green-800'}`}>
-                                                {record.direction === 'sent' ? '↑' : '↓'}
+                                {recentTransactions.map(record => {
+                                    const { name, notes } = getContactForTransaction(record, contacts);
+                                    const truncatedNotes = notes ? notes.substring(0, 30) + (notes.length > 30 ? '...' : '') : '';
+                                    return (
+                                        <button
+                                            key={record.id}
+                                            onClick={props.onNavigateToHistory}
+                                            className="w-full bg-bg-card-alternate rounded-lg p-3 border border-theme-subtle flex items-center justify-between hover:border-theme-primary hover:shadow-sm transition-all text-left group"
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <div className={`flex items-center justify-center h-8 w-8 rounded-full transition-transform group-hover:scale-110 ${record.direction === 'sent' ? 'bg-red-200 text-red-800' : 'bg-green-200 text-green-800'}`}>
+                                                    {record.direction === 'sent' ? '↑' : '↓'}
+                                                </div>
+                                                <div>
+                                                    <p className="font-semibold text-sm text-theme-primary capitalize">
+                                                        {record.direction === 'sent' ? 'Sent' : 'Received'}
+                                                    </p>
+                                                    <p className="text-xs text-theme-secondary font-medium mt-0.5">
+                                                        {name}{truncatedNotes ? ` · ${truncatedNotes}` : ''}
+                                                    </p>
+                                                </div>
                                             </div>
-                                            <div>
-                                                <p className="font-semibold text-sm text-theme-primary capitalize">
-                                                    {record.direction === 'sent' ? 'Sent' : 'Received'}
+                                            <div className="text-right">
+                                                <p className="font-semibold text-theme-secondary">
+                                                    {formatSummary(record.summableAmounts, record.countableItems)}
                                                 </p>
-                                                <p className="text-xs text-theme-light">
+                                                <p className="text-xs text-theme-light mt-0.5">
                                                     {formatTimestamp(record.timestamp)}
                                                 </p>
                                             </div>
-                                        </div>
-                                        <p className="font-semibold text-theme-secondary">
-                                            {formatSummary(record.summableAmounts, record.countableItems)}
-                                        </p>
-                                    </button>
-                                ))}
+                                        </button>
+                                    );
+                                })}
                             </div>
                         </section>
                     ) : (

@@ -28,7 +28,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [newTag, setNewTag] = useState('');
     const [isSaving, setIsSaving] = useState(false);
 
-    const availableTags = ["Friends", "Business", "Favorites", "Trusted"];
+    const predefinedTags = ["Friends", "Business", "Favorites", "Trusted"];
+    const availableTags = Array.from(new Set([...predefinedTags, ...tags]));
 
     useEffect(() => {
         if (existingContact) {
@@ -90,8 +91,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         }
     };
 
-    const handleAddNewTag = (e: React.FormEvent) => {
-        e.preventDefault();
+    const handleAddNewTag = () => {
         if (newTag.trim() && !tags.includes(newTag.trim())) {
             setTags([...tags, newTag.trim()]);
             setNewTag('');
@@ -184,7 +184,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                 </button>
                             ))}
                         </div>
-                        <form onSubmit={handleAddNewTag} className="flex gap-2">
+                        <div className="flex gap-2">
                             <input
                                 type="text"
                                 value={newTag}
@@ -193,14 +193,15 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                 className="flex-1 bg-white border border-theme-subtle rounded-lg px-3 py-1.5 text-xs text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-1 focus:ring-theme-primary/30 shadow-sm"
                             />
                             <button
-                                type="submit"
+                                type="button"
+                                onClick={handleAddNewTag}
                                 className="bg-theme-light hover:bg-theme-secondary-accent text-white p-1.5 rounded-lg transition-colors shadow-sm"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                                 </svg>
                             </button>
-                        </form>
+                        </div>
                     </div>
 
                     <div>

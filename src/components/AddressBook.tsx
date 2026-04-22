@@ -8,11 +8,12 @@ import { ConfirmationModal } from './ui/ConfirmationModal';
 
 interface AddressBookProps {
     onBack: () => void;
+    initialSearchQuery?: string;
 }
 
-const AddressBook: React.FC<AddressBookProps> = ({ onBack }) => {
+const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery }) => {
     const [contacts, setContacts] = useState<Contact[]>([]);
-    const [searchQuery, setSearchQuery] = useState('');
+    const [searchQuery, setSearchQuery] = useState(initialSearchQuery || '');
     const [selectedTag, setSelectedTag] = useState<string | null>(null);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingContact, setEditingContact] = useState<Contact | null>(null);
@@ -22,6 +23,12 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack }) => {
     useEffect(() => {
         loadContacts();
     }, []);
+
+    useEffect(() => {
+        if (initialSearchQuery) {
+            setSearchQuery(initialSearchQuery);
+        }
+    }, [initialSearchQuery]);
 
     const loadContacts = async () => {
         setIsLoading(true);
@@ -125,8 +132,19 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack }) => {
                         placeholder="Search name, organization or DID..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-white border border-theme-subtle rounded-2xl pl-12 pr-4 py-3 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 transition-all font-medium shadow-sm"
+                        className="w-full bg-white border border-theme-subtle rounded-2xl pl-12 pr-10 py-3 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 transition-all font-medium shadow-sm"
                     />
+                    {searchQuery && (
+                        <button
+                            onClick={() => setSearchQuery('')}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-light hover:text-red-500 hover:bg-red-50 rounded-full p-1 transition-colors"
+                            title="Clear search"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                        </button>
+                    )}
                 </div>
                 <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
                     <button

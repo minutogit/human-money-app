@@ -82,7 +82,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                     </div>
                     {payload.notes && (
                         <div>
-                            <p className="text-sm text-theme-light">Notes / Verwendungszweck</p>
+                            <p className="text-sm text-theme-light">Notes / Purpose</p>
                             <p className="text-base text-theme-secondary whitespace-pre-wrap">{payload.notes}</p>
                         </div>
                     )}

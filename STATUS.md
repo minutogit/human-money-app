@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0-alpha.6"
+version: "0.1.0-alpha.7"
 phase: "alpha"
 health: "green"
-last_updated: "2026-04-22"
+last_updated: "2026-04-23"
 blocks: []
 blocked_by: []
 priority_tasks:
