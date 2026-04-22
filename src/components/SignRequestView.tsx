@@ -70,7 +70,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
             setIsImpactLoading(true);
             try {
                 const impactResult = await invoke<SignatureImpact>("evaluate_signature_suitability", {
-                    voucher: voucherData,
+                    voucher: voucherData.voucher,
                     role: selectedRole,
                     standardTomlContent: standardContent
                 });
@@ -98,7 +98,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
             logger.info(`Creating detached signature response for role ${selectedRole}`);
             const bundleBytes = await protectAction(async (password) => {
                 return await invoke<number[]>("create_detached_signature_response_bundle", {
-                    voucher: voucherData,
+                    voucher: voucherData.voucher,
                     role: selectedRole,
                     includeDetails: includeDetails,
                     config: { type: "TargetDid", value: [voucherData.voucher.creator.id!, "TrialDecryption"] },

@@ -281,16 +281,32 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 logger.info("Bundle received and processed successfully.");
                 onReceiveSuccess(payload);
             } else if (fileType === 'ask') {
-                const voucher = await invoke<VoucherDetails>("open_voucher_signing_request", {
+                const openedVoucher = await invoke<any>("open_voucher_signing_request", {
                     containerBytes: fileData,
                     password: bundlePassword || null
                 });
                 logger.info("Signature request opened successfully.");
+                logger.info(`Voucher data structure keys: ${Object.keys(openedVoucher).join(", ")}`);
+                
+                // Wrap in VoucherDetails for frontend consistency
+                let voucherDetails: VoucherDetails;
+                if (openedVoucher.voucher && openedVoucher.local_instance_id) {
+                    logger.info("Backend returned a full VoucherDetails object.");
+                    voucherDetails = openedVoucher;
+                } else {
+                    logger.info("Backend returned a raw Voucher object. Wrapping it.");
+                    voucherDetails = {
+                        local_instance_id: "external-" + (openedVoucher.voucher_id?.slice(0, 8) || "temp"),
+                        status: "Active",
+                        voucher: openedVoucher
+                    };
+                }
+
                 (onReceiveSuccess as any)({
-                    senderId: voucher.voucher.creator.id,
+                    senderId: voucherDetails.voucher.creator?.id || "unknown",
                     transferSummary: { summableAmounts: {}, countableItems: {} },
                     involvedVouchers: [],
-                    voucherData: voucher
+                    voucherData: voucherDetails
                 });
             } else if (fileType === 'sig') {
                 const standardDefinitionsToml: Record<string, string> = {};

@@ -404,7 +404,13 @@ pub fn open_voucher_signing_request(
 ) -> Result<Voucher, String> {
     info!("Opening voucher signing request bundle...");
     let service = state.service.lock().unwrap();
-    service.open_voucher_signing_request(&container_bytes, password.as_deref())
+    match service.open_voucher_signing_request(&container_bytes, password.as_deref()) {
+        Ok(v) => {
+            info!("Signature request opened successfully. Voucher ID: {}, Creator: {}", v.voucher_id, v.creator_profile.id.as_deref().unwrap_or("N/A"));
+            Ok(v)
+        }
+        Err(e) => Err(e)
+    }
 }
 
 #[tauri::command]
