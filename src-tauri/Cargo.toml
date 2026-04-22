@@ -1,6 +1,6 @@
 [package]
 name = "human_money_app"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 description = "A decentralized wallet client for the Human Money system."
 authors = ["Human Money Team"]
 edition = "2021"

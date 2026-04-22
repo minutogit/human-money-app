@@ -47,7 +47,7 @@ type AppState =
     | { view: "sign_request"; voucherData: any }
     | { view: "conflict_details"; proofId: string; previousView?: AppState }
     | { view: "conflict_list" }
-    | { view: "wallet" };
+    | { view: "wallet"; initialStatusFilter?: string };
 
 function AppContent() {
     const [appState, setAppState] = useState<AppState>({ view: "loading" });
@@ -138,6 +138,8 @@ function AppContent() {
                     onNavigateToReceive={() => setAppState({ view: "receive_bundle" })}
                     onNavigateToHistory={() => setAppState({ view: "transaction_history" })}
                     onNavigateToConflicts={() => setAppState({ view: "conflict_list" })}
+                    onNavigateToWallet={(filter) => setAppState({ view: "wallet", initialStatusFilter: filter?.status })}
+                    onNavigateToSettings={() => setAppState({ view: "settings" })}
                 />;
             case "recreate_profile":
                 return <RecreateProfile
@@ -214,6 +216,7 @@ function AppContent() {
                     onShowDetails={(voucherId: string) => setAppState({ view: "voucher_details", voucherId, previousView: appState })}
                     onBack={() => setAppState({ view: "logged_in" })}
                     onNavigateToCreateVoucher={() => setAppState({ view: "create_voucher", previousView: appState })}
+                    initialStatusFilter={appState.initialStatusFilter}
                 />;
             default:
                 return (

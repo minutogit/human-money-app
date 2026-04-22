@@ -373,6 +373,21 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         </p>
                     )}
 
+                    {/* Public Data Notice */}
+                    <div className="bg-amber-50 border-l-4 border-amber-500 p-4 rounded-md shadow-sm">
+                        <div className="flex items-start gap-3">
+                            <div className="flex-shrink-0 text-amber-600 text-2xl">⚠️</div>
+                            <div>
+                                <p className="text-sm font-semibold text-amber-800">
+                                    Public Data Notice
+                                </p>
+                                <p className="text-xs text-amber-700 mt-1">
+                                    The information you enter into this voucher is crucial for building trust in this voucher. Please be aware that all details stored within this voucher will be readable by anyone who receives or verifies it in the future.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="flex justify-end gap-4 pt-6">
                         <Button type="submit" disabled={isLoading}>{isLoading ? "Creating..." : "Create Voucher"}</Button>
                     </div>

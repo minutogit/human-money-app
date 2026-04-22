@@ -37,7 +37,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
 
                 // Find the standard that matches the voucher's standard UUID
                 const matchingStandard = standards.find((s: VoucherStandardInfo) => {
-                    const uuidMatch = s.content.match(/uuid\s*=\s*"([^"]+)"/);
+                    const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
                     return uuidMatch && uuidMatch[1] === voucherData.voucher.voucher_standard.uuid;
                 });
 

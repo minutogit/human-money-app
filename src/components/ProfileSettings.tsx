@@ -102,6 +102,21 @@ export function ProfileSettings() {
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {/* Privacy Guarantee Info Box */}
+            <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-md shadow-sm">
+                <div className="flex items-start gap-3">
+                    <div className="flex-shrink-0 text-green-600 text-2xl">🔒</div>
+                    <div>
+                        <p className="text-sm font-semibold text-green-800">
+                            Privacy Guarantee
+                        </p>
+                        <p className="text-xs text-green-700 mt-1">
+                            Your profile data is securely encrypted and never leaves your local device. It is only shared when you explicitly sign or create a voucher.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
             <section className="bg-bg-card border border-theme-subtle rounded-xl overflow-hidden shadow-lg">
                 <div className="bg-theme-primary/5 px-6 py-4 border-b border-theme-subtle">
                     <h2 className="text-lg font-semibold text-theme-primary">Identity & Role</h2>

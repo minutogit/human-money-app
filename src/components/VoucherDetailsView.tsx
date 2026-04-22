@@ -6,8 +6,9 @@ import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { useSession } from "../context/SessionContext";
-import { AppSettings, VoucherDetails, Contact, TrustStatus } from "../types";
+import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardInfo } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
+import { getMissingProfileHint } from "../utils/signatureHints";
 import ContactDialog from "./ContactDialog";
 
 // Props for the component
@@ -63,6 +64,8 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     const [proofId, setProofId] = useState<string | null>(null);
     const [isFetchingProofId, setIsFetchingProofId] = useState(false);
     const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
+    const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
+    const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
 
     // Derived states
     const voucher = details?.voucher;
@@ -82,14 +85,18 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             setIsLoading(true);
             setErrorMsg("");
             try {
-                const [result, currentSettings, userId] = await Promise.all([
+                const [result, currentSettings, userId, profile, standards] = await Promise.all([
                     invoke<VoucherDetails>("get_voucher_details", { localId: voucherId }),
                     invoke<AppSettings>('get_app_settings').catch(() => null),
-                    invoke<string>("get_user_id").catch(() => null)
+                    invoke<string>("get_user_id").catch(() => null),
+                    invoke<PublicProfile>("get_user_profile").catch(() => null),
+                    invoke<VoucherStandardInfo[]>("get_voucher_standards").catch(() => [])
                 ]);
                 setDetails(result);
                 setSettings(currentSettings);
                 setCurrentUserId(userId);
+                setUserProfile(profile);
+                setVoucherStandards(standards);
             } catch (e) {
                 const msg = `Failed to fetch voucher details: ${e}`;
                 logger.error(msg);
@@ -227,6 +234,22 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     const collateral = voucher.collateral;
     const statusInfo = getDerivedVoucherStatus(details);
 
+    // Generate signature hint for incomplete vouchers
+    const signatureHint = statusInfo.name === 'Incomplete' && userProfile && voucherStandards.length > 0
+        ? (() => {
+            const standard = voucherStandards.find(s => {
+                const targetUuid = voucher.voucher_standard.uuid;
+                if (s.id === targetUuid) return true;
+                const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
+                return uuidMatch && uuidMatch[1] === targetUuid;
+            });
+            if (standard) {
+                return getMissingProfileHint(standard.content, userProfile);
+            }
+            return null;
+        })()
+        : null;
+
     return (
         <div className="max-w-6xl mx-auto space-y-6">
             <header className="flex items-center gap-4">
@@ -278,17 +301,31 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             </header>
 
             {statusInfo.name === 'Incomplete' && (
-                <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">
-                    <div className="flex items-center">
-                        <div className="flex-shrink-0 text-yellow-400 text-xl">⚠️</div>
-                        <div className="ml-3">
-                            <p className="text-sm text-yellow-800">
-                                <strong>Action Required:</strong> This voucher needs more signatures to become valid and spendable. 
-                                Click the <strong>Request Signature</strong> button above to invite signers.
-                            </p>
+                <>
+                    <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">
+                        <div className="flex items-center">
+                            <div className="flex-shrink-0 text-yellow-400 text-xl">⚠️</div>
+                            <div className="ml-3">
+                                <p className="text-sm text-yellow-800">
+                                    <strong>Action Required:</strong> This voucher needs more signatures to become valid and spendable. 
+                                    Click the <strong>Request Signature</strong> button above to invite signers.
+                                </p>
+                            </div>
                         </div>
                     </div>
-                </div>
+                    {signatureHint && (
+                        <div className="bg-blue-50 border-l-4 border-blue-400 p-3 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">
+                            <div className="flex items-center">
+                                <div className="flex-shrink-0 text-blue-400 text-lg">💡</div>
+                                <div className="ml-3">
+                                    <p className="text-xs text-blue-800">
+                                        <strong>Profile Hint:</strong> {signatureHint}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </>
             )}
 
             {isQuarantined && (
