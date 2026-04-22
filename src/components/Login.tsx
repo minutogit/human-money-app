@@ -1,5 +1,5 @@
 // src/components/Login.tsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error } from "@tauri-apps/plugin-log";
 import { logger } from "../utils/log";
@@ -22,6 +22,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [isLoggingIn, setIsLoggingIn] = useState(false);
+    const passwordInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         logger.info("Login component displayed");
@@ -77,6 +78,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 setFeedbackMsg(`Error: ${msg}`);
                 error(`Frontend: ${msg}`);
                 setIsLoggingIn(false);
+                setPassword("");
+                passwordInputRef.current?.focus();
             }
         }, 150);
     }
@@ -125,8 +128,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                 onFocus={() => {
                                     if (feedbackMsg.includes("Error")) setFeedbackMsg("");
                                 }}
-                                placeholder="Enter your password" 
-                                required 
+                                placeholder="Enter your password"
+                                ref={passwordInputRef}
                             />
                         </div>
                     </div>

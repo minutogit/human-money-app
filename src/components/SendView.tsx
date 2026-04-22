@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, FormEvent, ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "../utils/log";
-import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord, InvolvedVoucherInfo, Contact } from "../types"; // AKTUALISIERT
+import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord, InvolvedVoucherInfo, Contact, TrustStatus } from "../types"; 
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
@@ -45,12 +45,32 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [isProcessing, setIsProcessing] = useState(false);
     const [standardIdToUuidMap, setStandardIdToUuidMap] = useState<Map<string, string>>(new Map());
     const [showConfirm, setShowConfirm] = useState(false);
+    const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
     
     // Adressebuch & Vorschläge
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [suggestions, setSuggestions] = useState<Contact[]>([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [showContactPicker, setShowContactPicker] = useState(false);
+
+    // Reputation Check useEffect
+    useEffect(() => {
+        if (recipientId.length < 10) {
+            setTrustStatus("Clean");
+            return;
+        }
+
+        const timer = setTimeout(async () => {
+            try {
+                const status = await invoke<TrustStatus>("check_reputation", { offenderId: recipientId });
+                setTrustStatus(status);
+            } catch (e) {
+                logger.error(`Reputation check failed: ${e}`);
+            }
+        }, 500);
+
+        return () => clearTimeout(timer);
+    }, [recipientId]);
 
     useEffect(() => {
         async function fetchData() {
@@ -406,6 +426,21 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                         </svg>
                                     </button>
                                 </div>
+                                
+                                {typeof trustStatus === 'object' && 'KnownOffender' in trustStatus && (
+                                    <div className="mt-3 bg-red-50 border border-red-200 rounded-xl p-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                                        <div className="flex gap-3">
+                                            <span className="text-xl">⚠️</span>
+                                            <div>
+                                                <p className="text-sm font-bold text-red-800">High Risk Recipient</p>
+                                                <p className="text-xs text-red-700 leading-relaxed mt-1">
+                                                    CAUTION: This address has been linked to unresolved double-spend conflicts in the past. 
+                                                    This could be a mistake, but it represents a high risk. Proceed at your own risk.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                             {/* --- NEU START --- */}
                             <div>

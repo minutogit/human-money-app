@@ -1,5 +1,40 @@
 use serde::{Deserialize, Serialize};
 
+// Enum for mnemonic language selection (BIP-39)
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MnemonicLanguage {
+    English,
+    German,
+    Spanish,
+    French,
+    Italian,
+    Japanese,
+    Korean,
+    Portuguese,
+    Czech,
+    ChineseSimplified,
+    ChineseTraditional,
+}
+
+impl From<MnemonicLanguage> for human_money_core::MnemonicLanguage {
+    fn from(lang: MnemonicLanguage) -> Self {
+        match lang {
+            MnemonicLanguage::English => human_money_core::MnemonicLanguage::English,
+            MnemonicLanguage::German => human_money_core::MnemonicLanguage::German,
+            MnemonicLanguage::Spanish => human_money_core::MnemonicLanguage::Spanish,
+            MnemonicLanguage::French => human_money_core::MnemonicLanguage::French,
+            MnemonicLanguage::Italian => human_money_core::MnemonicLanguage::Italian,
+            MnemonicLanguage::Japanese => human_money_core::MnemonicLanguage::Japanese,
+            MnemonicLanguage::Korean => human_money_core::MnemonicLanguage::Korean,
+            MnemonicLanguage::Portuguese => human_money_core::MnemonicLanguage::Portuguese,
+            MnemonicLanguage::Czech => human_money_core::MnemonicLanguage::Czech,
+            MnemonicLanguage::ChineseSimplified => human_money_core::MnemonicLanguage::ChineseSimplified,
+            MnemonicLanguage::ChineseTraditional => human_money_core::MnemonicLanguage::ChineseTraditional,
+        }
+    }
+}
+
 // A local struct that mirrors `human_money_core::...::NewVoucherData` but derives `Deserialize`.
 // This is necessary because Tauri needs to deserialize the JSON payload from the frontend,
 // and we cannot add `#[derive(Deserialize)]` to the original struct in the upstream library.
@@ -28,6 +63,7 @@ pub struct FrontendCollateralData {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FrontendCreatorData {
+    pub protocol_version: Option<String>,
     pub first_name: String,
     pub last_name: String,
     pub address: FrontendAddressData,
@@ -44,6 +80,7 @@ pub struct FrontendCreatorData {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct FrontendUserProfile {
+    pub protocol_version: Option<String>,
     pub id: Option<String>,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
@@ -87,10 +124,19 @@ pub struct FrontendNewVoucherData {
 pub struct ProfileInfo {
     pub profile_name: String,
     pub folder_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_used: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
 pub struct VoucherStandardInfo {
     pub id: String,
     pub content: String,
+}
+#[derive(Serialize, Clone)]
+pub struct FullProofDetails {
+    pub proof: human_money_core::models::conflict::ProofOfDoubleSpend,
+    pub local_override: bool,
+    pub local_note: Option<String>,
+    pub conflict_role: human_money_core::models::conflict::ConflictRole,
 }

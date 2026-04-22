@@ -5,8 +5,9 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
-import { VoucherSummary, VoucherStatus, AppSettings } from "../types";
+import { VoucherSummary, VoucherStatus, AppSettings, PublicProfile, VoucherStandardInfo } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
+import { getMissingProfileHint } from "../utils/signatureHints";
 import { useSession } from "../context/SessionContext";
 
 interface WalletViewProps {
@@ -14,12 +15,15 @@ interface WalletViewProps {
     onBack: () => void;
     onNavigateToCreateVoucher: () => void;
     profileName: string;
+    initialStatusFilter?: string;
 }
 
 export function WalletView(props: WalletViewProps) {
     const { protectAction } = useSession();
     const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
     const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
+    const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
 
     // Export state for Wallet
     const [showExportModal, setShowExportModal] = useState(false);
@@ -34,7 +38,7 @@ export function WalletView(props: WalletViewProps) {
     const [exportError, setExportError] = useState("");
 
     // Filter state
-    const [statusFilters, setStatusFilters] = useState<string[]>([]);
+    const [statusFilters, setStatusFilters] = useState<string[]>(props.initialStatusFilter ? [props.initialStatusFilter] : []);
     const [standardFilters, setStandardFilters] = useState<string[]>([]);
     const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
 
@@ -45,12 +49,16 @@ export function WalletView(props: WalletViewProps) {
         logger.info("WalletView component displayed");
         async function fetchData() {
             try {
-                const [voucherList, currentSettings] = await Promise.all([
+                const [voucherList, currentSettings, profile, standards] = await Promise.all([
                     invoke<VoucherSummary[]>("get_voucher_summaries"),
-                    invoke<AppSettings>('get_app_settings').catch(() => null)
+                    invoke<AppSettings>('get_app_settings').catch(() => null),
+                    invoke<PublicProfile>("get_user_profile").catch(() => null),
+                    invoke<VoucherStandardInfo[]>("get_voucher_standards").catch(() => [])
                 ]);
                 setVouchers(voucherList || []);
                 setSettings(currentSettings);
+                setUserProfile(profile);
+                setVoucherStandards(standards);
             } catch (e) {
                 const msg = `Failed to fetch wallet data: ${e}`;
                 console.error(msg);
@@ -125,6 +133,21 @@ export function WalletView(props: WalletViewProps) {
         return num.toString();
     }
 
+    // Helper function to get signature hint for a voucher
+    const getSignatureHintForVoucher = (voucher: VoucherSummary): string | null => {
+        if (!userProfile || voucherStandards.length === 0) return null;
+        
+        // Find by folder ID first, then by UUID inside the TOML content
+        const standard = voucherStandards.find(s => {
+            if (s.id === voucher.voucher_standard_uuid) return true;
+            const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
+            return uuidMatch && uuidMatch[1] === voucher.voucher_standard_uuid;
+        });
+
+        if (!standard) return null;
+        return getMissingProfileHint(standard.content, userProfile);
+    };
+
     async function handleExportSigningRequest() {
         if (!exportId) return;
         setIsExporting(true);
@@ -137,7 +160,7 @@ export function WalletView(props: WalletViewProps) {
                     setIsExporting(false);
                     return;
                 }
-                config = { type: "TargetDid", value: recipientId.trim() };
+                config = { type: "TargetDid", value: [recipientId.trim(), "TrialDecryption"] };
             } else if (protectWithPassword) {
                 if (!exportPassword) {
                     setExportError("Please enter a password.");
@@ -508,22 +531,35 @@ export function WalletView(props: WalletViewProps) {
 
                                                 {/* Help text and action for incomplete vouchers */}
                                                 {status.name === 'incomplete' && (
-                                                    <div className="mt-3 p-3 bg-yellow-50 rounded-md border border-yellow-100 flex flex-col sm:flex-row items-center justify-between gap-3 animate-in fade-in zoom-in duration-300">
-                                                        <p className="text-sm text-yellow-800 leading-tight">
-                                                            <strong>Missing Signatures:</strong> This voucher needs more signatures to become active.
-                                                        </p>
-                                                        <Button 
-                                                            size="xs" 
-                                                            variant="primary" 
-                                                            className="bg-theme-accent text-white whitespace-nowrap"
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                setExportId(v.local_instance_id);
-                                                                setShowExportModal(true);
-                                                            }}
-                                                        >
-                                                            ✍️ Request Signature
-                                                        </Button>
+                                                    <div className="mt-3 space-y-2">
+                                                        <div className="p-3 bg-yellow-50 rounded-md border border-yellow-100 flex flex-col sm:flex-row items-center justify-between gap-3 animate-in fade-in zoom-in duration-300">
+                                                            <p className="text-sm text-yellow-800 leading-tight">
+                                                                <strong>Missing Signatures:</strong> This voucher needs more signatures to become active.
+                                                            </p>
+                                                            <Button 
+                                                                size="xs" 
+                                                                variant="primary" 
+                                                                className="bg-theme-accent text-white whitespace-nowrap"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setExportId(v.local_instance_id);
+                                                                    setShowExportModal(true);
+                                                                }}
+                                                            >
+                                                                ✍️ Request Signature
+                                                            </Button>
+                                                        </div>
+                                                        {(() => {
+                                                            const hint = getSignatureHintForVoucher(v);
+                                                            return hint && (
+                                                                <div className="p-2 bg-blue-50 rounded-md border border-blue-100 flex items-center gap-2 animate-in fade-in zoom-in duration-300">
+                                                                    <span className="text-blue-400 text-sm">💡</span>
+                                                                    <p className="text-xs text-blue-800 leading-tight">
+                                                                        <strong>Hint:</strong> {hint}
+                                                                    </p>
+                                                                </div>
+                                                            );
+                                                        })()}
                                                     </div>
                                                 )}
                                             </div>

@@ -4,13 +4,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
-import { AggregatedBalance, TransactionRecord } from "../types";
+import { AggregatedBalance, TransactionRecord, VoucherSummary } from "../types";
 
 interface DashboardProps {
     onNavigateToCreateVoucher: () => void;
     onNavigateToSend: () => void;
     onNavigateToHistory: () => void;
     onNavigateToReceive: () => void;
+    onNavigateToConflicts?: () => void;
+    onNavigateToWallet: (filter?: { status?: string }) => void;
+    onNavigateToSettings?: () => void;
     profileName: string;
 }
 
@@ -20,15 +23,22 @@ export function Dashboard(props: DashboardProps) {
     const [recentTransactions, setRecentTransactions] = useState<TransactionRecord[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [copied, setCopied] = useState(false);
+    const [activeVouchersCount, setActiveVouchersCount] = useState(0);
+    const [incompleteCount, setIncompleteCount] = useState(0);
+    const [quarantinedCount, setQuarantinedCount] = useState(0);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isProfileComplete, setIsProfileComplete] = useState(true);
 
     useEffect(() => {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, history] = await Promise.all([
+                const [id, balanceList, history, voucherSummaries, userProfile] = await Promise.all([
                     invoke<string>("get_user_id"),
                     invoke<AggregatedBalance[]>("get_total_balance_by_currency"),
-                    invoke<TransactionRecord[]>("get_transaction_history").catch(() => [])
+                    invoke<TransactionRecord[]>("get_transaction_history").catch(() => []),
+                    invoke<VoucherSummary[]>("get_voucher_summaries").catch(() => []),
+                    invoke<any>("get_user_profile").catch(() => null)
                 ]);
                 setUserId(id);
                 setBalances(balanceList || []);
@@ -37,10 +47,29 @@ export function Dashboard(props: DashboardProps) {
                     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                     .slice(0, 5);
                 setRecentTransactions(sortedHistory);
+                
+                // Calculate voucher counts
+                const activeCount = (voucherSummaries || []).filter(v => v.status === "Active").length;
+                const incompleteCount = (voucherSummaries || []).filter(v => {
+                    return typeof v.status === 'object' && 'Incomplete' in v.status;
+                }).length;
+                const quarantinedCount = (voucherSummaries || []).filter(v => {
+                    return typeof v.status === 'object' && 'Quarantined' in v.status;
+                }).length;
+                
+                setActiveVouchersCount(activeCount);
+                setIncompleteCount(incompleteCount);
+                setQuarantinedCount(quarantinedCount);
+
+                // Check if profile is complete (requires first_name and last_name)
+                const profileComplete = userProfile && userProfile.first_name && userProfile.last_name;
+                setIsProfileComplete(!!profileComplete);
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${e}`;
                 console.error(msg);
                 setFeedbackMsg(`Error: ${msg}`);
+            } finally {
+                setIsLoading(false);
             }
         }
         fetchData();
@@ -116,17 +145,17 @@ export function Dashboard(props: DashboardProps) {
                     </div>
                     
                     <div className="flex items-center gap-2">
-                        <span>ID:</span>
+                        <span className="font-semibold text-theme-secondary">Your ID:</span>
                         <button 
                             onClick={handleCopyUserId}
                             title={copied ? "Copied!" : "Click to copy User ID"}
-                            className={`font-mono text-[10px] sm:text-xs transition-all duration-200 border px-2 py-0.5 rounded ${
+                            className={`font-mono text-xs sm:text-sm font-medium transition-all duration-200 border px-3 py-1 rounded-md ${
                                 copied 
-                                ? 'bg-theme-success/10 text-theme-success border-theme-success/30' 
-                                : 'bg-transparent text-theme-light border-theme-subtle hover:border-theme-primary hover:text-theme-primary'
+                                ? 'bg-theme-success/10 text-theme-success border-theme-success/30 shadow-sm' 
+                                : 'bg-bg-card text-theme-primary border-theme-subtle hover:border-theme-primary hover:bg-theme-primary/5 hover:shadow-sm'
                             }`}
                         >
-                            {copied ? "Copied!" : truncatedUserId}
+                            {copied ? "✓ Copied!" : truncatedUserId}
                         </button>
                     </div>
                 </div>
@@ -137,72 +166,195 @@ export function Dashboard(props: DashboardProps) {
                 <div className="mx-auto max-w-4xl">
                     {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
 
-                    {/* Hero-Section: Centered Total Balance */}
-                    <section className="text-center mb-12">
-                        <h1 className="text-sm font-semibold text-theme-light uppercase tracking-wider mb-2">Total Balance</h1>
-                        {singleCurrency && primaryUnit ? (
-                            <div className="flex items-center justify-center">
-                                <p className="text-6xl md:text-7xl font-bold text-theme-primary">
-                                    {formatAmount(balancesByUnit[primaryUnit].total.toString())}
-                                </p>
-                                <span className="text-3xl md:text-4xl font-normal text-theme-light ml-3">{primaryUnit}</span>
+                    {/* Profile Warning Banner */}
+                    {!isProfileComplete && (
+                        <div className="mb-6 bg-amber-50 border-l-4 border-amber-500 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center">
+                                    <div className="flex-shrink-0 text-amber-500 text-2xl">⚠️</div>
+                                    <div className="ml-3">
+                                        <p className="text-sm font-semibold text-amber-800">
+                                            Your profile is incomplete.
+                                        </p>
+                                        <p className="text-xs text-amber-700">
+                                            A complete profile is essential for building trust in the network.
+                                        </p>
+                                    </div>
+                                </div>
+                                {props.onNavigateToSettings && (
+                                    <Button
+                                        onClick={props.onNavigateToSettings}
+                                        variant="primary"
+                                        size="sm"
+                                        className="bg-amber-600 hover:bg-amber-700 text-white"
+                                    >
+                                        Complete Profile
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Zone 1: Quarantine & Double Spends (Red Warning) */}
+                    {quarantinedCount > 0 && (
+                        <div 
+                            className="mb-6 bg-red-50 border-l-4 border-red-500 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500 cursor-pointer hover:bg-red-100 transition-colors"
+                            onClick={props.onNavigateToConflicts}
+                        >
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center">
+                                    <div className="flex-shrink-0 text-red-500 text-2xl">🚫</div>
+                                    <div className="ml-3">
+                                        <p className="text-sm font-bold text-red-800">
+                                            Quarantine Warning: {quarantinedCount} voucher{quarantinedCount > 1 ? 's' : ''} locked
+                                        </p>
+                                        <p className="text-xs text-red-700">
+                                            Double-spend detected. Please review the conflict resolution view.
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="text-red-500">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Zone 2: Kaufkraft & Inventar (Central) */}
+                    <section className="text-center mb-8">
+                        {isLoading ? (
+                            <div className="animate-pulse">
+                                <div className="h-20 bg-gray-200 rounded mx-auto w-48 mb-2"></div>
+                                <div className="h-4 bg-gray-200 rounded mx-auto w-32"></div>
                             </div>
                         ) : (
-                            <div className="flex flex-wrap justify-center gap-6">
-                                {uniqueUnits.map(unit => (
-                                    <div key={unit} className="flex items-baseline">
-                                        <p className="text-5xl md:text-6xl font-bold text-theme-primary">
-                                            {formatAmount(balancesByUnit[unit].total.toString())}
+                            <>
+                                <h1 className="text-sm font-semibold text-theme-light uppercase tracking-wider mb-2">Total Balance</h1>
+                                {singleCurrency && primaryUnit ? (
+                                    <div className="flex items-center justify-center">
+                                        <p className="text-6xl md:text-7xl font-bold text-theme-primary">
+                                            {formatAmount(balancesByUnit[primaryUnit].total.toString())}
                                         </p>
-                                        <span className="text-2xl md:text-3xl font-normal text-theme-light ml-2">{unit}</span>
+                                        <span className="text-3xl md:text-4xl font-normal text-theme-light ml-3">{primaryUnit}</span>
                                     </div>
-                                ))}
-                            </div>
-                        )}
-                        {balances.length > 1 && (
-                            <div className="mt-4 flex flex-wrap justify-center gap-4">
-                                {balances.map((balance) => (
-                                    <div key={balance.standard_uuid} className="bg-bg-card-alternate rounded-lg px-4 py-2 border border-theme-subtle">
-                                        <p className="text-xs text-theme-light">{balance.standard_name}</p>
-                                        <p className="text-lg font-semibold text-theme-secondary">
-                                            {formatAmount(balance.total_amount)} {balance.unit}
-                                        </p>
+                                ) : (
+                                    <div className="flex flex-wrap justify-center gap-6">
+                                        {uniqueUnits.map(unit => (
+                                            <div key={unit} className="flex items-baseline">
+                                                <p className="text-5xl md:text-6xl font-bold text-theme-primary">
+                                                    {formatAmount(balancesByUnit[unit].total.toString())}
+                                                </p>
+                                                <span className="text-2xl md:text-3xl font-normal text-theme-light ml-2">{unit}</span>
+                                            </div>
+                                        ))}
                                     </div>
-                                ))}
-                            </div>
+                                )}
+                                <p className="text-sm text-theme-light mt-2">
+                                    Consisting of {activeVouchersCount} active voucher{activeVouchersCount !== 1 ? 's' : ''}
+                                </p>
+                                {balances.length > 1 && (
+                                    <div className="mt-4 flex flex-wrap justify-center gap-4">
+                                        {balances.map((balance) => (
+                                            <div key={balance.standard_uuid} className="bg-bg-card-alternate rounded-lg px-4 py-2 border border-theme-subtle">
+                                                <p className="text-xs text-theme-light">{balance.standard_name}</p>
+                                                <p className="text-lg font-semibold text-theme-secondary">
+                                                    {formatAmount(balance.total_amount)} {balance.unit}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </>
                         )}
                     </section>
 
-                    {/* Quick Actions */}
-                    <section className="flex justify-center gap-4 mb-12">
-                        <Button 
-                            onClick={props.onNavigateToReceive} 
-                            className="px-8 py-4 text-lg"
-                            variant="primary"
-                        >
-                            Receive
-                        </Button>
-                        <Button 
-                            onClick={props.onNavigateToSend} 
-                            className="px-8 py-4 text-lg"
-                            variant="secondary"
-                        >
-                            Send
-                        </Button>
-                        <Button 
-                            onClick={props.onNavigateToCreateVoucher}
-                            className="px-4 py-4 text-lg"
-                            variant="secondary"
-                            title="Create Voucher"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                            </svg>
-                        </Button>
+                    {/* Zone 3: Dynamic Quick-Actions */}
+                    <section className="flex justify-center gap-4 mb-6">
+                        {activeVouchersCount === 0 ? (
+                            // Scenario A: 0 active vouchers - Create is primary
+                            <>
+                                <Button 
+                                    onClick={props.onNavigateToCreateVoucher}
+                                    className="px-8 py-4 text-lg"
+                                    variant="primary"
+                                >
+                                    Create Voucher
+                                </Button>
+                                <Button 
+                                    onClick={props.onNavigateToReceive} 
+                                    className="px-8 py-4 text-lg"
+                                    variant="secondary"
+                                >
+                                    Receive
+                                </Button>
+                                <Button 
+                                    onClick={props.onNavigateToSend} 
+                                    className="px-8 py-4 text-lg"
+                                    variant="secondary"
+                                    disabled
+                                >
+                                    Send
+                                </Button>
+                            </>
+                        ) : (
+                            // Scenario B: >0 active vouchers - Send is primary
+                            <>
+                                <Button 
+                                    onClick={props.onNavigateToSend} 
+                                    className="px-8 py-4 text-lg"
+                                    variant="primary"
+                                >
+                                    Send
+                                </Button>
+                                <Button 
+                                    onClick={props.onNavigateToReceive} 
+                                    className="px-8 py-4 text-lg"
+                                    variant="secondary"
+                                >
+                                    Receive
+                                </Button>
+                                <Button 
+                                    onClick={props.onNavigateToCreateVoucher}
+                                    className="px-6 py-4 text-lg border border-theme-subtle text-theme-light hover:border-theme-primary hover:text-theme-primary"
+                                    variant="secondary"
+                                >
+                                    Create
+                                </Button>
+                            </>
+                        )}
                     </section>
 
-                    {/* Optional History Preview */}
-                    {recentTransactions.length > 0 && (
+                    {/* Zone 4: Action Area / To-Dos (Incomplete Vouchers) */}
+                    {incompleteCount > 0 && (
+                        <div 
+                            className="mb-6 bg-yellow-50 border-l-4 border-yellow-500 p-4 rounded-md shadow-sm cursor-pointer hover:bg-yellow-100 transition-colors"
+                            onClick={() => props.onNavigateToWallet({ status: 'incomplete' })}
+                        >
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center">
+                                    <div className="flex-shrink-0 text-yellow-500 text-2xl">⏳</div>
+                                    <div className="ml-3">
+                                        <p className="text-sm font-semibold text-yellow-800">
+                                            {incompleteCount} voucher{incompleteCount > 1 ? 's' : ''} incomplete
+                                        </p>
+                                        <p className="text-xs text-yellow-700">
+                                            Need more signatures. Click to view in wallet.
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="text-yellow-500">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Zone 5: Recent Activity & History Link OR Welcome Empty State */}
+                    {recentTransactions.length > 0 ? (
                         <section className="mb-8">
                             <div className="flex items-center justify-between mb-4">
                                 <h2 className="text-lg font-semibold text-theme-secondary">Recent Activity</h2>
@@ -210,7 +362,7 @@ export function Dashboard(props: DashboardProps) {
                                     onClick={props.onNavigateToHistory}
                                     className="text-sm text-theme-accent hover:underline"
                                 >
-                                    View All
+                                    View All ➔
                                 </button>
                             </div>
                             <div className="space-y-3">
@@ -240,6 +392,50 @@ export function Dashboard(props: DashboardProps) {
                                 ))}
                             </div>
                         </section>
+                    ) : (
+                        // Welcome Empty State - shows when wallet is completely empty
+                        balances.length === 0 && activeVouchersCount === 0 && incompleteCount === 0 && (
+                            <section className="mb-8 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-8 shadow-sm animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                <div className="text-center">
+                                    <h2 className="text-2xl font-bold text-theme-primary mb-4">👋 Welcome to your Wallet!</h2>
+                                    <p className="text-theme-secondary mb-6">Your balance is currently empty. You have two ways to get started:</p>
+                                    
+                                    <div className="grid md:grid-cols-2 gap-6 max-w-2xl mx-auto">
+                                        {/* Option 1: Receive */}
+                                        <div className="bg-white rounded-lg p-6 border border-theme-subtle shadow-sm hover:shadow-md transition-shadow">
+                                            <div className="text-3xl mb-3">📥</div>
+                                            <h3 className="text-lg font-semibold text-theme-primary mb-2">Receive Vouchers</h3>
+                                            <p className="text-sm text-theme-light mb-4">
+                                                Receive vouchers in exchange for goods or services. Simply share your ID or QR code with your partner.
+                                            </p>
+                                            <Button 
+                                                onClick={props.onNavigateToReceive}
+                                                variant="secondary"
+                                                className="w-full"
+                                            >
+                                                Receive
+                                            </Button>
+                                        </div>
+                                        
+                                        {/* Option 2: Create */}
+                                        <div className="bg-white rounded-lg p-6 border border-theme-subtle shadow-sm hover:shadow-md transition-shadow">
+                                            <div className="text-3xl mb-3">✨</div>
+                                            <h3 className="text-lg font-semibold text-theme-primary mb-2">Create Vouchers</h3>
+                                            <p className="text-sm text-theme-light mb-4">
+                                                Create your own vouchers to act as a medium of exchange within your trusted network.
+                                            </p>
+                                            <Button 
+                                                onClick={props.onNavigateToCreateVoucher}
+                                                variant="primary"
+                                                className="w-full"
+                                            >
+                                                Create
+                                            </Button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                        )
                     )}
                 </div>
             </div>

@@ -38,7 +38,6 @@ export function AuthModal({ isOpen, onConfirm, onCancel, title, description }: A
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="Wallet Password"
                         autoFocus
-                        required
                     />
                     <div className="flex justify-end gap-3 mt-6">
                         <Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button>

@@ -3,6 +3,7 @@ import { useState, useEffect, ChangeEvent, FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error } from "@tauri-apps/plugin-log";
 import { logger } from "../utils/log";
+import { MnemonicLanguage } from "../types";
 
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -19,12 +20,14 @@ interface ConfirmationWord {
 interface CreateNewProfileProps {
     onProfileCreated: () => void;
     onSwitchToRecreate: () => void;
+    onSwitchToLogin?: () => void;
 }
 
-export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate }: CreateNewProfileProps) {
+export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitchToLogin }: CreateNewProfileProps) {
     const [wizardStep, setWizardStep] = useState<WizardStep>("display_seed");
     const [generatedSeed, setGeneratedSeed] = useState<string[]>([]);
     const [wordCount, setWordCount] = useState<12 | 24>(12);
+    const [selectedLanguage, setSelectedLanguage] = useState<MnemonicLanguage>("english");
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
 
@@ -48,12 +51,40 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate }: Creat
         // Log when component is displayed
         logger.info("CreateNewProfile component displayed");
 
-        // Generate a new seed phrase when the component mounts or word count changes.
+        // Detect system language for smart default
+        const systemLang = navigator.language || "en";
+        let detectedLanguage: MnemonicLanguage = "english";
+        if (systemLang.startsWith("de")) {
+            detectedLanguage = "german";
+        } else if (systemLang.startsWith("es")) {
+            detectedLanguage = "spanish";
+        } else if (systemLang.startsWith("fr")) {
+            detectedLanguage = "french";
+        } else if (systemLang.startsWith("it")) {
+            detectedLanguage = "italian";
+        } else if (systemLang.startsWith("ja")) {
+            detectedLanguage = "japanese";
+        } else if (systemLang.startsWith("ko")) {
+            detectedLanguage = "korean";
+        } else if (systemLang.startsWith("pt")) {
+            detectedLanguage = "portuguese";
+        } else if (systemLang.startsWith("cs")) {
+            detectedLanguage = "czech";
+        } else if (systemLang.startsWith("zh-CN")) {
+            detectedLanguage = "chineseSimplified";
+        } else if (systemLang.startsWith("zh-TW")) {
+            detectedLanguage = "chineseTraditional";
+        }
+        setSelectedLanguage(detectedLanguage);
+    }, []);
+
+    useEffect(() => {
+        // Generate a new seed phrase when the component mounts or word count or language changes.
         async function generateNewSeed() {
             setIsLoading(true);
             setFeedbackMsg("Generating new secure seed phrase...");
             try {
-                const newSeed: string = await invoke("generate_mnemonic", { wordCount });
+                const newSeed: string = await invoke("generate_mnemonic", { wordCount, language: selectedLanguage });
                 setGeneratedSeed(newSeed.split(' '));
                 setFeedbackMsg("");
                 info("Frontend: A new seed phrase was generated.");
@@ -66,7 +97,29 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate }: Creat
             }
         }
         generateNewSeed();
-    }, [wordCount]);
+    }, [wordCount, selectedLanguage]);
+
+    // Auto-clean bulk seed input (same logic as RecreateProfile)
+    useEffect(() => {
+        if (!isBulkMode) return;
+
+        const cleanSeedText = (text: string) => {
+            return text
+                .toLowerCase()
+                .replace(/[0-9.,\-:]/g, ' ') // Remove digits and punctuation
+                .replace(/[\r\n\t]/g, ' ')      // Replace tabs and newlines with space
+                .replace(/\s+/g, ' ')          // Collapse multiple spaces
+                .trim();
+        };
+
+        const cleaned = cleanSeedText(bulkSeedInput);
+        if (cleaned !== bulkSeedInput && bulkSeedInput.length > 0) {
+            // Auto-apply cleaning if there are numbers or multiple spaces
+            if (/[0-9.,\-:]/.test(bulkSeedInput) || /\s\s/.test(bulkSeedInput)) {
+                setBulkSeedInput(cleaned);
+            }
+        }
+    }, [bulkSeedInput, isBulkMode]);
 
 
     // --- Helper Functions ---
@@ -99,6 +152,11 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate }: Creat
     async function handleWordCountChange(event: ChangeEvent<HTMLSelectElement>) {
         const newWordCount = parseInt(event.target.value, 10) as 12 | 24;
         setWordCount(newWordCount);
+    }
+
+    async function handleLanguageChange(event: ChangeEvent<HTMLSelectElement>) {
+        const newLanguage = event.target.value as MnemonicLanguage;
+        setSelectedLanguage(newLanguage);
     }
 
     const handleConfirmationInputChange = (index: number, value: string) => {
@@ -155,6 +213,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate }: Creat
                 passphrase: passphrase || undefined,
                 userPrefix: userPrefix || undefined,
                 password,
+                language: selectedLanguage,
             });
             setFeedbackMsg("Profile successfully created!");
             onProfileCreated();
@@ -197,14 +256,43 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate }: Creat
                                 </div>
                             ))}
                         </div>
-                        <div className="flex justify-between items-center mt-4">
-                            <select value={wordCount} onChange={handleWordCountChange} className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary">
-                                <option value={12}>12 Words</option>
-                                <option value={24}>24 Words</option>
-                            </select>
-                            <Button type="button" onClick={prepareConfirmationStep} disabled={isLoading || generatedSeed.length === 0}>
-                                I've Saved My Seed Phrase
-                            </Button>
+                        <div className="flex flex-col gap-3 mt-4">
+                            <div className="flex justify-between items-center">
+                                <label className="text-sm font-semibold text-theme-secondary">Mnemonic Language</label>
+                                <select 
+                                    value={selectedLanguage} 
+                                    onChange={handleLanguageChange} 
+                                    className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary"
+                                >
+                                    <option value="english">English</option>
+                                    <option value="german">Deutsch</option>
+                                    <option value="spanish">Español</option>
+                                    <option value="french">Français</option>
+                                    <option value="italian">Italiano</option>
+                                    <option value="japanese">日本語</option>
+                                    <option value="korean">한국어</option>
+                                    <option value="portuguese">Português</option>
+                                    <option value="czech">Čeština</option>
+                                    <option value="chineseSimplified">简体中文</option>
+                                    <option value="chineseTraditional">繁體中文</option>
+                                </select>
+                            </div>
+                            <div className="flex justify-between items-center">
+                                <div className="flex gap-2">
+                                    <select value={wordCount} onChange={handleWordCountChange} className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary">
+                                        <option value={12}>12 Words</option>
+                                        <option value={24}>24 Words</option>
+                                    </select>
+                                    {onSwitchToLogin && (
+                                        <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="!px-3 !py-1 text-xs">
+                                            Back to Login
+                                        </Button>
+                                    )}
+                                </div>
+                                <Button type="button" onClick={prepareConfirmationStep} disabled={isLoading || generatedSeed.length === 0}>
+                                    I've Saved My Seed Phrase
+                                </Button>
+                            </div>
                         </div>
                     </>
                 );

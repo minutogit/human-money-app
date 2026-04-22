@@ -1,8 +1,10 @@
 // src/components/ReceiveSuccessView.tsx
 import { useEffect } from "react";
-import { ReceiveSuccessPayload } from "../types"; // <--- NEU
+import { ReceiveSuccessPayload, TrustStatus } from "../types"; // <--- NEU
 import { Button } from "./ui/Button";
 import { logger } from '../utils/log';
+import { useState } from 'react';
+import { invoke } from "@tauri-apps/api/core";
 
 interface ReceiveSuccessViewProps {
     payload: ReceiveSuccessPayload;
@@ -16,6 +18,7 @@ function formatAmount(amountStr: string): string {
 }
 
 export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps) {
+    const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
 
     // Erzeuge einen detaillierten String aus der TransferSummary
     const summable = Object.entries(payload.transferSummary.summableAmounts)
@@ -30,6 +33,12 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
 
     useEffect(() => {
         logger.info(`Receive success screen shown. Received: ${summaryString} from ${payload.senderId} (${payload.senderProfileName ?? 'N/A'})`);
+        
+        if (payload.senderId) {
+            invoke<TrustStatus>("check_reputation", { offenderId: payload.senderId })
+                .then(setTrustStatus)
+                .catch(e => logger.error(`Reputation check error: ${e}`));
+        }
     }, [payload, summaryString]);
 
     return (
@@ -58,6 +67,18 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                         {payload.senderProfileName && (
                             <p className="text-xs font-mono text-theme-light break-all" title={payload.senderId}>({payload.senderId})</p>
                         )}
+                        
+                        {typeof trustStatus === 'object' && 'KnownOffender' in trustStatus && (
+                            <div className="mt-2 bg-red-100 border border-red-200 rounded-lg p-2.5 flex gap-2">
+                                <span className="text-lg">⚠️</span>
+                                <div>
+                                    <p className="text-[11px] font-bold text-red-800">Sender Security Warning</p>
+                                    <p className="text-[10px] text-red-700 leading-tight">
+                                        This sender is known for past payment conflicts. Treat future payments with extra caution.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
                     </div>
                     {payload.notes && (
                         <div>
@@ -81,6 +102,21 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                         </div>
                     )}
                     {/* --- ENDE --- */}
+
+                    {/* --- NEU: ANZEIGE DER KONFLIKTE (DOUBLE SPEND) --- */}
+                    {payload.verifiableConflicts && Object.keys(payload.verifiableConflicts).length > 0 && (
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-3 mt-4 animate-pulse-subtle">
+                            <div className="flex items-start gap-2">
+                                <span className="text-xl">🚫</span>
+                                <div className="text-left">
+                                    <p className="text-sm font-bold text-red-800">Double-Spend detected!</p>
+                                    <p className="text-[11px] text-red-700 leading-tight mt-1">
+                                        Fraud was detected during processing. Some vouchers have been quarantined and are not spendable.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 <Button size="lg" onClick={onDone} className="w-full">Back to Dashboard</Button>

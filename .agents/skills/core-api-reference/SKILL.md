@@ -186,6 +186,11 @@ These methods read data from the `Unlocked` wallet and do not require authentica
 #### `pub fn get_voucher_details(&self, local_id: &str) -> Result<VoucherDetails, String>`
 * **Description:** Gets all details for a single voucher, including its full transaction history.
 
+#### `pub fn check_reputation(&self, offender_id: &str) -> Result<TrustStatus, String>`
+* **Description:** Checks the reputation of a User ID based on locally stored conflict proofs.
+* **Returns:** `TrustStatus` (Clean, KnownOffender, or Resolved).
+* **Auth:** Read-only (if wallet is unlocked), no password needed.
+
 #### `pub fn get_allowed_signature_roles_from_standard(toml: &str) -> Result<Vec<String>, String>`
 * **Description:** Helper to extract allowed roles (like `"guarantor"`) from a standard definition.
 
@@ -204,11 +209,20 @@ Methods for handling double-spend conflicts.
 * **Auth:** Read-only, no password needed.
 
 #### `pub fn create_resolution_endorsement(...) -> Result<ResolutionEndorsement, String>`
-* **Description:** Creates a signed resolution endorsement for a conflict, indicating that the conflict is resolved from the wallet owner's perspective.
+* **Description:** Creates a signed resolution endorsement for a conflict, indicating that the conflict is resolved from the wallet owner's perspective (as a victim).
 * **Auth:** Read-only, no password needed.
 
-#### `pub fn import_resolution_endorsement(...) -> Result<(), String>`
-* **Description:** Imports a `ResolutionEndorsement` from another party (e.g., the victim) to mark a local conflict proof as resolved.
+#### `pub fn set_conflict_local_override(&mut self, proof_id: &str, value: bool) -> Result<(), String>`
+* **Description:** Manually overrides the trust status of a specific conflict proof.
+* **Auth:** Requires `password: Option<&str>`.
+
+#### `pub fn import_proof_from_json(&mut self, json_base64: &str) -> Result<(), String>`
+* **Description:** Imports a `ProofOfDoubleSpend` from a Base64-encoded JSON string (Cleartext Export).
+* **Immunity Rule:** Local decisions (Overrides) are never overwritten by imports.
+* **Auth:** Requires `password: Option<&str>`.
+
+#### `pub fn import_proof_from_container(&mut self, container_bytes: &[u8]) -> Result<(), String>`
+* **Description:** Imports a `ProofOfDoubleSpend` from a `SecureContainer` (Private exchange).
 * **Auth:** Requires `password: Option<&str>`.
 
 ---

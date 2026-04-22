@@ -6,7 +6,7 @@ import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
-import { ProfileInfo } from "../types";
+import { ProfileInfo, MnemonicLanguage } from "../types";
 
 interface WalletRecoveryProps {
     onRecoverySuccess: () => void;
@@ -20,6 +20,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
 
     // Core state
     const [wordCount, setWordCount] = useState<12 | 24>(12);
+    const [selectedLanguage, setSelectedLanguage] = useState<MnemonicLanguage>("english");
     const [mnemonicWords, setMnemonicWords] = useState<string[]>(Array(12).fill(""));
     const [inputMode, setInputMode] = useState<InputMode>("words");
 
@@ -42,6 +43,32 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     // Log when component is displayed
     useEffect(() => {
         logger.info("WalletRecovery component displayed");
+
+        // Detect system language for smart default
+        const systemLang = navigator.language || "en";
+        let detectedLanguage: MnemonicLanguage = "english";
+        if (systemLang.startsWith("de")) {
+            detectedLanguage = "german";
+        } else if (systemLang.startsWith("es")) {
+            detectedLanguage = "spanish";
+        } else if (systemLang.startsWith("fr")) {
+            detectedLanguage = "french";
+        } else if (systemLang.startsWith("it")) {
+            detectedLanguage = "italian";
+        } else if (systemLang.startsWith("ja")) {
+            detectedLanguage = "japanese";
+        } else if (systemLang.startsWith("ko")) {
+            detectedLanguage = "korean";
+        } else if (systemLang.startsWith("pt")) {
+            detectedLanguage = "portuguese";
+        } else if (systemLang.startsWith("cs")) {
+            detectedLanguage = "czech";
+        } else if (systemLang.startsWith("zh-CN")) {
+            detectedLanguage = "chineseSimplified";
+        } else if (systemLang.startsWith("zh-TW")) {
+            detectedLanguage = "chineseTraditional";
+        }
+        setSelectedLanguage(detectedLanguage);
 
         async function fetchProfiles() {
             setIsLoading(true);
@@ -76,15 +103,15 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     useEffect(() => {
         async function fetchWordlist() {
             try {
-                const list = await invoke<string[]>("get_bip39_wordlist");
+                const list = await invoke<string[]>("get_bip39_wordlist", { language: selectedLanguage });
                 setBip39Wordlist(list);
-                info("Successfully fetched BIP-39 wordlist from backend.");
+                info(`Successfully fetched BIP-39 wordlist for ${selectedLanguage} from backend.`);
             } catch (e) {
                 error(`Failed to fetch BIP-39 wordlist: ${e}`);
             }
         }
         fetchWordlist();
-    }, []);
+    }, [selectedLanguage]);
 
     // Effect 3: Process the raw text from the textarea ('phrase' mode)
     useEffect(() => {
@@ -97,7 +124,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
 
         if (needsCleaning) {
             const singleLine = rawPhrase.replace(/(\r\n|\n|\r)/gm, " ");
-            const cleaned = singleLine.replace(/[0-9]+\./g, '').trim().replace(/\s+/g, ' ');
+            const cleaned = singleLine.replace(/[0-9]+\./g, '').trim().replace(/\s+/g, ' ').toLowerCase();
             // If cleaning is needed and changes the string, update the rawPhrase state and stop.
             // The effect will re-run with the clean text.
             if (cleaned !== rawPhrase) {
@@ -146,7 +173,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
             if (nonEmptyWords.length > 0 && mnemonicWords.every(word => word && word.length > 1)) {
                 const fullMnemonic = mnemonicWords.join(" ");
                 try {
-                    await invoke("validate_mnemonic", { mnemonic: fullMnemonic });
+                    await invoke("validate_mnemonic", { mnemonic: fullMnemonic, language: selectedLanguage });
                     setIsValidMnemonic(true);
                     setFeedbackMsg("Seed phrase is valid.");
                 } catch (e) {
@@ -163,7 +190,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
             }
         };
         validate();
-    }, [mnemonicWords]);
+    }, [mnemonicWords, selectedLanguage]);
 
     // Handler for the individual input fields ('words' mode)
     const handleWordChange = (index: number, value: string) => {
@@ -225,7 +252,8 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 folderName: selectedProfile,
                 mnemonic: mnemonicWords.join(" "),
                 passphrase: passphrase || undefined,
-                newPassword
+                newPassword,
+                language: selectedLanguage,
             });
             info("Frontend: Wallet successfully recovered. Logging in.");
             onRecoverySuccess();
@@ -268,17 +296,38 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                     )}
 
                     <div>
-                        <div className="flex justify-between items-center mb-2">
-                            <div className="flex items-center gap-4">
+                        <div className="flex flex-col gap-3 mb-2">
+                            <div className="flex justify-between items-center">
                                 <label className="text-sm font-semibold text-theme-secondary">2. Your Seed Phrase</label>
-                                <button type="button" onClick={handleInputModeToggle} className="text-xs text-theme-primary hover:underline">
-                                    {inputMode === "words" ? "Enter full phrase" : "Use single fields"}
-                                </button>
+                                <select 
+                                    value={selectedLanguage} 
+                                    onChange={(e) => setSelectedLanguage(e.target.value as MnemonicLanguage)} 
+                                    className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary"
+                                >
+                                    <option value="english">English</option>
+                                    <option value="german">Deutsch</option>
+                                    <option value="spanish">Español</option>
+                                    <option value="french">Français</option>
+                                    <option value="italian">Italiano</option>
+                                    <option value="japanese">日本語</option>
+                                    <option value="korean">한국어</option>
+                                    <option value="portuguese">Português</option>
+                                    <option value="czech">Čeština</option>
+                                    <option value="chineseSimplified">简体中文</option>
+                                    <option value="chineseTraditional">繁體中文</option>
+                                </select>
                             </div>
-                            <select value={wordCount} onChange={(e) => setWordCount(Number(e.target.value) as 12 | 24)} className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary">
-                                <option value={12}>12 Words</option>
-                                <option value={24}>24 Words</option>
-                            </select>
+                            <div className="flex justify-between items-center">
+                                <div className="flex items-center gap-4">
+                                    <button type="button" onClick={handleInputModeToggle} className="text-xs text-theme-primary hover:underline">
+                                        {inputMode === "words" ? "Enter full phrase" : "Use single fields"}
+                                    </button>
+                                </div>
+                                <select value={wordCount} onChange={(e) => setWordCount(Number(e.target.value) as 12 | 24)} className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary">
+                                    <option value={12}>12 Words</option>
+                                    <option value={24}>24 Words</option>
+                                </select>
+                            </div>
                         </div>
 
                         {inputMode === 'words' ? (

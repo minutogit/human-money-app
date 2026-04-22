@@ -78,6 +78,12 @@ Die folgenden Funktionen der `human_money_core` sollen implementiert werden:
   * `get_bip39_wordlist`
   * `frontend_log`
   * `log_to_backend`
+* **Konflikt- & Reputationsmanagement (NEU):**
+  * `list_conflicts` / `get_double_spend_conflicts`
+  * `check_reputation` (Gedächtnis-basierter Web of Trust)
+  * `set_conflict_local_override` (Manuelle Beilegung)
+  * `import_proof_from_json` / `import_proof_from_container`
+  * VIP-Gossip-Priorisierung (im Core)
 
 **4. Datentypen & Fehlerbehandlung**
 
@@ -269,9 +275,9 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
   * `src/main.rs`: Einstiegspunkt, der die `run()`-Funktion aus `lib.rs` aufruft
   * `src/commands/actions.rs`: Implementierung von Voucher-Aktionen wie `create_new_voucher`, `create_transfer_bundle`, `receive_bundle`, `save_transaction_record`
   * `src/commands/auth.rs`: Authentifizierungsbezogene Befehle wie `create_profile`, `login`, `logout`, `list_profiles`
-  * `src/commands/queries.rs`: Abfragebezogene Befehle wie `get_voucher_summaries`, `get_voucher_details`, `get_transaction_history`
+  * `src/commands/queries.rs`: Abfragebezogene Befehle wie `get_voucher_summaries`, `get_voucher_details`, `get_transaction_history`, `get_double_spend_conflicts`, `get_proof_of_double_spend`, `check_reputation`
   * `src/commands/utils.rs`: Hilfsfunktionen wie `generate_mnemonic`, `get_voucher_standards`, `get_bip39_wordlist`, `frontend_log`, `log_to_backend`
-  * `src/models.rs`: Datenstrukturdefinitionen für den Austausch zwischen Frontend und Backend; neue Strukturen wie `NominalValueData`, `FrontendAddressData`, `FrontendCollateralData`, `FrontendCreatorData`, `FrontendNewVoucherData`
+  * `src/models.rs`: Datenstrukturdefinitionen für den Austausch zwischen Frontend und Backend; neue Strukturen wie `NominalValueData`, `FrontendAddressData`, `FrontendCollateralData`, `FrontendCreatorData`, `FrontendNewVoucherData`, `ProofStoreEntry`, `ConflictRole`, `TrustStatus`
   * `src/settings.rs`: Implementierung der Einstellungs- und Konfigurationsverwaltung mit Speicherung in verschlüsselter Datei; `AppSettings` mit `bundle_retention_days`
 
 **7. Logging**
@@ -299,3 +305,18 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 * **Automatisches Bereinigen:** Beim Login werden automatisch abgelaufene Transfer-Bundle-Daten aus dem Verlauf gelöscht, basierend auf dem konfigurierten Aufbewahrungszeitraum.
 * **Log-Rotation:** Implementierung einer Log-Rotationsfunktion, die beim Start die Größe der Logdatei prüft und diese bei Überschreitung eines definierten Limits kürzt. Logging wird zusätzlich in eine Datei im Anwendungs-Log-Verzeichnis geschrieben.
 * **Erweiterte Logging-Utility:** Neue Frontend-Logging-Funktionen (`logger.info`, `logger.warn`, `logger.error`) senden Logs direkt ins Rust-Terminal für besseres Debugging.
+
+**9. Development & CI Workflow**
+
+Um eine reibungslose Entwicklung im Team und automatische Builds auf GitHub zu gewährleisten, müssen folgende Regeln beachtet werden:
+
+*   **Lokale Core-Entwicklung:**
+    *   Die `human_money_core` wird lokal oft parallel zur App entwickelt.
+    *   **Regel:** Verwende NIEMALS einen `[patch]`-Block in der `src-tauri/Cargo.toml`. Dies führt zu Fehlern auf GitHub, da der Pfad dort nicht existiert.
+    *   **Lösung:** Nutze stattdessen die Datei `src-tauri/.cargo/config.toml` (diese ist in der `.gitignore` enthalten). Dort wird der lokale Pfad für Cargo registriert, ohne das Repository für andere zu korrumpieren.
+*   **Cargo.lock Konsistenz:**
+    *   Wenn die Core-Abhängigkeiten geändert werden, muss die `src-tauri/Cargo.lock` synchronisiert werden.
+    *   **Befehl:** `cd src-tauri && cargo update -p human_money_core`. Dieser Befehl aktualisiert den Cache in der Lock-Datei auf die neue Quelle/den neuen Pfad. Ohne diesen Schritt schlägt der GitHub-Build mit "failed to load source" fehl.
+*   **GitHub Releases:**
+    *   Ein Release wird automatisch durch das Pushen eines Version-Tags ausgelöst (Format: `v*`, z. B. `v0.1.0-alpha.3`).
+    *   Voraussetzung: Der `master`-Zweig im `human-money-core` Repository muss auf dem Stand sein, den die App benötigt.

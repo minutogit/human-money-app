@@ -1,10 +1,25 @@
 // src/types.ts
 
+// --- Mnemonic Language Support ---
+export type MnemonicLanguage =
+    | "english"
+    | "german"
+    | "spanish"
+    | "french"
+    | "italian"
+    | "japanese"
+    | "korean"
+    | "portuguese"
+    | "czech"
+    | "chineseSimplified"
+    | "chineseTraditional";
+
 // --- Basis-Strukturen ---
 
 export interface ProfileInfo {
     profile_name: string;
     folder_name: string;
+    last_used?: string; // ISO 8601 timestamp
 }
 
 export interface Address {
@@ -66,7 +81,18 @@ export interface AggregatedBalance {
 
 // --- Voucher Strukturen ---
 
-export type VoucherStatus = string | { [key: string]: any };
+export type VoucherStatus = 
+    | "Active" 
+    | "Archived" 
+    | { Incomplete: { reasons: ValidationFailureReason[] } } 
+    | { Quarantined: { reason: string } }
+    | { Endorsed: { role: string } };
+
+export interface ValidationFailureReason {
+    BusinessRule?: { message: string };
+    AdditionalSignatureCountLow?: { required: number; current: number };
+    RequiredSignatureMissing?: { role_description: string };
+}
 
 export interface VoucherSummary {
     local_instance_id: string;
@@ -158,6 +184,12 @@ export interface TransactionHistoryEntry {
 }
 
 export interface VoucherDetails {
+    local_instance_id: string;
+    status: VoucherStatus;
+    voucher: Voucher;
+}
+
+export interface Voucher {
     voucher_standard: VoucherStandardData;
     voucher_id: string;
     voucher_nonce: string;
@@ -218,6 +250,59 @@ export interface ReceiveSuccessPayload {
     involvedVouchersDetails?: InvolvedVoucherInfo[];
     isSignatureAttached?: boolean;
     voucherId?: string;
+    verifiableConflicts?: Record<string, TransactionFingerprint[]>;
+}
+
+export interface TransactionFingerprint {
+    ds_tag: string;
+    u: string;
+    blinded_id: string;
+    t_id: string;
+    encrypted_timestamp: string; // u128 usually serializes to string
+    layer2_signature: string;
+    deletable_at: string;
+}
+
+export type ConflictRole = "Victim" | "Witness";
+export type TrustStatus = "Clean" | { KnownOffender: string } | { Resolved: [string, boolean] };
+
+export interface ProofOfDoubleSpendSummary {
+    proof_id: string;
+    offender_id: string;
+    fork_point_prev_hash: string;
+    report_timestamp: string;
+    is_resolved: boolean;
+    has_l2_verdict: boolean;
+    local_override: boolean;
+    conflict_role: ConflictRole;
+    affected_voucher_name?: string;
+    voucher_standard_uuid?: string;
+    local_note?: string;
+}
+
+export interface ProofOfDoubleSpend {
+    proof_id: string;
+    offender_id: string;
+    fork_point_prev_hash: string;
+    conflicting_transactions: TransactionHistoryEntry[];
+    deletable_at: string;
+    reporter_id: string;
+    report_timestamp: string;
+    reporter_signature: string;
+    resolutions?: ResolutionEndorsement[];
+    layer2_verdict?: any;
+    affected_voucher_name?: string;
+    voucher_standard_uuid?: string;
+    is_resolved?: boolean;
+}
+
+export interface ResolutionEndorsement {
+    endorsement_id: string;
+    proof_id: string;
+    victim_id: string;
+    resolution_timestamp: string;
+    notes?: string;
+    victim_signature: string;
 }
 
 export interface AppSettings {
@@ -231,4 +316,10 @@ export interface SignatureImpact {
     fatal_conflicts: string[];
     resolved_rules: string[];
     gentle_hints: string[];
+}
+export interface FullProofDetails {
+    proof: ProofOfDoubleSpend;
+    local_override: boolean;
+    conflict_role: ConflictRole;
+    local_note?: string;
 }

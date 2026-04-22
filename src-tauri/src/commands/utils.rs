@@ -1,5 +1,4 @@
-use crate::models::VoucherStandardInfo;
-use bip39::Language;
+use crate::models::{VoucherStandardInfo, MnemonicLanguage};
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
 use log::{error, info, warn};
 use std::fs;
@@ -7,15 +6,17 @@ use human_money_core::app_service::AppService;
 use tauri::Manager;
 
 #[tauri::command]
-pub fn generate_mnemonic(word_count: u32) -> Result<String, String> {
-    info!("Generating a new {}-word mnemonic", word_count);
-    AppService::generate_mnemonic(word_count)
+pub fn generate_mnemonic(word_count: u32, language: MnemonicLanguage) -> Result<String, String> {
+    info!("Generating a new {}-word mnemonic in language {:?}", word_count, language);
+    let core_language = language.into();
+    AppService::generate_mnemonic(word_count, core_language)
 }
 
 #[tauri::command]
-pub fn validate_mnemonic(mnemonic: String) -> Result<(), String> {
-    info!("Validating mnemonic...");
-    AppService::validate_mnemonic(&mnemonic)
+pub fn validate_mnemonic(mnemonic: String, language: MnemonicLanguage) -> Result<(), String> {
+    info!("Validating mnemonic with language {:?}...", language);
+    let core_language = language.into();
+    AppService::validate_mnemonic(&mnemonic, core_language)
 }
 
 #[tauri::command]
@@ -115,9 +116,10 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
 }
 
 #[tauri::command]
-pub fn get_bip39_wordlist() -> Vec<&'static str> {
-    info!("Fetching BIP-39 English wordlist for frontend.");
-    Language::English.word_list().iter().copied().collect()
+pub fn get_bip39_wordlist(language: MnemonicLanguage) -> Vec<&'static str> {
+    info!("Fetching BIP-39 wordlist for language {:?} for frontend.", language);
+    let core_language = language.into();
+    AppService::get_mnemonic_wordlist(core_language)
 }
 
 #[tauri::command]

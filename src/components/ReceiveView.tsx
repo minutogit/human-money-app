@@ -287,7 +287,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 });
                 logger.info("Signature request opened successfully.");
                 (onReceiveSuccess as any)({
-                    senderId: voucher.creator.id,
+                    senderId: voucher.voucher.creator.id,
                     transferSummary: { summableAmounts: {}, countableItems: {} },
                     involvedVouchers: [],
                     voucherData: voucher

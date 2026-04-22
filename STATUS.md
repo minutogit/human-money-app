@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0-alpha.2"
+version: "0.1.0-alpha.6"
 phase: "alpha"
 health: "green"
-last_updated: "2026-04-14"
+last_updated: "2026-04-22"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -73,6 +73,18 @@ priority_tasks:
     priority: "medium"
     depends_on: ["APP-007"]
     description: "Allow creators to remove additional signatures from vouchers before they enter circulation."
+  - id: "APP-012"
+    title: "Decentralized Conflict & Reputation"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Multi-layered fraud protection: VIP Gossip for propagation, visual reputation checks (KnownOffender warnings), and local conflict overrides (forgiveness)."
+  - id: "APP-013"
+    title: "Multi-Language Mnemonic Support"
+    status: "completed"
+    priority: "medium"
+    depends_on: []
+    description: "Support for multi-language seed phrases (BIP-39) including custom high-security German wordlist."
 ---
 
 # Human Money App — Status
@@ -85,7 +97,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 - **Frontend**: React 19 + TypeScript + Tailwind CSS v4
 - **Backend**: Rust (Tauri v2), thin bridge to `human_money_core` via Tauri commands
-- **Core dependency**: `human_money_core` via git with local `[patch]` to `../../human-money-core`
+- **Core dependency**: `human_money_core` via git in `Cargo.toml`. Local development uses git-ignored `src-tauri/.cargo/config.toml` for `[patch]` to ensure CI compatibility.
 - **13 UI components**: Dashboard, CreateVoucher, SendView, ReceiveView, TransactionHistory, Settings, Login, etc.
 - **5 Tauri command modules**: actions, auth, queries, utils
 
@@ -108,6 +120,14 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Encrypted Address Book (App-side persistence)
 - [x] Signature Impact Evaluation Engine (Real-time hypothesis testing in UI)
 - [x] Voucher Signature Management (Removal of uncirculated signatures)
+- [x] Decentralized Conflict Management (VIP Gossip, Reputation, Local Notes, Tested Role Detection)
+- [x] Conflict management integration tests (Victim vs. Witness roles)
+- [x] Persistent Local Conflict Overrides with Resolution Notes
+- [x] CI/Release workflow stabilization (git-ignored local patches)
+- [x] Multi-Language Mnemonic Support (BIP-39, custom German wordlists, smart language detection)
+- [x] Synchronized with human_money_core (Protocol version support in public profiles)
+- [x] Dynamic Signature Hints & Lexical Hinting (missing profile data detection)
+- [x] Dashboard UI Polish (Welcome empty state & To-Do area)
 
 ## Next Milestones
 
