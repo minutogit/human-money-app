@@ -16,6 +16,7 @@ interface WalletViewProps {
     onNavigateToCreateVoucher: () => void;
     profileName: string;
     initialStatusFilter?: string;
+    initialStandardFilter?: string;
 }
 
 export function WalletView(props: WalletViewProps) {
@@ -39,7 +40,7 @@ export function WalletView(props: WalletViewProps) {
 
     // Filter state
     const [statusFilters, setStatusFilters] = useState<string[]>(props.initialStatusFilter ? [props.initialStatusFilter] : []);
-    const [standardFilters, setStandardFilters] = useState<string[]>([]);
+    const [standardFilters, setStandardFilters] = useState<string[]>(props.initialStandardFilter ? [props.initialStandardFilter] : []);
     const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
 
     // Expand/collapse state for vouchers

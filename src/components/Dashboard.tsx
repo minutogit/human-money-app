@@ -12,7 +12,7 @@ interface DashboardProps {
     onNavigateToHistory: () => void;
     onNavigateToReceive: () => void;
     onNavigateToConflicts?: () => void;
-    onNavigateToWallet: (filter?: { status?: string }) => void;
+    onNavigateToWallet: (filter?: { status?: string; standard?: string }) => void;
     onNavigateToSettings?: () => void;
     profileName: string;
 }
@@ -28,6 +28,7 @@ export function Dashboard(props: DashboardProps) {
     const [quarantinedCount, setQuarantinedCount] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [isProfileComplete, setIsProfileComplete] = useState(true);
+    const [voucherCountsByStandard, setVoucherCountsByStandard] = useState<Record<string, number>>({});
 
     useEffect(() => {
         logger.info("Dashboard component displayed");
@@ -56,7 +57,19 @@ export function Dashboard(props: DashboardProps) {
                 const quarantinedCount = (voucherSummaries || []).filter(v => {
                     return typeof v.status === 'object' && 'Quarantined' in v.status;
                 }).length;
-                
+
+                // Calculate voucher counts by standard (only active vouchers)
+                const countsByStandard: Record<string, number> = {};
+                (voucherSummaries || [])
+                    .filter(v => v.status === "Active")
+                    .forEach(v => {
+                        const standardUuid = v.voucher_standard_uuid;
+                        if (standardUuid) {
+                            countsByStandard[standardUuid] = (countsByStandard[standardUuid] || 0) + 1;
+                        }
+                    });
+                setVoucherCountsByStandard(countsByStandard);
+
                 setActiveVouchersCount(activeCount);
                 setIncompleteCount(incompleteCount);
                 setQuarantinedCount(quarantinedCount);
@@ -110,21 +123,6 @@ export function Dashboard(props: DashboardProps) {
         const all = [...s, ...c];
         return all.length > 0 ? all.join(', ') : '0.00';
     }
-
-    // Group balances by currency unit
-    const balancesByUnit = balances.reduce((acc, bal) => {
-        const unit = bal.unit;
-        if (!acc[unit]) {
-            acc[unit] = { total: 0, balances: [] };
-        }
-        acc[unit].total += parseFloat(bal.total_amount);
-        acc[unit].balances.push(bal);
-        return acc;
-    }, {} as Record<string, { total: number; balances: AggregatedBalance[] }>);
-
-    const uniqueUnits = Object.keys(balancesByUnit);
-    const singleCurrency = uniqueUnits.length === 1;
-    const primaryUnit = singleCurrency ? uniqueUnits[0] : '';
 
     const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Lade...";
 
@@ -231,41 +229,32 @@ export function Dashboard(props: DashboardProps) {
                             </div>
                         ) : (
                             <>
-                                <h1 className="text-sm font-semibold text-theme-light uppercase tracking-wider mb-2">Total Balance</h1>
-                                {singleCurrency && primaryUnit ? (
-                                    <div className="flex items-center justify-center">
-                                        <p className="text-6xl md:text-7xl font-bold text-theme-primary">
-                                            {formatAmount(balancesByUnit[primaryUnit].total.toString())}
-                                        </p>
-                                        <span className="text-3xl md:text-4xl font-normal text-theme-light ml-3">{primaryUnit}</span>
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-wrap justify-center gap-6">
-                                        {uniqueUnits.map(unit => (
-                                            <div key={unit} className="flex items-baseline">
-                                                <p className="text-5xl md:text-6xl font-bold text-theme-primary">
-                                                    {formatAmount(balancesByUnit[unit].total.toString())}
+                                <h1 className="text-sm font-semibold text-theme-light uppercase tracking-wider mb-8">Balances</h1>
+                                <div className="flex flex-wrap justify-center gap-8 md:gap-12">
+                                    {balances.map((balance) => {
+                                        const count = voucherCountsByStandard[balance.standard_uuid] || 0;
+                                        return (
+                                            <div
+                                                key={balance.standard_uuid}
+                                                onClick={() => props.onNavigateToWallet({ standard: balance.standard_name })}
+                                                className="flex flex-col items-center hover:opacity-80 transition-opacity cursor-pointer group"
+                                            >
+                                                <div className="flex items-baseline mb-2">
+                                                    <p className="text-5xl md:text-6xl font-bold text-theme-primary transition-colors group-hover:text-theme-accent">
+                                                        {formatAmount(balance.total_amount)}
+                                                    </p>
+                                                    <span className="text-2xl md:text-3xl font-normal text-theme-light ml-2">{balance.unit}</span>
+                                                </div>
+                                                <p className="font-semibold text-theme-secondary text-lg">
+                                                    {balance.standard_name}
                                                 </p>
-                                                <span className="text-2xl md:text-3xl font-normal text-theme-light ml-2">{unit}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                                <p className="text-sm text-theme-light mt-2">
-                                    Consisting of {activeVouchersCount} active voucher{activeVouchersCount !== 1 ? 's' : ''}
-                                </p>
-                                {balances.length > 1 && (
-                                    <div className="mt-4 flex flex-wrap justify-center gap-4">
-                                        {balances.map((balance) => (
-                                            <div key={balance.standard_uuid} className="bg-bg-card-alternate rounded-lg px-4 py-2 border border-theme-subtle">
-                                                <p className="text-xs text-theme-light">{balance.standard_name}</p>
-                                                <p className="text-lg font-semibold text-theme-secondary">
-                                                    {formatAmount(balance.total_amount)} {balance.unit}
+                                                <p className="text-sm text-theme-light mt-1">
+                                                    ({count} voucher{count !== 1 ? 's' : ''})
                                                 </p>
                                             </div>
-                                        ))}
-                                    </div>
-                                )}
+                                        );
+                                    })}
+                                </div>
                             </>
                         )}
                     </section>
