@@ -62,10 +62,14 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                         {payload.senderProfileName ? (
                             <p className="text-lg font-semibold text-theme-primary">{payload.senderProfileName}</p>
                         ) : (
-                            <p className="text-base font-mono text-theme-secondary break-all">{payload.senderId}</p>
+                            <p className="text-base font-mono text-theme-secondary break-all">
+                                {payload.senderId || 'Anonymous Sender'}
+                            </p>
                         )}
                         {payload.senderProfileName && (
-                            <p className="text-xs font-mono text-theme-light break-all" title={payload.senderId}>({payload.senderId})</p>
+                            <p className="text-xs font-mono text-theme-light break-all" title={payload.senderId}>
+                                ({payload.senderId || 'Anonymous'})
+                            </p>
                         )}
                         
                         {typeof trustStatus === 'object' && 'KnownOffender' in trustStatus && (

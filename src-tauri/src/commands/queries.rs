@@ -61,6 +61,12 @@ pub fn get_voucher_details(local_id: String, state: tauri::State<AppState>) -> R
 }
 
 #[tauri::command]
+pub fn get_voucher_source_sender(local_id: String, state: tauri::State<AppState>) -> Result<Option<String>, String> {
+    let service = state.service.lock().unwrap();
+    service.get_voucher_source_sender(&local_id)
+}
+
+#[tauri::command]
 pub fn get_double_spend_conflicts(state: tauri::State<AppState>) -> Result<Vec<ProofOfDoubleSpendSummary>, String> {
     let service = state.service.lock().unwrap();
     service.list_conflicts()

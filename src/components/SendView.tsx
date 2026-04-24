@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, FormEvent, ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "../utils/log";
-import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord, InvolvedVoucherInfo, Contact, TrustStatus } from "../types";
+import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord, InvolvedVoucherInfo, Contact, TrustStatus, AppSettings } from "../types";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
@@ -48,6 +48,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [standardIdToNameMap, setStandardIdToNameMap] = useState<Map<string, string>>(new Map());
     const [showConfirm, setShowConfirm] = useState(false);
     const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
+    const [privacyMode, setPrivacyMode] = useState<'public' | 'stealth' | null>(null);
+    const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
     
     // Adressebuch & Vorschläge
     const [contacts, setContacts] = useState<Contact[]>([]);
@@ -55,6 +57,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [showContactPicker, setShowContactPicker] = useState(false);
     const [recipientError, setRecipientError] = useState(false);
+    const [privacyError, setPrivacyError] = useState(false);
 
     // Reset error indicator after short delay
     useEffect(() => {
@@ -63,6 +66,21 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             return () => clearTimeout(timer);
         }
     }, [recipientError]);
+
+    // Reset privacy error indicator after short delay
+    useEffect(() => {
+        if (privacyError) {
+            const timer = setTimeout(() => setPrivacyError(false), 2000);
+            return () => clearTimeout(timer);
+        }
+    }, [privacyError]);
+
+    // Reset privacy mode when selection changes (for flexible mode)
+    useEffect(() => {
+        if (privacyRules.mode === 'Flexible') {
+            setPrivacyMode(null);
+        }
+    }, [selection]);
 
     // Reputation Check useEffect
     useEffect(() => {
@@ -101,6 +119,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
                 const userId = await invoke<string>("get_user_id");
                 const standards = await invoke<VoucherStandardInfo[]>("get_voucher_standards");
+                const settings = await invoke<AppSettings>("get_app_settings");
                 const newMap = new Map<string, string>();
                 const newNameMap = new Map<string, string>();
                 standards.forEach(s => {
@@ -124,6 +143,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 setAvailableVouchers(enrichedVouchers);
                 setVoucherStandards(standards);
                 setOwnUserId(userId);
+                setAppSettings(settings);
                 
                 // Kontakte laden
                 const fetchedContacts = await invoke<Contact[]>("get_contacts");
@@ -227,6 +247,58 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         setShowContactPicker(false);
     };
 
+    // Ermittle die Privacy-Regeln basierend auf der aktuellen Auswahl
+    const privacyRules = useMemo(() => {
+        if (selection.size === 0) return { mode: 'Flexible', forced: false };
+        
+        const selectedVoucherIds = Array.from(selection.keys());
+        const selectedStandards = new Set<string>();
+        
+        selectedVoucherIds.forEach(vid => {
+            const v = availableVouchers.find(av => av.local_instance_id === vid);
+            if (v) selectedStandards.add(v.voucher_standard_uuid);
+        });
+
+        let hasPublic = false;
+        let hasPrivate = false;
+
+        selectedStandards.forEach(uuid => {
+            const standard = voucherStandards.find(s => standardIdToUuidMap.get(s.id) === uuid);
+            if (standard) {
+                const match = standard.content.match(/privacy_mode\s*=\s*"([^"]+)"/);
+                const mode = match ? match[1] : "Public"; // Default
+                if (mode === "Public" || mode === "public") hasPublic = true;
+                if (mode === "Stealth" || mode === "stealth" || mode === "Private" || mode === "private") hasPrivate = true;
+            }
+        });
+
+        // Logik für Mischpakete:
+        // Wenn sowohl Public als auch Stealth dabei sind -> Inkompatibel
+        if (hasPublic && hasPrivate) return { mode: 'Incompatible', forced: false };
+        if (hasPrivate) return { mode: 'Stealth', forced: true };
+        if (hasPublic) return { mode: 'Public', forced: true };
+        return { mode: 'Flexible', forced: false };
+    }, [selection, availableVouchers, voucherStandards, standardIdToUuidMap]);
+
+    // Effekt: Setze den Privacy-Schalter automatisch, wenn er erzwungen wird
+    useEffect(() => {
+        if (privacyRules.mode === 'Stealth') {
+            setPrivacyMode('stealth');
+        } else if (privacyRules.mode === 'Public') {
+            setPrivacyMode('public');
+        } else if (privacyRules.mode === 'Flexible' && privacyMode === null && appSettings) {
+            // Apply default setting when flexible mode is detected and user hasn't selected yet
+            if (appSettings.privacy_default === 'stealth') {
+                setPrivacyMode('stealth');
+            } else if (appSettings.privacy_default === 'public') {
+                setPrivacyMode('public');
+            } else {
+                // 'ask' mode - don't auto-select, require user to choose
+                setPrivacyMode(null);
+            }
+        }
+    }, [privacyRules, privacyMode, appSettings]);
+
 
     const handleManualVoucherSelect = (voucher: VoucherSummary) => {
         setTargetAmountStr("");
@@ -285,6 +357,13 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             setFeedbackMsg("Please select at least one voucher");
             return;
         }
+        // Prüfe ob Privacy Mode für flexible Standards ausgewählt wurde
+        if (privacyRules.mode === 'Flexible' && privacyMode === null) {
+            setPrivacyError(true);
+            setFeedbackMsg("Please select privacy mode to continue");
+            document.getElementById('privacyMode')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
         setFeedbackMsg("");
         setShowConfirm(true);
     };
@@ -294,7 +373,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         setIsProcessing(true);
         // Modal bleibt offen oder zeigt Loading, wir schließen es erst am Ende oder bei Fehler
         try {
-            const senderProfileNameToSend = sendProfileName && profileName ? profileName : null;
+            const senderProfileNameToSend = (sendProfileName && privacyMode === 'public' && profileName) ? profileName : null;
             const notesToSend = notes.trim() === "" ? null : notes.trim();
 
             const sources: SourceTransfer[] = Array.from(selection.entries()).map(([id, amount]) => ({
@@ -313,9 +392,10 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 return await invoke<CreateBundleResult>("create_transfer_bundle", {
                     recipientId,
                     sources,
-                    notes: notesToSend, // NEU
-                    senderProfileName: senderProfileNameToSend, // NEU
+                    notes: notesToSend,
+                    senderProfileName: senderProfileNameToSend,
                     standardDefinitionsToml,
+                    usePrivacyMode: privacyMode === 'stealth',
                     password
                 });
             });
@@ -505,12 +585,12 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                             </div>
                             <div>
                                 <div className="flex items-center">
-                                    <input
+                                     <input
                                         id="sendProfileName"
                                         type="checkbox"
-                                        checked={sendProfileName}
+                                        checked={sendProfileName && privacyMode === 'public'}
                                         onChange={(e: ChangeEvent<HTMLInputElement>) => setSendProfileName(e.target.checked)}
-                                        disabled={!profileName}
+                                        disabled={!profileName || privacyMode === 'stealth'}
                                         className="h-4 w-4 text-theme-accent border-input-border rounded focus:ring-theme-accent"
                                     />
                                     <label htmlFor="sendProfileName" className="ml-2 block text-sm text-theme-light">
@@ -518,6 +598,77 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                     </label>
                                 </div>
                                 {!profileName && <p className="text-xs text-theme-light mt-1">Profile name not available to send.</p>}
+                                {privacyMode === 'stealth' && <p className="text-xs text-theme-light mt-1">Profile name is hidden in stealth mode.</p>}
+                            </div>
+                            
+                            {/* NEU: Privacy Mode Segmented Control */}
+                            <div id="privacyMode" className={`pt-2 border-t border-theme-subtle/50 mt-2 transition-all duration-150 ease-in-out ${privacyError ? 'border-4 border-red-500' : ''}`}>
+                                <label className={`block text-xs font-medium mb-1.5 ${privacyError ? 'text-red-900' : 'text-theme-light'}`}>
+                                    Privacy Mode
+                                </label>
+                                
+                                {privacyRules.forced ? (
+                                    // Show read-only state when forced by standard
+                                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-bg-input-readonly rounded-md border border-theme-subtle text-xs">
+                                        <span>{privacyRules.mode === 'Stealth' ? '🔒' : '👁️'}</span>
+                                        <span className={`font-medium ${privacyRules.mode === 'Stealth' ? 'text-theme-accent' : 'text-theme-secondary'}`}>
+                                            {privacyRules.mode === 'Stealth' ? 'Stealth' : 'Public'}
+                                        </span>
+                                        <span className="text-theme-light">(forced)</span>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center gap-2">
+                                        {/* Show 2-state segmented control for flexible mode */}
+                                        <div className={`inline-flex rounded-md border overflow-hidden transition-all duration-150 ease-in-out ${
+                                            privacyError 
+                                                ? 'border-4 border-red-500' 
+                                                : 'border border-theme-subtle'
+                                        }`}>
+                                            <button
+                                                type="button"
+                                                onClick={() => setPrivacyMode('public')}
+                                                disabled={privacyRules.mode === 'Incompatible'}
+                                                className={`px-3 py-1.5 text-xs font-medium transition-colors border-r ${
+                                                    privacyError
+                                                        ? 'border-red-500 text-red-900'
+                                                        : 'border-theme-subtle'
+                                                } ${
+                                                    privacyMode === 'public'
+                                                        ? 'bg-blue-50 text-blue-700'
+                                                        : privacyError
+                                                            ? 'bg-red-50 hover:bg-red-100'
+                                                            : 'bg-white text-theme-light hover:bg-bg-input-readonly'
+                                                } ${privacyRules.mode === 'Incompatible' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                            >
+                                                👁️ Public
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setPrivacyMode('stealth')}
+                                                disabled={privacyRules.mode === 'Incompatible'}
+                                                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                                                    privacyMode === 'stealth'
+                                                        ? 'bg-purple-50 text-purple-700'
+                                                        : privacyError
+                                                            ? 'bg-red-50 hover:bg-red-100'
+                                                            : 'bg-white text-theme-light hover:bg-bg-input-readonly'
+                                                } ${privacyRules.mode === 'Incompatible' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                            >
+                                                🔒 Stealth
+                                            </button>
+                                        </div>
+                                        {/* Show hint when not selected */}
+                                        {privacyRules.mode === 'Flexible' && privacyMode === null && (
+                                            <span className={`text-[10px] italic ${privacyError ? 'text-red-500' : 'text-theme-accent'}`}>select privacy mode</span>
+                                        )}
+                                    </div>
+                                )}
+                                
+                                {privacyRules.mode === 'Incompatible' && (
+                                    <p className="mt-1.5 text-[10px] text-red-500 font-medium">
+                                        ⚠️ Incompatible privacy rules
+                                    </p>
+                                )}
                             </div>
                             {/* --- NEU ENDE --- */}
                             <div>

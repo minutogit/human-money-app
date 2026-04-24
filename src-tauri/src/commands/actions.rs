@@ -77,9 +77,10 @@ pub fn create_transfer_bundle(
     notes: Option<String>,
     sender_profile_name: Option<String>,
     standard_definitions_toml: HashMap<String, String>,
-    password: Option<String>, // <--- GEÄNDERT
+    use_privacy_mode: Option<bool>,
+    password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<CreateBundleResult, String> { // RÜCKGABETYP GEÄNDERT
+) -> Result<CreateBundleResult, String> {
     info!(
         "Attempting to create a transfer bundle for recipient: {}",
         recipient_id
@@ -99,6 +100,7 @@ pub fn create_transfer_bundle(
         sources: source_transfers,
         notes,
         sender_profile_name,
+        use_privacy_mode,
     };
 
     let archive: Option<&dyn VoucherArchive> = None;
@@ -293,7 +295,7 @@ pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<Tran
     history_cache
         .as_ref()
         .cloned()
-        .ok_or_else(|| "Transaction history not available. User might be logged out.".to_string())
+        .ok_or_else(|| "Transaction history not available. User might be logged out or initialization failed.".to_string())
 }
 
 #[tauri::command]
@@ -303,7 +305,7 @@ pub fn get_app_settings(state: tauri::State<AppState>) -> Result<AppSettings, St
     settings_cache
         .as_ref()
         .cloned()
-        .ok_or_else(|| "Settings not available. User might be logged out.".to_string())
+        .ok_or_else(|| "Settings not available. User might be logged out or core initialization missing.".to_string())
 }
 
 #[tauri::command]

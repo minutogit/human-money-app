@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
-import { AppSettings } from '../types';
+import { AppSettings, PrivacyDefault } from '../types';
 import { useSession } from '../context/SessionContext';
 
 import { ProfileSettings } from './ProfileSettings';
@@ -145,6 +145,67 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                 />
                                 <p className="text-xs text-theme-light mt-2 bg-theme-secondary/5 p-2 rounded border-l-2 border-theme-secondary">
                                     Duration to keep the wallet unlocked after activity. Set to 0 to always ask for password (High Security).
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h2 className="text-lg font-semibold text-theme-main mb-4">Privacy Defaults</h2>
+                        
+                        <div className="space-y-6">
+                            <div>
+                                <label className="block text-sm font-medium text-theme-light mb-1.5">
+                                    Default Privacy Mode for Flexible Standards
+                                </label>
+                                <div className="space-y-3">
+                                    <label className="flex items-center gap-3 p-3 border border-theme-subtle rounded-lg hover:bg-bg-input-readonly cursor-pointer transition-colors">
+                                        <input
+                                            type="radio"
+                                            name="privacyDefault"
+                                            value="ask"
+                                            checked={settings?.privacy_default === 'ask'}
+                                            onChange={(e) => setSettings(s => s ? { ...s, privacy_default: e.target.value as PrivacyDefault } : null)}
+                                            className="h-4 w-4 text-theme-accent border-input-border focus:ring-theme-accent"
+                                        />
+                                        <div>
+                                            <p className="text-sm font-medium text-theme-secondary">Always Ask</p>
+                                            <p className="text-xs text-theme-light">Prompt me to choose privacy mode each time I send with flexible standards</p>
+                                        </div>
+                                    </label>
+                                    
+                                    <label className="flex items-center gap-3 p-3 border border-theme-subtle rounded-lg hover:bg-bg-input-readonly cursor-pointer transition-colors">
+                                        <input
+                                            type="radio"
+                                            name="privacyDefault"
+                                            value="stealth"
+                                            checked={settings?.privacy_default === 'stealth'}
+                                            onChange={(e) => setSettings(s => s ? { ...s, privacy_default: e.target.value as PrivacyDefault } : null)}
+                                            className="h-4 w-4 text-theme-accent border-input-border focus:ring-theme-accent"
+                                        />
+                                        <div>
+                                            <p className="text-sm font-medium text-theme-secondary">Stealth Mode (Anonymous)</p>
+                                            <p className="text-xs text-theme-light">Hide my DID from the ledger by default</p>
+                                        </div>
+                                    </label>
+                                    
+                                    <label className="flex items-center gap-3 p-3 border border-theme-subtle rounded-lg hover:bg-bg-input-readonly cursor-pointer transition-colors">
+                                        <input
+                                            type="radio"
+                                            name="privacyDefault"
+                                            value="public"
+                                            checked={settings?.privacy_default === 'public'}
+                                            onChange={(e) => setSettings(s => s ? { ...s, privacy_default: e.target.value as PrivacyDefault } : null)}
+                                            className="h-4 w-4 text-theme-accent border-input-border focus:ring-theme-accent"
+                                        />
+                                        <div>
+                                            <p className="text-sm font-medium text-theme-secondary">Public Mode</p>
+                                            <p className="text-xs text-theme-light">Make my DID visible on the ledger by default</p>
+                                        </div>
+                                    </label>
+                                </div>
+                                <p className="text-xs text-theme-light mt-2 bg-theme-accent/5 p-2 rounded border-l-2 border-theme-accent">
+                                    This setting only applies to flexible standards. Fixed standards always enforce their specific privacy rules.
                                 </p>
                             </div>
                         </div>

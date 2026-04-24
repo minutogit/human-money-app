@@ -9,12 +9,17 @@ interface ContactBadgeProps {
     onEdit?: () => void;
 }
 
-const truncateDid = (did: string) => {
+const truncateDid = (did: string | null | undefined) => {
+    if (!did) return "Anonymous";
     if (did.length <= 20) return did;
     return `${did.substring(0, 10)}...${did.substring(did.length - 6)}`;
 };
 
 export const ContactBadge: React.FC<ContactBadgeProps> = ({ did, contacts, size = 'md', onEdit }) => {
+    console.log("DEBUG [ContactBadge]: Rendering for DID:", did);
+    if (!did) {
+        return <span className={`font-mono ${size === 'sm' ? 'text-[10px]' : 'text-xs'} text-theme-light italic`}>Anonymous Sender</span>;
+    }
     const contact = contacts.find(c => c.did === did);
     const avatarSize = size === 'sm' ? 20 : 24;
     const textSize = size === 'sm' ? 'text-[10px]' : 'text-xs';

@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0-alpha.7"
+version: "0.1.0-alpha.9"
 phase: "alpha"
 health: "green"
-last_updated: "2026-04-23"
+last_updated: "2026-04-24"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -128,6 +128,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Synchronized with human_money_core (Protocol version support in public profiles)
 - [x] Dynamic Signature Hints & Lexical Hinting (missing profile data detection)
 - [x] Dashboard UI Polish (Welcome empty state & To-Do area)
+- [x] Cryptographic Voucher Traceability & Anti-Spoofing (Privacy mode back-tracing)
+- [x] User-Controlled Privacy Mode (Vertical Toggle: Frontend -> Tauri -> Core)
 
 ## Next Milestones
 

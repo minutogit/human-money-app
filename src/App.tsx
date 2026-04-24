@@ -143,13 +143,22 @@ function AppContent() {
                 />;
             case "recreate_profile":
                 return <RecreateProfile
-                    onProfileCreated={() => setAppState({ view: "logged_in" })}
+                    onProfileCreated={() => {
+                        notifyLogin();
+                        setAppState({ view: "logged_in" });
+                    }}
                     onSwitchToLogin={() => setAppState({ view: "needs_login" })}
                 />;
             case "settings":
                 return <SettingsView onBack={() => setAppState({ view: "logged_in" })} />;
             case "needs_recovery":
-                return <WalletRecovery onRecoverySuccess={() => setAppState({ view: "logged_in" })} onSwitchToLogin={() => setAppState({ view: "needs_login" })} />;
+                return <WalletRecovery 
+                    onRecoverySuccess={() => {
+                        notifyLogin();
+                        setAppState({ view: "logged_in" });
+                    }} 
+                    onSwitchToLogin={() => setAppState({ view: "needs_login" })} 
+                />;
             case "create_voucher":
                 return <CreateVoucher onVoucherCreated={() => setAppState(appState.previousView || { view: "logged_in" })} onCancel={() => setAppState(appState.previousView || { view: "logged_in" })} />;
             case "voucher_details":

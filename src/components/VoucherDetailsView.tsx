@@ -66,6 +66,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     const [isRemovingSignature, setIsRemovingSignature] = useState(false);
     const [proofId, setProofId] = useState<string | null>(null);
     const [isFetchingProofId, setIsFetchingProofId] = useState(false);
+    const [sourceSenderId, setSourceSenderId] = useState<string | null>(null);
     const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
     const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
@@ -89,18 +90,20 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             setIsLoading(true);
             setErrorMsg("");
             try {
-                const [result, currentSettings, userId, profile, standards] = await Promise.all([
+                const [result, currentSettings, userId, profile, standards, sourceId] = await Promise.all([
                     invoke<VoucherDetails>("get_voucher_details", { localId: voucherId }),
                     invoke<AppSettings>('get_app_settings').catch(() => null),
                     invoke<string>("get_user_id").catch(() => null),
                     invoke<PublicProfile>("get_user_profile").catch(() => null),
-                    invoke<VoucherStandardInfo[]>("get_voucher_standards").catch(() => [])
+                    invoke<VoucherStandardInfo[]>("get_voucher_standards").catch(() => []),
+                    invoke<string | null>("get_voucher_source_sender", { localId: voucherId }).catch(() => null)
                 ]);
                 setDetails(result);
                 setSettings(currentSettings);
                 setCurrentUserId(userId);
                 setUserProfile(profile);
                 setVoucherStandards(standards);
+                setSourceSenderId(sourceId);
             } catch (e) {
                 const msg = `Failed to fetch voucher details: ${e}`;
                 logger.error(msg);
@@ -447,6 +450,44 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                         )}
                     </Card>
 
+                    {sourceSenderId && sourceSenderId !== voucher.creator.id && (
+                        <Card title={
+                            <span className="flex items-center gap-3">
+                                Transferred By (Last Predecessor)
+                                <Button 
+                                    variant="outline" 
+                                    size="sm" 
+                                    onClick={() => {
+                                        const contact = contacts.find(c => c.did === sourceSenderId);
+                                        setPendingContactDID(sourceSenderId);
+                                        setExistingContact(contact || null);
+                                        setShowContactDialog(true);
+                                    }}
+                                    className="flex items-center gap-1"
+                                >
+                                    {contacts.some(c => c.did === sourceSenderId) ? '✏️ Edit Contact' : '👤 Add to Address Book'}
+                                </Button>
+                            </span>
+                        }>
+                            <p className="text-sm text-theme-secondary mb-3 italic">
+                                This identity directly transferred the voucher to you. 
+                                In case of conflicts, this is your primary contact for path tracing.
+                            </p>
+                            <ContactBadge did={sourceSenderId} contacts={contacts} size="sm" onEdit={() => {
+                                const contact = contacts.find(c => c.did === sourceSenderId);
+                                setPendingContactDID(sourceSenderId);
+                                setExistingContact(contact || null);
+                                setShowContactDialog(true);
+                            }} />
+                            {isQuarantined && (
+                                <div className="mt-4 bg-red-50 border border-red-200 rounded p-3 text-xs text-red-800 flex items-center gap-2">
+                                    <span>🛡️</span>
+                                    <span><strong>Certified Traceability:</strong> This identity is cryptographically linked to the receipt of this voucher.</span>
+                                </div>
+                            )}
+                        </Card>
+                    )}
+
                     <div className="bg-bg-card-alternate border border-theme-subtle rounded-lg shadow-sm p-4 flex flex-wrap items-center justify-start gap-x-6 gap-y-2">
                         <span title={statusInfo.tooltip} className={`px-3 py-1 text-sm font-bold rounded-full capitalize ${statusInfo.color}`}>
                             {statusInfo.name}
@@ -556,12 +597,12 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                     <div className="bg-theme-subtle/30 p-2 rounded space-y-2">
                                         <div>
                                             <p className="text-xs font-semibold text-theme-light mb-1">From:</p>
-                                            <ContactBadge did={t.sender_id} contacts={contacts} size="sm" onEdit={() => {
+                                            <ContactBadge did={t.sender_id} contacts={contacts} size="sm" onEdit={t.sender_id ? () => {
                                                 const contact = contacts.find(c => c.did === t.sender_id);
                                                 setPendingContactDID(t.sender_id);
                                                 setExistingContact(contact || null);
                                                 setShowContactDialog(true);
-                                            }} />
+                                            } : undefined} />
                                         </div>
                                         <div>
                                             <p className="text-xs font-semibold text-theme-light mb-1">To:</p>

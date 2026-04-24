@@ -409,7 +409,15 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
             <div className="flex-grow">
                 <form onSubmit={handleProcessClick} className="space-y-6">
-                    {feedbackMsg && <p className="text-center text-red-500">{feedbackMsg}</p>}
+                    {feedbackMsg && (
+                        <div className={`p-4 rounded-md text-center text-sm ${
+                            feedbackMsg.includes('Privacy Guard Integrity') || feedbackMsg.includes('Tampered') || feedbackMsg.includes('Security')
+                            ? 'bg-red-100 border border-red-300 text-red-800 font-bold' 
+                            : 'text-red-500'
+                        }`}>
+                            {feedbackMsg}
+                        </div>
+                    )}
 
                     <div
                         id="bundle-drop-zone"

@@ -170,16 +170,8 @@ pub fn create_profile(
                 .save_encrypted_data(SETTINGS_KEY, &settings_bytes, Some(&password))
                 .map_err(|e| format!("Failed to save default settings: {}", e))?;
 
-            // 2. Starte die Session direkt (wie beim Login)
-            if default_settings.session_timeout_seconds > 0 {
-                service.unlock_session(&password, default_settings.session_timeout_seconds)?;
-            }
-
-            // 3. Aktualisiere den globalen AppState (Settings & leere History)
-            *state.settings.lock().unwrap() = Some(default_settings);
-            *state.history.lock().unwrap() = Some(Vec::new());
-
-            Ok(())
+            // 2. Initialisiere die Session und den Cache (lädt Settings & leere History)
+            initialize_profile_session(&mut service, &password, &state)
         }
         Err(e) => {
             error!("Profile creation failed: {}", e);
@@ -187,6 +179,7 @@ pub fn create_profile(
         }
     }
 }
+
 
 #[tauri::command]
 pub fn login(
@@ -208,59 +201,8 @@ pub fn login(
                 // Don't fail login if metadata update fails
             }
 
-            // Lade oder erstelle die Einstellungen
-            let settings: AppSettings = match service.load_encrypted_data(SETTINGS_KEY, Some(&password)) {
-                Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
-                Err(_) => {
-                    info!("No settings file found, creating default settings.");
-                    let default_settings = AppSettings::default();
-                    let bytes = serde_json::to_vec(&default_settings).unwrap();
-                    service
-                        .save_encrypted_data(SETTINGS_KEY, &bytes, Some(&password))
-                        .map_err(|e| format!("Failed to save default settings: {}", e))?;
-                    default_settings
-                 }
-             };
-
-            // NEU: Wenn ein Timeout konfiguriert ist, starten wir direkt die Session.
-            // So muss der User für die ersten Aktionen kein Passwort eingeben.
-            if settings.session_timeout_seconds > 0 {
-                service.unlock_session(&password, settings.session_timeout_seconds)?;
-            }
-
-             // Lade die Transaktionshistorie und führe die Bereinigung durch
-             // Beim Login haben wir immer das Passwort, also Some(&password)
-             let mut history = load_history_from_disk(&mut service, Some(&password))?;
-            let mut changed = false;
-            let retention_duration = Duration::days(settings.bundle_retention_days as i64);
-
-            for record in history.iter_mut() {
-                if record.bundle_data.is_empty() {
-                    continue;
-                }
-                if let Ok(timestamp) = record.timestamp.parse::<chrono::DateTime<Utc>>() {
-                    if Utc::now().signed_duration_since(timestamp) > retention_duration {
-                        info!("Clearing bundle data for old transaction record: {}", record.id);
-                        record.bundle_data.clear();
-                        changed = true;
-                    }
-                }
-            }
-
-            if changed {
-                info!("Saving cleaned transaction history back to disk...");
-                let history_bytes = serde_json::to_vec(&history)
-                    .map_err(|e| format!("Failed to serialize cleaned history: {}", e))?;
-                service
-                    .save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, Some(&password))
-                    .map_err(|e| format!("Failed to save cleaned history: {}", e))?;
-            }
-
-            // Speichere die geladenen Daten im AppState
-            *state.settings.lock().unwrap() = Some(settings);
-            *state.history.lock().unwrap() = Some(history);
-
-            Ok(())
+            // Initialisiere die Session und den Cache
+            initialize_profile_session(&mut service, &password, &state)
         }
         Err(e) => {
             error!("Login failed: {}", e);
@@ -284,7 +226,10 @@ pub fn recover_wallet_and_set_new_password(
     match service.recover_wallet_and_set_new_password(&folder_name, &mnemonic, passphrase.as_deref(), &new_password, core_language) {
         Ok(()) => {
             info!("Wallet recovered and new password set successfully!");
-            Ok(())
+            
+            // NEU: Nach der Recovery müssen wir die Session und den Cache ebenfalls initialisieren,
+            // da der User im Frontend direkt ins Dashboard (logged_in) wechselt.
+            initialize_profile_session(&mut service, &new_password, &state)
         }
         Err(e) => {
             error!("Wallet recovery failed: {}", e);
@@ -292,6 +237,69 @@ pub fn recover_wallet_and_set_new_password(
         }
     }
 }
+
+/// Helper-Funktion zur Initialisierung der Sitzung und der AppState-Caches (Settings & History).
+/// Wird nach Login, Profile-Erstellung (teilweise) und Recovery aufgerufen.
+fn initialize_profile_session(
+    service: &mut human_money_core::app_service::AppService,
+    password: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    info!("Initializing profile session and member caches...");
+    
+    // 1. Lade oder erstelle die Einstellungen
+    let settings: AppSettings = match service.load_encrypted_data(SETTINGS_KEY, Some(password)) {
+        Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
+        Err(_) => {
+            info!("No settings file found, creating default settings.");
+            let default_settings = AppSettings::default();
+            let bytes = serde_json::to_vec(&default_settings).unwrap();
+            service
+                .save_encrypted_data(SETTINGS_KEY, &bytes, Some(password))
+                .map_err(|e| format!("Failed to save default settings: {}", e))?;
+            default_settings
+        }
+    };
+
+    // 2. Wenn ein Timeout konfiguriert ist, starten wir direkt die Session.
+    if settings.session_timeout_seconds > 0 {
+        service.unlock_session(password, settings.session_timeout_seconds)?;
+    }
+
+    // 3. Lade die Transaktionshistorie und führe die Bereinigung durch
+    let mut history = load_history_from_disk(service, Some(password))?;
+    let mut changed = false;
+    let retention_duration = Duration::days(settings.bundle_retention_days as i64);
+
+    for record in history.iter_mut() {
+        if record.bundle_data.is_empty() {
+            continue;
+        }
+        if let Ok(timestamp) = record.timestamp.parse::<chrono::DateTime<Utc>>() {
+            if Utc::now().signed_duration_since(timestamp) > retention_duration {
+                info!("Clearing bundle data for old transaction record: {}", record.id);
+                record.bundle_data.clear();
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        info!("Saving cleaned transaction history back to disk...");
+        let history_bytes = serde_json::to_vec(&history)
+            .map_err(|e| format!("Failed to serialize cleaned history: {}", e))?;
+        service
+            .save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, Some(password))
+            .map_err(|e| format!("Failed to save cleaned history: {}", e))?;
+    }
+
+    // 4. Speichere die geladenen Daten im AppState
+    *state.settings.lock().unwrap() = Some(settings);
+    *state.history.lock().unwrap() = Some(history);
+
+    Ok(())
+}
+
 
 #[tauri::command]
 pub fn logout(state: tauri::State<AppState>) {

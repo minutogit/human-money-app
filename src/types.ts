@@ -218,6 +218,15 @@ export interface SourceTransfer {
     amount_to_send: string;
 }
 
+export interface MultiTransferRequest {
+    recipientId: string;
+    sources: SourceTransfer[];
+    notes?: string | null;
+    senderProfileName?: string | null;
+    standardDefinitionsToml: Record<string, string>;
+    use_privacy_mode?: boolean | null;
+}
+
 export interface TransactionRecord {
     id: string;
     direction: 'sent' | 'received';
@@ -305,10 +314,13 @@ export interface ResolutionEndorsement {
     victim_signature: string;
 }
 
+export type PrivacyDefault = 'ask' | 'stealth' | 'public';
+
 export interface AppSettings {
     bundle_retention_days: number;
     session_timeout_seconds: number;
     last_used_directory?: string;
+    privacy_default: PrivacyDefault;
 }
 
 export interface SignatureImpact {

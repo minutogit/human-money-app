@@ -183,7 +183,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                                         <span className="font-mono text-xs ml-1.5">({truncateId(recipientIdPart)})</span>
                                                                     </>
                                                                 ) : (
-                                                                    <span className="font-mono">{truncateId(record.recipient_id || '')}</span>
+                                                                    <span className="font-mono">{truncateId(record.recipient_id || 'Anonymous')}</span>
                                                                 )}
                                                             </p>
                                                             {/* NEUES LAYOUT FÜR NOTIZEN */}
@@ -202,10 +202,10 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                         From: {record.sender_profile_name ? (
                                                             <>
                                                                 <span className="font-semibold text-theme-primary">{record.sender_profile_name}</span>
-                                                                <span className="font-mono text-xs ml-1.5">({truncateId(record.sender_id || 'Unknown')})</span>
+                                                                <span className="font-mono text-xs ml-1.5">({truncateId(record.sender_id || 'Anonymous')})</span>
                                                             </>
                                                         ) : (
-                                                            <span className="font-mono">{truncateId(record.sender_id || 'Unknown')}</span>
+                                                            <span className="font-mono">{truncateId(record.sender_id || 'Anonymous')}</span>
                                                         )}
                                                     </p>
                                                     {/* NEUES LAYOUT FÜR NOTIZEN */}
