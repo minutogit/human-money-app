@@ -24,6 +24,7 @@ import { RecreateProfile } from './components/RecreateProfile';
 import AddressBook from './components/AddressBook';
 import { ConflictDetailsView } from './components/ConflictDetailsView';
 import { ConflictListView } from './components/ConflictListView';
+import { ForkLockOverlay } from './components/ForkLockOverlay';
 import { ProfileInfo, ReceiveSuccessPayload } from './types';
 // WICHTIG: Der Import für den Provider
 import { SessionProvider, useSession } from './context/SessionContext';
@@ -56,7 +57,13 @@ function AppContent() {
     const [appVersion, setAppVersion] = useState<string>("");
     
     // Zugriff auf SessionContext
-    const { notifyLogin } = useSession();
+    const { notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, clearLocks } = useSession();
+
+    useEffect(() => {
+        if (isForkLocked || isRecoveryRequired) {
+            logger.warn("Global lock detected, switching to recovery view state.");
+        }
+    }, [isForkLocked, isRecoveryRequired]);
 
     useEffect(() => {
         getVersion().then(setAppVersion);
@@ -98,6 +105,7 @@ function AppContent() {
         // Reset the profile name on logout
         setProfileName("");
         setAppState({ view: "needs_login" });
+        notifyLogout();
     }
 
     function renderContent() {
@@ -315,6 +323,35 @@ function AppContent() {
                         {renderContent()}
                     </main>
                 </div>
+
+                {/* Fork detected overlay */}
+                {isForkLocked && (
+                    <ForkLockOverlay 
+                        onStartRecovery={() => {
+                            clearLocks();
+                            setAppState({ view: "needs_recovery" });
+                        }} 
+                    />
+                )}
+                
+                {/* Fallback for general recovery required (no seal) */}
+                {isRecoveryRequired && !isForkLocked && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                         <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl p-8 text-center shadow-xl">
+                            <h2 className="text-xl font-bold mb-4">Recovery Required</h2>
+                            <p className="text-theme-light mb-6">Your security seal has been lost. You must perform a recovery to continue using this wallet.</p>
+                            <Button 
+                                className="w-full"
+                                onClick={() => {
+                                    clearLocks();
+                                    setAppState({ view: "needs_recovery" });
+                                }}
+                            >
+                                Start Recovery
+                            </Button>
+                        </div>
+                    </div>
+                )}
             </div>
     );
 }

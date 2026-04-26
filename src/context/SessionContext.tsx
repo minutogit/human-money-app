@@ -4,11 +4,16 @@ import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/log';
 import { AuthModal } from '../components/ui/AuthModal';
 import { AppSettings } from '../types';
+import { startSealSyncLoop, stopSealSyncLoop } from '../utils/sealSync';
 
 interface SessionContextType {
     protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>;
     isSessionActive: boolean;
     notifyLogin: () => void;
+    notifyLogout: () => void;
+    isForkLocked: boolean;
+    isRecoveryRequired: boolean;
+    clearLocks: () => void;
 }
 
 const SessionContext = createContext<SessionContextType | null>(null);
@@ -22,6 +27,8 @@ export function useSession() {
 export function SessionProvider({ children }: { children: ReactNode }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSessionActive, setIsSessionActive] = useState(false);
+    const [isForkLocked, setIsForkLocked] = useState(false);
+    const [isRecoveryRequired, setIsRecoveryRequired] = useState(false);
 
     // Ref für aktuellen Status (um Stale Closures zu vermeiden)
     const isSessionActiveRef = useRef(false);
@@ -79,7 +86,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     // Wird von App.tsx nach Login aufgerufen
     const notifyLogin = useCallback(() => {
         activateSession();
+        startSealSyncLoop();
     }, [activateSession]);
+
+    const notifyLogout = useCallback(() => {
+        setIsSessionActive(false);
+        isSessionActiveRef.current = false;
+        stopSealSyncLoop();
+    }, []);
 
     const protectAction = useCallback(async <T,>(action: (password: string | null) => Promise<T>): Promise<T | void> => {
         const executeWithSessionCheck = async (pwd: string | null): Promise<T> => {
@@ -93,6 +107,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     setIsSessionActive(false);
                     isSessionActiveRef.current = false;
                     throw new Error("SESSION_EXPIRED_RETRY");
+                }
+                if (errMsg.includes("WalletLockedDueToFork") || errMsg.includes("SealForkDetected") || errMsg.includes("Security Lockdown")) {
+                    logger.error("CRITICAL: Wallet is locked due to a fork.");
+                    setIsForkLocked(true);
+                }
+                if (errMsg.includes("RequiresSealRecovery") || errMsg.includes("No local security seal found")) {
+                    logger.error("CRITICAL: Wallet requires seal recovery.");
+                    setIsRecoveryRequired(true);
                 }
                 throw error;
             }
@@ -176,8 +198,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setPendingAction(null);
     };
 
+    const clearLocks = useCallback(() => {
+        setIsForkLocked(false);
+        setIsRecoveryRequired(false);
+    }, []);
+
     return (
-        <SessionContext.Provider value={{ protectAction, isSessionActive, notifyLogin }}>
+        <SessionContext.Provider value={{ protectAction, isSessionActive, notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, clearLocks }}>
             {children}
             <AuthModal
                 isOpen={isModalOpen}

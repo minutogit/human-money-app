@@ -124,14 +124,15 @@ pub fn create_transfer_bundle(
 pub fn receive_bundle(
     bundle_data: Vec<u8>,
     standard_definitions_toml: HashMap<String, String>,
-    password: Option<String>, // <--- GEÄNDERT
+    password: Option<String>,
+    force_accept_tolerance_bundle: bool, // <--- NEU
     state: tauri::State<AppState>,
 ) -> Result<ReceiveSuccessPayload, String> {
     info!("Attempting to receive and process a transfer bundle...");
     let mut service = state.service.lock().unwrap();
     let archive: Option<&dyn VoucherArchive> = None;
 
-    match service.receive_bundle(&bundle_data, &standard_definitions_toml, archive, password.as_deref()) {
+    match service.receive_bundle(&bundle_data, &standard_definitions_toml, archive, password.as_deref(), force_accept_tolerance_bundle) {
         Ok(result) => {
             info!("Bundle processed successfully. Creating transaction record.");
 
@@ -565,4 +566,53 @@ pub fn set_conflict_local_override(
     }
     
     service.set_conflict_local_override(&proof_id, value, note, password.as_deref())
+}
+
+// --- WalletSeal / Sync Commands ---
+
+#[tauri::command]
+pub fn get_seal_sync_status(state: tauri::State<AppState>) -> Result<String, String> {
+    let service = state.service.lock().unwrap();
+    let status = service.get_seal_sync_status()?;
+    // We return the debug/display string of the enum for simplicity in the frontend
+    Ok(format!("{:?}", status))
+}
+
+#[derive(Serialize)]
+pub struct SealUploadData {
+    pub seal_bytes: Vec<u8>,
+    pub seal_hash: String,
+}
+
+#[tauri::command]
+pub fn get_seal_for_upload(state: tauri::State<AppState>) -> Result<Option<SealUploadData>, String> {
+    let service = state.service.lock().unwrap();
+    
+    // We need to compute the hash here because the AppService doesn't return it yet
+    // but the acknowledge_seal_sync needs it.
+    let data = service.get_seal_for_upload()?;
+    if let Some(bytes) = data {
+        let seal: human_money_core::models::seal::WalletSeal = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Failed to parse seal for hashing: {}", e))?;
+        
+        let hash = human_money_core::services::seal_manager::SealManager::compute_seal_hash(&seal)
+            .map_err(|e| e.to_string())?;
+            
+        Ok(Some(SealUploadData {
+            seal_bytes: bytes,
+            seal_hash: hash,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+pub fn acknowledge_seal_sync(
+    uploaded_seal_hash: String,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let mut service = state.service.lock().unwrap();
+    service.acknowledge_seal_sync(&uploaded_seal_hash, password.as_deref()).map_err(|e| e.to_string())
 }

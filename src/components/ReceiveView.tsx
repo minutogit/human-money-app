@@ -33,6 +33,11 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         confirmText: string;
         voucherId?: string;
     } | null>(null);
+    const [toleranceModal, setToleranceModal] = useState<{
+        type: 'Soft' | 'Critical';
+        message: string;
+    } | null>(null);
+    const [confirmText, setConfirmText] = useState("");
 
     useEffect(() => {
         async function fetchData() {
@@ -273,7 +278,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     return await invoke<ReceiveSuccessPayload>("receive_bundle", {
                         bundleData: fileData,
                         standardDefinitionsToml,
-                        password
+                        password,
+                        force_accept_tolerance_bundle: false
                     });
                 });
 
@@ -355,6 +361,26 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         } catch (e) {
             const errorStr = e instanceof Error ? e.message : String(e);
             
+            // Check for tolerance zones
+            if (errorStr.includes("BundleInRecoveryToleranceZone") || errorStr.includes("shortly before the recent wallet recovery")) {
+                setToleranceModal({
+                    type: 'Soft',
+                    message: "This bundle was created shortly before your last wallet recovery. If you already received and spent this money before losing your device, importing it now will lead to a double-spend!"
+                });
+                return;
+            }
+            if (errorStr.includes("BundleInExtendedRecoveryToleranceZone") || errorStr.includes("up to 4 weeks old")) {
+                setToleranceModal({
+                    type: 'Critical',
+                    message: "DANGER: This voucher is up to 4 weeks old. Importing it after a recovery is highly risky and will lead to a loss of reputation if it results in a double-spend!"
+                });
+                return;
+            }
+            if (errorStr.includes("BundlePredatesCurrentEpoch") || errorStr.includes("too old relative to the last wallet recovery")) {
+                setFeedbackMsg("Transaction blocked: This voucher is too old to be safely processed after your last recovery. It has been rejected for your protection.");
+                return;
+            }
+
             // Check for "already attached" case
             if (errorStr.includes("already attached to voucher")) {
                 // Extract local ID from our new [LOCAL_ID:...] format
@@ -384,7 +410,55 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             if (e instanceof Error && e.stack) logger.error(e.stack);
             setFeedbackMsg(`Error: ${msg}`);
         } finally {
+            if (!toleranceModal) {
+                setIsProcessing(false);
+                setShowConfirm(false);
+            }
+        }
+    }
+
+    async function confirmToleranceImport() {
+        if (!toleranceModal) return;
+        if (toleranceModal.type === 'Critical' && confirmText.toUpperCase() !== "IMPORT") {
+            return;
+        }
+
+        setIsProcessing(true);
+        try {
+            let fileData: number[];
+            if (droppedFileContent) {
+                fileData = droppedFileContent;
+            } else if (bundlePath) {
+                const fileUint8Array = await readFile(bundlePath);
+                fileData = Array.from(fileUint8Array);
+            } else return;
+
+            const standardDefinitionsToml: Record<string, string> = {};
+            voucherStandards.forEach(standard => {
+                const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
+                if (uuidMatch && uuidMatch[1]) {
+                    standardDefinitionsToml[uuidMatch[1]] = standard.content;
+                }
+            });
+
+            const payload = await protectAction(async (password) => {
+                return await invoke<ReceiveSuccessPayload>("receive_bundle", {
+                    bundleData: fileData,
+                    standardDefinitionsToml,
+                    password,
+                    force_accept_tolerance_bundle: true
+                });
+            });
+
+            if (payload) {
+                onReceiveSuccess(payload);
+            }
+        } catch (e) {
+            setFeedbackMsg(`Failed to import with force: ${e}`);
+        } finally {
             setIsProcessing(false);
+            setToleranceModal(null);
+            setConfirmText("");
             setShowConfirm(false);
         }
     }
@@ -490,6 +564,60 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 }}
                 isProcessing={isProcessing}
             />
+
+            {toleranceModal && (
+                <ConfirmationModal
+                    isOpen={true}
+                    title={toleranceModal.type === 'Soft' ? "Recovery Warning" : "Critical Recovery Warning"}
+                    description={
+                        <div className="space-y-4">
+                            <p className="text-theme-primary">{toleranceModal.message}</p>
+                            
+                            {toleranceModal.type === 'Soft' ? (
+                                <div className="flex items-center gap-3 bg-theme-accent/10 p-3 rounded-lg border border-theme-accent/20">
+                                    <input 
+                                        type="checkbox" 
+                                        id="confirm-soft" 
+                                        className="w-5 h-5 rounded border-theme-subtle text-theme-accent focus:ring-theme-accent"
+                                        checked={confirmText === "checked"}
+                                        onChange={(e) => setConfirmText(e.target.checked ? "checked" : "")}
+                                    />
+                                    <label htmlFor="confirm-soft" className="text-sm font-medium text-theme-primary cursor-pointer select-none">
+                                        I understand the risk and want to import anyway
+                                    </label>
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    <p className="text-sm font-bold text-red-500">To proceed, please type "IMPORT" to confirm:</p>
+                                    <input 
+                                        type="text" 
+                                        className="w-full px-4 py-3 bg-bg-app border-2 border-red-500/30 rounded-lg text-theme-primary focus:border-red-500 outline-none transition-all uppercase font-mono tracking-widest"
+                                        placeholder="TYPE IMPORT HERE"
+                                        value={confirmText}
+                                        onChange={(e) => setConfirmText(e.target.value)}
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    }
+                    confirmText="Import Anyway"
+                    cancelText="Cancel"
+                    onConfirm={confirmToleranceImport}
+                    onCancel={() => {
+                        setToleranceModal(null);
+                        setConfirmText("");
+                        setIsProcessing(false);
+                        setShowConfirm(false);
+                    }}
+                    isProcessing={isProcessing}
+                    // Disable confirm button if requirements not met
+                    confirmDisabled={
+                        toleranceModal.type === 'Soft' 
+                            ? confirmText !== "checked"
+                            : confirmText.toUpperCase() !== "IMPORT"
+                    }
+                />
+            )}
 
             {resultModal && (
                 <ConfirmationModal

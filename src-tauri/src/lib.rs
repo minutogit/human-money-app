@@ -139,7 +139,9 @@ pub fn run() {
             get_voucher_source_sender,
             check_reputation, set_conflict_local_override,
             // Address Book
-            get_contacts, save_contact, delete_contact
+            get_contacts, save_contact, delete_contact,
+            // WalletSeal / Sync
+            get_seal_sync_status, get_seal_for_upload, acknowledge_seal_sync
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

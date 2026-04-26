@@ -316,6 +316,13 @@ export interface ResolutionEndorsement {
 
 export type PrivacyDefault = 'ask' | 'stealth' | 'public';
 
+export type SealSyncStatus = 'Synced' | 'PendingUpload';
+
+export interface SealUploadData {
+    seal_bytes: number[];
+    seal_hash: string;
+}
+
 export interface AppSettings {
     bundle_retention_days: number;
     session_timeout_seconds: number;

@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0-alpha.9"
+version: "0.1.0-alpha.10"
 phase: "alpha"
 health: "green"
-last_updated: "2026-04-24"
+last_updated: "2026-04-25"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -85,6 +85,12 @@ priority_tasks:
     priority: "medium"
     depends_on: []
     description: "Support for multi-language seed phrases (BIP-39) including custom high-security German wordlist."
+  - id: "APP-014"
+    title: "WalletSeal (Rollback Guard)"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Multi-device fork protection with security lockdown, recovery tolerance zones (Soft/Critical warnings), and background seal synchronization."
 ---
 
 # Human Money App — Status
@@ -130,6 +136,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Dashboard UI Polish (Welcome empty state & To-Do area)
 - [x] Cryptographic Voucher Traceability & Anti-Spoofing (Privacy mode back-tracing)
 - [x] User-Controlled Privacy Mode (Vertical Toggle: Frontend -> Tauri -> Core)
+- [x] WalletSeal Integration (Fork Detection Lockdown, Recovery Tolerance Zones, Background Sync)
 
 ## Next Milestones
 
