@@ -3,3 +3,4 @@ pub mod auth;
 pub mod queries;
 pub mod utils;
 pub mod contacts;
+pub mod integrity;

@@ -140,3 +140,29 @@ pub struct FullProofDetails {
     pub local_note: Option<String>,
     pub conflict_role: human_money_core::models::conflict::ConflictRole,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(tag = "type", content = "items")]
+pub enum IntegrityReport {
+    Valid,
+    MissingItems(Vec<String>),
+    ManipulatedItems(Vec<String>),
+    UnknownItems(Vec<String>),
+    IntegrityOutdated,
+    InvalidSignature,
+    MissingIntegrityRecord,
+}
+
+impl From<human_money_core::models::storage_integrity::IntegrityReport> for IntegrityReport {
+    fn from(report: human_money_core::models::storage_integrity::IntegrityReport) -> Self {
+        match report {
+            human_money_core::models::storage_integrity::IntegrityReport::Valid => IntegrityReport::Valid,
+            human_money_core::models::storage_integrity::IntegrityReport::MissingItems(items) => IntegrityReport::MissingItems(items),
+            human_money_core::models::storage_integrity::IntegrityReport::ManipulatedItems(items) => IntegrityReport::ManipulatedItems(items),
+            human_money_core::models::storage_integrity::IntegrityReport::UnknownItems(items) => IntegrityReport::UnknownItems(items),
+            human_money_core::models::storage_integrity::IntegrityReport::IntegrityOutdated => IntegrityReport::IntegrityOutdated,
+            human_money_core::models::storage_integrity::IntegrityReport::InvalidSignature => IntegrityReport::InvalidSignature,
+            human_money_core::models::storage_integrity::IntegrityReport::MissingIntegrityRecord => IntegrityReport::MissingIntegrityRecord,
+        }
+    }
+}

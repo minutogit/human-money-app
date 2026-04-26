@@ -13,6 +13,8 @@ interface SessionContextType {
     notifyLogout: () => void;
     isForkLocked: boolean;
     isRecoveryRequired: boolean;
+    integrityReport: import('../types').IntegrityReport | null;
+    checkIntegrity: () => Promise<void>;
     clearLocks: () => void;
 }
 
@@ -29,6 +31,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const [isSessionActive, setIsSessionActive] = useState(false);
     const [isForkLocked, setIsForkLocked] = useState(false);
     const [isRecoveryRequired, setIsRecoveryRequired] = useState(false);
+    const [integrityReport, setIntegrityReport] = useState<import('../types').IntegrityReport | null>(null);
 
     // Ref für aktuellen Status (um Stale Closures zu vermeiden)
     const isSessionActiveRef = useRef(false);
@@ -87,6 +90,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const notifyLogin = useCallback(() => {
         activateSession();
         startSealSyncLoop();
+        checkIntegrity();
     }, [activateSession]);
 
     const notifyLogout = useCallback(() => {
@@ -198,13 +202,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setPendingAction(null);
     };
 
+    const checkIntegrity = useCallback(async () => {
+        try {
+            const report = await invoke<import('../types').IntegrityReport>("check_wallet_integrity");
+            setIntegrityReport(report);
+            if (report.type !== 'Valid') {
+                logger.warn(`Integrity issue detected: ${report.type}`);
+            }
+        } catch (e) {
+            logger.error(`Failed to check integrity: ${e}`);
+        }
+    }, []);
+
     const clearLocks = useCallback(() => {
         setIsForkLocked(false);
         setIsRecoveryRequired(false);
     }, []);
 
     return (
-        <SessionContext.Provider value={{ protectAction, isSessionActive, notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, clearLocks }}>
+        <SessionContext.Provider value={{ protectAction, isSessionActive, notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks }}>
             {children}
             <AuthModal
                 isOpen={isModalOpen}

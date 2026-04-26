@@ -137,6 +137,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Cryptographic Voucher Traceability & Anti-Spoofing (Privacy mode back-tracing)
 - [x] User-Controlled Privacy Mode (Vertical Toggle: Frontend -> Tauri -> Core)
 - [x] WalletSeal Integration (Fork Detection Lockdown, Recovery Tolerance Zones, Background Sync)
+- [x] Storage Integrity Stabilization (Automatic seal updates for all storage writes)
 
 ## Next Milestones
 

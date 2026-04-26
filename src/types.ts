@@ -342,3 +342,12 @@ export interface FullProofDetails {
     conflict_role: ConflictRole;
     local_note?: string;
 }
+
+export type IntegrityReport =
+    | { type: "Valid" }
+    | { type: "MissingItems", items: string[] }
+    | { type: "ManipulatedItems", items: string[] }
+    | { type: "UnknownItems", items: string[] }
+    | { type: "IntegrityOutdated" }
+    | { type: "InvalidSignature" }
+    | { type: "MissingIntegrityRecord" };

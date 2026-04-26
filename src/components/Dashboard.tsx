@@ -5,6 +5,8 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { AggregatedBalance, TransactionRecord, VoucherSummary, Contact } from "../types";
+import { useSession } from "../context/SessionContext";
+import { IntegrityReportModal } from "./IntegrityReportModal";
 
 interface DashboardProps {
     onNavigateToCreateVoucher: () => void;
@@ -30,6 +32,8 @@ export function Dashboard(props: DashboardProps) {
     const [isLoading, setIsLoading] = useState(true);
     const [isProfileComplete, setIsProfileComplete] = useState(true);
     const [voucherCountsByStandard, setVoucherCountsByStandard] = useState<Record<string, number>>({});
+    const [showIntegrityModal, setShowIntegrityModal] = useState(false);
+    const { integrityReport } = useSession();
 
     useEffect(() => {
         logger.info("Dashboard component displayed");
@@ -189,6 +193,37 @@ export function Dashboard(props: DashboardProps) {
             <div className="flex-grow overflow-y-auto p-4 sm:p-6">
                 <div className="mx-auto max-w-4xl">
                     {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
+
+                    {/* Integrity Warning Banner */}
+                    {integrityReport && integrityReport.type !== 'Valid' && (
+                        <div 
+                            className={`mb-6 p-4 rounded-xl border shadow-sm flex items-center justify-between cursor-pointer transition-all hover:shadow-md animate-in fade-in slide-in-from-top-4 duration-500 ${
+                                integrityReport.type === 'UnknownItems' || integrityReport.type === 'MissingIntegrityRecord'
+                                ? 'bg-blue-50 border-blue-200 text-blue-800'
+                                : 'bg-red-50 border-red-200 text-red-800'
+                            }`}
+                            onClick={() => setShowIntegrityModal(true)}
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className={`p-2 rounded-lg ${
+                                    integrityReport.type === 'UnknownItems' || integrityReport.type === 'MissingIntegrityRecord'
+                                    ? 'bg-blue-500 text-white'
+                                    : 'bg-red-500 text-white'
+                                }`}>
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                    </svg>
+                                </div>
+                                <div>
+                                    <p className="font-bold">Security Alert: Integrity Issue Detected</p>
+                                    <p className="text-xs opacity-80">Click to view details and repair your wallet.</p>
+                                </div>
+                            </div>
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                        </div>
+                    )}
 
                     {/* Profile Warning Banner */}
                     {!isProfileComplete && (
@@ -464,6 +499,12 @@ export function Dashboard(props: DashboardProps) {
                 </div>
             </div>
 
+            {showIntegrityModal && integrityReport && (
+                <IntegrityReportModal 
+                    report={integrityReport} 
+                    onClose={() => setShowIntegrityModal(false)} 
+                />
+            )}
         </div>
     );
 }

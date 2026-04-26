@@ -19,7 +19,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{actions::*, auth::*, queries::*, utils::*, contacts::*};
+use crate::commands::{actions::*, auth::*, queries::*, utils::*, contacts::*, integrity::*};
 use crate::commands::actions::TransactionRecord;
 use crate::settings::AppSettings;
 
@@ -141,7 +141,9 @@ pub fn run() {
             // Address Book
             get_contacts, save_contact, delete_contact,
             // WalletSeal / Sync
-            get_seal_sync_status, get_seal_for_upload, acknowledge_seal_sync
+            get_seal_sync_status, get_seal_for_upload, acknowledge_seal_sync,
+            // Integrity
+            check_wallet_integrity, repair_wallet_integrity
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
