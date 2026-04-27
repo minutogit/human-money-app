@@ -81,8 +81,8 @@ export function Dashboard(props: DashboardProps) {
                 setIncompleteCount(incompleteCount);
                 setQuarantinedCount(quarantinedCount);
 
-                // Check if profile is complete (requires first_name and last_name)
-                const profileComplete = userProfile && userProfile.first_name && userProfile.last_name;
+                // Check if profile is complete (requires first_name, last_name, and city)
+                const profileComplete = userProfile && userProfile.first_name && userProfile.last_name && userProfile.address?.city;
                 setIsProfileComplete(!!profileComplete);
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${e}`;

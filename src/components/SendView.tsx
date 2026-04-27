@@ -36,6 +36,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [recipientId, setRecipientId] = useState("");
     const [notes, setNotes] = useState(""); // NEU
     const [sendProfileName, setSendProfileName] = useState(true); // NEU
+    const [customSenderName, setCustomSenderName] = useState("");
     const [ownUserId, setOwnUserId] = useState("");
     const [targetAmountStr, setTargetAmountStr] = useState("");
     const [availableVouchers, setAvailableVouchers] = useState<VoucherSummary[]>([]);
@@ -118,6 +119,24 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 logger.info(`2. Filtered down to ${activeVouchers.length} active vouchers.`);
 
                 const userId = await invoke<string>("get_user_id");
+                
+                // Fetch public profile to build a better default display name
+                try {
+                    const userProfile = await invoke<any>("get_user_profile");
+                    let defaultName = "";
+                    if (userProfile.organization) {
+                        defaultName = userProfile.organization;
+                    } else if (userProfile.first_name || userProfile.last_name) {
+                        defaultName = `${userProfile.first_name || ''} ${userProfile.last_name || ''}`.trim();
+                    } else {
+                        defaultName = profileName || "";
+                    }
+                    setCustomSenderName(defaultName);
+                } catch (e) {
+                    logger.warn(`Could not fetch user profile for default sender name: ${e}`);
+                    setCustomSenderName(profileName || "");
+                }
+
                 const standards = await invoke<VoucherStandardInfo[]>("get_voucher_standards");
                 const settings = await invoke<AppSettings>("get_app_settings");
                 const newMap = new Map<string, string>();
@@ -167,25 +186,22 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     }, [availableVouchers, selectedStandardId, standardIdToUuidMap]);
 
 
-    useEffect(() => {
-        if (!selectedStandardId || !targetAmountStr) {
+    const handleTargetAmountChange = (valStr: string) => {
+        if (!selectedStandardId || !valStr) {
+            setTargetAmountStr(valStr);
             setSelection(new Map());
             return;
         }
-        const targetAmount = parseFloat(targetAmountStr);
+
+        let targetAmount = parseFloat(valStr);
         if (isNaN(targetAmount) || targetAmount <= 0) {
+            setTargetAmountStr(valStr);
             setSelection(new Map());
             return;
         }
-        const newSelection = new Map<string, string>();
-        let currentTotal = 0;
 
-        // Finde den ausgewählten Standard, um die korrekte Präzision zu ermitteln.
         const selectedStandard = voucherStandards.find(s => s.id === selectedStandardId);
-        let precision = 4; // Ein sicherer Standard-Fallback.
-
-        // ROBUSTE LÖSUNG: Parse die Präzision direkt aus dem TOML-Content,
-        // da das Backend sie nicht als separates Feld bereitstellt.
+        let precision = 4;
         if (selectedStandard) {
             const match = selectedStandard.content.match(/amount_decimal_places\s*=\s*(\d+)/);
             if (match && match[1]) {
@@ -193,17 +209,38 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             }
         }
 
+        // Calculate max possible amount for the current standard
+        let maxPossibleAmount = 0;
+        filteredVouchers.forEach(v => {
+            const amt = parseFloat(v.current_amount);
+            if (!isNaN(amt)) maxPossibleAmount += amt;
+        });
+        
+        // Clean up float precision issues
+        maxPossibleAmount = parseFloat(maxPossibleAmount.toFixed(precision));
+
+        // Cap target amount if it exceeds max
+        let finalValStr = valStr;
+        if (targetAmount > maxPossibleAmount && maxPossibleAmount > 0) {
+            targetAmount = maxPossibleAmount;
+            finalValStr = targetAmount.toString();
+        }
+        
+        setTargetAmountStr(finalValStr);
+
+        const newSelection = new Map<string, string>();
+        let currentTotal = 0;
+
         const sortedVouchers = [...filteredVouchers].sort((a, b) => parseFloat(a.current_amount) - parseFloat(b.current_amount));
         for (const voucher of sortedVouchers) {
             const voucherAmount = parseFloat(voucher.current_amount);
-            // KORREKTUR: Stelle sicher, dass 'divisible' geprüft wird (kommt von enrichedVouchers)
             if (currentTotal + voucherAmount <= targetAmount) {
                 newSelection.set(voucher.local_instance_id, voucher.current_amount);
                 currentTotal += voucherAmount;
             } else {
                 const neededAmount = targetAmount - currentTotal;
+                // @ts-ignore
                 if (voucher.divisible) {
-                    // KORREKTUR: Wende die dynamisch ermittelte Präzision an.
                     newSelection.set(voucher.local_instance_id, neededAmount.toFixed(precision));
                     currentTotal += neededAmount;
                     break;
@@ -211,13 +248,44 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             }
             if (currentTotal >= targetAmount) break;
         }
-        if (currentTotal < targetAmount) {
+        
+        // Use a small epsilon to avoid floating point precision issues in comparison
+        if (currentTotal < targetAmount - 0.000001) {
             setFeedbackMsg("The entered amount cannot be met with the available vouchers.");
         } else {
             setFeedbackMsg("");
         }
         setSelection(newSelection);
-    }, [targetAmountStr, selectedStandardId, filteredVouchers]);
+    };
+
+    const handleStandardSelect = (id: string | null) => {
+        setSelectedStandardId(id);
+        setTargetAmountStr("");
+        setSelection(new Map());
+        setFeedbackMsg("");
+    };
+
+    const handleVoucherAmountChange = (voucherId: string, newAmountStr: string, maxAmount: string) => {
+        let val = parseFloat(newAmountStr);
+        const max = parseFloat(maxAmount);
+        
+        if (!isNaN(val) && val > max) {
+            newAmountStr = maxAmount.toString();
+        }
+
+        const newSelection = new Map(selection);
+        newSelection.set(voucherId, newAmountStr);
+        setSelection(newSelection);
+
+        if (selectedStandardId) {
+            let total = 0;
+            newSelection.forEach(amount => {
+                const parsed = parseFloat(amount);
+                if (!isNaN(parsed)) total += parsed;
+            });
+            setTargetAmountStr(total > 0 ? total.toString() : "");
+        }
+    };
 
     // Vorschlaggs-Logik
     const handleRecipientChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -301,7 +369,6 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
 
     const handleManualVoucherSelect = (voucher: VoucherSummary) => {
-        setTargetAmountStr("");
         const newSelection = new Map(selection);
         if (newSelection.has(voucher.local_instance_id)) {
             newSelection.delete(voucher.local_instance_id);
@@ -309,6 +376,17 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             newSelection.set(voucher.local_instance_id, voucher.current_amount);
         }
         setSelection(newSelection);
+
+        if (selectedStandardId) {
+            let total = 0;
+            newSelection.forEach(amount => {
+                const parsed = parseFloat(amount);
+                if (!isNaN(parsed)) total += parsed;
+            });
+            setTargetAmountStr(total > 0 ? total.toString() : "");
+        } else {
+            setTargetAmountStr("");
+        }
     };
 
     // KORREKTUR (von 13:28): Unterscheidet summable/countable
@@ -373,7 +451,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         setIsProcessing(true);
         // Modal bleibt offen oder zeigt Loading, wir schließen es erst am Ende oder bei Fehler
         try {
-            const senderProfileNameToSend = (sendProfileName && privacyMode === 'public' && profileName) ? profileName : null;
+            const senderProfileNameToSend = (sendProfileName && customSenderName.trim() !== "") ? customSenderName.trim() : null;
             const notesToSend = notes.trim() === "" ? null : notes.trim();
 
             const sources: SourceTransfer[] = Array.from(selection.entries()).map(([id, amount]) => ({
@@ -584,21 +662,36 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                 />
                             </div>
                             <div>
-                                <div className="flex items-center">
+                                <div className="flex items-center mb-2">
                                      <input
                                         id="sendProfileName"
                                         type="checkbox"
-                                        checked={sendProfileName && privacyMode === 'public'}
+                                        checked={sendProfileName}
                                         onChange={(e: ChangeEvent<HTMLInputElement>) => setSendProfileName(e.target.checked)}
-                                        disabled={!profileName || privacyMode === 'stealth'}
                                         className="h-4 w-4 text-theme-accent border-input-border rounded focus:ring-theme-accent"
                                     />
-                                    <label htmlFor="sendProfileName" className="ml-2 block text-sm text-theme-light">
-                                        Send my profile name ({profileName || 'No name set'})
+                                    <label htmlFor="sendProfileName" className="ml-2 block text-sm font-medium text-theme-light">
+                                        Include sender name in transaction
                                     </label>
                                 </div>
-                                {!profileName && <p className="text-xs text-theme-light mt-1">Profile name not available to send.</p>}
-                                {privacyMode === 'stealth' && <p className="text-xs text-theme-light mt-1">Profile name is hidden in stealth mode.</p>}
+                                {sendProfileName && (
+                                    <div className="ml-6 animate-in fade-in duration-200">
+                                        <label htmlFor="customSenderName" className="block text-xs font-semibold text-theme-secondary mb-1">
+                                            Sender Name
+                                        </label>
+                                        <Input
+                                            id="customSenderName"
+                                            type="text"
+                                            value={customSenderName}
+                                            onChange={(e: ChangeEvent<HTMLInputElement>) => setCustomSenderName(e.target.value)}
+                                            placeholder="e.g. John Doe"
+                                            className="w-full sm:max-w-xs"
+                                        />
+                                        <p className="text-[10px] text-theme-light mt-1">
+                                            <strong>Note:</strong> Only the direct recipient can read this name; it remains completely hidden from subsequent recipients. Providing a clear sender name builds trust and helps the receiver keep track of their incoming transactions.
+                                        </p>
+                                    </div>
+                                )}
                             </div>
                             
                             {/* NEU: Privacy Mode Segmented Control */}
@@ -659,7 +752,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                         </div>
                                         {/* Show hint when not selected */}
                                         {privacyRules.mode === 'Flexible' && privacyMode === null && (
-                                            <span className={`text-[10px] italic ${privacyError ? 'text-red-500' : 'text-theme-accent'}`}>select privacy mode</span>
+                                            <span className={`text-xs italic ${privacyError ? 'text-red-500' : 'text-theme-accent'}`}>select privacy mode</span>
                                         )}
                                     </div>
                                 )}
@@ -669,16 +762,43 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                         ⚠️ Incompatible privacy rules
                                     </p>
                                 )}
+                                
+                                {/* Info Box for Privacy Modes */}
+                                <details className="mt-3 text-xs group">
+                                    <summary className="cursor-pointer text-theme-light hover:text-theme-primary flex items-center gap-1 font-medium list-none select-none">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-theme-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        How do Privacy Modes work?
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 ml-1 transition-transform group-open:rotate-180 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                        </svg>
+                                    </summary>
+                                    <div className="mt-2 p-3 bg-bg-app rounded-md border border-theme-subtle text-theme-secondary space-y-3 leading-relaxed">
+                                        <p>
+                                            <strong>🔒 Stealth Mode:</strong> If the voucher is passed on, nobody will know you sent it. Your sender ID is hidden. This protects against mass surveillance by states or third parties. If everyone uses stealth, observers can only see how many times a voucher was transferred, but not by whom. <br/>
+                                            <em>Note: Fraud can still be detected. In the event of a double-spend, the sender's identity is cryptographically revealed.</em>
+                                        </p>
+                                        <p>
+                                            <strong>👁️ Public Mode:</strong> Useful in trusted environments or when you have no fear of negative consequences. Revealing your identity can increase trust, as it signals transparency and makes any potential fraud easier to trace.
+                                        </p>
+                                        <div className="border-t border-theme-subtle/50 pt-2 mt-1">
+                                            <p className="text-[10px] text-theme-light italic">
+                                                Important: Regardless of the mode chosen, the original creator of a voucher is always visible in plain text, and their first transaction transferring the voucher is always transparent.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </details>
                             </div>
                             {/* --- NEU ENDE --- */}
                             <div>
                                 <label className="block text-sm font-medium text-theme-light mb-1">Filter by Standard</label>
                                 <div className="flex flex-wrap gap-2">
-                                    <button type="button" onClick={() => setSelectedStandardId(null)} className={`px-3 py-1 text-sm rounded-full ${selectedStandardId === null ? 'bg-theme-accent text-white font-semibold' : 'bg-input-readonly hover:bg-theme-subtle'}`}>All</button>
+                                    <button type="button" onClick={() => handleStandardSelect(null)} className={`px-3 py-1 text-sm rounded-full ${selectedStandardId === null ? 'bg-theme-accent text-white font-semibold' : 'bg-input-readonly hover:bg-theme-subtle'}`}>All</button>
                                     {voucherStandards.map(standard => {
                                         const displayName = standardIdToNameMap.get(standard.id) || standard.id;
                                         return (
-                                            <button type="button" key={standard.id} onClick={() => setSelectedStandardId(standard.id)} className={`px-3 py-1 text-sm rounded-full ${selectedStandardId === standard.id ? 'bg-theme-accent text-white font-semibold' : 'bg-input-readonly hover:bg-theme-subtle'}`}>{displayName}</button>
+                                            <button type="button" key={standard.id} onClick={() => handleStandardSelect(standard.id)} className={`px-3 py-1 text-sm rounded-full ${selectedStandardId === standard.id ? 'bg-theme-accent text-white font-semibold' : 'bg-input-readonly hover:bg-theme-subtle'}`}>{displayName}</button>
                                         );
                                     })}
                                 </div>
@@ -687,7 +807,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                             {selectedStandardId && (
                                 <div>
                                     <label htmlFor="amount" className="block text-sm font-medium text-theme-light mb-1">Amount to Send (Automatic Mode)</label>
-                                    <Input id="amount" placeholder="e.g., 50" value={targetAmountStr} onChange={(e: ChangeEvent<HTMLInputElement>) => setTargetAmountStr(e.target.value)} type="number" />
+                                    <Input id="amount" placeholder="e.g., 50" value={targetAmountStr} onChange={(e: ChangeEvent<HTMLInputElement>) => handleTargetAmountChange(e.target.value)} type="number" min="0" step="any" />
                                 </div>
                             )}
                         </div>
@@ -739,8 +859,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                 const selectedAmount = selection.get(v.local_instance_id);
                                 const isSelected = selectedAmount !== undefined;
                                 return (
-                                    <button type="button" key={v.local_instance_id} onClick={() => handleManualVoucherSelect(v)} className={`w-full text-left bg-bg-card-alternate rounded-lg border shadow-sm p-3 transition-all duration-150 ease-in-out ${isSelected ? 'border-theme-accent ring-2 ring-theme-accent' : 'border-theme-subtle hover:border-theme-primary'}`}>
-                                        <div className="flex justify-between items-start">
+                                    <div key={v.local_instance_id} className={`w-full text-left bg-bg-card-alternate rounded-lg border shadow-sm p-3 transition-all duration-150 ease-in-out ${isSelected ? 'border-theme-accent ring-2 ring-theme-accent' : 'border-theme-subtle hover:border-theme-primary'}`}>
+                                        <div className="flex justify-between items-start cursor-pointer" onClick={() => handleManualVoucherSelect(v)}>
                                             <div>
                                                 <div className="flex items-baseline text-xl font-bold text-theme-primary">
                                                     {/* @ts-ignore */}
@@ -767,7 +887,26 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                                 <p className="text-xs text-theme-light">until {formatDate(v.valid_until)}</p>
                                             </div>
                                         </div>
-                                    </button>
+                                        {/* @ts-ignore */}
+                                        {isSelected && v.divisible && (
+                                            <div className="mt-4 p-4 bg-theme-accent/5 rounded-xl border-2 border-theme-accent/20 flex items-center justify-between animate-in fade-in slide-in-from-top-2 duration-200 shadow-inner">
+                                                <label className="text-sm font-bold text-theme-primary">Adjust Amount:</label>
+                                                <div className="flex items-center gap-2">
+                                                    <Input 
+                                                        type="number" 
+                                                        value={selectedAmount} 
+                                                        onChange={(e: ChangeEvent<HTMLInputElement>) => handleVoucherAmountChange(v.local_instance_id, e.target.value, v.current_amount)}
+                                                        className="w-32 text-right !py-2 !px-3 h-10 !text-lg !font-black !border-2 !border-theme-accent/40 !bg-white !shadow-sm !rounded-md"
+                                                        max={v.current_amount}
+                                                        min="0"
+                                                        step="any"
+                                                    />
+                                                    {/* @ts-ignore */}
+                                                    <span className="text-sm font-black text-theme-primary">{v.unit}</span>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
                                 )
                             }) : (
                                 <div className="text-center text-theme-light py-8 bg-input-readonly rounded-lg border border-theme-subtle"><p>No active vouchers found matching your criteria.</p></div>

@@ -366,22 +366,61 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                     <div className="border-t border-theme-light-border pt-5 space-y-5">
                         <div>
                             <label className="block text-sm font-semibold text-theme-secondary mb-1">3. Optional Passphrase</label>
-                            <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Enter if you used one during profile creation" />
+                            <Input 
+                                type="password" 
+                                value={passphrase} 
+                                onChange={(e) => setPassphrase(e.target.value)} 
+                                onFocus={() => {
+                                    if (feedbackMsg.includes("Error")) {
+                                        setFeedbackMsg("");
+                                    }
+                                }}
+                                placeholder="Enter if you used one during profile creation" 
+                            />
                         </div>
 
                         <div>
                             <label className="block text-sm font-semibold text-theme-secondary mb-1">4. New Password</label>
-                            <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Minimum 8 characters" required />
+                            <Input 
+                                type="password" 
+                                value={newPassword} 
+                                onChange={(e) => setNewPassword(e.target.value)} 
+                                onFocus={() => {
+                                    if (feedbackMsg.includes("Error")) {
+                                        setFeedbackMsg("");
+                                    }
+                                    setNewPassword("");
+                                    setConfirmPassword("");
+                                }}
+                                placeholder="Minimum 8 characters" 
+                                required 
+                            />
                         </div>
 
                         <div>
                             <label className="block text-sm font-semibold text-theme-secondary mb-1">5. Confirm New Password</label>
-                            <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repeat your new password" required />
+                            <Input 
+                                type="password" 
+                                value={confirmPassword} 
+                                onChange={(e) => setConfirmPassword(e.target.value)} 
+                                onFocus={() => {
+                                    if (feedbackMsg.includes("Error")) {
+                                        setFeedbackMsg("");
+                                    }
+                                }}
+                                placeholder="Repeat your new password" 
+                                required 
+                            />
                         </div>
                     </div>
 
                     <div className="pt-3 text-center">
-                        {feedbackMsg && <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>}
+                        {isLoading && (
+                            <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>
+                                Recovering wallet, please wait... This may take a moment.
+                            </p>
+                        )}
+                        {feedbackMsg && !isLoading && <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>}
                         <div className="flex flex-col items-center gap-4">
                             <Button type="submit" disabled={isLoading || !isValidMnemonic || profiles.length === 0}>
                                 {isLoading ? "Recovering..." : "Recover Wallet & Login"}

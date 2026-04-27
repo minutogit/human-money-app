@@ -1,5 +1,5 @@
 // src/components/CreateNewProfile.tsx
-import { useState, useEffect, ChangeEvent, FormEvent } from "react";
+import { useState, useEffect, useRef, ChangeEvent, FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { info, error } from "@tauri-apps/plugin-log";
 import { logger } from "../utils/log";
@@ -44,6 +44,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
     const [userPrefix, setUserPrefix] = useState("");
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
+    const passwordInputRef = useRef<HTMLInputElement>(null);
 
     // --- Effects ---
 
@@ -193,44 +194,52 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
         e.preventDefault();
         if (password !== confirmPassword) {
             setFeedbackMsg("Error: The passwords do not match.");
+            passwordInputRef.current?.focus();
             return;
         }
         if (password.length < 8) {
             setFeedbackMsg("Error: Password must be at least 8 characters long.");
+            passwordInputRef.current?.focus();
             return;
         }
         if (passphrase !== confirmPassphrase) {
             setFeedbackMsg("Error: The passphrases do not match.");
+            passwordInputRef.current?.focus();
             return;
         }
 
         setIsLoading(true);
-        setFeedbackMsg("Creating profile, please wait...");
-        try {
-            const localInstanceId = await invoke<string>("get_local_instance_id");
-            await invoke("create_profile", {
-                profileName,
-                mnemonic: generatedSeed.join(' '),
-                passphrase: passphrase || undefined,
-                userPrefix: userPrefix || undefined,
-                password,
-                localInstanceId,
-                language: selectedLanguage,
-            });
-            setFeedbackMsg("Profile successfully created!");
-            onProfileCreated();
-        } catch (e) {
-            setFeedbackMsg(`Error creating profile: ${e}`);
-            error(`Frontend: Profile creation failed: ${e}`);
-        } finally {
-            setIsLoading(false);
-        }
+        setFeedbackMsg(""); // Clear any previous errors
+        
+        // Use a small delay to ensure React has finished the render cycle
+        // and the browser has had a chance to paint the loading state
+        setTimeout(async () => {
+            try {
+                const localInstanceId = await invoke<string>("get_local_instance_id");
+                await invoke("create_profile", {
+                    profileName,
+                    mnemonic: generatedSeed.join(' '),
+                    passphrase: passphrase || undefined,
+                    userPrefix: userPrefix || undefined,
+                    password,
+                    localInstanceId,
+                    language: selectedLanguage,
+                });
+                // Keep loading state true during transition, like Login
+                onProfileCreated();
+            } catch (e) {
+                setFeedbackMsg(`Error creating profile: ${e}`);
+                error(`Frontend: Profile creation failed: ${e}`);
+            } finally {
+                setIsLoading(false);
+            }
+        }, 150);
     }
 
 
     // --- Render Logic ---
 
-    const feedbackClass = feedbackMsg.includes("Error") ? "text-theme-error" : "text-theme-success";
+    const feedbackClass = "text-theme-error";
 
     const renderContent = () => {
         switch (wizardStep) {
@@ -374,21 +383,66 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                         </div>
                         <div>
                             <label className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
-                            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 8 characters" required />
+                            <Input 
+                                type="password" 
+                                value={password} 
+                                onChange={(e) => setPassword(e.target.value)} 
+                                onFocus={() => {
+                                    if (feedbackMsg.includes("Error")) {
+                                        setFeedbackMsg("");
+                                    }
+                                    setPassword("");
+                                    setConfirmPassword("");
+                                }}
+                                placeholder="Minimum 8 characters" 
+                                required 
+                                ref={passwordInputRef}
+                            />
                         </div>
                         <div>
                             <label className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Password</label>
-                            <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repeat your password" required />
+                            <Input 
+                                type="password" 
+                                value={confirmPassword} 
+                                onChange={(e) => setConfirmPassword(e.target.value)} 
+                                onFocus={() => {
+                                    if (feedbackMsg.includes("Error")) {
+                                        setFeedbackMsg("");
+                                    }
+                                }}
+                                placeholder="Repeat your password" 
+                                required 
+                            />
                         </div>
 
                         <div className="border-t border-theme-light-border pt-5 space-y-5">
                             <div>
                                 <label className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (Advanced)</label>
-                                <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Adds extra security to your seed" />
+                                <Input 
+                                    type="password" 
+                                    value={passphrase} 
+                                    onChange={(e) => setPassphrase(e.target.value)} 
+                                    onFocus={() => {
+                                        if (feedbackMsg.includes("Error")) {
+                                            setFeedbackMsg("");
+                                        }
+                                    }}
+                                    placeholder="Adds extra security to your seed" 
+                                />
                             </div>
                             <div>
                                 <label className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Optional Passphrase</label>
-                                <Input type="password" value={confirmPassphrase} onChange={(e) => setConfirmPassphrase(e.target.value)} placeholder="Repeat your passphrase" />
+                                <Input 
+                                    type="password" 
+                                    value={confirmPassphrase} 
+                                    onChange={(e) => setConfirmPassphrase(e.target.value)} 
+                                    onFocus={() => {
+                                        if (feedbackMsg.includes("Error")) {
+                                            setFeedbackMsg("");
+                                        }
+                                    }}
+                                    placeholder="Repeat your passphrase" 
+                                />
                                 <p className="text-xs text-theme-light mt-1">Warning: If you forget this passphrase, your seed phrase alone will not be enough to recover your wallet.</p>
                             </div>
                             <div>
@@ -397,7 +451,12 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                             </div>
                         </div>
 
-                        <div className="flex justify-center pt-3">
+                        <div className="flex flex-col items-center gap-4 pt-3">
+                            {isLoading && (
+                                <p className="text-center text-sm font-medium text-theme-secondary animate-pulse">
+                                    Creating profile, please wait... This may take a moment.
+                                </p>
+                            )}
                             <Button type="submit" disabled={isLoading}>
                                 {isLoading ? "Creating Profile..." : "Create & Encrypt Profile"}
                             </Button>
@@ -417,7 +476,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
 
                 {renderContent()}
 
-                {feedbackMsg && <p className={`text-center text-sm font-medium mt-4 ${feedbackClass}`}>{feedbackMsg}</p>}
+                {feedbackMsg && !isLoading && <p className={`text-center text-sm font-medium mt-4 ${feedbackClass}`}>{feedbackMsg}</p>}
             </div>
         </div>
     );

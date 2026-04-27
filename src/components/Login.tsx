@@ -23,6 +23,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     const [isLoading, setIsLoading] = useState(false);
     const [isLoggingIn, setIsLoggingIn] = useState(false);
     const [showHandoverUI, setShowHandoverUI] = useState(false);
+    const [showPostHandoverWarning, setShowPostHandoverWarning] = useState(false);
+    const [handoverUserId, setHandoverUserId] = useState("");
     const passwordInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
@@ -78,7 +80,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
 
             } catch (e: any) {
                 const msg = String(e);
-                if (msg.includes("DeviceMismatch") || msg.includes("different device")) {
+                // The core returns "Device Mismatch" with a space.
+                if (msg.includes("Device Mismatch") || msg.includes("DeviceMismatch") || msg.includes("different device")) {
                     setFeedbackMsg(msg);
                     setShowHandoverUI(true);
                 } else {
@@ -86,9 +89,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 }
                 error(`Frontend: Login failed: ${msg}`);
                 setIsLoggingIn(false);
-                if (!msg.includes("DeviceMismatch")) {
-                    setPassword("");
-                }
+                setPassword("");
                 passwordInputRef.current?.focus();
             }
         }, 150);
@@ -105,11 +106,11 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 localInstanceId,
             });
             
-            info("Frontend: Handover and login successful.");
-            const loggedInProfile = profiles.find(p => p.folder_name === selectedProfile);
-            if (loggedInProfile) {
-                onLoginSuccess(loggedInProfile.profile_name);
-            }
+            info("Frontend: Handover successful. Showing security warning.");
+            const userId = await invoke<string>("get_user_id");
+            setHandoverUserId(userId);
+            setShowPostHandoverWarning(true);
+            setIsLoggingIn(false);
         } catch (e) {
             setFeedbackMsg(`Error: Handover failed: ${e}`);
             setIsLoggingIn(false);
@@ -118,9 +119,61 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
 
     const feedbackClass = isLoggingIn 
         ? "text-theme-secondary animate-pulse font-bold" 
-        : (feedbackMsg.includes("Error") ? "text-theme-error" : "text-theme-success");
+        : (feedbackMsg.includes("Error") || feedbackMsg.includes("Mismatch") ? "text-theme-error" : "text-theme-success");
 
     return (
+        <>
+        {showPostHandoverWarning ? (
+            <div className="w-full h-full flex flex-col items-center justify-center">
+                <div className="w-full max-w-xl bg-bg-card shadow-2xl rounded-2xl p-8 space-y-6 border-2 border-theme-error animate-in fade-in zoom-in duration-300">
+                    <div className="text-center space-y-2">
+                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-red-100 dark:bg-red-900/30 text-theme-error mb-2">
+                            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                        </div>
+                        <h2 className="text-2xl font-bold text-theme-error">Handover Successful!</h2>
+                        <p className="text-theme-light">The wallet is now bound to this device.</p>
+                    </div>
+
+                    <div className="p-4 bg-bg-input rounded-lg border border-theme-subtle space-y-2">
+                        <p className="text-xs font-semibold text-theme-secondary uppercase tracking-wider">Your Unique User ID (DID):</p>
+                        <div className="relative group">
+                            <p className="text-sm font-mono break-all text-theme-primary bg-black/5 dark:bg-white/5 p-3 rounded border border-theme-subtle/50">
+                                {handoverUserId}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        <div className="p-4 bg-red-50 dark:bg-red-900/10 rounded-lg border border-red-200 dark:border-red-800 text-sm text-theme-light">
+                            <p className="font-bold text-theme-error mb-2">CRITICAL SECURITY WARNING:</p>
+                            <p>This identity is defined by your seed phrase AND the <span className="font-bold underline">User Prefix</span> you chose.</p>
+                            
+                            <div className="mt-3 space-y-2">
+                                <p>1. You <span className="font-bold underline text-theme-error">MUST NOT</span> use this exact profile (same Prefix) on your <span className="font-bold underline">OLD device</span> anymore. Delete the wallet folder there immediately!</p>
+                                <p>2. If you want to use the same seed phrase on multiple devices simultaneously, you <span className="font-bold italic">must</span> create a new profile with a <span className="font-bold text-theme-success">DIFFERENT User Prefix</span> for each device.</p>
+                            </div>
+
+                            <p className="mt-3 text-xs italic">Reusing the same identity (Prefix) concurrently leads to double-spending conflicts and permanent reputation loss.</p>
+                        </div>
+
+                        <Button 
+                            type="button" 
+                            onClick={() => {
+                                const loggedInProfile = profiles.find(p => p.folder_name === selectedProfile);
+                                if (loggedInProfile) {
+                                    onLoginSuccess(loggedInProfile.profile_name);
+                                }
+                            }}
+                            className="w-full !bg-theme-primary py-4 font-bold shadow-lg hover:shadow-xl transition-all"
+                        >
+                            I Understand - Proceed to Dashboard
+                        </Button>
+                    </div>
+                </div>
+            </div>
+        ) : (
         <div className="w-full h-full flex flex-col items-center justify-center">
             <div className="w-full max-w-xl min-w-[380px] bg-bg-card shadow-2xl rounded-2xl p-8 space-y-6 border border-theme-subtle">
                 <div className="text-center">
@@ -135,7 +188,11 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                             <div className="max-w-md mx-auto">
                                 <select
                                     value={selectedProfile}
-                                    onChange={(e) => setSelectedProfile(e.target.value)}
+                                    onChange={(e) => {
+                                        setSelectedProfile(e.target.value);
+                                        setShowHandoverUI(false);
+                                        setFeedbackMsg("");
+                                    }}
                                     className="w-full px-3 py-2 border rounded-md bg-bg-input border-theme-subtle text-theme-light focus:ring-2 focus:ring-theme-primary"
                                 >
                                     {profiles.map((profile) => (
@@ -169,18 +226,50 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     <div className="pt-3 text-center">
                         {isLoggingIn ? (
                              <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>
-                                Signing in... Decrypting your wallet data. Please wait.
+                                {feedbackMsg || "Signing in... Decrypting your wallet data. Please wait."}
                              </p>
                         ) : (
-                            feedbackMsg && <p className={`text-left text-xs font-medium mb-4 whitespace-pre-wrap p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg ${feedbackClass}`}>{feedbackMsg}</p>
+                            feedbackMsg && (
+                                <div className={`text-left text-xs font-medium mb-4 whitespace-pre-wrap p-4 rounded-lg border shadow-sm ${
+                                    feedbackMsg.includes("Mismatch") 
+                                        ? "bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-theme-light" 
+                                        : "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-theme-error"
+                                }`}>
+                                    {feedbackMsg}
+                                </div>
+                            )
                         )}
                         <div className="flex flex-col items-center gap-4">
                             {showHandoverUI ? (
-                                <Button type="button" onClick={handleHandover} disabled={isLoggingIn} variant="primary" className="!bg-theme-accent">
-                                    Perform Device Handover
-                                </Button>
+                                <div className="w-full space-y-4">
+                                    <Button 
+                                        type="button" 
+                                        onClick={handleHandover} 
+                                        disabled={isLoggingIn} 
+                                        variant="primary" 
+                                        className="w-full !bg-amber-600 hover:!bg-amber-700 text-white font-bold py-3 shadow-lg transform transition active:scale-95"
+                                    >
+                                        Authorize & Perform Device Handover
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        onClick={() => {
+                                            setShowHandoverUI(false);
+                                            setFeedbackMsg("");
+                                        }}
+                                        disabled={isLoggingIn}
+                                        variant="secondary"
+                                        className="w-full"
+                                    >
+                                        Cancel - Keep using on old device
+                                    </Button>
+                                    <p className="text-[10px] text-theme-light italic">
+                                        Note: This binds the wallet profile to THIS device. 
+                                        Use 'Option B' below if you want to use the seed concurrently on multiple devices.
+                                    </p>
+                                </div>
                             ) : (
-                                <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0}>
+                                <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0} className="w-full">
                                     {isLoggingIn ? "Signing in..." : "Login"}
                                 </Button>
                             )}
@@ -210,5 +299,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 </form>
             </div>
         </div>
+        )}
+        </>
     );
 }

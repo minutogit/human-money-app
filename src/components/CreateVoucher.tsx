@@ -30,12 +30,16 @@ function parseStandardInfo(tomlContent: string) {
     const name = nameMatch ? nameMatch[1] : null;
     const issuerMatch = tomlContent.match(/issuer_name\s*=\s*"([^"]+)"/);
     const issuer = issuerMatch ? issuerMatch[1] : null;
+    const unitMatch = tomlContent.match(/unit\s*=\s*"([^"]+)"/);
+    const unit = unitMatch ? unitMatch[1] : null;
+    const abbreviationMatch = tomlContent.match(/abbreviation\s*=\s*"([^"]+)"/);
+    const abbreviation = abbreviationMatch ? abbreviationMatch[1] : null;
     const durationMatch = tomlContent.match(/default_validity_duration\s*=\s*"P(\d+)([YMD])"/);
     let validity = null;
     if (durationMatch) {
         validity = { value: parseInt(durationMatch[1], 10), unit: durationMatch[2] as "Y" | "M" | "D" };
     }
-    return { name, issuer, validity };
+    return { name, issuer, unit, abbreviation, validity };
 }
 
 export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps) {
@@ -397,7 +401,14 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             <ConfirmationModal
                 isOpen={showConfirm}
                 title="Create Voucher?"
-                description={<p>Do you really want to create a new <strong>{amount} {standards.find(s=>s.id===selectedStandardId)?.id || 'Minuto'}</strong> voucher?<br/><br/>This action will sign the voucher with your private key.</p>}
+                description={<p>Do you really want to create a new <strong>{(() => {
+                    const selected = standards.find(s => s.id === selectedStandardId);
+                    if (!selected) return `${amount} Minuto`;
+                    const { name, abbreviation } = parseStandardInfo(selected.content);
+                    const displayName = name || selected.id;
+                    const displayUnit = abbreviation || 'Minuto';
+                    return `${amount} ${displayUnit} of ${displayName}`;
+                })()}</strong> voucher?<br/><br/>This action will sign the voucher with your private key.</p>}
                 confirmText="Yes, Create"
                 onConfirm={executeCreation}
                 onCancel={() => setShowConfirm(false)}

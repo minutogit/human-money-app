@@ -44,13 +44,19 @@ pub struct NominalValueData {
     pub unit: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct FrontendAddressData {
+    #[serde(default)]
     pub street: String,
+    #[serde(default)]
     pub house_number: String,
+    #[serde(default)]
     pub zip_code: String,
+    #[serde(default)]
     pub city: String,
+    #[serde(default)]
     pub country: String,
+    #[serde(default)]
     pub full_address: String,
 }
 
