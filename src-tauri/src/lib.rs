@@ -123,8 +123,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             profile_exists, list_profiles, create_profile, login, recover_wallet_and_set_new_password, logout,
+            handover_to_this_device,
             unlock_session, lock_session, refresh_session_activity, // <--- NEU
-            generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic,
+            generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic, get_local_instance_id,
             get_user_id, get_user_profile, get_total_balance_by_currency, get_voucher_summaries, get_voucher_details,
             create_new_voucher, create_transfer_bundle, receive_bundle, save_transaction_record,
             get_transaction_history,

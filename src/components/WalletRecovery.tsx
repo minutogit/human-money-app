@@ -248,11 +248,13 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
         setIsLoading(true);
         setFeedbackMsg("Recovering wallet...");
         try {
+            const localInstanceId = await invoke<string>("get_local_instance_id");
             await invoke("recover_wallet_and_set_new_password", {
                 folderName: selectedProfile,
                 mnemonic: mnemonicWords.join(" "),
                 passphrase: passphrase || undefined,
                 newPassword,
+                localInstanceId,
                 language: selectedLanguage,
             });
             info("Frontend: Wallet successfully recovered. Logging in.");

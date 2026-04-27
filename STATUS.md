@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0-alpha.10"
 phase: "alpha"
 health: "green"
-last_updated: "2026-04-25"
+last_updated: "2026-04-27"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -91,6 +91,12 @@ priority_tasks:
     priority: "high"
     depends_on: []
     description: "Multi-device fork protection with security lockdown, recovery tolerance zones (Soft/Critical warnings), and background seal synchronization."
+  - id: "APP-015"
+    title: "Wallet Cloning Protection"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-014"]
+    description: "Anti-cloning system binding wallet state to a unique Host/Instance ID. Prevents accidental state forks and enforces device handovers."
 ---
 
 # Human Money App — Status
@@ -138,6 +144,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] User-Controlled Privacy Mode (Vertical Toggle: Frontend -> Tauri -> Core)
 - [x] WalletSeal Integration (Fork Detection Lockdown, Recovery Tolerance Zones, Background Sync)
 - [x] Storage Integrity Stabilization (Automatic seal updates for all storage writes)
+- [x] Wallet Cloning Protection (Instance ID binding, device handover, legacy migration)
 
 ## Next Milestones
 

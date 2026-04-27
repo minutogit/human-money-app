@@ -138,3 +138,48 @@ pub async fn log_to_backend(level: String, message: String) -> Result<(), String
     }
     Ok(())
 }
+#[tauri::command]
+pub fn get_local_instance_id(app: tauri::AppHandle) -> Result<String, String> {
+    let app_config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    
+    let config_id_path = app_config_dir.join("instance_id");
+    let legacy_data_id_path = app_data_dir.join("instance_id");
+
+    // 1. Check if it already exists in the secure config dir
+    if config_id_path.exists() {
+        let id = std::fs::read_to_string(&config_id_path).map_err(|e| e.to_string())?;
+        let trimmed = id.trim().to_string();
+        if !trimmed.is_empty() {
+            // Success. Now proactively clean up legacy path if it exists to avoid core panic.
+            if legacy_data_id_path.exists() {
+                let _ = std::fs::remove_file(&legacy_data_id_path);
+            }
+            return Ok(trimmed);
+        }
+    }
+
+    // 2. Not in config dir? Check legacy data dir for migration
+    if legacy_data_id_path.exists() {
+        let id = std::fs::read_to_string(&legacy_data_id_path).map_err(|e| e.to_string())?;
+        let trimmed = id.trim().to_string();
+        if !trimmed.is_empty() {
+            // Migrate to config dir
+            if !app_config_dir.exists() {
+                std::fs::create_dir_all(&app_config_dir).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(&config_id_path, &trimmed).map_err(|e| e.to_string())?;
+            // DELETE the legacy file. This is mandatory for cloning protection check.
+            let _ = std::fs::remove_file(&legacy_data_id_path);
+            return Ok(trimmed);
+        }
+    }
+
+    // 3. Brand new installation: Generate and store in config dir
+    if !app_config_dir.exists() {
+        std::fs::create_dir_all(&app_config_dir).map_err(|e| e.to_string())?;
+    }
+    let new_id = uuid::Uuid::new_v4().to_string();
+    std::fs::write(&config_id_path, &new_id).map_err(|e| e.to_string())?;
+    Ok(new_id)
+}

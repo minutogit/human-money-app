@@ -137,6 +137,7 @@ pub fn create_profile(
     passphrase: Option<String>,
     user_prefix: Option<String>,
     password: String,
+    local_instance_id: String,
     language: MnemonicLanguage,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
@@ -144,7 +145,7 @@ pub fn create_profile(
     info!("Attempting to create profile '{}' with language {:?}...", profile_name, language);
     let mut service = state.service.lock().unwrap();
     let core_language = language.into();
-    match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password, core_language) {
+    match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password, core_language, local_instance_id) {
         Ok(()) => {
             info!("Profile created successfully!");
 
@@ -186,12 +187,13 @@ pub fn login(
     folder_name: String,
     password: String,
     cleanup_on_login: bool,
+    local_instance_id: String,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     info!("Attempting to login...");
     let mut service = state.service.lock().unwrap();
-    match service.login(&folder_name, &password, cleanup_on_login) {
+    match service.login(&folder_name, &password, cleanup_on_login, local_instance_id) {
         Ok(()) => {
             info!("Login successful!");
 
@@ -217,13 +219,14 @@ pub fn recover_wallet_and_set_new_password(
     mnemonic: String,
     passphrase: Option<String>,
     new_password: String,
+    local_instance_id: String,
     language: MnemonicLanguage,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
     info!("Attempting to recover wallet and set new password with language {:?}...", language);
     let mut service = state.service.lock().unwrap();
     let core_language = language.into();
-    match service.recover_wallet_and_set_new_password(&folder_name, &mnemonic, passphrase.as_deref(), &new_password, core_language) {
+    match service.recover_wallet_and_set_new_password(&folder_name, &mnemonic, passphrase.as_deref(), &new_password, core_language, local_instance_id) {
         Ok(()) => {
             info!("Wallet recovered and new password set successfully!");
             
@@ -233,6 +236,35 @@ pub fn recover_wallet_and_set_new_password(
         }
         Err(e) => {
             error!("Wallet recovery failed: {}", e);
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn handover_to_this_device(
+    folder_name: String,
+    password: String,
+    local_instance_id: String,
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    info!("Attempting device handover for profile in folder '{}'...", folder_name);
+    let mut service = state.service.lock().unwrap();
+    match service.handover_to_this_device(&folder_name, &password, local_instance_id) {
+        Ok(()) => {
+            info!("Handover successful! Device bound to wallet.");
+            
+            // Update last_used timestamp
+            if let Err(e) = update_profile_last_used(&app, &folder_name) {
+                error!("Failed to update profile last_used timestamp: {}", e);
+            }
+
+            // Initialisiere die Session und den Cache
+            initialize_profile_session(&mut service, &password, &state)
+        }
+        Err(e) => {
+            error!("Handover failed: {}", e);
             Err(e)
         }
     }

@@ -22,6 +22,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [isLoggingIn, setIsLoggingIn] = useState(false);
+    const [showHandoverUI, setShowHandoverUI] = useState(false);
     const passwordInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
@@ -60,10 +61,12 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
         // and the browser has had a chance to paint the loading state.
         setTimeout(async () => {
             try {
+                const localInstanceId = await invoke<string>("get_local_instance_id");
                 await invoke("login", {
                     folderName: selectedProfile,
                     password,
                     cleanupOnLogin: true,
+                    localInstanceId,
                 });
                 
                 info("Frontend: Login successful.");
@@ -73,15 +76,44 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 }
                 // We keep isLoggingIn true while transitioning to the dashboard
 
-            } catch (e) {
-                const msg = `Login failed: ${e}`;
-                setFeedbackMsg(`Error: ${msg}`);
-                error(`Frontend: ${msg}`);
+            } catch (e: any) {
+                const msg = String(e);
+                if (msg.includes("DeviceMismatch") || msg.includes("different device")) {
+                    setFeedbackMsg(msg);
+                    setShowHandoverUI(true);
+                } else {
+                    setFeedbackMsg(`Error: ${msg}`);
+                }
+                error(`Frontend: Login failed: ${msg}`);
                 setIsLoggingIn(false);
-                setPassword("");
+                if (!msg.includes("DeviceMismatch")) {
+                    setPassword("");
+                }
                 passwordInputRef.current?.focus();
             }
         }, 150);
+    }
+
+    async function handleHandover() {
+        setIsLoggingIn(true);
+        setFeedbackMsg("Binding wallet to this device (Handover)...");
+        try {
+            const localInstanceId = await invoke<string>("get_local_instance_id");
+            await invoke("handover_to_this_device", {
+                folderName: selectedProfile,
+                password,
+                localInstanceId,
+            });
+            
+            info("Frontend: Handover and login successful.");
+            const loggedInProfile = profiles.find(p => p.folder_name === selectedProfile);
+            if (loggedInProfile) {
+                onLoginSuccess(loggedInProfile.profile_name);
+            }
+        } catch (e) {
+            setFeedbackMsg(`Error: Handover failed: ${e}`);
+            setIsLoggingIn(false);
+        }
     }
 
     const feedbackClass = isLoggingIn 
@@ -140,12 +172,18 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                 Signing in... Decrypting your wallet data. Please wait.
                              </p>
                         ) : (
-                            feedbackMsg && <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>
+                            feedbackMsg && <p className={`text-left text-xs font-medium mb-4 whitespace-pre-wrap p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg ${feedbackClass}`}>{feedbackMsg}</p>
                         )}
                         <div className="flex flex-col items-center gap-4">
-                             <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0}>
-                                {isLoggingIn ? "Signing in..." : "Login"}
-                            </Button>
+                            {showHandoverUI ? (
+                                <Button type="button" onClick={handleHandover} disabled={isLoggingIn} variant="primary" className="!bg-theme-accent">
+                                    Perform Device Handover
+                                </Button>
+                            ) : (
+                                <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0}>
+                                    {isLoggingIn ? "Signing in..." : "Login"}
+                                </Button>
+                            )}
                             <button
                                 type="button"
                                 onClick={onSwitchToCreate}

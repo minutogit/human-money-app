@@ -207,12 +207,14 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
         setIsLoading(true);
         setFeedbackMsg("Creating profile, please wait...");
         try {
+            const localInstanceId = await invoke<string>("get_local_instance_id");
             await invoke("create_profile", {
                 profileName,
                 mnemonic: generatedSeed.join(' '),
                 passphrase: passphrase || undefined,
                 userPrefix: userPrefix || undefined,
                 password,
+                localInstanceId,
                 language: selectedLanguage,
             });
             setFeedbackMsg("Profile successfully created!");

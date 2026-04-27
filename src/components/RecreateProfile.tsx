@@ -249,12 +249,14 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
         setIsLoading(true);
         setFeedbackMsg("Creating profile, please wait...");
         try {
+            const localInstanceId = await invoke<string>("get_local_instance_id");
             await invoke("create_profile", {
                 profileName,
                 mnemonic: mnemonicWords.join(' '), // Use the imported mnemonic
                 passphrase: passphrase || undefined,
                 userPrefix: userPrefix,
                 password,
+                localInstanceId,
                 language: selectedLanguage,
             });
             setFeedbackMsg("Profile successfully created!");
