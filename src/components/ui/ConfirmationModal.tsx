@@ -10,6 +10,7 @@ interface ConfirmationModalProps {
     onConfirm: () => void;
     onCancel: () => void;
     isProcessing?: boolean;
+    confirmDisabled?: boolean;
 }
 
 export function ConfirmationModal({ 
@@ -21,7 +22,8 @@ export function ConfirmationModal({
     cancelText = "Cancel", 
     onConfirm, 
     onCancel,
-    isProcessing = false
+    isProcessing = false,
+    confirmDisabled = false
 }: ConfirmationModalProps) {
     if (!isOpen) return null;
 
@@ -34,7 +36,7 @@ export function ConfirmationModal({
                     <Button variant="secondary" onClick={onCancel} disabled={isProcessing}>
                         {cancelText}
                     </Button>
-                    <Button variant={confirmVariant} onClick={onConfirm} disabled={isProcessing}>
+                    <Button variant={confirmVariant} onClick={onConfirm} disabled={isProcessing || confirmDisabled}>
                         {isProcessing ? "Processing..." : confirmText}
                     </Button>
                 </div>

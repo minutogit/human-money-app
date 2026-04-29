@@ -25,6 +25,7 @@ import AddressBook from './components/AddressBook';
 import { ConflictDetailsView } from './components/ConflictDetailsView';
 import { ConflictListView } from './components/ConflictListView';
 import { ForkLockOverlay } from './components/ForkLockOverlay';
+import { Button } from './components/ui/Button';
 import { ProfileInfo, ReceiveSuccessPayload } from './types';
 // WICHTIG: Der Import für den Provider
 import { SessionProvider, useSession } from './context/SessionContext';
