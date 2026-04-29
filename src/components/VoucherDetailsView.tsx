@@ -314,6 +314,22 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                 <p className="text-theme-light ml-14">View voucher information and signatures.</p>
             </header>
 
+            {voucher?.non_redeemable_test_voucher && (
+                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">
+                    <div className="flex items-center">
+                        <div className="flex-shrink-0 text-red-600 text-2xl">⚠️</div>
+                        <div className="ml-3">
+                            <p className="text-sm font-semibold text-red-800">
+                                Test Voucher
+                            </p>
+                            <p className="text-xs text-red-700 mt-1">
+                                This voucher is for testing purposes only. It has no real monetary value but can be used to test transactions.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {statusInfo.name === 'Incomplete' && (
                 <>
                     <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">

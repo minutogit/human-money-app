@@ -49,7 +49,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const [amount, setAmount] = useState("");
     const [validityValue, setValidityValue] = useState<number>(3);
     const [validityUnit, setValidityUnit] = useState<"Y" | "M" | "D">("Y");
-    const [nonRedeemable, setNonRedeemable] = useState(false);
+    const [nonRedeemable] = useState(true);
 
     const [firstName, setFirstName] = useState("");
     const [lastName, setLastName] = useState("");
@@ -174,12 +174,13 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     async function executeCreation() {
         setIsLoading(true);
         const selectedStandard = standards.find(s => s.id === selectedStandardId)!;
+        const { unit: standardUnit } = parseStandardInfo(selectedStandard.content);
         const validityDuration = validityValue > 0 ? `P${validityValue}${validityUnit}` : null;
         const fullAddress = `${street} ${houseNumber}, ${zipCode} ${city}, ${country}`.trim();
         const voucherData: NewVoucherData = {
             validity_duration: validityDuration,
             non_redeemable_test_voucher: nonRedeemable,
-            nominal_value: { amount, unit: "Minuto" },
+            nominal_value: { amount, unit: standardUnit || "Units" },
             collateral: { amount: collateralAmount, unit: collateralUnit, abbreviation: collateralAbbreviation },
             creator: {
                 first_name: firstName,
@@ -259,9 +260,10 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
-                            <input id="nonRedeemable" type="checkbox" checked={nonRedeemable} onChange={(e) => setNonRedeemable(e.target.checked)} disabled={isLoading} className="h-4 w-4 rounded border-gray-300 text-theme-accent focus:ring-theme-accent"/>
-                            <label htmlFor="nonRedeemable" className="block text-sm font-medium text-theme-secondary">Non-redeemable Test Voucher</label>
+                            <input id="nonRedeemable" type="checkbox" checked={nonRedeemable} disabled className="h-4 w-4 rounded border-gray-300 text-theme-accent focus:ring-theme-accent cursor-not-allowed"/>
+                            <label htmlFor="nonRedeemable" className="block text-sm font-medium text-theme-secondary cursor-not-allowed">Non-redeemable Test Voucher</label>
                         </div>
+                        <p className="text-xs text-theme-light mt-1 italic">Early phase: Only non-redeemable test vouchers can be created at this time.</p>
                     </Fieldset>
 
                     <Fieldset legend="Creator Details">
@@ -403,10 +405,10 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                 title="Create Voucher?"
                 description={<p>Do you really want to create a new <strong>{(() => {
                     const selected = standards.find(s => s.id === selectedStandardId);
-                    if (!selected) return `${amount} Minuto`;
-                    const { name, abbreviation } = parseStandardInfo(selected.content);
+                    if (!selected) return `${amount}`;
+                    const { name, abbreviation, unit } = parseStandardInfo(selected.content);
                     const displayName = name || selected.id;
-                    const displayUnit = abbreviation || 'Minuto';
+                    const displayUnit = abbreviation || unit || 'Units';
                     return `${amount} ${displayUnit} of ${displayName}`;
                 })()}</strong> voucher?<br/><br/>This action will sign the voucher with your private key.</p>}
                 confirmText="Yes, Create"

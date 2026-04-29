@@ -451,7 +451,7 @@ export function WalletView(props: WalletViewProps) {
                             <div key={v.local_instance_id} className="relative">
                                 {v.non_redeemable_test_voucher && (
                                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-                                        <span className="text-[90px] font-bold text-gray-800/20 transform -rotate-12 select-none pointer-events-none">TEST</span>
+                                        <span className="text-[50px] font-semibold text-red-600/30 select-none pointer-events-none">TEST VOUCHER</span>
                                     </div>
                                 )}
                                 <button
@@ -525,7 +525,7 @@ export function WalletView(props: WalletViewProps) {
                                                             {status.name}
                                                         </span>
                                                         {v.non_redeemable_test_voucher && (
-                                                            <span className="px-3 py-1 text-xs font-bold rounded-full text-purple-800 bg-purple-200" title="Non-redeemable test voucher">Test</span>
+                                                            <span className="px-3 py-1 text-xs font-bold rounded-full text-red-800 bg-red-200" title="Non-redeemable test voucher">Testing Only</span>
                                                         )}
                                                     </div>
                                                 </div>
