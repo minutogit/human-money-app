@@ -367,3 +367,29 @@ pub fn refresh_session_activity(state: tauri::State<AppState>) {
     let mut service = state.service.lock().unwrap();
     let _ = service.refresh_session_activity();
 }
+
+#[tauri::command]
+pub fn verify_profile_password(folder_name: String, password: String, state: tauri::State<AppState>) -> Result<String, String> {
+    info!("Verifying password for profile in folder '{}'...", folder_name);
+    let service = state.service.lock().unwrap();
+    service.get_profile_id_with_password(&folder_name, &password)
+}
+
+#[tauri::command]
+pub fn delete_profile(folder_name: String, password: String, state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    info!("Attempting to delete profile in folder '{}'...", folder_name);
+    
+    // 1. Delete in Core (this also verifies password)
+    let mut service = state.service.lock().unwrap();
+    service.delete_profile(&folder_name, &password)?;
+    
+    // 2. Remove metadata entry
+    if let Ok(mut metadata) = load_profile_metadata(&app) {
+        if metadata.remove(&folder_name).is_some() {
+            let _ = save_profile_metadata(&app, &metadata);
+        }
+    }
+    
+    info!("Profile '{}' deleted successfully.", folder_name);
+    Ok(())
+}

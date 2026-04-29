@@ -123,6 +123,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             profile_exists, list_profiles, create_profile, login, recover_wallet_and_set_new_password, logout,
+            delete_profile, verify_profile_password,
             handover_to_this_device,
             unlock_session, lock_session, refresh_session_activity, // <--- NEU
             generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic, get_local_instance_id,

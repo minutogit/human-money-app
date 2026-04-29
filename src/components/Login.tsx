@@ -25,29 +25,41 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     const [showHandoverUI, setShowHandoverUI] = useState(false);
     const [showPostHandoverWarning, setShowPostHandoverWarning] = useState(false);
     const [handoverUserId, setHandoverUserId] = useState("");
+    
+    // Delete states
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [showDeletePasswordPrompt, setShowDeletePasswordPrompt] = useState(false);
+    const [deletePassword, setDeletePassword] = useState("");
+    const [deleteUserId, setDeleteUserId] = useState("");
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [isVerifyingDelete, setIsVerifyingDelete] = useState(false);
+    
     const passwordInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         logger.info("Login component displayed");
         async function fetchProfiles() {
             setIsLoading(true);
-            try {
-                const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
-                setProfiles(availableProfiles);
-                if (availableProfiles.length > 0) {
-                    setSelectedProfile(availableProfiles[0].folder_name);
-                }
-                info(`Frontend: Found ${availableProfiles.length} profiles.`);
-            } catch (e) {
-                const errorMsg = `Failed to fetch profiles: ${e}`;
-                setFeedbackMsg(`Error: ${errorMsg}`);
-                error(`Frontend: ${errorMsg}`);
-            } finally {
-                setIsLoading(false);
-            }
+            refreshProfiles();
+            setIsLoading(false);
         }
         fetchProfiles();
     }, []);
+
+    async function refreshProfiles() {
+        try {
+            const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
+            setProfiles(availableProfiles);
+            if (availableProfiles.length > 0 && !selectedProfile) {
+                setSelectedProfile(availableProfiles[0].folder_name);
+            }
+            info(`Frontend: Found ${availableProfiles.length} profiles.`);
+        } catch (e) {
+            const errorMsg = `Failed to fetch profiles: ${e}`;
+            setFeedbackMsg(`Error: ${errorMsg}`);
+            error(`Frontend: ${errorMsg}`);
+        }
+    }
 
     async function handleLogin() {
         if (!selectedProfile || !password) {
@@ -121,8 +133,141 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
         ? "text-theme-secondary animate-pulse font-bold" 
         : (feedbackMsg.includes("Error") || feedbackMsg.includes("Mismatch") ? "text-theme-error" : "text-theme-success");
 
+    async function handleVerifyDeletePassword() {
+        setIsVerifyingDelete(true);
+        setFeedbackMsg("");
+        try {
+            const userId = await invoke<string>("verify_profile_password", {
+                folderName: selectedProfile,
+                password: deletePassword,
+            });
+            setDeleteUserId(userId);
+            setShowDeletePasswordPrompt(false);
+            setShowDeleteConfirm(true);
+        } catch (e) {
+            setFeedbackMsg(`Error: Verification failed: ${e}`);
+        } finally {
+            setIsVerifyingDelete(false);
+        }
+    }
+
+    async function handleDeleteProfile() {
+        setIsDeleting(true);
+        setFeedbackMsg("Deleting profile... please wait.");
+        try {
+            await invoke("delete_profile", {
+                folderName: selectedProfile,
+                password: deletePassword,
+            });
+            
+            info(`Frontend: Profile '${selectedProfile}' deleted successfully.`);
+            setFeedbackMsg(`Success: Profile deleted.`);
+            setShowDeleteConfirm(false);
+            setDeletePassword("");
+            await refreshProfiles();
+            // Select first profile if any left
+            const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
+            if (availableProfiles.length > 0) {
+                setSelectedProfile(availableProfiles[0].folder_name);
+            } else {
+                setSelectedProfile("");
+                // Wenn kein Profil mehr da ist, direkt zur Erstellung leiten
+                onSwitchToCreate();
+            }
+        } catch (e) {
+            setFeedbackMsg(`Error: Delete failed: ${e}`);
+            error(`Frontend: Delete profile failed: ${e}`);
+        } finally {
+            setIsDeleting(false);
+        }
+    }
+
+    const activeProfile = profiles.find(p => p.folder_name === selectedProfile);
+    const activeProfileName = activeProfile?.profile_name || "Unknown Profile";
+
     return (
         <>
+        {showDeleteConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                <div className="w-full max-w-xl bg-bg-card border-2 border-theme-error shadow-2xl rounded-2xl p-8 space-y-6 animate-in fade-in zoom-in duration-200">
+                    <div className="text-center">
+                        <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 text-theme-error mb-2">
+                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                        </div>
+                        <h2 className="text-2xl font-bold text-theme-error">Final Confirmation: Delete Profile?</h2>
+                        <p className="mt-2 text-theme-light italic">"{activeProfileName}"</p>
+                    </div>
+
+                    <div className="p-4 bg-bg-input rounded-lg border border-theme-subtle space-y-2">
+                        <p className="text-[10px] font-bold text-theme-secondary uppercase tracking-widest">Target Identity (DID):</p>
+                        <p className="text-xs font-mono break-all text-theme-primary bg-black/5 dark:bg-white/5 p-2 rounded">{deleteUserId}</p>
+                    </div>
+
+                    <div className="p-5 bg-red-50 dark:bg-red-900/10 rounded-lg border border-red-200 dark:border-red-800 text-sm text-theme-light space-y-3">
+                        <p className="font-bold text-theme-error underline tracking-wide">CRITICAL SECURITY WARNING:</p>
+                        <p>This identity is bound to its specific <span className="font-bold">User Prefix</span>.</p>
+                        <p>If you have already moved this wallet to another device (Handover), deleting it here is the <span className="text-theme-success font-bold">CORRECT</span> step to avoid accidental double-spending.</p>
+                        <p>However, if you have NOT moved this wallet elsewhere, <span className="font-bold text-theme-error">ALL FUNDS AND DATA WILL BE LOST PERMANENTLY.</span></p>
+                    </div>
+
+                    <div className="flex gap-4 pt-2">
+                        <Button type="button" variant="secondary" onClick={() => setShowDeleteConfirm(false)} className="flex-1">No, Keep Profile</Button>
+                        <Button 
+                            type="button"
+                            variant="primary" 
+                            onClick={handleDeleteProfile} 
+                            disabled={isDeleting}
+                            className="flex-1 !bg-theme-error text-white font-bold py-3 shadow-lg hover:shadow-xl transition-all"
+                        >
+                            {isDeleting ? "Deleting..." : "YES, Delete Identity Forever"}
+                        </Button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {showDeletePasswordPrompt && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                <div className="w-full max-w-md bg-bg-card border border-theme-subtle shadow-2xl rounded-2xl p-6 space-y-6 animate-in fade-in zoom-in duration-200">
+                    <div className="text-center">
+                        <h2 className="text-2xl font-bold text-theme-primary">Authorize Deletion</h2>
+                        <p className="mt-2 text-sm text-theme-light">To delete <span className="font-bold">"{activeProfileName}"</span>, please enter the wallet password first.</p>
+                    </div>
+                    
+                    <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); handleVerifyDeletePassword(); }}>
+                        <div>
+                            <label className="block text-xs font-semibold text-theme-secondary mb-1 uppercase">Wallet Password</label>
+                            <Input 
+                                type="password" 
+                                value={deletePassword} 
+                                onChange={(e) => setDeletePassword(e.target.value)}
+                                placeholder="Required for verification"
+                                autoFocus
+                            />
+                        </div>
+
+                        {feedbackMsg.includes("Error") && (
+                             <p className="text-xs text-theme-error font-medium">{feedbackMsg}</p>
+                        )}
+
+                        <div className="flex gap-4 pt-2">
+                            <Button type="button" variant="secondary" onClick={() => { setShowDeletePasswordPrompt(false); setDeletePassword(""); setFeedbackMsg(""); }} disabled={isVerifyingDelete} className="flex-1">Cancel</Button>
+                            <Button 
+                                type="submit"
+                                variant="primary" 
+                                disabled={isVerifyingDelete || !deletePassword} 
+                                className="flex-1"
+                            >
+                                {isVerifyingDelete ? "Verifying..." : "Verify Password"}
+                            </Button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        )}
+
         {showPostHandoverWarning ? (
             <div className="w-full h-full flex flex-col items-center justify-center">
                 <div className="w-full max-w-xl bg-bg-card shadow-2xl rounded-2xl p-8 space-y-6 border-2 border-theme-error animate-in fade-in zoom-in duration-300">
@@ -185,7 +330,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     {profiles.length > 0 && (
                         <div>
                             <label className="block text-sm font-semibold text-theme-secondary mb-1">Select Profile</label>
-                            <div className="max-w-md mx-auto">
+                            <div className="max-w-md mx-auto flex items-center gap-2">
                                 <select
                                     value={selectedProfile}
                                     onChange={(e) => {
@@ -193,7 +338,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                         setShowHandoverUI(false);
                                         setFeedbackMsg("");
                                     }}
-                                    className="w-full px-3 py-2 border rounded-md bg-bg-input border-theme-subtle text-theme-light focus:ring-2 focus:ring-theme-primary"
+                                    className="flex-1 px-3 py-2 border rounded-md bg-bg-input border-theme-subtle text-theme-light focus:ring-2 focus:ring-theme-primary h-[42px]"
                                 >
                                     {profiles.map((profile) => (
                                         <option key={profile.folder_name} value={profile.folder_name}>
@@ -201,6 +346,16 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                         </option>
                                     ))}
                                 </select>
+                                <button 
+                                    type="button"
+                                    onClick={() => setShowDeletePasswordPrompt(true)}
+                                    className="p-2 text-theme-light hover:text-theme-error transition-colors rounded-md hover:bg-red-50 dark:hover:bg-red-900/20 border border-theme-subtle h-[42px] w-[42px] flex items-center justify-center"
+                                    title="Delete selected profile"
+                                >
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                </button>
                             </div>
                         </div>
                     )}
