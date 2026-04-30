@@ -46,8 +46,9 @@ To ensure successful builds on GitHub:
 
 1.  **Dependency Handling:** NEVER include a `[patch]` block in `src-tauri/Cargo.toml`. Instead, use `src-tauri/.cargo/config.toml` for local overrides (this file is git-ignored).
 2.  **Cargo.lock Synchronization:** If you change core dependencies or local configurations, always run `cd src-tauri && cargo update -p human_money_core` to refresh the lock file, then commit the updated `Cargo.lock`.
-3.  **Release Trigger:** Push a tag starting with `v` (e.g., `v0.1.0-alpha.3`) from any branch to trigger the production build and GitHub release.
-4.  **Core State:** Ensure the `master` branch of `human-money-core` is up-to-date before pushing the app tag.
+3.  **Type Checking:** After code changes, run `npx tsc --noEmit` to verify frontend types. For configuration files in the root (like `vite.config.ts`), run `npx tsc -p tsconfig.node.json --noEmit`. You are expected to run these commands independently to catch and fix errors.
+4.  **Release Trigger:** Push a tag starting with `v` (e.g., `v0.1.0-alpha.3`) from any branch to trigger the production build and GitHub release.
+5.  **Core State:** Ensure the `master` branch of `human-money-core` is up-to-date before pushing the app tag.
 
 ## Project Structure
 

@@ -231,8 +231,8 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                 <form onSubmit={handleCreateClick}>
                     <Fieldset legend="Basic Information">
                         <div>
-                            <label htmlFor="standard" className="block text-sm font-medium text-theme-secondary mb-1">Voucher Type</label>
-                            <select id="standard" value={selectedStandardId} onChange={handleStandardChange} disabled={isLoading || standards.length === 0} className={inputClass}>
+                            <label htmlFor="standard-select" className="block text-sm font-medium text-theme-secondary mb-1">Voucher Type</label>
+                            <select id="standard-select" value={selectedStandardId} onChange={handleStandardChange} disabled={isLoading || standards.length === 0} className={inputClass}>
                                 {standards.map(s => {
                                     const { name, issuer } = parseStandardInfo(s.content);
                                     let label = name ? name : s.id;
@@ -245,8 +245,8 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                             </select>
                         </div>
                         <div>
-                            <label htmlFor="amount" className="block text-sm font-medium text-theme-secondary mb-1">Amount (e.g., 60)</label>
-                            <input id="amount" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} required disabled={isLoading} className={inputClass} title="Please enter an amount."/>
+                            <label htmlFor="amount-input" className="block text-sm font-medium text-theme-secondary mb-1">Amount (e.g., 60)</label>
+                            <input id="amount-input" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} required disabled={isLoading} className={inputClass} title="Please enter an amount."/>
                         </div>
                         <div>
                             <label htmlFor="validityValue" className="block text-sm font-medium text-theme-secondary mb-1">Validity</label>
@@ -284,12 +284,12 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         </div>
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                             <div>
-                                <label htmlFor="firstName" className="block text-sm font-medium text-theme-secondary mb-1">First Name (Required)</label>
-                                <input id="firstName" type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} required disabled={isLoading} className={inputClass} title="Please enter a first name."/>
+                                <label htmlFor="first-name-input" className="block text-sm font-medium text-theme-secondary mb-1">First Name (Required)</label>
+                                <input id="first-name-input" type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} required disabled={isLoading} className={inputClass} title="Please enter a first name."/>
                             </div>
                             <div>
-                                <label htmlFor="lastName" className="block text-sm font-medium text-theme-secondary mb-1">Last Name (Required)</label>
-                                <input id="lastName" type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} required disabled={isLoading} className={inputClass} title="Please enter a last name."/>
+                                <label htmlFor="last-name-input" className="block text-sm font-medium text-theme-secondary mb-1">Last Name (Required)</label>
+                                <input id="last-name-input" type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} required disabled={isLoading} className={inputClass} title="Please enter a last name."/>
                             </div>
                         </div>
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -395,7 +395,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                     </div>
 
                     <div className="flex justify-end gap-4 pt-6">
-                        <Button type="submit" disabled={isLoading}>{isLoading ? "Creating..." : "Create Voucher"}</Button>
+                        <Button type="submit" disabled={isLoading || !amount || !firstName || !lastName}>{isLoading ? "Creating..." : "Create Voucher"}</Button>
                     </div>
                 </form>
             </div>

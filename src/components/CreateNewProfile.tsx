@@ -262,7 +262,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                         </div>
                         <div className="grid grid-cols-3 gap-x-6 gap-y-3 my-6">
                             {generatedSeed.map((word, index) => (
-                                <div key={index} className="text-theme-secondary font-mono">
+                                <div key={index} className="text-theme-secondary font-mono" data-testid={`word-display-${index}`}>
                                     <span className="text-sm text-theme-light mr-2">{index + 1}.</span>{word}
                                 </div>
                             ))}
@@ -333,10 +333,11 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
 
                         {isBulkMode ? (
                             <div className="my-8">
-                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Paste Full Seed Phrase</label>
+                                <label htmlFor="bulk-seed-input" className="block text-sm font-semibold text-theme-secondary mb-1">Paste Full Seed Phrase</label>
                                 <textarea
+                                    id="bulk-seed-input"
                                     value={bulkSeedInput}
-                                    onChange={(e) => setBulkSeedInput(e.target.value)}
+                                    onChange={(e) => setBulkSeedInput(cleanSeedText(e.target.value))}
                                     className="w-full h-32 px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary font-mono text-sm focus:outline-none focus:ring-2 focus:ring-theme-primary"
                                     placeholder="Paste here... e.g. 1. apple 2. banana..."
                                     required
@@ -347,8 +348,10 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                             <div className="space-y-4 my-8">
                                 {confirmationWords.map(({ index }) => (
                                     <div key={index}>
-                                        <label className="block text-sm font-semibold text-theme-secondary mb-1">Word #{index + 1}</label>
+                                        <label htmlFor={`word-${index}`} className="block text-sm font-semibold text-theme-secondary mb-1">Word #{index + 1}</label>
                                         <Input
+                                            id={`word-${index}`}
+                                            data-testid={`word-input-${index}`}
                                             type="text"
                                             value={userConfirmationInput[index] || ""}
                                             onChange={(e) => handleConfirmationInputChange(index, e.target.value)}
@@ -378,12 +381,14 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                         </div>
 
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Profile Name</label>
-                            <Input type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="e.g., 'My Main Wallet'" required />
+                            <label htmlFor="profileName" className="block text-sm font-semibold text-theme-secondary mb-1">Profile Name</label>
+                            <Input id="profileName" data-testid="profile-name-input" type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="e.g., 'My Main Wallet'" required />
                         </div>
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
+                            <label htmlFor="password" className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
                             <Input 
+                                id="password"
+                                data-testid="password-input"
                                 type="password" 
                                 value={password} 
                                 onChange={(e) => setPassword(e.target.value)} 
@@ -400,8 +405,10 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Password</label>
+                            <label htmlFor="confirmPassword" className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Password</label>
                             <Input 
+                                id="confirmPassword"
+                                data-testid="confirm-password-input"
                                 type="password" 
                                 value={confirmPassword} 
                                 onChange={(e) => setConfirmPassword(e.target.value)} 
@@ -417,8 +424,10 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
 
                         <div className="border-t border-theme-light-border pt-5 space-y-5">
                             <div>
-                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (Advanced)</label>
+                                <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (Advanced)</label>
                                 <Input 
+                                    id="passphrase"
+                                    data-testid="passphrase-input"
                                     type="password" 
                                     value={passphrase} 
                                     onChange={(e) => setPassphrase(e.target.value)} 
@@ -431,8 +440,10 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                                 />
                             </div>
                             <div>
-                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Optional Passphrase</label>
+                                <label htmlFor="confirmPassphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Optional Passphrase</label>
                                 <Input 
+                                    id="confirmPassphrase"
+                                    data-testid="confirm-passphrase-input"
                                     type="password" 
                                     value={confirmPassphrase} 
                                     onChange={(e) => setConfirmPassphrase(e.target.value)} 
@@ -446,8 +457,8 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                                 <p className="text-xs text-theme-light mt-1">Warning: If you forget this passphrase, your seed phrase alone will not be enough to recover your wallet.</p>
                             </div>
                             <div>
-                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Optional User Prefix</label>
-                                <Input type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g., 'my_wallet' (can be left blank)" />
+                                <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary mb-1">Optional User Prefix</label>
+                                <Input id="userPrefix" data-testid="user-prefix-input" type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g., 'my_wallet' (can be left blank)" />
                             </div>
                         </div>
 

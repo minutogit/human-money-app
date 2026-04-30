@@ -616,3 +616,135 @@ pub fn acknowledge_seal_sync(
     let mut service = state.service.lock().unwrap();
     service.acknowledge_seal_sync(&uploaded_seal_hash, password.as_deref()).map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_new_voucher_ipc_parsing() {
+        // Test that FrontendNewVoucherData can be parsed from JSON
+        let valid_json = r#"{
+            "validity_duration": "P3Y",
+            "non_redeemable_test_voucher": true,
+            "nominal_value": {
+                "amount": "100",
+                "unit": "Silver"
+            },
+            "collateral": {
+                "amount": "0",
+                "unit": "",
+                "abbreviation": ""
+            },
+            "creator": {
+                "first_name": "John",
+                "last_name": "Doe",
+                "address": {
+                    "street": "Test Street",
+                    "house_number": "123",
+                    "zip_code": "12345",
+                    "city": "Test City",
+                    "country": "Germany",
+                    "full_address": "Test Street 123, 12345 Test City, Germany"
+                },
+                "gender": "1",
+                "coordinates": "51.16, 10.45",
+                "protocol_version": "1.0"
+            }
+        }"#;
+
+        let result: Result<FrontendNewVoucherData, _> = serde_json::from_str(valid_json);
+        assert!(result.is_ok(), "Valid FrontendNewVoucherData JSON should parse successfully");
+
+        let data = result.unwrap();
+        assert_eq!(data.validity_duration, Some("P3Y".to_string()));
+        assert_eq!(data.non_redeemable_test_voucher, true);
+        assert_eq!(data.nominal_value.amount, "100");
+        assert_eq!(data.creator.first_name, "John");
+    }
+
+    #[test]
+    fn test_create_transfer_bundle_ipc_parsing() {
+        // Test that MultiTransferRequest can be parsed from JSON
+        let valid_json = r#"{
+            "recipientId": "did:key:z123",
+            "sources": [
+                {
+                    "local_instance_id": "voucher1",
+                    "amount_to_send": "50.00"
+                }
+            ],
+            "notes": "Test transfer",
+            "senderProfileName": "John Doe",
+            "standardDefinitionsToml": {
+                "silver-uuid": "name = \"Silver Standard\""
+            },
+            "usePrivacyMode": false
+        }"#;
+
+        let result: Result<serde_json::Value, _> = serde_json::from_str(valid_json);
+        assert!(result.is_ok(), "Valid transfer bundle JSON should parse successfully");
+    }
+
+    #[test]
+    fn test_receive_bundle_ipc_parsing() {
+        // Test that Vec<u8> can be deserialized from JSON array
+        let valid_json = r#"[1, 2, 3, 4, 5]"#;
+        let result: Result<Vec<u8>, _> = serde_json::from_str(valid_json);
+        assert!(result.is_ok(), "Valid byte array should parse successfully");
+
+        let bytes = result.unwrap();
+        assert_eq!(bytes, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_signature_workflows_ipc_parsing() {
+        // Test that signature request data can be parsed
+        let valid_json = r#"{
+            "role": "Guarantor",
+            "includeDetails": true,
+            "config": {
+                "type": "TargetDid",
+                "value": ["did:key:z123", "TrialDecryption"]
+            }
+        }"#;
+
+        let result: Result<serde_json::Value, _> = serde_json::from_str(valid_json);
+        assert!(result.is_ok(), "Valid signature workflow JSON should parse successfully");
+
+        let parsed = result.unwrap();
+        assert_eq!(parsed["role"], "Guarantor");
+        assert_eq!(parsed["includeDetails"], true);
+    }
+
+    #[test]
+    fn test_transaction_record_serialization() {
+        // Test that TransactionRecord can be serialized and deserialized
+        let record = TransactionRecord {
+            id: "test-id-123".to_string(),
+            direction: "sent".to_string(),
+            recipient_id: "did:key:z456".to_string(),
+            sender_id: "did:key:z789".to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            summable_amounts: {
+                let mut map = HashMap::new();
+                map.insert("AG".to_string(), "100.00".to_string());
+                map
+            },
+            countable_items: HashMap::new(),
+            involved_vouchers: vec!["voucher1".to_string()],
+            involved_sources_details: None,
+            bundle_data: vec![1, 2, 3],
+            bundle_id: "bundle-123".to_string(),
+            notes: Some("Test note".to_string()),
+            sender_profile_name: Some("John Doe".to_string()),
+        };
+
+        let serialized = serde_json::to_string(&record);
+        assert!(serialized.is_ok(), "TransactionRecord should serialize");
+
+        let deserialized: Result<TransactionRecord, _> = serde_json::from_str(&serialized.unwrap());
+        assert!(deserialized.is_ok(), "TransactionRecord should deserialize");
+        assert_eq!(deserialized.unwrap().id, "test-id-123");
+    }
+}

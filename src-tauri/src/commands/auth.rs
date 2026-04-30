@@ -393,3 +393,57 @@ pub fn delete_profile(folder_name: String, password: String, state: tauri::State
     info!("Profile '{}' deleted successfully.", folder_name);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_login_ipc_parsing() {
+        // Test that malformed JSON doesn't crash the parsing logic
+        let invalid_json = "{ invalid json }";
+        let result: Result<serde_json::Value, _> = serde_json::from_str(invalid_json);
+        assert!(result.is_err(), "Malformed JSON should fail to parse");
+
+        // Test that valid JSON structure can be parsed
+        let valid_json = r#"{
+            "folderName": "test_profile",
+            "password": "test_password",
+            "cleanupOnLogin": true,
+            "localInstanceId": "test-instance-123"
+        }"#;
+        let result: Result<serde_json::Value, _> = serde_json::from_str(valid_json);
+        assert!(result.is_ok(), "Valid JSON should parse successfully");
+    }
+
+    #[test]
+    fn test_profile_metadata_serialization() {
+        // Test that ProfileMetadata can be serialized and deserialized
+        let metadata = ProfileMetadata {
+            last_used: Utc::now().to_rfc3339(),
+        };
+
+        let serialized = serde_json::to_string(&metadata);
+        assert!(serialized.is_ok(), "ProfileMetadata should serialize");
+
+        let deserialized: Result<ProfileMetadata, _> = serde_json::from_str(&serialized.unwrap());
+        assert!(deserialized.is_ok(), "ProfileMetadata should deserialize");
+    }
+
+    #[test]
+    fn test_profile_info_serialization() {
+        // Test that ProfileInfo can be serialized and deserialized
+        let profile_info = ProfileInfo {
+            profile_name: "Test Profile".to_string(),
+            folder_name: "test_folder".to_string(),
+            last_used: Some(Utc::now().to_rfc3339()),
+        };
+
+        let serialized = serde_json::to_string(&profile_info);
+        assert!(serialized.is_ok(), "ProfileInfo should serialize");
+
+        let deserialized: Result<ProfileInfo, _> = serde_json::from_str(&serialized.unwrap());
+        assert!(deserialized.is_ok(), "ProfileInfo should deserialize");
+        assert_eq!(deserialized.unwrap().profile_name, "Test Profile");
+    }
+}

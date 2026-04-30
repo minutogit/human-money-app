@@ -1,0 +1,142 @@
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
+import { Login } from '../Login';
+import { invoke } from '@tauri-apps/api/core';
+import { ProfileInfo } from '../../types';
+
+// Mock the Tauri API
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/plugin-log', () => ({
+  info: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock('../../utils/log', () => ({
+  logger: {
+    info: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock('@tauri-apps/plugin-log', () => ({
+  info: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock('../../utils/log', () => ({
+  logger: {
+    info: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+describe('Login Component', () => {
+  const mockProfiles: ProfileInfo[] = [
+    { profile_name: 'Test Profile 1', folder_name: 'profile1' },
+    { profile_name: 'Test Profile 2', folder_name: 'profile2' },
+  ];
+
+  const mockOnLoginSuccess = vi.fn();
+  const mockOnSwitchToCreate = vi.fn();
+  const mockOnSwitchToRecreate = vi.fn();
+  const mockOnSwitchToReset = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'list_profiles') {
+        return Promise.resolve(mockProfiles);
+      }
+      if (cmd === 'get_local_instance_id') {
+        return Promise.resolve('test-instance-id');
+      }
+      if (cmd === 'login') {
+        return Promise.resolve(true);
+      }
+      return Promise.resolve(undefined);
+    });
+  });
+
+  it('renders profile dropdown and password field', async () => {
+    render(
+      <Login
+        onLoginSuccess={mockOnLoginSuccess}
+        onSwitchToCreate={mockOnSwitchToCreate}
+        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToReset={mockOnSwitchToReset}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Select Profile/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/Password/i)).toBeInTheDocument();
+    });
+  });
+
+  it('disables login button when password is empty', async () => {
+    render(
+      <Login
+        onLoginSuccess={mockOnLoginSuccess}
+        onSwitchToCreate={mockOnSwitchToCreate}
+        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToReset={mockOnSwitchToReset}
+      />
+    );
+
+    await waitFor(() => {
+      const loginButton = screen.getByRole('button', { name: /Login/i });
+      expect(loginButton).toBeDisabled();
+    });
+  });
+
+  it('shows navigation buttons for creating and recreating profiles', async () => {
+    render(
+      <Login
+        onLoginSuccess={mockOnLoginSuccess}
+        onSwitchToCreate={mockOnSwitchToCreate}
+        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToReset={mockOnSwitchToReset}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Don't have a wallet\? Create one/i)).toBeInTheDocument();
+      expect(screen.getByText(/Recreate profile from seed/i)).toBeInTheDocument();
+      expect(screen.getByText(/Forgot password\?/i)).toBeInTheDocument();
+    });
+  });
+
+  it('calls onLoginSuccess on valid credentials', async () => {
+    const mockOnLoginSuccess = vi.fn();
+    render(
+      <Login 
+        onLoginSuccess={mockOnLoginSuccess} 
+        onSwitchToCreate={() => {}} 
+        onSwitchToRecreate={() => {}} 
+        onSwitchToReset={() => {}} 
+      />
+    );
+
+    // Wait for profiles to load
+    const passwordInput = await screen.findByLabelText(/Password/i);
+    const loginButton = screen.getByRole('button', { name: /Login/i });
+
+    // Fill form
+    fireEvent.change(passwordInput, { target: { value: 'password123' } });
+    
+    // We need to wait for the button to be enabled (profiles loaded)
+    await waitFor(() => {
+        expect(loginButton).not.toBeDisabled();
+    });
+
+    fireEvent.click(loginButton);
+
+    // Wait and check if callback was called
+    await waitFor(() => {
+      expect(mockOnLoginSuccess).toHaveBeenCalled();
+    }, { timeout: 3000 });
+  });
+});

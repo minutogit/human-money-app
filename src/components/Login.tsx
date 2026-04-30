@@ -40,7 +40,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
         logger.info("Login component displayed");
         async function fetchProfiles() {
             setIsLoading(true);
-            refreshProfiles();
+            await refreshProfiles();
             setIsLoading(false);
         }
         fetchProfiles();
@@ -329,14 +329,16 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
                     {profiles.length > 0 && (
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Select Profile</label>
+                            <label htmlFor="profile-select" className="block text-sm font-semibold text-theme-secondary mb-1">Select Profile</label>
                             <div className="max-w-md mx-auto flex items-center gap-2">
                                 <select
+                                    id="profile-select"
                                     value={selectedProfile}
                                     onChange={(e) => {
                                         setSelectedProfile(e.target.value);
                                         setShowHandoverUI(false);
                                         setFeedbackMsg("");
+                                        // onLoginSuccess(); // BUG: Wir leiten den User nicht mehr weiter!
                                     }}
                                     className="flex-1 px-3 py-2 border rounded-md bg-bg-input border-theme-subtle text-theme-light focus:ring-2 focus:ring-theme-primary h-[42px]"
                                 >
@@ -360,9 +362,10 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                         </div>
                     )}
                     <div>
-                        <label className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
+                        <label htmlFor="password-input" className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
                         <div className="max-w-md mx-auto">
                             <Input 
+                                id="password-input"
                                 type="password" 
                                 value={password} 
                                 onChange={(e) => {
@@ -424,7 +427,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                     </p>
                                 </div>
                             ) : (
-                                <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0} className="w-full">
+                                <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0 || !password || !selectedProfile} className="w-full">
                                     {isLoggingIn ? "Signing in..." : "Login"}
                                 </Button>
                             )}

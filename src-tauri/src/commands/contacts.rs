@@ -94,3 +94,120 @@ pub fn delete_contact(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_contacts_ipc_parsing() {
+        // Test that FrontendContact can be parsed from JSON
+        let valid_json = r#"{
+            "did": "did:key:z123",
+            "profile": {
+                "id": "did:key:z123",
+                "first_name": "John",
+                "last_name": "Doe",
+                "organization": "Test Org",
+                "address": {
+                    "street": "Test Street",
+                    "house_number": "123",
+                    "zip_code": "12345",
+                    "city": "Test City",
+                    "country": "Germany",
+                    "full_address": "Test Street 123, 12345 Test City, Germany"
+                },
+                "gender": "1",
+                "email": "john@example.com",
+                "phone": "123456789",
+                "coordinates": "51.16, 10.45",
+                "url": "https://example.com"
+            },
+            "tags": ["friend", "family"],
+            "added_at": "2024-01-01T00:00:00Z",
+            "notes": "Test contact"
+        }"#;
+
+        let result: Result<FrontendContact, _> = serde_json::from_str(valid_json);
+        assert!(result.is_ok(), "Valid FrontendContact JSON should parse successfully");
+
+        let contact = result.unwrap();
+        assert_eq!(contact.did, "did:key:z123");
+        assert_eq!(contact.tags, vec!["friend", "family"]);
+        assert_eq!(contact.profile.first_name, Some("John".to_string()));
+    }
+
+    #[test]
+    fn test_address_book_serialization() {
+        // Test that FrontendAddressBook can be serialized and deserialized
+        use crate::models::FrontendAddressBook;
+
+        let mut address_book = FrontendAddressBook::default();
+        
+        let contact_json = r#"{
+            "did": "did:key:z456",
+            "profile": {
+                "id": "did:key:z456",
+                "first_name": "Jane",
+                "last_name": "Smith"
+            },
+            "tags": ["colleague"],
+            "added_at": "2024-01-02T00:00:00Z"
+        }"#;
+
+        let contact: FrontendContact = serde_json::from_str(contact_json).unwrap();
+        address_book.contacts.insert(contact.did.clone(), contact);
+
+        let serialized = serde_json::to_string(&address_book);
+        assert!(serialized.is_ok(), "FrontendAddressBook should serialize");
+
+        let deserialized: Result<FrontendAddressBook, _> = serde_json::from_str(&serialized.unwrap());
+        assert!(deserialized.is_ok(), "FrontendAddressBook should deserialize");
+        
+        let deserialized_book = deserialized.unwrap();
+        assert_eq!(deserialized_book.contacts.len(), 1);
+        assert!(deserialized_book.contacts.contains_key("did:key:z456"));
+    }
+
+    #[test]
+    fn test_contact_serialization_roundtrip() {
+        // Test that a contact can be serialized and deserialized without data loss
+        let original_json = r#"{
+            "did": "did:key:z789",
+            "profile": {
+                "id": "did:key:z789",
+                "first_name": "Alice",
+                "last_name": "Wonder",
+                "organization": "Wonderland Inc",
+                "community": "Fantasy",
+                "address": {
+                    "street": "Wonder Lane",
+                    "house_number": "42",
+                    "zip_code": "54321",
+                    "city": "Wonder City",
+                    "country": "Wonderland",
+                    "full_address": "Wonder Lane 42, 54321 Wonder City, Wonderland"
+                },
+                "gender": "2",
+                "email": "alice@wonderland.com",
+                "phone": "987654321",
+                "coordinates": "52.52, 13.40",
+                "url": "https://wonderland.com",
+                "service_offer": "Wonderful services",
+                "needs": "Nothing"
+            },
+            "tags": ["vip", "friend"],
+            "added_at": "2024-01-03T00:00:00Z",
+            "notes": "VIP contact"
+        }"#;
+
+        let original: FrontendContact = serde_json::from_str(original_json).unwrap();
+        let serialized = serde_json::to_string(&original).unwrap();
+        let deserialized: FrontendContact = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(original.did, deserialized.did);
+        assert_eq!(original.tags, deserialized.tags);
+        assert_eq!(original.profile.first_name, deserialized.profile.first_name);
+        assert_eq!(original.profile.organization, deserialized.profile.organization);
+    }
+}

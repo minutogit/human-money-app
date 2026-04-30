@@ -12,6 +12,10 @@ import { Textarea } from "./ui/Textarea";
 type WizardStep = "import_seed" | "set_details";
 type InputMode = "words" | "phrase";
 
+const cleanPhrase = (phrase: string) => {
+    return phrase.replace(/\s+/g, ' ').trim().toLowerCase();
+};
+
 interface RecreateProfileProps {
     onProfileCreated: () => void;
     onSwitchToLogin: () => void;
@@ -157,7 +161,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     useEffect(() => {
         const validate = async () => {
             const nonEmptyWords = mnemonicWords.filter(Boolean);
-            if (nonEmptyWords.length > 0 && mnemonicWords.every(word => word && word.length > 1) && (mnemonicWords.length === 12 || mnemonicWords.length === 24)) {
+            if (nonEmptyWords.length === wordCount) {
                 const fullMnemonic = mnemonicWords.join(" ");
                 try {
                     await invoke("validate_mnemonic", { mnemonic: fullMnemonic, language: selectedLanguage });
@@ -323,7 +327,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                                 {inputMode === "words" ? "Enter full phrase" : "Use single fields"}
                                             </button>
                                         </div>
-                                        <select value={wordCount} onChange={(e) => setWordCount(Number(e.target.value) as 12 | 24)} className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary">
+                                        <select id="wordCount" value={wordCount} onChange={(e) => setWordCount(Number(e.target.value) as 12 | 24)} className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary">
                                             <option value={12}>12 Words</option>
                                             <option value={24}>24 Words</option>
                                         </select>
@@ -337,6 +341,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                                 <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-theme-light">{index + 1}.</span>
                                                 <Input
                                                     id={`word-${index}`}
+                                                    data-testid={`word-input-${index}`}
                                                     type="text"
                                                     value={word}
                                                     onChange={(e) => handleWordChange(index, e.target.value)}
@@ -351,8 +356,9 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                         <Textarea
                                             ref={textareaRef}
                                             id="phrase-input"
+                                            data-testid="phrase-textarea"
                                             value={rawPhrase}
-                                            onChange={(e) => { setRawPhrase(e.target.value); }}
+                                            onChange={(e) => { setRawPhrase(cleanPhrase(e.target.value)); }}
                                             placeholder="Paste full seed phrase here... Numbers and punctuation are cleaned automatically."
                                             rows={6}
                                             className="font-mono text-sm"
@@ -380,12 +386,13 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                         </div>
 
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Profile Name</label>
-                            <Input type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="e.g., 'My Main Wallet'" required />
+                            <label htmlFor="profileName" className="block text-sm font-semibold text-theme-secondary mb-1">Profile Name</label>
+                            <Input id="profileName" data-testid="profile-name-input" type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="e.g., 'My Main Wallet'" required />
                         </div>
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
+                            <label htmlFor="password" className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
                             <Input 
+                                id="password"
                                 type="password" 
                                 value={password} 
                                 onChange={(e) => setPassword(e.target.value)} 
@@ -402,8 +409,9 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Password</label>
+                            <label htmlFor="confirmPassword" className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Password</label>
                             <Input 
+                                id="confirmPassword"
                                 type="password" 
                                 value={confirmPassword} 
                                 onChange={(e) => setConfirmPassword(e.target.value)} 
@@ -419,8 +427,9 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
 
                         <div className="border-t border-theme-light-border pt-5 space-y-5">
                             <div>
-                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (Advanced)</label>
+                                <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (Advanced)</label>
                                 <Input 
+                                    id="passphrase"
                                     type="password" 
                                     value={passphrase} 
                                     onChange={(e) => setPassphrase(e.target.value)} 
@@ -433,8 +442,9 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                 />
                             </div>
                             <div>
-                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Optional Passphrase</label>
+                                <label htmlFor="confirmPassphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Optional Passphrase</label>
                                 <Input 
+                                    id="confirmPassphrase"
                                     type="password" 
                                     value={confirmPassphrase} 
                                     onChange={(e) => setConfirmPassphrase(e.target.value)} 
@@ -448,8 +458,8 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                 <p className="text-xs text-theme-light mt-1">Warning: If you use this, you must enter the *exact same* passphrase for this seed on all devices.</p>
                             </div>
                             <div>
-                                <label className="block text-sm font-semibold text-theme-secondary mb-1">User Prefix (CRITICAL)</label>
-                                <Input type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g., 'my_laptop' (must be unique)" required />
+                                <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary mb-1">User Prefix (CRITICAL)</label>
+                                <Input id="userPrefix" data-testid="user-prefix-input" type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g., 'my_laptop' (must be unique)" required />
                                 <p className="text-xs text-theme-error font-semibold mt-1">WARNING: This prefix MUST be *unique* for each device (e.g., laptop, phone). Reusing the same prefix on multiple devices will lead to critical errors and unresolvable conflicts.</p>
                             </div>
                         </div>

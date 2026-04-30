@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0-alpha.10"
 phase: "alpha"
 health: "green"
-last_updated: "2026-04-27"
+last_updated: "2026-04-30"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -39,7 +39,7 @@ priority_tasks:
     description: "Fix remaining bugs and polish existing voucher workflow"
   - id: "APP-006"
     title: "Set up test infrastructure"
-    status: "open"
+    status: "completed"
     priority: "high"
     depends_on: []
     description: "Add frontend (Vitest/RTL) and backend (Rust) tests for existing features to ensure stability during future changes"
@@ -115,7 +115,6 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Known Issues
 
-- No automated tests (frontend or backend) — high risk during refactoring
 - No WoT integration (depends on CORE-001 and WOT-005)
 - Alpha stability — some UI edge cases unpolished
 
@@ -145,11 +144,12 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] WalletSeal Integration (Fork Detection Lockdown, Recovery Tolerance Zones, Background Sync)
 - [x] Storage Integrity Stabilization (Automatic seal updates for all storage writes)
 - [x] Wallet Cloning Protection (Instance ID binding, device handover, legacy migration)
+- [x] Automated Test Infrastructure (Vitest + Rust Integration Tests)
+- [x] Unified Test Script (`run-tests.sh`) and CI Preparation
 
 ## Next Milestones
 
 - [ ] Stabilize existing features and fix edge cases (MVP)
-- [ ] Set up test infrastructure (Vitest + React Testing Library, Rust integration tests) (MVP)
 - [ ] Internationalization (i18n) - German/English (MVP)
 - [ ] Address book / contact list UI polish
 - [ ] L2 sync hardening

@@ -283,6 +283,8 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                             <label className="block text-sm font-semibold text-theme-secondary mb-1">1. Profile to Recover</label>
                             <div className="max-w-md">
                                 <select
+                                    id="profileSelect"
+                                    data-testid="profile-select"
                                     value={selectedProfile}
                                     onChange={(e) => setSelectedProfile(e.target.value)}
                                     className="w-full px-3 py-2 border rounded-md bg-bg-input border-theme-subtle text-theme-light focus:ring-2 focus:ring-theme-primary"
@@ -302,6 +304,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                             <div className="flex justify-between items-center">
                                 <label className="text-sm font-semibold text-theme-secondary">2. Your Seed Phrase</label>
                                 <select 
+                                    data-testid="language-select"
                                     value={selectedLanguage} 
                                     onChange={(e) => setSelectedLanguage(e.target.value as MnemonicLanguage)} 
                                     className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary"
@@ -339,6 +342,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                                         <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-theme-light">{index + 1}.</span>
                                         <Input
                                             id={`word-${index}`}
+                                            data-testid={`word-input-${index}`}
                                             type="text"
                                             value={word}
                                             onChange={(e) => handleWordChange(index, e.target.value)}
@@ -365,8 +369,9 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
 
                     <div className="border-t border-theme-light-border pt-5 space-y-5">
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">3. Optional Passphrase</label>
+                            <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary mb-1">3. Optional Passphrase</label>
                             <Input 
+                                id="passphrase"
                                 type="password" 
                                 value={passphrase} 
                                 onChange={(e) => setPassphrase(e.target.value)} 
@@ -380,8 +385,9 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                         </div>
 
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">4. New Password</label>
+                            <label htmlFor="newPassword" className="block text-sm font-semibold text-theme-secondary mb-1">4. New Password</label>
                             <Input 
+                                id="newPassword"
                                 type="password" 
                                 value={newPassword} 
                                 onChange={(e) => setNewPassword(e.target.value)} 
@@ -398,8 +404,9 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                         </div>
 
                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">5. Confirm New Password</label>
+                            <label htmlFor="confirmPassword" className="block text-sm font-semibold text-theme-secondary mb-1">5. Confirm New Password</label>
                             <Input 
+                                id="confirmPassword"
                                 type="password" 
                                 value={confirmPassword} 
                                 onChange={(e) => setConfirmPassword(e.target.value)} 
@@ -420,7 +427,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                                 Recovering wallet, please wait... This may take a moment.
                             </p>
                         )}
-                        {feedbackMsg && !isLoading && <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>}
+                        {feedbackMsg && !isLoading && <p data-testid="feedback-message" className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>}
                         <div className="flex flex-col items-center gap-4">
                             <Button type="submit" disabled={isLoading || !isValidMnemonic || profiles.length === 0}>
                                 {isLoading ? "Recovering..." : "Recover Wallet & Login"}

@@ -495,6 +495,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
                     <div
                         id="bundle-drop-zone"
+                        data-testid="drop-zone"
                         className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer ${
                             isDragOver ? 'border-theme-primary bg-bg-input-focus' : 'border-theme-subtle'
                         }`}
@@ -511,7 +512,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                             </div>
                         ) : (
                             <div>
-                                <p className="text-theme-light mb-4">Drag & Drop your '.transfer', '.ask', or '.sig' file here</p>
+                                <p data-testid="drop-zone-text" className="text-theme-light mb-4">Drag & Drop your '.transfer', '.ask', or '.sig' file here</p>
                                 <p className="text-theme-light text-sm mb-4">or</p>
                                 <Button type="button" onClick={handleFileSelect}>Select Bundle File</Button>
                             </div>
