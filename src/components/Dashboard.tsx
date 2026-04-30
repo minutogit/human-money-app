@@ -297,17 +297,17 @@ export function Dashboard(props: DashboardProps) {
                                         return (
                                             <div
                                                 key={balance.standard_uuid}
-                                                onClick={() => props.onNavigateToWallet({ standard: balance.standard_name, status: 'active' })}
+                                                onClick={() => props.onNavigateToWallet({ standard: balance.display_standard_name, status: 'active' })}
                                                 className="flex flex-col items-center hover:opacity-80 transition-opacity cursor-pointer group"
                                             >
                                                 <div className="flex items-baseline mb-2">
                                                     <p className="text-5xl md:text-6xl font-bold text-theme-primary transition-colors group-hover:text-theme-accent">
                                                         {formatAmount(balance.total_amount)}
                                                     </p>
-                                                    <span className="text-2xl md:text-3xl font-normal text-theme-light ml-2">{balance.unit}</span>
+                                                    <span className="text-2xl md:text-3xl font-normal text-theme-light ml-2">{balance.display_currency}</span>
                                                 </div>
                                                 <p className="font-semibold text-theme-secondary text-lg">
-                                                    {balance.standard_name}
+                                                    {balance.display_standard_name}
                                                 </p>
                                                 <p className="text-sm text-theme-light mt-1">
                                                     ({count} voucher{count !== 1 ? 's' : ''})

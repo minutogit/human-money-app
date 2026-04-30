@@ -294,19 +294,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 logger.info("Signature request opened successfully.");
                 logger.info(`Voucher data structure keys: ${Object.keys(openedVoucher).join(", ")}`);
                 
-                // Wrap in VoucherDetails for frontend consistency
-                let voucherDetails: VoucherDetails;
-                if (openedVoucher.voucher && openedVoucher.local_instance_id) {
-                    logger.info("Backend returned a full VoucherDetails object.");
-                    voucherDetails = openedVoucher;
-                } else {
-                    logger.info("Backend returned a raw Voucher object. Wrapping it.");
-                    voucherDetails = {
-                        local_instance_id: "external-" + (openedVoucher.voucher_id?.slice(0, 8) || "temp"),
-                        status: "Active",
-                        voucher: openedVoucher
-                    };
-                }
+                // Backend now returns VoucherDetails
+                const voucherDetails: VoucherDetails = openedVoucher;
 
                 (onReceiveSuccess as any)({
                     senderId: voucherDetails.voucher.creator?.id || "unknown",

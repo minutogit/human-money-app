@@ -237,15 +237,15 @@ export function WalletView(props: WalletViewProps) {
     }, {} as Record<string, number>);
 
     const standardCounts = (vouchers || []).reduce((acc, v) => {
-        if (!v || !v.voucher_standard_name) return acc;
-        acc[v.voucher_standard_name] = (acc[v.voucher_standard_name] || 0) + 1;
+        if (!v || !v.display_standard_name) return acc;
+        acc[v.display_standard_name] = (acc[v.display_standard_name] || 0) + 1;
         return acc;
     }, {} as Record<string, number>);
 
     const allStatusNames = ['active', 'incomplete', 'archived', 'quarantined'];
     // Only show statuses that exist in the wallet OR are currently filtered
     const availableStatuses = allStatusNames.filter(s => statusCounts[s] > 0 || statusFilters.includes(s));
-    const availableStandards = Array.from(new Set((vouchers || []).map(v => v?.voucher_standard_name).filter(Boolean))).sort() as string[];
+    const availableStandards = Array.from(new Set((vouchers || []).map(v => v?.display_standard_name).filter(Boolean))).sort() as string[];
 
     const toggleStatusFilter = (status: string) => {
         setStatusFilters(prev => 
@@ -263,7 +263,7 @@ export function WalletView(props: WalletViewProps) {
         if (!v) return false;
         const statusName = getVoucherStatus(v.status).name;
         const matchesStatus = statusFilters.length === 0 || statusFilters.includes(statusName);
-        const matchesStandard = standardFilters.length === 0 || standardFilters.includes(v.voucher_standard_name || "");
+        const matchesStandard = standardFilters.length === 0 || standardFilters.includes(v.display_standard_name || "");
         return matchesStatus && matchesStandard;
     });
 
@@ -449,7 +449,7 @@ export function WalletView(props: WalletViewProps) {
                         const isExpanded = expandedVoucherIds.includes(v.local_instance_id);
                         return (
                             <div key={v.local_instance_id} className="relative">
-                                {v.non_redeemable_test_voucher && (
+                                {v.is_test_voucher && (
                                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
                                         <span className="text-[50px] font-semibold text-red-600/30 select-none pointer-events-none">TEST VOUCHER</span>
                                     </div>
@@ -469,10 +469,10 @@ export function WalletView(props: WalletViewProps) {
                                         <div className="flex items-center justify-between">
                                             <div className="flex items-center gap-3">
                                                 <div className="text-lg font-bold text-theme-primary">
-                                                    {formatAmount(v.current_amount)} {v.unit}
+                                                    {formatAmount(v.current_amount)} {v.display_currency}
                                                 </div>
                                                 <div className="text-xs text-theme-light">
-                                                    {v.voucher_standard_name}
+                                                    {v.display_standard_name}
                                                 </div>
                                                 <div className="text-xs text-theme-secondary italic border-l border-theme-subtle pl-3">
                                                     by {v.creator_first_name} {v.creator_last_name}
@@ -485,7 +485,7 @@ export function WalletView(props: WalletViewProps) {
                                                 <span className={`px-2 py-1 text-[10px] font-bold rounded-full capitalize ${status.color}`}>
                                                     {status.name}
                                                 </span>
-                                                {v.non_redeemable_test_voucher && (
+                                                {v.is_test_voucher && (
                                                     <span className="px-2 py-1 text-[10px] font-bold rounded-full text-purple-800 bg-purple-200">Test</span>
                                                 )}
                                             </div>
@@ -500,12 +500,12 @@ export function WalletView(props: WalletViewProps) {
                                                 <div>
                                                     <div className="flex items-baseline text-2xl font-bold text-theme-primary">
                                                         <span className="inline-block min-w-[4rem] text-right">{formatAmount(v.current_amount)}</span>
-                                                        <span className="ml-2 text-lg font-normal text-theme-light">{v.unit}</span>
+                                                        <span className="ml-2 text-lg font-normal text-theme-light">{v.display_currency}</span>
                                                     </div>
                                                     <p className="text-xs text-theme-light font-mono">by {v.creator_first_name} {v.creator_last_name}</p>
                                                 </div>
                                                 <div className="text-right">
-                                                    <p className="text-xl font-normal text-theme-light">{v.voucher_standard_name}</p>
+                                                    <p className="text-xl font-normal text-theme-light">{v.display_standard_name}</p>
                                                 </div>
                                             </div>
 
@@ -524,7 +524,7 @@ export function WalletView(props: WalletViewProps) {
                                                         <span className={`px-2 py-1 text-xs font-bold rounded-full capitalize ${status.color}`} title={status.tooltip}>
                                                             {status.name}
                                                         </span>
-                                                        {v.non_redeemable_test_voucher && (
+                                                        {v.is_test_voucher && (
                                                             <span className="px-3 py-1 text-xs font-bold rounded-full text-red-800 bg-red-200" title="Non-redeemable test voucher">Testing Only</span>
                                                         )}
                                                     </div>

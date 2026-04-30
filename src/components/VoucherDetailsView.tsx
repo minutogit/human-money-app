@@ -314,7 +314,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                 <p className="text-theme-light ml-14">View voucher information and signatures.</p>
             </header>
 
-            {voucher?.non_redeemable_test_voucher && (
+            {details?.is_test_voucher && (
                 <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">
                     <div className="flex items-center">
                         <div className="flex-shrink-0 text-red-600 text-2xl">⚠️</div>
@@ -406,9 +406,9 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                     <div className="bg-bg-card-alternate border border-theme-subtle rounded-lg shadow-sm p-6">
                         <div className="flex items-baseline gap-3">
                             <p className="text-4xl font-bold text-theme-accent">{voucher.nominal_value.amount}</p>
-                            <p className="text-xl text-theme-light">{voucher.nominal_value.unit}</p>
+                            <p className="text-xl text-theme-light">{details.display_currency}</p>
                         </div>
-                        <h1 className="text-2xl font-bold text-theme-primary mt-1">{voucher.voucher_standard.name}</h1>
+                        <h1 className="text-2xl font-bold text-theme-primary mt-1">{details.display_standard_name}</h1>
                         <p className="text-theme-secondary mt-2 max-w-2xl">{voucher.voucher_standard.template.description}</p>
                     </div>
 
@@ -607,7 +607,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                 <div key={t.t_id} className="border-t border-theme-subtle pt-3">
                                     <div className="flex justify-between items-center mb-1">
                                         <p className="font-semibold capitalize text-theme-primary bg-theme-subtle/30 px-2 py-1 rounded-md text-sm">{t.t_type}</p>
-                                        <p className="text-lg font-semibold">{t.amount} <span className="text-base text-theme-light">{voucher.nominal_value.unit}</span></p>
+                                        <p className="text-lg font-semibold">{t.amount} <span className="text-base text-theme-light">{details.display_currency}</span></p>
                                     </div>
                                     <p className="text-xs text-theme-light mb-2">{formatDateTime(t.t_time)}</p>
                                     <div className="bg-theme-subtle/30 p-2 rounded space-y-2">

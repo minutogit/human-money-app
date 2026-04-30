@@ -77,6 +77,9 @@ export interface AggregatedBalance {
     standard_uuid: string;
     unit: string;
     total_amount: string;
+    display_currency: string;
+    display_standard_name: string;
+    is_test_voucher: boolean;
 }
 
 // --- Voucher Strukturen ---
@@ -111,7 +114,9 @@ export interface VoucherSummary {
     creator_first_name?: string;
     creator_last_name?: string;
     creator_coordinates?: string;
-    non_redeemable_test_voucher: boolean;
+    is_test_voucher: boolean;
+    display_currency: string;
+    display_standard_name: string;
     // Client-side enrichment
     divisible?: boolean;
 }
@@ -187,6 +192,9 @@ export interface VoucherDetails {
     local_instance_id: string;
     status: VoucherStatus;
     voucher: Voucher;
+    display_currency: string;
+    display_standard_name: string;
+    is_test_voucher: boolean;
 }
 
 export interface Voucher {
@@ -211,6 +219,9 @@ export interface InvolvedVoucherInfo {
     standard_name: string;
     amount: string;
     unit: string;
+    is_test_voucher: boolean;
+    display_currency: string;
+    display_standard_name: string;
 }
 
 export interface SourceTransfer {
@@ -287,6 +298,7 @@ export interface ProofOfDoubleSpendSummary {
     affected_voucher_name?: string;
     voucher_standard_uuid?: string;
     local_note?: string;
+    is_test_voucher: boolean;
 }
 
 export interface ProofOfDoubleSpend {
@@ -303,6 +315,7 @@ export interface ProofOfDoubleSpend {
     affected_voucher_name?: string;
     voucher_standard_uuid?: string;
     is_resolved?: boolean;
+    non_redeemable_test_voucher: boolean;
 }
 
 export interface ResolutionEndorsement {

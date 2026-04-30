@@ -66,6 +66,9 @@ describe('SignRequestView Component (Minuto Standard)', () => {
       signatures: [],
       transactions: [],
     },
+    display_currency: 'MIN',
+    display_standard_name: 'Minuto Standard',
+    is_test_voucher: false,
   };
 
   const mockStandards: VoucherStandardInfo[] = [

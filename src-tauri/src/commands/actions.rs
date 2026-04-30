@@ -404,13 +404,26 @@ pub fn open_voucher_signing_request(
     container_bytes: Vec<u8>,
     password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<Voucher, String> {
+) -> Result<human_money_core::wallet::types::VoucherDetails, String> {
     info!("Opening voucher signing request bundle...");
     let service = state.service.lock().unwrap();
     match service.open_voucher_signing_request(&container_bytes, password.as_deref()) {
         Ok(v) => {
             info!("Signature request opened successfully. Voucher ID: {}, Creator: {}", v.voucher_id, v.creator_profile.id.as_deref().unwrap_or("N/A"));
-            Ok(v)
+            
+            // Wrap in VoucherDetails for frontend consistency
+            let display_currency = v.nominal_value.unit.clone();
+            let display_standard_name = v.voucher_standard.name.clone();
+            let is_test_voucher = v.non_redeemable_test_voucher;
+            
+            Ok(human_money_core::wallet::types::VoucherDetails {
+                local_instance_id: format!("external-{}", v.voucher_id.chars().take(8).collect::<String>()),
+                status: human_money_core::VoucherStatus::Active, // Placeholder status
+                voucher: v,
+                display_currency,
+                display_standard_name,
+                is_test_voucher,
+            })
         }
         Err(e) => Err(e)
     }

@@ -38,7 +38,9 @@ describe('SendView Component (Silber Standard)', () => {
       guarantor_signatures_count: 0,
       additional_signatures_count: 0,
       has_collateral: false,
-      non_redeemable_test_voucher: false,
+      is_test_voucher: false,
+      display_currency: 'AG',
+      display_standard_name: 'Silver Standard',
       divisible: true,
     },
   ];
