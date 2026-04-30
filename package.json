@@ -16,9 +16,9 @@
     "@tauri-apps/plugin-fs": "^2.5.0",
     "@tauri-apps/plugin-log": "^2.8.0",
     "@tauri-apps/plugin-opener": "^2.5.3",
+    "boring-avatars": "^1.11.2",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "boring-avatars": "^1.11.2"
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.13",

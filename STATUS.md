@@ -16,15 +16,15 @@ priority_tasks:
   - id: "APP-002"
     title: "Trust level display for contacts"
     status: "open"
-    priority: "high"
+    priority: "low"
     depends_on: ["CORE-001", "WOT-005"]
-    description: "Visual trust badges and verification status in contact views"
+    description: "Visual trust badges and verification status in contact views (Post-MVP)"
   - id: "APP-003"
     title: "Stranger discovery workflow (BLE/NFC)"
     status: "open"
-    priority: "medium"
+    priority: "low"
     depends_on: ["CORE-002"]
-    description: "Face-to-face contact exchange via BLE/NFC"
+    description: "Face-to-face contact exchange via BLE/NFC (Post-MVP)"
   - id: "APP-004"
     title: "L2 sync integration hardening"
     status: "open"
@@ -148,9 +148,10 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Next Milestones
 
-- [ ] Stabilize existing features and fix edge cases
-- [ ] Set up test infrastructure (Vitest + React Testing Library, Rust integration tests)
-- [ ] Address book / contact list UI
-- [ ] Trust level badges for contacts
-- [ ] BLE/NFC stranger discovery
+- [ ] Stabilize existing features and fix edge cases (MVP)
+- [ ] Set up test infrastructure (Vitest + React Testing Library, Rust integration tests) (MVP)
+- [ ] Internationalization (i18n) - German/English (MVP)
+- [ ] Address book / contact list UI polish
 - [ ] L2 sync hardening
+- [ ] Trust level badges for contacts (Post-MVP)
+- [ ] BLE/NFC stranger discovery (Post-MVP)

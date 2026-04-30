@@ -18,18 +18,19 @@ description: 4-phase MVP project plan for the Human Money App, from core transac
 **Goal:** Make the app actually usable.
 
 1. **Enhanced Voucher Overview** — Dashboard with summaries + `VoucherDetailsView.tsx` ✅
-2. **Contact Management (Address Book)** — Simple UI for contacts (Name + User-ID), stored via `save/load_encrypted_data` 🔜 (APP-001)
+2. **Contact Management (Address Book)** — Simple UI for contacts (Name + User-ID), stored via `save/load_encrypted_data` ✅ (APP-001)
+3. **Guarantor Flow** — Signing request UI + detached signature response ✅ (APP-007)
+4. **Internationalization (i18n)** — `i18next` integration (German/English) 🔜
 
-## Phase 3: Extended Functionality
+## Phase 3: Extended Functionality (Post-MVP)
 
-1. **Guarantor Flow** — Signing request UI + detached signature response ⬜
-2. **Trust Integration** — Trust badges, WoT display (depends on WOT specs + CORE-001) ⬜
+1. **Trust Integration** — Trust badges, WoT display (depends on WOT specs + CORE-001) ⬜
+2. **Discovery** — BLE/NFC contact exchange ⬜
 
-## Phase 4: Scaling & Polish
+## Phase 4: Scaling & Polish (Post-MVP)
 
-1. **Internationalization (i18n)** — `i18next` integration ⬜
-2. **Dynamic Voucher Standard UI** — Form fields generated from TOML definition ⬜
-3. **Performance** — Optional SQLite, pagination, lazy loading ⬜
+1. **Dynamic Voucher Standard UI** — Form fields generated from TOML definition ⬜
+2. **Performance** — Optional SQLite, pagination, lazy loading ⬜
 
 ## Current Status
 
