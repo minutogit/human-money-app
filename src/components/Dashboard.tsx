@@ -7,6 +7,7 @@ import { Button } from "./ui/Button";
 import { AggregatedBalance, TransactionRecord, VoucherSummary, Contact } from "../types";
 import { useSession } from "../context/SessionContext";
 import { IntegrityReportModal } from "./IntegrityReportModal";
+import { PageLayout } from "./ui/PageLayout";
 
 interface DashboardProps {
     onNavigateToCreateVoucher: () => void;
@@ -189,42 +190,41 @@ export function Dashboard(props: DashboardProps) {
     const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Lade...";
 
     return (
-        <div className="flex flex-col h-full">
-            {/* Fixierte Kopfleiste */}
-            <header className="flex-shrink-0 border-b border-theme-subtle px-6 py-0.5 bg-bg-card">
-                <div className="flex items-center justify-between gap-3 text-xs text-theme-light">
-                    <div className="flex items-center gap-3">
-                        <span className="relative flex h-2 w-2">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                        </span>
-                        <div className="flex items-center gap-1">
-                            <span>Profile:</span>
-                            <span className="font-semibold text-theme-secondary">{props.profileName}</span>
+        <PageLayout 
+            customHeader={
+                <header className="flex-shrink-0 border-b border-theme-subtle px-6 py-0.5 bg-bg-card">
+                    <div className="flex items-center justify-between gap-3 text-xs text-theme-light">
+                        <div className="flex items-center gap-3">
+                            <span className="relative flex h-2 w-2">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                            </span>
+                            <div className="flex items-center gap-1">
+                                <span>Profile:</span>
+                                <span className="font-semibold text-theme-secondary">{props.profileName}</span>
+                            </div>
+                        </div>
+                        
+                        <div className="flex items-center gap-2">
+                            <span className="font-semibold text-theme-secondary">Your ID:</span>
+                            <button 
+                                onClick={handleCopyUserId}
+                                title={copied ? "Copied!" : "Click to copy User ID"}
+                                className={`font-mono text-xs sm:text-sm font-medium transition-all duration-200 border px-3 py-1 rounded-md ${
+                                    copied 
+                                    ? 'bg-theme-success/10 text-theme-success border-theme-success/30 shadow-sm' 
+                                    : 'bg-bg-card text-theme-primary border-theme-subtle hover:border-theme-primary hover:bg-theme-primary/5 hover:shadow-sm'
+                                }`}
+                            >
+                                {copied ? "✓ Copied!" : truncatedUserId}
+                            </button>
                         </div>
                     </div>
-                    
-                    <div className="flex items-center gap-2">
-                        <span className="font-semibold text-theme-secondary">Your ID:</span>
-                        <button 
-                            onClick={handleCopyUserId}
-                            title={copied ? "Copied!" : "Click to copy User ID"}
-                            className={`font-mono text-xs sm:text-sm font-medium transition-all duration-200 border px-3 py-1 rounded-md ${
-                                copied 
-                                ? 'bg-theme-success/10 text-theme-success border-theme-success/30 shadow-sm' 
-                                : 'bg-bg-card text-theme-primary border-theme-subtle hover:border-theme-primary hover:bg-theme-primary/5 hover:shadow-sm'
-                            }`}
-                        >
-                            {copied ? "✓ Copied!" : truncatedUserId}
-                        </button>
-                    </div>
-                </div>
-            </header>
+                </header>
+            }
+        >
 
-            {/* Main content area that is scrollable */}
-            <div className="flex-grow overflow-y-auto p-4 sm:p-6">
-                <div className="mx-auto max-w-4xl">
-                    {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
+            {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
 
                     {/* Integrity Warning Banner */}
                     {integrityReport && integrityReport.type !== 'Valid' && (
@@ -578,15 +578,12 @@ export function Dashboard(props: DashboardProps) {
                             </section>
                         )
                     )}
-                </div>
-            </div>
-
             {showIntegrityModal && integrityReport && (
                 <IntegrityReportModal 
                     report={integrityReport} 
                     onClose={() => setShowIntegrityModal(false)} 
                 />
             )}
-        </div>
+        </PageLayout>
     );
 }

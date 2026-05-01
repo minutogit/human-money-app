@@ -8,6 +8,7 @@ import { AppSettings, PrivacyDefault } from '../types';
 import { useSession } from '../context/SessionContext';
 
 import { ProfileSettings } from './ProfileSettings';
+import { PageLayout } from './ui/PageLayout';
 
 interface SettingsViewProps {
     onBack: () => void;
@@ -70,38 +71,30 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     }
 
     return (
-        <div className="max-w-3xl mx-auto pb-12">
-            <header className="flex-shrink-0 mb-8">
-                <div className="flex items-center gap-4 mb-4">
-                    <button
-                        onClick={onBack}
-                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
-                        title="Back to Dashboard"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                        </svg>
-                    </button>
-                    <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-theme-primary to-theme-secondary">Settings</h1>
-                </div>
-                
-                <div className="flex border-b border-theme-subtle gap-8">
-                    <button 
-                        onClick={() => setActiveTab('profile')}
-                        className={`pb-2 text-sm font-medium transition-colors relative ${activeTab === 'profile' ? 'text-theme-primary' : 'text-theme-light hover:text-theme-main'}`}
-                    >
-                        User Profile
-                        {activeTab === 'profile' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-theme-primary animate-in fade-in zoom-in duration-300"></div>}
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('app')}
-                        className={`pb-2 text-sm font-medium transition-colors relative ${activeTab === 'app' ? 'text-theme-primary' : 'text-theme-light hover:text-theme-main'}`}
-                    >
-                        App Settings
-                        {activeTab === 'app' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-theme-primary animate-in fade-in zoom-in duration-300"></div>}
-                    </button>
-                </div>
-            </header>
+        <PageLayout 
+            title={
+                <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-theme-primary to-theme-secondary">
+                    Settings
+                </h1>
+            }
+            onBack={onBack}
+        >
+            <div className="flex border-b border-theme-subtle gap-8 mb-6">
+                <button 
+                    onClick={() => setActiveTab('profile')}
+                    className={`pb-2 text-sm font-medium transition-colors relative ${activeTab === 'profile' ? 'text-theme-primary' : 'text-theme-light hover:text-theme-main'}`}
+                >
+                    User Profile
+                    {activeTab === 'profile' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-theme-primary animate-in fade-in zoom-in duration-300"></div>}
+                </button>
+                <button 
+                    onClick={() => setActiveTab('app')}
+                    className={`pb-2 text-sm font-medium transition-colors relative ${activeTab === 'app' ? 'text-theme-primary' : 'text-theme-light hover:text-theme-main'}`}
+                >
+                    App Settings
+                    {activeTab === 'app' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-theme-primary animate-in fade-in zoom-in duration-300"></div>}
+                </button>
+            </div>
 
             {activeTab === 'profile' ? (
                 <ProfileSettings />
@@ -222,6 +215,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     </div>
                 </form>
             )}
-        </div>
+        </PageLayout>
     );
 }

@@ -147,6 +147,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Automated Test Infrastructure (Vitest + Rust Integration Tests)
 - [x] Unified Test Script (`run-tests.sh`) and CI Preparation
 - [x] BFF Currency Separation & API Synchronization (Mandatory display names, test voucher filtering, and interface alignment)
+- [x] UI Layout Standardization (Centralized PageLayout, unified header design, and consistent full-width layout across all views)
 
 ## Next Milestones
 

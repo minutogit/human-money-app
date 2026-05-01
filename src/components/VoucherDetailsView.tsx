@@ -11,6 +11,7 @@ import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import ContactDialog from "./ContactDialog";
 import { ContactBadge } from "./ui/ContactBadge";
+import { PageLayout } from "./ui/PageLayout";
 
 // Props for the component
 interface VoucherDetailsViewProps {
@@ -270,49 +271,39 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
         : null;
 
     return (
-        <div className="flex flex-col h-full">
-            <header className="flex-shrink-0 mb-6">
-                <div className="flex items-center gap-4 mb-2">
-                    <button
-                        onClick={onBack}
-                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
-                        title="Back"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                        </svg>
-                    </button>
-                    <h1 className="text-2xl font-bold text-theme-primary">Voucher Details</h1>
-                    <div className="flex-grow"></div>
-                    <div className="flex items-center gap-4">
-                        {statusInfo.name === 'Incomplete' && (
-                            <Button 
-                                variant="primary" 
-                                size="sm" 
-                                onClick={() => setShowExportModal(true)}
-                                className="bg-theme-accent text-white shadow-md animate-pulse-subtle"
-                            >
-                                ✍️ Request Signature
-                            </Button>
-                        )}
-                        {isQuarantined && onViewConflict && (
-                            <Button 
-                                variant="primary" 
-                                size="sm" 
-                                disabled={!proofId || isFetchingProofId}
-                                onClick={() => proofId && onViewConflict(proofId)}
-                                className="bg-red-600 hover:bg-red-700 text-white shadow-md"
-                            >
-                                {isFetchingProofId ? "Loading..." : "🚫 View Double-Spend Proof"}
-                            </Button>
-                        )}
-                        <Button onClick={() => setShowJson(!showJson)} variant="secondary" size="sm">
-                            {showJson ? "Show Formatted View" : "Show Raw JSON"}
+        <PageLayout 
+            title="Voucher Details" 
+            description="View voucher information and signatures." 
+            onBack={onBack}
+            actions={
+                <div className="flex items-center gap-4">
+                    {statusInfo.name === 'Incomplete' && (
+                        <Button 
+                            variant="primary" 
+                            size="sm" 
+                            onClick={() => setShowExportModal(true)}
+                            className="bg-theme-accent text-white shadow-md animate-pulse-subtle"
+                        >
+                            ✍️ Request Signature
                         </Button>
-                    </div>
+                    )}
+                    {isQuarantined && onViewConflict && (
+                        <Button 
+                            variant="primary" 
+                            size="sm" 
+                            disabled={!proofId || isFetchingProofId}
+                            onClick={() => proofId && onViewConflict(proofId)}
+                            className="bg-red-600 hover:bg-red-700 text-white shadow-md"
+                        >
+                            {isFetchingProofId ? "Loading..." : "🚫 View Double-Spend Proof"}
+                        </Button>
+                    )}
+                    <Button onClick={() => setShowJson(!showJson)} variant="secondary" size="sm">
+                        {showJson ? "Show Formatted View" : "Show Raw JSON"}
+                    </Button>
                 </div>
-                <p className="text-theme-light ml-14">View voucher information and signatures.</p>
-            </header>
+            }
+        >
 
             {details?.is_test_voucher && (
                 <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">
@@ -773,7 +764,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                 onCancel={() => setShowRemoveSignatureModal(null)}
                 isProcessing={isRemovingSignature}
             />
-        </div>
+        </PageLayout>
     );
 
     async function handleRemoveSignature() {

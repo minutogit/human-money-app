@@ -9,6 +9,7 @@ import { VoucherSummary, VoucherStatus, AppSettings, PublicProfile, VoucherStand
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import { useSession } from "../context/SessionContext";
+import { PageLayout } from "./ui/PageLayout";
 
 interface WalletViewProps {
     onShowDetails: (voucherId: string) => void;
@@ -278,34 +279,23 @@ export function WalletView(props: WalletViewProps) {
     };
 
     return (
-        <div className="flex flex-col h-full">
-            {/* Header with back button */}
-            <header className="flex-shrink-0 mb-6">
-                <div className="flex items-center gap-4 mb-2">
-                    <button
-                        onClick={props.onBack}
-                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
-                        title="Back"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                        </svg>
-                    </button>
-                    <h1 className="text-2xl font-bold text-theme-primary">Wallet</h1>
-                    <div className="flex-grow"></div>
-                    <Button
-                        onClick={props.onNavigateToCreateVoucher}
-                        variant="primary"
-                        className="flex items-center gap-2"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                        </svg>
-                        Create
-                    </Button>
-                </div>
-                <p className="text-theme-light ml-14">Manage your vouchers.</p>
-            </header>
+        <PageLayout 
+            title="Wallet" 
+            description="Manage your vouchers." 
+            onBack={props.onBack}
+            actions={
+                <Button
+                    onClick={props.onNavigateToCreateVoucher}
+                    variant="primary"
+                    className="flex items-center gap-2"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    Create
+                </Button>
+            }
+        >
 
             {/* Filter Section */}
             <section className="mb-6">
@@ -686,6 +676,6 @@ export function WalletView(props: WalletViewProps) {
                 }}
                 isProcessing={isExporting}
             />
-        </div>
+        </PageLayout>
     );
 }

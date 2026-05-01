@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { PageLayout } from './ui/PageLayout';
 import { invoke } from '@tauri-apps/api/core';
 import { Contact } from '../types';
 import Avatar from 'boring-avatars';
@@ -87,37 +88,25 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     };
 
     return (
-        <div className="flex flex-col h-full bg-bg-app text-theme-secondary">
-            {/* Header with Back Button */}
-            <div className="flex items-center gap-4 mb-8">
+        <PageLayout 
+            title="Address Book" 
+            description="Manage your trusted contacts and local DIDs." 
+            onBack={onBack}
+            actions={
                 <button
-                    onClick={onBack}
-                    className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
-                    title="Back to Dashboard"
+                    onClick={() => {
+                        setEditingContact(null);
+                        setIsDialogOpen(true);
+                    }}
+                    className="bg-theme-primary hover:bg-theme-accent text-white px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-theme-primary/20 active:scale-95 flex items-center gap-2"
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                     </svg>
+                    Add Contact
                 </button>
-                <div>
-                    <h1 className="text-3xl font-extrabold text-theme-secondary tracking-tight">Address Book</h1>
-                    <p className="text-theme-light mt-0.5">Manage your trusted contacts and local DIDs.</p>
-                </div>
-                <div className="ml-auto">
-                    <button
-                        onClick={() => {
-                            setEditingContact(null);
-                            setIsDialogOpen(true);
-                        }}
-                        className="bg-theme-primary hover:bg-theme-accent text-white px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-theme-primary/20 active:scale-95 flex items-center gap-2"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                        </svg>
-                        Add Contact
-                    </button>
-                </div>
-            </div>
+            }
+        >
 
             {/* Search and Filters */}
             <div className="flex flex-col md:flex-row gap-4 mb-8">
@@ -261,7 +250,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                 onConfirm={handleDeleteContact}
                 onCancel={() => setDeleteRequest(null)}
             />
-        </div>
+        </PageLayout>
     );
 };
 

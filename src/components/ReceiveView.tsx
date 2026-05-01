@@ -9,6 +9,7 @@ import { ConfirmationModal } from './ui/ConfirmationModal';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
 import { AppSettings, VoucherStandardInfo, ReceiveSuccessPayload, VoucherDetails } from '../types';
+import { PageLayout } from './ui/PageLayout';
 
 interface ReceiveViewProps {
     onBack: () => void;
@@ -453,25 +454,13 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     }
 
     return (
-        <div className="flex flex-col h-full max-w-4xl mx-auto">
-            <header className="flex-shrink-0 mb-6">
-                <div className="flex items-center gap-4 mb-2">
-                    <button
-                        onClick={onBack}
-                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
-                        title="Cancel"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                        </svg>
-                    </button>
-                    <h1 className="text-2xl font-bold text-theme-primary">Receive & Process</h1>
-                </div>
-                <p className="text-theme-light ml-14">Process transfers, signature requests, or responses you have received.</p>
-            </header>
+        <PageLayout 
+            title="Receive & Process" 
+            description="Process transfers, signature requests, or responses you have received." 
+            onBack={onBack}
+        >
+            <form onSubmit={handleProcessClick} className="space-y-6">
 
-            <div className="flex-grow">
-                <form onSubmit={handleProcessClick} className="space-y-6">
                     {feedbackMsg && (
                         <div className={`p-4 rounded-md text-center text-sm ${
                             feedbackMsg.includes('Privacy Guard Integrity') || feedbackMsg.includes('Tampered') || feedbackMsg.includes('Security')
@@ -515,7 +504,6 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                      )}
 
                 </form>
-            </div>
 
             <ConfirmationModal
                 isOpen={showConfirm}
@@ -634,6 +622,6 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     }}
                 />
             )}
-        </div>
+        </PageLayout>
     );
 }

@@ -8,6 +8,7 @@ import { NewVoucherData, VoucherStandardInfo, PublicProfile } from "../types";
 import { useSession } from "../context/SessionContext";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { normalizeCoordinates } from "../utils/geoUtils";
+import { PageLayout } from "./ui/PageLayout";
 
 interface CreateVoucherProps {
     onVoucherCreated: () => void;
@@ -245,19 +246,10 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const inputClass = "block w-full rounded-md border-theme-subtle bg-bg-app px-3 py-2 text-theme-secondary shadow-sm focus:border-theme-accent focus:ring focus:ring-theme-accent focus:ring-opacity-50";
 
     return (
-        <div className="mx-auto max-w-4xl">
-            <header className="flex items-center gap-4 mb-4">
-                <button
-                    onClick={onCancel}
-                    className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
-                    title="Cancel"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                    </svg>
-                </button>
-                <h1 className="text-2xl font-bold text-theme-primary">Create New Voucher</h1>
-            </header>
+        <PageLayout 
+            title="Create New Voucher" 
+            onBack={onCancel}
+        >
             <div className="rounded-lg border border-theme-subtle bg-bg-card-alternate p-6 shadow-lg">
                 <form onSubmit={handleCreateClick}>
                     <Fieldset legend="Basic Information">
@@ -477,6 +469,6 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                 }}
                 confirmVariant="danger"
             />
-        </div>
+        </PageLayout>
     );
 }

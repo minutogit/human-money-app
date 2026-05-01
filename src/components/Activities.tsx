@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/log';
 import { WalletEvent } from '../types';
+import { PageLayout } from './ui/PageLayout';
 
 interface ActivitiesProps {
     onBack: () => void;
@@ -75,71 +76,57 @@ export function Activities({ onBack, onNavigateToVoucherDetail, onNavigateToHist
     }, []);
 
     return (
-        <div className="flex flex-col h-full max-w-4xl mx-auto">
-            <header className="flex-shrink-0 mb-6">
-                <div className="flex items-center gap-4 mb-2">
-                    <button
-                        onClick={onBack}
-                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
-                        title="Back to Dashboard"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                        </svg>
-                    </button>
-                    <h1 className="text-2xl font-bold text-theme-primary">Activity Log</h1>
-                </div>
-                <p className="text-theme-light ml-14">A chronological record of all wallet events.</p>
-            </header>
+        <PageLayout 
+            title="Activity Log" 
+            description="A chronological record of all wallet events." 
+            onBack={onBack}
+        >
+            {isLoading && <p className="text-center text-theme-light py-8">Loading activities...</p>}
+            {error && <p className="text-center text-red-500 py-8">{error}</p>}
 
-            <div className="flex-grow overflow-y-auto">
-                {isLoading && <p className="text-center text-theme-light py-8">Loading activities...</p>}
-                {error && <p className="text-center text-red-500 py-8">{error}</p>}
-
-                {!isLoading && !error && (
-                    <div className="space-y-3">
-                        {events.length > 0 ? events.map(event => {
-                            const { label, icon, color } = getEventDetails(event);
-                            return (
-                                <button 
-                                    key={event.event_id} 
-                                    onClick={() => {
-                                        const type = event.event_type;
-                                        if (type === 'TransferSent' || type === 'TransferReceived') {
-                                            onNavigateToHistory();
-                                        } else {
-                                            onNavigateToVoucherDetail(event.local_instance_id);
-                                        }
-                                    }}
-                                    className="w-full text-left bg-bg-card border border-theme-subtle rounded-lg p-4 flex items-center justify-between hover:border-theme-primary hover:shadow-sm transition-all group"
-                                >
-                                    <div className="flex items-center gap-4">
-                                        <div className={`flex items-center justify-center h-10 w-10 rounded-full font-bold text-lg ${color}`}>
-                                            {icon}
-                                        </div>
-                                        <div>
-                                            <p className="font-semibold text-theme-primary">{label}</p>
-                                            <p className="text-xs text-theme-light mt-0.5">
-                                                ID: {event.local_instance_id.substring(0, 8)}...
-                                                {event.bff_data.display_currency && ` · ${event.bff_data.amount} ${event.bff_data.display_currency}`}
-                                            </p>
-                                        </div>
+            {!isLoading && !error && (
+                <div className="space-y-3">
+                    {events.length > 0 ? events.map(event => {
+                        const { label, icon, color } = getEventDetails(event);
+                        return (
+                            <button 
+                                key={event.event_id} 
+                                onClick={() => {
+                                    const type = event.event_type;
+                                    if (type === 'TransferSent' || type === 'TransferReceived') {
+                                        onNavigateToHistory();
+                                    } else {
+                                        onNavigateToVoucherDetail(event.local_instance_id);
+                                    }
+                                }}
+                                className="w-full text-left bg-bg-card border border-theme-subtle rounded-lg p-4 flex items-center justify-between hover:border-theme-primary hover:shadow-sm transition-all group"
+                            >
+                                <div className="flex items-center gap-4">
+                                    <div className={`flex items-center justify-center h-10 w-10 rounded-full font-bold text-lg ${color}`}>
+                                        {icon}
                                     </div>
-                                    <div className="text-right">
-                                        <p className="text-sm text-theme-secondary">
-                                            {formatTimestamp(event.timestamp)}
+                                    <div>
+                                        <p className="font-semibold text-theme-primary">{label}</p>
+                                        <p className="text-xs text-theme-light mt-0.5">
+                                            ID: {event.local_instance_id.substring(0, 8)}...
+                                            {event.bff_data.display_currency && ` · ${event.bff_data.amount} ${event.bff_data.display_currency}`}
                                         </p>
                                     </div>
-                                </button>
-                            );
-                        }) : (
-                            <div className="text-center text-theme-light py-12 bg-bg-card border border-dashed border-theme-subtle rounded-lg">
-                                <p>No activities recorded yet.</p>
-                            </div>
-                        )}
-                    </div>
-                )}
-            </div>
-        </div>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-sm text-theme-secondary">
+                                        {formatTimestamp(event.timestamp)}
+                                    </p>
+                                </div>
+                            </button>
+                        );
+                    }) : (
+                        <div className="text-center text-theme-light py-12 bg-bg-card border border-dashed border-theme-subtle rounded-lg">
+                            <p>No activities recorded yet.</p>
+                        </div>
+                    )}
+                </div>
+            )}
+        </PageLayout>
     );
 }
