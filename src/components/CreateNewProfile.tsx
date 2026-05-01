@@ -1,17 +1,29 @@
 // src/components/CreateNewProfile.tsx
-import { useState, useEffect, useRef, ChangeEvent, FormEvent } from "react";
+import { useState, useEffect, useRef, FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { info, error } from "@tauri-apps/plugin-log";
 import { logger } from "../utils/log";
 import { MnemonicLanguage } from "../types";
-
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
+import { Card } from "./ui/Card";
+import { 
+    ShieldCheck, 
+    Lock, 
+    Fingerprint, 
+    Languages, 
+    BookOpen, 
+    AlertTriangle, 
+    CheckCircle2, 
+    ArrowRight, 
+    ArrowLeft,
+    RefreshCw,
+    ShieldAlert,
+    Info,
+    User
+} from "lucide-react";
 
-// Define the steps for the wizard
 type WizardStep = "display_seed" | "confirm_seed" | "set_password";
 
-// Define the structure for the confirmation words
 interface ConfirmationWord {
     index: number;
     value: string;
@@ -31,13 +43,11 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
 
-    // State for seed confirmation step
     const [confirmationWords, setConfirmationWords] = useState<ConfirmationWord[]>([]);
     const [userConfirmationInput, setUserConfirmationInput] = useState<{ [key: number]: string }>({});
     const [isBulkMode, setIsBulkMode] = useState(false);
     const [bulkSeedInput, setBulkSeedInput] = useState("");
 
-    // State for password step
     const [passphrase, setPassphrase] = useState<string>("");
     const [confirmPassphrase, setConfirmPassphrase] = useState<string>("");
     const [profileName, setProfileName] = useState("");
@@ -46,53 +56,29 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
     const [confirmPassword, setConfirmPassword] = useState("");
     const passwordInputRef = useRef<HTMLInputElement>(null);
 
-    // --- Effects ---
-
     useEffect(() => {
-        // Log when component is displayed
         logger.info("CreateNewProfile component displayed");
-
-        // Detect system language for smart default
         const systemLang = navigator.language || "en";
         let detectedLanguage: MnemonicLanguage = "english";
-        if (systemLang.startsWith("de")) {
-            detectedLanguage = "german";
-        } else if (systemLang.startsWith("es")) {
-            detectedLanguage = "spanish";
-        } else if (systemLang.startsWith("fr")) {
-            detectedLanguage = "french";
-        } else if (systemLang.startsWith("it")) {
-            detectedLanguage = "italian";
-        } else if (systemLang.startsWith("ja")) {
-            detectedLanguage = "japanese";
-        } else if (systemLang.startsWith("ko")) {
-            detectedLanguage = "korean";
-        } else if (systemLang.startsWith("pt")) {
-            detectedLanguage = "portuguese";
-        } else if (systemLang.startsWith("cs")) {
-            detectedLanguage = "czech";
-        } else if (systemLang.startsWith("zh-CN")) {
-            detectedLanguage = "chineseSimplified";
-        } else if (systemLang.startsWith("zh-TW")) {
-            detectedLanguage = "chineseTraditional";
+        const langMap: Record<string, MnemonicLanguage> = {
+            "de": "german", "es": "spanish", "fr": "french", "it": "italian",
+            "ja": "japanese", "ko": "korean", "pt": "portuguese", "cs": "czech",
+            "zh-CN": "chineseSimplified", "zh-TW": "chineseTraditional"
+        };
+        for (const [key, val] of Object.entries(langMap)) {
+            if (systemLang.startsWith(key)) { detectedLanguage = val; break; }
         }
         setSelectedLanguage(detectedLanguage);
     }, []);
 
     useEffect(() => {
-        // Generate a new seed phrase when the component mounts or word count or language changes.
         async function generateNewSeed() {
             setIsLoading(true);
-            setFeedbackMsg("Generating new secure seed phrase...");
             try {
                 const newSeed: string = await invoke("generate_mnemonic", { wordCount, language: selectedLanguage });
                 setGeneratedSeed(newSeed.split(' '));
-                setFeedbackMsg("");
-                info("Frontend: A new seed phrase was generated.");
             } catch (e) {
-                const errorMsg = `Failed to generate seed phrase: ${e}`;
-                setFeedbackMsg(`Error: ${errorMsg}`);
-                error(errorMsg);
+                setFeedbackMsg(`Error: ${e}`);
             } finally {
                 setIsLoading(false);
             }
@@ -100,119 +86,55 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
         generateNewSeed();
     }, [wordCount, selectedLanguage]);
 
-    // Auto-clean bulk seed input (same logic as RecreateProfile)
     useEffect(() => {
         if (!isBulkMode) return;
-
-        const cleanSeedText = (text: string) => {
-            return text
-                .toLowerCase()
-                .replace(/[0-9.,\-:]/g, ' ') // Remove digits and punctuation
-                .replace(/[\r\n\t]/g, ' ')      // Replace tabs and newlines with space
-                .replace(/\s+/g, ' ')          // Collapse multiple spaces
-                .trim();
-        };
-
+        const cleanSeedText = (text: string) => text.toLowerCase().replace(/[0-9.,\-:]/g, ' ').replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim();
         const cleaned = cleanSeedText(bulkSeedInput);
-        if (cleaned !== bulkSeedInput && bulkSeedInput.length > 0) {
-            // Auto-apply cleaning if there are numbers or multiple spaces
-            if (/[0-9.,\-:]/.test(bulkSeedInput) || /\s\s/.test(bulkSeedInput)) {
-                setBulkSeedInput(cleaned);
-            }
-        }
+        if ((/[0-9.,\-:]/.test(bulkSeedInput) || /\s\s/.test(bulkSeedInput)) && cleaned !== bulkSeedInput) setBulkSeedInput(cleaned);
     }, [bulkSeedInput, isBulkMode]);
 
-
-    // --- Helper Functions ---
-
-    // Prepares the confirmation step by selecting random words
     const prepareConfirmationStep = () => {
         const shuffled = [...generatedSeed].map((word, index) => ({ word, index }));
-        shuffled.sort(() => 0.5 - Math.random()); // Shuffle indices
+        shuffled.sort(() => 0.5 - Math.random());
         const selected = shuffled.slice(0, 3).map(item => ({ index: item.index, value: "" }));
-        selected.sort((a, b) => a.index - b.index); // Sort by index for user-friendly display
+        selected.sort((a, b) => a.index - b.index);
         setConfirmationWords(selected);
-        setUserConfirmationInput({}); // Reset input
+        setUserConfirmationInput({});
         setBulkSeedInput("");
         setIsBulkMode(false);
         setFeedbackMsg("");
         setWizardStep("confirm_seed");
     };
 
-    const cleanSeedText = (text: string) => {
-        return text
-            .toLowerCase()
-            .replace(/[0-9.,\-:]/g, ' ') // Remove digits and punctuation
-            .replace(/[\r\n\t]/g, ' ')      // Replace tabs and newlines with space
-            .replace(/\s+/g, ' ')          // Collapse multiple spaces
-            .trim();
-    };
-
-    // --- Event Handlers ---
-
-    async function handleWordCountChange(event: ChangeEvent<HTMLSelectElement>) {
-        const newWordCount = parseInt(event.target.value, 10) as 12 | 24;
-        setWordCount(newWordCount);
-    }
-
-    async function handleLanguageChange(event: ChangeEvent<HTMLSelectElement>) {
-        const newLanguage = event.target.value as MnemonicLanguage;
-        setSelectedLanguage(newLanguage);
-    }
-
-    const handleConfirmationInputChange = (index: number, value: string) => {
-        setUserConfirmationInput(prev => ({ ...prev, [index]: value.trim().toLowerCase() }));
-    };
+    const cleanSeedText = (text: string) => text.toLowerCase().replace(/[0-9.,\-:]/g, ' ').replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim();
 
     const handleConfirmSeedSubmit = (e: FormEvent) => {
         e.preventDefault();
-        
         if (isBulkMode) {
-            const cleanedInput = cleanSeedText(bulkSeedInput);
-            const targetSeed = generatedSeed.join(' ');
-            if (cleanedInput !== targetSeed) {
-                setFeedbackMsg("Error: The phrase does not match your generated seed. Please check for typos or missing words.");
+            if (cleanSeedText(bulkSeedInput) !== generatedSeed.join(' ')) {
+                setFeedbackMsg("Error: The phrase does not match");
                 return;
             }
         } else {
             for (const word of confirmationWords) {
                 if (userConfirmationInput[word.index] !== generatedSeed[word.index]) {
-                    setFeedbackMsg("Error: One or more words are incorrect. Please check your saved seed phrase.");
+                    setFeedbackMsg("Error: One or more words are incorrect");
                     return;
                 }
             }
         }
-
-        setFeedbackMsg("Seed phrase confirmed successfully!");
-        setTimeout(() => {
-            setFeedbackMsg("");
-            setWizardStep("set_password");
-        }, 1500);
+        setFeedbackMsg("Seed phrase confirmed!");
+        setTimeout(() => { setFeedbackMsg(""); setWizardStep("set_password"); }, 1000);
     };
 
     async function handleCreateProfileSubmit(e: FormEvent) {
         e.preventDefault();
-        if (password !== confirmPassword) {
-            setFeedbackMsg("Error: The passwords do not match.");
-            passwordInputRef.current?.focus();
-            return;
-        }
-        if (password.length < 8) {
-            setFeedbackMsg("Error: Password must be at least 8 characters long.");
-            passwordInputRef.current?.focus();
-            return;
-        }
-        if (passphrase !== confirmPassphrase) {
-            setFeedbackMsg("Error: The passphrases do not match.");
-            passwordInputRef.current?.focus();
-            return;
-        }
+        if (password !== confirmPassword) { setFeedbackMsg("Error: The passwords do not match"); return; }
+        if (password.length < 8) { setFeedbackMsg("Error: Password must be at least 8 characters"); return; }
+        if (passphrase !== confirmPassphrase) { setFeedbackMsg("Error: The passphrases do not match"); return; }
 
         setIsLoading(true);
-        setFeedbackMsg(""); // Clear any previous errors
-        
-        // Use a small delay to ensure React has finished the render cycle
-        // and the browser has had a chance to paint the loading state
+        setFeedbackMsg("Creating profile, please wait...");
         setTimeout(async () => {
             try {
                 const localInstanceId = await invoke<string>("get_local_instance_id");
@@ -225,56 +147,48 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                     localInstanceId,
                     language: selectedLanguage,
                 });
-                // Keep loading state true during transition, like Login
                 onProfileCreated();
             } catch (e) {
-                setFeedbackMsg(`Error creating profile: ${e}`);
-                error(`Frontend: Profile creation failed: ${e}`);
+                setFeedbackMsg(`Error: ${e}`);
             } finally {
                 setIsLoading(false);
             }
         }, 150);
     }
 
-
-    // --- Render Logic ---
-
-    const feedbackClass = "text-theme-error";
-
     const renderContent = () => {
         switch (wizardStep) {
-            // STEP 1: Display Seed Phrase
             case "display_seed":
                 return (
-                    <>
-                        <div className="text-center">
-                            <h2 className="text-2xl font-bold text-theme-primary">Step 1: Your Secret Seed Phrase</h2>
-                            <p className="text-theme-light mt-1">Write these words down in order and store them in a secure, offline location. This is the only way to recover your wallet.</p>
-                            <p className="text-theme-light mt-2 text-sm">
-                                Already have a seed phrase?
-                                <button type="button" onClick={onSwitchToRecreate} className="ml-1 text-theme-primary hover:underline font-semibold">
-                                    Recreate profile here
-                                </button>
-                            </p>
+                    <div className="space-y-8 animate-in fade-in duration-500">
+                        <div className="text-center space-y-2">
+                            <h2 className="text-2xl font-black text-theme-primary tracking-tight">Step 1: Your Secret Seed Phrase</h2>
+                            <p className="text-sm font-medium text-theme-light">This unique word sequence is your physical backup. Store it offline.</p>
                         </div>
-                        <div className="my-4 p-4 border border-theme-error rounded-lg bg-red-500/10">
-                            <p className="font-bold text-center text-theme-error">WARNING: Never share this phrase with anyone. Anyone with this phrase can take your funds.</p>
+
+                        <div className="p-6 bg-rose-50 border-2 border-rose-100 rounded-[32px] flex items-start gap-4 shadow-sm">
+                            <ShieldAlert className="text-rose-500 shrink-0 mt-1" size={24} />
+                            <div>
+                                <h3 className="text-sm font-black text-rose-900 uppercase tracking-widest mb-1">Warning</h3>
+                                <p className="text-xs text-rose-800 font-medium leading-relaxed">
+                                    Warning: Never share this phrase with anyone. Digital copies are highly discouraged.
+                                </p>
+                            </div>
                         </div>
-                        <div className="grid grid-cols-3 gap-x-6 gap-y-3 my-6">
+
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                             {generatedSeed.map((word, index) => (
-                                <div key={index} className="text-theme-secondary font-mono" data-testid={`word-display-${index}`}>
-                                    <span className="text-sm text-theme-light mr-2">{index + 1}.</span>{word}
+                                <div key={index} data-testid={`word-display-${index}`} className="flex items-center gap-3 p-3 bg-theme-primary/5 border border-theme-primary/10 rounded-2xl shadow-inner-soft group hover:bg-white transition-all hover:shadow-md hover:scale-[1.02] duration-300">
+                                    <span className="text-[10px] font-black text-theme-primary/40 w-5">{index + 1}</span>
+                                    <span className="text-sm font-mono font-bold text-theme-secondary tracking-tight">{word}</span>
                                 </div>
                             ))}
                         </div>
-                        <div className="flex flex-col gap-3 mt-4">
-                            <div className="flex justify-between items-center">
-                                <label className="text-sm font-semibold text-theme-secondary">Mnemonic Language</label>
-                                <select 
-                                    value={selectedLanguage} 
-                                    onChange={handleLanguageChange} 
-                                    className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary"
-                                >
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Languages size={10}/> Dictionary</label>
+                                <select value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value as MnemonicLanguage)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-2.5 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
                                     <option value="english">English</option>
                                     <option value="german">Deutsch</option>
                                     <option value="spanish">Español</option>
@@ -288,206 +202,185 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                                     <option value="chineseTraditional">繁體中文</option>
                                 </select>
                             </div>
-                            <div className="flex justify-between items-center">
-                                <div className="flex gap-2">
-                                    <select value={wordCount} onChange={handleWordCountChange} className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary">
-                                        <option value={12}>12 Words</option>
-                                        <option value={24}>24 Words</option>
-                                    </select>
-                                    {onSwitchToLogin && (
-                                        <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="!px-3 !py-1 text-xs">
-                                            Back to Login
-                                        </Button>
-                                    )}
-                                </div>
-                                <Button type="button" onClick={prepareConfirmationStep} disabled={isLoading || generatedSeed.length === 0}>
-                                    I've Saved My Seed Phrase
-                                </Button>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><BookOpen size={10}/> Word Count</label>
+                                <select value={wordCount} onChange={(e) => setWordCount(parseInt(e.target.value, 10) as 12 | 24)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-2.5 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
+                                    <option value={12}>12 Words (Standard Security)</option>
+                                    <option value={24}>24 Words (High Security)</option>
+                                </select>
                             </div>
                         </div>
-                    </>
+
+                        <div className="flex flex-col items-center gap-4 pt-4">
+                            <Button size="lg" onClick={prepareConfirmationStep} disabled={isLoading || generatedSeed.length === 0} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
+                                {isLoading ? <RefreshCw className="animate-spin" size={24} /> : <CheckCircle2 size={24} />}
+                                I've Saved My Seed Phrase
+                            </Button>
+                            <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="w-full py-3 rounded-2xl shadow-sm text-sm gap-2">
+                                <ArrowLeft size={18} /> Back to Login
+                            </Button>
+                            <button onClick={onSwitchToRecreate} className="text-[10px] font-black uppercase tracking-widest text-theme-light hover:text-theme-primary transition-colors flex items-center gap-2">
+                                <RefreshCw size={12} /> Recreate profile here
+                            </button>
+                        </div>
+                    </div>
                 );
 
-            // STEP 2: Confirm Seed Phrase
             case "confirm_seed":
                 return (
-                    <form onSubmit={handleConfirmSeedSubmit}>
-                        <div className="text-center">
-                            <h2 className="text-2xl font-bold text-theme-primary">Step 2: Confirm Your Seed Phrase</h2>
-                            <p className="text-theme-light mt-1">
-                                {isBulkMode 
-                                    ? "Paste your entire seed phrase below. Numbers and punctuation will be cleaned automatically." 
-                                    : "To ensure you saved it correctly, please enter the following words from your seed phrase."}
-                            </p>
-                            <button 
-                                type="button" 
-                                onClick={() => {
-                                    setIsBulkMode(!isBulkMode);
-                                    setFeedbackMsg("");
-                                }} 
-                                className="mt-2 text-xs text-theme-primary hover:underline font-semibold"
-                            >
-                                {isBulkMode ? "Switch to Individual Words (Standard)" : "Switch to Bulk Paste (Pro Mode)"}
+                    <form onSubmit={handleConfirmSeedSubmit} className="space-y-8 animate-in slide-in-from-right-8 duration-500">
+                        <div className="text-center space-y-2">
+                            <h2 className="text-2xl font-black text-theme-primary tracking-tight">Step 2: Confirm Your Seed Phrase</h2>
+                            <p className="text-sm font-medium text-theme-light">Confirm the key sequence to ensure backup integrity.</p>
+                        </div>
+
+                        <div className="flex justify-center">
+                            <button type="button" onClick={() => { setIsBulkMode(!isBulkMode); setFeedbackMsg(""); }} className="px-4 py-1.5 bg-theme-primary/5 border border-theme-primary/10 rounded-full text-[10px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-2">
+                                <Languages size={12} /> {isBulkMode ? "Interactive Mode" : "Switch to Bulk Paste"}
                             </button>
                         </div>
 
                         {isBulkMode ? (
-                            <div className="my-8">
-                                <label htmlFor="bulk-seed-input" className="block text-sm font-semibold text-theme-secondary mb-1">Paste Full Seed Phrase</label>
+                            <div className="space-y-3">
+                                <label htmlFor="bulk-seed-input" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Paste Full Seed Phrase</label>
                                 <textarea
                                     id="bulk-seed-input"
                                     value={bulkSeedInput}
                                     onChange={(e) => setBulkSeedInput(cleanSeedText(e.target.value))}
-                                    className="w-full h-32 px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary font-mono text-sm focus:outline-none focus:ring-2 focus:ring-theme-primary"
-                                    placeholder="Paste here... e.g. 1. apple 2. banana..."
+                                    className="w-full h-32 px-4 py-3 bg-white border border-theme-subtle rounded-2xl text-theme-primary font-mono text-sm focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all"
+                                    placeholder="Paste here"
                                     required
                                 />
-                                <p className="text-[10px] text-theme-light mt-1">Automatic cleaning will handle numbers, dots, newlines and extra spaces.</p>
+                                <p className="text-[9px] font-bold text-theme-light italic flex items-center gap-1.5"><Info size={10}/> Formatting is automatically standardized.</p>
                             </div>
                         ) : (
-                            <div className="space-y-4 my-8">
+                            <div className="space-y-5">
                                 {confirmationWords.map(({ index }) => (
-                                    <div key={index}>
-                                        <label htmlFor={`word-${index}`} className="block text-sm font-semibold text-theme-secondary mb-1">Word #{index + 1}</label>
+                                    <div key={index} className="space-y-2">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Verify Word #{index + 1}</label>
                                         <Input
-                                            id={`word-${index}`}
-                                            data-testid={`word-input-${index}`}
                                             type="text"
                                             value={userConfirmationInput[index] || ""}
                                             onChange={(e) => handleConfirmationInputChange(index, e.target.value)}
                                             required
-                                            className="font-mono"
+                                            className="font-mono font-bold py-4 text-center text-lg"
                                             autoComplete="off"
+                                            data-testid={`word-input-${index}`}
                                         />
                                     </div>
                                 ))}
                             </div>
                         )}
                         
-                        <div className="flex justify-between items-center">
-                            <Button type="button" variant="secondary" onClick={() => setWizardStep("display_seed")}>Back</Button>
-                            <Button type="submit">Confirm Seed</Button>
+                        <div className="flex gap-4 pt-4">
+                            <Button type="button" variant="secondary" onClick={() => setWizardStep("display_seed")} className="flex-1 rounded-2xl gap-2">
+                                <ArrowLeft size={18} /> Back
+                            </Button>
+                            <Button type="submit" className="flex-[2] rounded-3xl py-4 shadow-premium-lg gap-2">
+                                Confirm Seed <ArrowRight size={18} />
+                            </Button>
                         </div>
                     </form>
                 );
 
-            // STEP 3: Set Password
             case "set_password":
                 return (
-                    <form onSubmit={handleCreateProfileSubmit} className="space-y-5">
-                        <div className="text-center">
-                            <h2 className="text-2xl font-bold text-theme-primary">Step 3: Secure Your Wallet</h2>
-                            <p className="text-theme-light mt-1">Create a strong password to encrypt your wallet on this device.</p>
+                    <form onSubmit={handleCreateProfileSubmit} className="space-y-8 animate-in slide-in-from-right-8 duration-500 pb-10">
+                        <div className="text-center space-y-2">
+                            <h2 className="text-2xl font-black text-theme-primary tracking-tight">Step 3: Secure Your Wallet</h2>
+                            <p className="text-sm font-medium text-theme-light">Create your access credentials for this device.</p>
                         </div>
 
-                        <div>
-                            <label htmlFor="profileName" className="block text-sm font-semibold text-theme-secondary mb-1">Profile Name</label>
-                            <Input id="profileName" data-testid="profile-name-input" type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="e.g., 'My Main Wallet'" required />
-                        </div>
-                        <div>
-                            <label htmlFor="password" className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
-                            <Input 
-                                id="password"
-                                data-testid="password-input"
-                                type="password" 
-                                value={password} 
-                                onChange={(e) => setPassword(e.target.value)} 
-                                onFocus={() => {
-                                    if (feedbackMsg.includes("Error")) {
-                                        setFeedbackMsg("");
-                                    }
-                                    setPassword("");
-                                    setConfirmPassword("");
-                                }}
-                                placeholder="Minimum 8 characters" 
-                                required 
-                                ref={passwordInputRef}
-                            />
-                        </div>
-                        <div>
-                            <label htmlFor="confirmPassword" className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Password</label>
-                            <Input 
-                                id="confirmPassword"
-                                data-testid="confirm-password-input"
-                                type="password" 
-                                value={confirmPassword} 
-                                onChange={(e) => setConfirmPassword(e.target.value)} 
-                                onFocus={() => {
-                                    if (feedbackMsg.includes("Error")) {
-                                        setFeedbackMsg("");
-                                    }
-                                }}
-                                placeholder="Repeat your password" 
-                                required 
-                            />
+                        <div className="space-y-6">
+                            <Card header={<div className="flex items-center gap-2"><Lock size={14}/><span className="font-black text-[10px] uppercase tracking-widest">Profile Details</span></div>}>
+                                <div className="space-y-4">
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><User size={10}/> Profile Label</label>
+                                        <Input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="e.g. My Secure Vault" required />
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Access Password</label>
+                                            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required ref={passwordInputRef} />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Confirm Password</label>
+                                            <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="••••••••" required />
+                                        </div>
+                                    </div>
+                                </div>
+                            </Card>
+
+                            <Card header={<div className="flex items-center gap-2"><ShieldCheck size={14}/><span className="font-black text-[10px] uppercase tracking-widest">Optional Passphrase</span></div>}>
+                                <div className="space-y-4">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Recovery Passphrase</label>
+                                            <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Optional 13th/25th word" />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Confirm Passphrase</label>
+                                            <Input type="password" value={confirmPassphrase} onChange={(e) => setConfirmPassphrase(e.target.value)} placeholder="Verify passphrase" />
+                                        </div>
+                                    </div>
+                                    <p className="text-[9px] font-bold text-amber-600 bg-amber-50 p-3 rounded-xl border border-amber-100 flex items-start gap-2">
+                                        <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                                        Advanced: This passphrase creates a completely different wallet from the same mnemonic. If lost, the mnemonic alone CANNOT recover your assets.
+                                    </p>
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">DID Prefix</label>
+                                        <Input value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g. alice (leave blank for random)" />
+                                    </div>
+                                </div>
+                            </Card>
                         </div>
 
-                        <div className="border-t border-theme-light-border pt-5 space-y-5">
-                            <div>
-                                <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (Advanced)</label>
-                                <Input 
-                                    id="passphrase"
-                                    data-testid="passphrase-input"
-                                    type="password" 
-                                    value={passphrase} 
-                                    onChange={(e) => setPassphrase(e.target.value)} 
-                                    onFocus={() => {
-                                        if (feedbackMsg.includes("Error")) {
-                                            setFeedbackMsg("");
-                                        }
-                                    }}
-                                    placeholder="Adds extra security to your seed" 
-                                />
+                        <div className="flex flex-col items-center gap-4 pt-4">
+                            <div className="flex gap-4 w-full">
+                                <Button type="button" variant="secondary" onClick={() => setWizardStep("confirm_seed")} className="flex-1 py-4 rounded-2xl gap-2">
+                                    <ArrowLeft size={18} /> Back
+                                </Button>
+                                <Button type="submit" disabled={isLoading} className="flex-[2] py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
+                                    {isLoading ? <RefreshCw className="animate-spin" size={24} /> : <Fingerprint size={24} />}
+                                    {isLoading ? "Creating Profile..." : "Create Profile"}
+                                </Button>
                             </div>
-                            <div>
-                                <label htmlFor="confirmPassphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Optional Passphrase</label>
-                                <Input 
-                                    id="confirmPassphrase"
-                                    data-testid="confirm-passphrase-input"
-                                    type="password" 
-                                    value={confirmPassphrase} 
-                                    onChange={(e) => setConfirmPassphrase(e.target.value)} 
-                                    onFocus={() => {
-                                        if (feedbackMsg.includes("Error")) {
-                                            setFeedbackMsg("");
-                                        }
-                                    }}
-                                    placeholder="Repeat your passphrase" 
-                                />
-                                <p className="text-xs text-theme-light mt-1">Warning: If you forget this passphrase, your seed phrase alone will not be enough to recover your wallet.</p>
-                            </div>
-                            <div>
-                                <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary mb-1">Optional User Prefix</label>
-                                <Input id="userPrefix" data-testid="user-prefix-input" type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g., 'my_wallet' (can be left blank)" />
-                            </div>
-                        </div>
-
-                        <div className="flex flex-col items-center gap-4 pt-3">
-                            {isLoading && (
-                                <p className="text-center text-sm font-medium text-theme-secondary animate-pulse">
-                                    Creating profile, please wait... This may take a moment.
-                                </p>
-                            )}
-                            <Button type="submit" disabled={isLoading}>
-                                {isLoading ? "Creating Profile..." : "Create & Encrypt Profile"}
-                            </Button>
+                            <p className="text-[10px] font-bold text-theme-light flex items-center gap-2">
+                                <Lock size={12} /> Your data is securely encrypted on this device.
+                            </p>
                         </div>
                     </form>
                 );
         }
     };
 
+    const handleConfirmationInputChange = (index: number, value: string) => {
+        setUserConfirmationInput(prev => ({ ...prev, [index]: value.trim().toLowerCase() }));
+    };
+
     return (
-        <div className="w-full h-full flex flex-col items-center justify-center">
-            <div className="w-full max-w-xl min-w-[420px] bg-bg-card shadow-2xl rounded-2xl p-8 border border-theme-subtle">
-                <div className="text-center mb-6">
-                    <h1 className="text-4xl font-extrabold text-theme-primary">Human Money App</h1>
-                    <p className="text-lg text-theme-light mt-1">Create a New Profile</p>
+        <div className="w-full min-h-screen flex items-center justify-center py-20 px-4 animate-in fade-in duration-700">
+            <div className="w-full max-w-2xl bg-white/80 backdrop-blur-xl border border-theme-subtle rounded-[48px] p-12 shadow-premium-lg space-y-10 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-theme-primary/20 to-transparent"></div>
+                
+                <div className="text-center space-y-4">
+                    <div className="mx-auto w-20 h-20 bg-theme-primary text-white rounded-[32px] flex items-center justify-center shadow-premium-lg transform -rotate-6 group-hover:rotate-0 transition-transform duration-500">
+                        <ShieldCheck size={40} />
+                    </div>
+                    <div className="space-y-1">
+                        <h1 className="text-4xl font-black text-theme-primary tracking-tighter">HUMAN MONEY</h1>
+                        <p className="text-[10px] font-black uppercase tracking-[0.3em] text-theme-light">Create a New Profile</p>
+                    </div>
                 </div>
 
                 {renderContent()}
 
-                {feedbackMsg && !isLoading && <p className={`text-center text-sm font-medium mt-4 ${feedbackClass}`}>{feedbackMsg}</p>}
+                {feedbackMsg && !isLoading && (
+                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 animate-in shake duration-500">
+                        <AlertTriangle className="text-rose-500 shrink-0" size={18} />
+                        <p className="text-sm font-bold text-rose-800 leading-tight">{feedbackMsg}</p>
+                    </div>
+                )}
             </div>
         </div>
     );

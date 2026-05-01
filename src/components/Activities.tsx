@@ -4,6 +4,18 @@ import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/log';
 import { WalletEvent } from '../types';
 import { PageLayout } from './ui/PageLayout';
+import { 
+    PlusCircle, 
+    ArrowUpRight, 
+    ArrowDownLeft, 
+    ShieldAlert, 
+    CheckCircle2, 
+    XCircle, 
+    Clock, 
+    Info,
+    ChevronRight,
+    Calendar
+} from 'lucide-react';
 
 interface ActivitiesProps {
     onBack: () => void;
@@ -18,40 +30,40 @@ function formatTimestamp(isoString: string): string {
     });
 }
 
-function getEventDetails(event: WalletEvent): { label: string; icon: string; color: string } {
+function getEventDetails(event: WalletEvent): { label: string; icon: any; color: string; bgColor: string } {
     const type = event.event_type;
     const bff = event.bff_data;
 
     if (typeof type === 'string') {
         switch (type) {
             case 'VoucherCreated':
-                return { label: 'Voucher Created', icon: '✨', color: 'bg-blue-100 text-blue-700' };
+                return { label: 'Voucher Created', icon: PlusCircle, color: 'text-blue-600', bgColor: 'bg-blue-50' };
             case 'TransferSent':
                 return { 
                     label: `Sent to ${bff.counterparty_name || 'Anonymous'}`, 
-                    icon: '↑', 
-                    color: 'bg-red-100 text-red-700' 
+                    icon: ArrowUpRight, 
+                    color: 'text-rose-600', 
+                    bgColor: 'bg-rose-50' 
                 };
             case 'TransferReceived':
                 return { 
                     label: `Received from ${bff.counterparty_name || 'Anonymous'}`, 
-                    icon: '↓', 
-                    color: 'bg-green-100 text-green-700' 
+                    icon: ArrowDownLeft, 
+                    color: 'text-emerald-600', 
+                    bgColor: 'bg-emerald-50' 
                 };
             case 'VoucherQuarantined':
-                return { label: 'Voucher Quarantined', icon: '⚠️', color: 'bg-amber-100 text-amber-700' };
+                return { label: 'Security Quarantine', icon: ShieldAlert, color: 'text-amber-600', bgColor: 'bg-amber-50' };
             case 'VoucherActivated':
-                return { label: 'Voucher Activated', icon: '✅', color: 'bg-emerald-100 text-emerald-700' };
+                return { label: 'Voucher Activated', icon: CheckCircle2, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
             case 'VoucherVoided':
-                return { label: 'Voucher Voided', icon: '🚫', color: 'bg-gray-100 text-gray-700' };
+                return { label: 'Voucher Voided', icon: XCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
             case 'VoucherExpired':
-                return { label: 'Voucher Expired', icon: '⏰', color: 'bg-orange-100 text-orange-700' };
+                return { label: 'Voucher Expired', icon: Clock, color: 'text-orange-600', bgColor: 'bg-orange-50' };
         }
-    } else if (type && typeof type === 'object' && 'Unknown' in type) {
-        return { label: type.Unknown, icon: '❓', color: 'bg-gray-100 text-gray-700' };
     }
 
-    return { label: 'Unknown Event', icon: '?', color: 'bg-gray-100 text-gray-700' };
+    return { label: 'Wallet Event', icon: Info, color: 'text-gray-600', bgColor: 'bg-gray-50' };
 }
 
 export function Activities({ onBack, onNavigateToVoucherDetail, onNavigateToHistory }: ActivitiesProps) {
@@ -62,7 +74,6 @@ export function Activities({ onBack, onNavigateToVoucherDetail, onNavigateToHist
     useEffect(() => {
         async function fetchEvents() {
             try {
-                // Fetch first 50 events
                 const data = await invoke<WalletEvent[]>("get_event_history", { offset: 0, limit: 50 });
                 setEvents(data);
             } catch (e) {
@@ -78,55 +89,85 @@ export function Activities({ onBack, onNavigateToVoucherDetail, onNavigateToHist
     return (
         <PageLayout 
             title="Activity Log" 
-            description="A chronological record of all wallet events." 
+            description="A chronological record of your wallet events." 
             onBack={onBack}
         >
-            {isLoading && <p className="text-center text-theme-light py-8">Loading activities...</p>}
-            {error && <p className="text-center text-red-500 py-8">{error}</p>}
+            <div className="max-w-4xl mx-auto space-y-6">
+                {isLoading && (
+                    <div className="py-20 text-center animate-pulse text-theme-light font-black uppercase tracking-[0.2em]">
+                        Loading Activities...
+                    </div>
+                )}
+                
+                {error && (
+                    <div className="p-8 text-center bg-rose-50 border border-rose-100 rounded-3xl text-rose-500 font-bold">
+                        {error}
+                    </div>
+                )}
 
-            {!isLoading && !error && (
-                <div className="space-y-3">
-                    {events.length > 0 ? events.map(event => {
-                        const { label, icon, color } = getEventDetails(event);
-                        return (
-                            <button 
-                                key={event.event_id} 
-                                onClick={() => {
-                                    const type = event.event_type;
-                                    if (type === 'TransferSent' || type === 'TransferReceived') {
-                                        onNavigateToHistory();
-                                    } else {
-                                        onNavigateToVoucherDetail(event.local_instance_id);
-                                    }
-                                }}
-                                className="w-full text-left bg-bg-card border border-theme-subtle rounded-lg p-4 flex items-center justify-between hover:border-theme-primary hover:shadow-sm transition-all group"
-                            >
-                                <div className="flex items-center gap-4">
-                                    <div className={`flex items-center justify-center h-10 w-10 rounded-full font-bold text-lg ${color}`}>
-                                        {icon}
+                {!isLoading && !error && (
+                    <div className="space-y-3">
+                        {events.length > 0 ? events.map(event => {
+                            const { label, icon: Icon, color, bgColor } = getEventDetails(event);
+                            return (
+                                <button 
+                                    key={event.event_id} 
+                                    onClick={() => {
+                                        const type = event.event_type;
+                                        if (type === 'TransferSent' || type === 'TransferReceived') {
+                                            onNavigateToHistory();
+                                        } else {
+                                            onNavigateToVoucherDetail(event.local_instance_id);
+                                        }
+                                    }}
+                                    className="w-full text-left group"
+                                >
+                                    <div className="p-4 bg-white border border-theme-subtle rounded-2xl flex items-center justify-between group-hover:border-theme-primary/30 group-hover:shadow-premium transition-all">
+                                        <div className="flex items-center gap-4">
+                                            <div className={`flex items-center justify-center h-12 w-12 rounded-xl shrink-0 transition-transform group-hover:scale-105 ${bgColor} ${color}`}>
+                                                <Icon size={24} />
+                                            </div>
+                                            <div className="min-w-0">
+                                                <p className="font-bold text-theme-primary truncate tracking-tight">{label}</p>
+                                                <div className="flex items-center gap-2 mt-0.5">
+                                                    <span className="text-[10px] font-mono font-bold text-theme-light/60">
+                                                        #{event.local_instance_id.substring(0, 8)}
+                                                    </span>
+                                                    {event.bff_data.display_currency && (
+                                                        <span className="text-[10px] font-black text-theme-accent uppercase tracking-widest">
+                                                            {event.bff_data.amount} {event.bff_data.display_currency}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="text-right shrink-0 flex items-center gap-4">
+                                            <div className="hidden sm:block">
+                                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-end gap-1 mb-1">
+                                                    <Calendar size={10} />
+                                                    Date
+                                                </p>
+                                                <p className="text-xs font-bold text-theme-secondary">
+                                                    {formatTimestamp(event.timestamp)}
+                                                </p>
+                                            </div>
+                                            <ChevronRight size={18} className="text-theme-light/30 group-hover:text-theme-primary group-hover:translate-x-1 transition-all" />
+                                        </div>
                                     </div>
-                                    <div>
-                                        <p className="font-semibold text-theme-primary">{label}</p>
-                                        <p className="text-xs text-theme-light mt-0.5">
-                                            ID: {event.local_instance_id.substring(0, 8)}...
-                                            {event.bff_data.display_currency && ` · ${event.bff_data.amount} ${event.bff_data.display_currency}`}
-                                        </p>
-                                    </div>
+                                </button>
+                            );
+                        }) : (
+                            <div className="py-24 flex flex-col items-center justify-center text-center bg-white/30 backdrop-blur-sm rounded-[40px] border-2 border-dashed border-theme-subtle/50">
+                                <div className="p-6 bg-theme-subtle/10 rounded-full text-theme-light mb-6">
+                                    <Clock size={48} />
                                 </div>
-                                <div className="text-right">
-                                    <p className="text-sm text-theme-secondary">
-                                        {formatTimestamp(event.timestamp)}
-                                    </p>
-                                </div>
-                            </button>
-                        );
-                    }) : (
-                        <div className="text-center text-theme-light py-12 bg-bg-card border border-dashed border-theme-subtle rounded-lg">
-                            <p>No activities recorded yet.</p>
-                        </div>
-                    )}
-                </div>
-            )}
+                                <h3 className="text-2xl font-black text-theme-primary tracking-tight">No Events Recorded</h3>
+                                <p className="text-theme-light mt-2 max-w-sm font-medium">Your activity trail will appear here as you create and spend vouchers.</p>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
         </PageLayout>
     );
 }

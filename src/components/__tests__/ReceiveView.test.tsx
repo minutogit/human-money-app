@@ -70,8 +70,8 @@ describe('ReceiveView Component (Silber Standard)', () => {
       <ReceiveView onBack={mockOnBack} onReceiveSuccess={mockOnReceiveSuccess} />
     );
 
-    expect(await screen.findByTestId('drop-zone-text')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Select Bundle File/i })).toBeInTheDocument();
+    expect(await screen.findByText(/Drop Transfer File/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Select File/i })).toBeInTheDocument();
   });
 
   it('opens file dialog when select button is clicked', async () => {
@@ -82,7 +82,7 @@ describe('ReceiveView Component (Silber Standard)', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Select Bundle File/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Select File/i })).toBeInTheDocument();
     });
   });
 });

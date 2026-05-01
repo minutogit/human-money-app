@@ -20,4 +20,16 @@ body {
   .animate-pulse-subtle {
     animation: pulse-subtle 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
+
+  .glass-panel {
+    @apply bg-white/70 backdrop-blur-md border border-white/40 shadow-premium;
+  }
+
+  .card-premium {
+    @apply bg-white rounded-2xl shadow-premium border border-theme-subtle/50 transition-all duration-300;
+  }
+
+  .card-premium-hover {
+    @apply hover:shadow-premium-hover hover:-translate-y-0.5 active:scale-[0.99];
+  }
 }

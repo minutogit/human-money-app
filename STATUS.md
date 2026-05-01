@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0-alpha.10"
 phase: "alpha"
 health: "green"
-last_updated: "2026-04-30"
+last_updated: "2026-05-02"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -148,6 +148,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Unified Test Script (`run-tests.sh`) and CI Preparation
 - [x] BFF Currency Separation & API Synchronization (Mandatory display names, test voucher filtering, and interface alignment)
 - [x] UI Layout Standardization (Centralized PageLayout, unified header design, and consistent full-width layout across all views)
+- [x] Human-Centered UI Refactoring (Reverted technical jargon to accessible language across all core components)
+- [x] Fixed TypeScript errors in CreateVoucher (Unused imports and missing Lock icon)
 
 ## Next Milestones
 

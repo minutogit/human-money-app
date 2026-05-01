@@ -4,23 +4,30 @@
 clear
 echo "🧪 Starte alle Tests..."
 
+FAILED_TESTS=()
+
+
 # 0. Tauri Version Check
 echo "🔍 Prüfe Tauri Versionssynchronisation..."
 npm run check-versions
 if [ $? -ne 0 ]; then
     echo "❌ Tauri Versionscheck fehlgeschlagen!"
-    exit 1
+    FAILED_TESTS+=("Tauri Versionssynchronisation")
+else
+    echo "✅ Tauri Versionscheck erfolgreich."
 fi
-echo "✅ Tauri Versionscheck erfolgreich."
+
 
 # 1. TypeScript Check
 echo "🔍 Prüfe TypeScript Typen (Frontend)..."
 npx tsc --noEmit
 if [ $? -ne 0 ]; then
     echo "❌ TypeScript Check fehlgeschlagen!"
-    exit 1
+    FAILED_TESTS+=("TypeScript Check (Frontend)")
+else
+    echo "✅ TypeScript Check erfolgreich."
 fi
-echo "✅ TypeScript Check erfolgreich."
+
 
 # 2. Frontend Tests (Vitest)
 echo "⚛️ Starte Frontend Komponententests (Vitest)..."
@@ -28,9 +35,11 @@ echo "⚛️ Starte Frontend Komponententests (Vitest)..."
 DEBUG_PRINT_LIMIT=0 npm test -- --run --reporter=verbose
 if [ $? -ne 0 ]; then
     echo "❌ Frontend Tests fehlgeschlagen!"
-    exit 1
+    FAILED_TESTS+=("Frontend Tests (Vitest)")
+else
+    echo "✅ Frontend Tests erfolgreich."
 fi
-echo "✅ Frontend Tests erfolgreich."
+
 
 # 3. Backend Tests (Cargo)
 echo "🦀 Starte Backend Integrationstests (Rust)..."
@@ -38,9 +47,22 @@ cd src-tauri
 cargo test
 if [ $? -ne 0 ]; then
     echo "❌ Backend Tests fehlgeschlagen!"
-    exit 1
+    FAILED_TESTS+=("Backend Integrationstests (Rust)")
+else
+    echo "✅ Backend Tests erfolgreich."
 fi
-echo "✅ Backend Tests erfolgreich."
 
 echo ""
-echo "🎉 ALLE TESTS BESTANDEN! 🎉"
+echo "--------------------------------------------------"
+if [ ${#FAILED_TESTS[@]} -eq 0 ]; then
+    echo "🎉 ALLE TESTS BESTANDEN! 🎉"
+    exit 0
+else
+    echo "❌ FOLGENDE TESTS SIND FEHLGESCHLAGEN:"
+    for test in "${FAILED_TESTS[@]}"; do
+        echo "   - $test"
+    done
+    echo "--------------------------------------------------"
+    exit 1
+fi
+

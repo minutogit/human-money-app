@@ -4,12 +4,26 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
+import { Card } from "./ui/Card";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { VoucherSummary, VoucherStatus, AppSettings, PublicProfile, VoucherStandardInfo } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import { useSession } from "../context/SessionContext";
 import { PageLayout } from "./ui/PageLayout";
+import { 
+    Plus, 
+    Filter, 
+    ChevronDown, 
+    X, 
+    ArrowUpRight, 
+    CheckCircle2, 
+    Clock, 
+    ShieldAlert, 
+    History,
+    MoreVertical,
+    FileSignature
+} from "lucide-react";
 
 interface WalletViewProps {
     onShowDetails: (voucherId: string) => void;
@@ -69,52 +83,24 @@ export function WalletView(props: WalletViewProps) {
         fetchData();
     }, []);
 
-    // Global listeners for auto-collapse
-    useEffect(() => {
-        if (!isFiltersExpanded) return;
-
-        const handleGlobalAction = () => {
-            setIsFiltersExpanded(false);
-        };
-
-        // Capture scroll events from any container
-        window.addEventListener('scroll', handleGlobalAction, true);
-        
-        return () => {
-            window.removeEventListener('scroll', handleGlobalAction, true);
-        };
-    }, [isFiltersExpanded]);
-
-    function getVoucherStatus(status: VoucherStatus): { name: string; color: string; tooltip: string } {
+    function getVoucherStatus(status: VoucherStatus | string): { name: string; color: string; bgColor: string; icon: any } {
         if (!status) {
-            return { name: 'unknown', color: 'text-gray-800 bg-gray-200', tooltip: 'Status unknown' };
+            return { name: 'unknown', color: 'text-gray-600', bgColor: 'bg-gray-100', icon: Clock };
         }
         const statusName = (typeof status === 'string' ? status : (Object.keys(status)[0] || 'unknown')).toLowerCase();
-        let color = 'text-gray-800 bg-gray-200';
-        let tooltip: string;
-
+        
         switch (statusName) {
             case 'active':
-                color = 'text-green-800 bg-green-200';
-                tooltip = 'This voucher is active and ready to be used or transferred.';
-                break;
+                return { name: 'active', color: 'text-emerald-600', bgColor: 'bg-emerald-50', icon: CheckCircle2 };
             case 'quarantined':
-                color = 'text-red-800 bg-red-200';
-                tooltip = 'This voucher has been identified as an illegal copy (double-spend) and is no longer usable.';
-                break;
+                return { name: 'quarantined', color: 'text-rose-600', bgColor: 'bg-rose-50', icon: ShieldAlert };
             case 'archived':
-                color = 'text-indigo-800 bg-indigo-200';
-                tooltip = 'This voucher has been fully used or archived. It cannot be used for new transfers.';
-                break;
+                return { name: 'archived', color: 'text-indigo-600', bgColor: 'bg-indigo-50', icon: History };
             case 'incomplete':
-                color = 'text-gray-800 bg-gray-200';
-                tooltip = 'This voucher cannot be used yet because not all conditions have been met (e.g., missing guarantor signatures).';
-                break;
+                return { name: 'incomplete', color: 'text-amber-600', bgColor: 'bg-amber-50', icon: Clock };
             default:
-                tooltip = `Status: ${statusName}`;
-                break;
+                return { name: statusName, color: 'text-gray-600', bgColor: 'bg-gray-100', icon: Clock };
         }
-        return { name: statusName, color: color, tooltip: tooltip };
     }
 
     function formatDate(isoString: string): string {
@@ -124,28 +110,19 @@ export function WalletView(props: WalletViewProps) {
         });
     }
 
-    function truncate(text: string, length: number): string {
-        if (text.length <= length) return text;
-        return text.substring(0, length) + '...';
-    }
-
     function formatAmount(amountStr: string): string {
         const num = parseFloat(amountStr);
         if (isNaN(num)) return amountStr;
-        return num.toString();
+        return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
-    // Helper function to get signature hint for a voucher
     const getSignatureHintForVoucher = (voucher: VoucherSummary): string | null => {
         if (!userProfile || voucherStandards.length === 0) return null;
-        
-        // Find by folder ID first, then by UUID inside the TOML content
         const standard = voucherStandards.find(s => {
             if (s.id === voucher.voucher_standard_uuid) return true;
             const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
             return uuidMatch && uuidMatch[1] === voucher.voucher_standard_uuid;
         });
-
         if (!standard) return null;
         return getMissingProfileHint(standard.content, userProfile);
     };
@@ -184,7 +161,6 @@ export function WalletView(props: WalletViewProps) {
                 config = { type: "Cleartext" };
             }
 
-            logger.info(`Creating signing request bundle for voucher ${exportId} from WalletView with config: ${JSON.stringify(config)}`);
             const bundleBytes = await invoke<number[]>("create_signing_request_bundle", {
                 localInstanceId: exportId,
                 config: config
@@ -204,9 +180,7 @@ export function WalletView(props: WalletViewProps) {
                 const uint8Array = new Uint8Array(bundleBytes);
                 const { writeFile } = await import("@tauri-apps/plugin-fs");
                 await writeFile(filePath, uint8Array);
-                logger.info(`Signing request bundle saved to ${filePath}`);
                 
-                // Save directory for next time
                 if (settings) {
                     updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
                         invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
@@ -229,7 +203,6 @@ export function WalletView(props: WalletViewProps) {
         }
     }
 
-    // --- Filter Logic ---
     const statusCounts = (vouchers || []).reduce((acc, v) => {
         if (!v) return acc;
         const s = getVoucherStatus(v.status).name;
@@ -244,20 +217,15 @@ export function WalletView(props: WalletViewProps) {
     }, {} as Record<string, number>);
 
     const allStatusNames = ['active', 'incomplete', 'archived', 'quarantined'];
-    // Only show statuses that exist in the wallet OR are currently filtered
     const availableStatuses = allStatusNames.filter(s => statusCounts[s] > 0 || statusFilters.includes(s));
     const availableStandards = Array.from(new Set((vouchers || []).map(v => v?.display_standard_name).filter(Boolean))).sort() as string[];
 
     const toggleStatusFilter = (status: string) => {
-        setStatusFilters(prev => 
-            prev.includes(status) ? prev.filter(s => s !== status) : [...prev, status]
-        );
+        setStatusFilters(prev => prev.includes(status) ? prev.filter(s => s !== status) : [...prev, status]);
     };
 
     const toggleStandardFilter = (standard: string) => {
-        setStandardFilters(prev => 
-            prev.includes(standard) ? prev.filter(s => s !== standard) : [...prev, standard]
-        );
+        setStandardFilters(prev => prev.includes(standard) ? prev.filter(s => s !== standard) : [...prev, standard]);
     };
 
     const filteredVouchers = (vouchers || []).filter(v => {
@@ -270,402 +238,364 @@ export function WalletView(props: WalletViewProps) {
 
     const activeFilterCount = statusFilters.length + standardFilters.length;
 
-    const toggleAllVouchers = () => {
-        if (expandedVoucherIds.length === filteredVouchers.length) {
-            setExpandedVoucherIds([]);
-        } else {
-            setExpandedVoucherIds(filteredVouchers.map(v => v.local_instance_id));
-        }
-    };
-
     return (
         <PageLayout 
             title="Wallet" 
-            description="Manage your vouchers." 
+            description="Manage your digital assets." 
             onBack={props.onBack}
             actions={
-                <Button
-                    onClick={props.onNavigateToCreateVoucher}
-                    variant="primary"
-                    className="flex items-center gap-2"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
+                <Button onClick={props.onNavigateToCreateVoucher} size="sm" className="gap-2 px-6">
+                    <Plus size={18} />
                     Create
                 </Button>
             }
         >
-
-            {/* Filter Section */}
-            <section className="mb-6">
-                {/* Collapsible Bar */}
-                <button 
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        setIsFiltersExpanded(!isFiltersExpanded);
-                    }}
-                    className={`w-full flex items-center justify-between px-4 py-2 bg-white border border-theme-subtle rounded-md shadow-sm transition-all hover:border-theme-primary group ${isFiltersExpanded ? 'rounded-b-none border-b-0' : ''}`}
-                >
-                    <div className="flex items-center gap-2">
-                        <svg 
-                            xmlns="http://www.w3.org/2000/svg" 
-                            className={`h-4 w-4 text-theme-light transition-transform duration-200 ${isFiltersExpanded ? 'rotate-180' : ''}`} 
-                            viewBox="0 0 20 20" 
-                            fill="currentColor"
-                        >
-                            <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-                        </svg>
-                        <span className="text-xs font-bold text-theme-secondary uppercase tracking-wider">Filters</span>
-                        {activeFilterCount > 0 && !isFiltersExpanded && (
-                            <span className="bg-theme-primary text-white text-[10px] px-1.5 py-0.5 rounded-full ml-1 animate-in zoom-in">
-                                {activeFilterCount} Active
-                            </span>
-                        )}
-                    </div>
-                    {activeFilterCount > 0 && (
-                        <span 
-                            className="text-[10px] text-theme-accent hover:underline font-medium"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                setStatusFilters([]);
-                                setStandardFilters([]);
-                            }}
-                        >
-                            Clear all
-                        </span>
-                    )}
-                </button>
-
-                {/* Ausklappbarer Bereich */}
-                <div 
-                    onClick={(e) => e.stopPropagation()} 
-                    className={`overflow-hidden transition-all duration-300 ease-in-out bg-white border border-theme-subtle border-t-0 rounded-b-md shadow-sm ${isFiltersExpanded ? 'max-h-[500px] p-4 opacity-100' : 'max-h-0 opacity-0 p-0 border-0'}`}
-                >
-                    <div className="space-y-6">
-                        {/* Status Filter */}
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-bold text-theme-light uppercase tracking-wider">Voucher Status</label>
-                            <div className="flex flex-wrap gap-2">
-                                <button
-                                    onClick={() => setStatusFilters([])}
-                                    className={`px-3 py-1 rounded-full text-[10px] font-bold transition-all border ${
-                                        statusFilters.length === 0 
-                                        ? 'bg-theme-secondary text-white border-theme-secondary' 
-                                        : 'bg-bg-app text-theme-light border-theme-subtle hover:border-theme-secondary hover:text-theme-secondary'
-                                    }`}
-                                >
-                                    All <span className="opacity-60 ml-1">{(vouchers || []).length}</span>
-                                </button>
-                                {availableStatuses.map(status => {
-                                    const isActive = statusFilters.includes(status);
-                                    const count = statusCounts[status] || 0;
-                                    return (
-                                        <button
-                                            key={status}
-                                            onClick={() => toggleStatusFilter(status)}
-                                            className={`px-3 py-1 rounded-full text-[10px] font-bold transition-all border capitalize flex items-center gap-2 ${
-                                                isActive 
-                                                ? 'bg-theme-primary text-white border-theme-primary' 
-                                                : 'bg-white text-theme-light border-theme-subtle hover:border-theme-primary hover:text-theme-primary'
-                                            }`}
-                                        >
-                                            {status}
-                                            <span className={`text-[8px] px-1.5 py-0.5 rounded-full ${isActive ? 'bg-white/20 text-white' : 'bg-theme-subtle text-theme-light'}`}>
-                                                {count}
-                                            </span>
-                                        </button>
-                                    );
-                                })}
+            <div className="max-w-5xl mx-auto space-y-6">
+                {/* Filter Section */}
+                <Card variant="glass" className="overflow-hidden border-none shadow-premium">
+                    <button 
+                        onClick={() => setIsFiltersExpanded(!isFiltersExpanded)}
+                        className="w-full flex items-center justify-between px-6 py-4 hover:bg-white/40 transition-colors group"
+                    >
+                        <div className="flex items-center gap-3">
+                            <div className={`p-2 rounded-lg transition-colors ${activeFilterCount > 0 ? 'bg-theme-primary text-white' : 'bg-theme-subtle/50 text-theme-light'}`}>
+                                <Filter size={16} />
                             </div>
+                            <span className="text-xs font-black text-theme-secondary uppercase tracking-[0.15em]">Filters</span>
+                            {activeFilterCount > 0 && (
+                                <span className="bg-theme-primary text-white text-[10px] px-2 py-0.5 rounded-full font-bold">
+                                    {activeFilterCount}
+                                </span>
+                            )}
                         </div>
+                        <ChevronDown size={18} className={`text-theme-light transition-transform duration-300 ${isFiltersExpanded ? 'rotate-180' : ''}`} />
+                    </button>
 
-                        {/* Standard Filter */}
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-bold text-theme-light uppercase tracking-wider">Voucher Standards</label>
-                            <div className="flex flex-wrap gap-2">
-                                <button
-                                    onClick={() => setStandardFilters([])}
-                                    className={`px-3 py-1 rounded-full text-[10px] font-bold transition-all border ${
-                                        standardFilters.length === 0 
-                                        ? 'bg-theme-secondary text-white border-theme-secondary' 
-                                        : 'bg-bg-app text-theme-light border-theme-subtle hover:border-theme-secondary hover:text-theme-secondary'
-                                    }`}
-                                >
-                                    All <span className="opacity-60 ml-1">{(vouchers || []).length}</span>
-                                </button>
-                                {availableStandards.map(standard => {
-                                    const isActive = standardFilters.includes(standard);
-                                    const count = standardCounts[standard] || 0;
-                                    return (
-                                        <button
-                                            key={standard}
-                                            onClick={() => toggleStandardFilter(standard)}
-                                            className={`px-3 py-1 rounded-full text-[10px] font-bold transition-all border flex items-center gap-2 ${
-                                                isActive 
-                                                ? 'bg-theme-accent text-white border-theme-accent' 
-                                                : 'bg-white text-theme-light border-theme-subtle hover:border-theme-accent hover:text-theme-accent'
-                                            }`}
-                                        >
-                                            {standard}
-                                            <span className={`text-[8px] px-1.5 py-0.5 rounded-full ${isActive ? 'bg-white/20 text-white' : 'bg-theme-subtle text-theme-light'}`}>
-                                                {count}
-                                            </span>
-                                        </button>
-                                    );
-                                })}
+                    <div className={`transition-all duration-500 ease-in-out ${isFiltersExpanded ? 'max-h-[500px] p-6 pt-0 opacity-100' : 'max-h-0 opacity-0'}`}>
+                        <div className="space-y-6 pt-4 border-t border-theme-subtle/30">
+                            {/* Status Filter */}
+                            <div className="space-y-3">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-2">By Status</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {availableStatuses.map(status => {
+                                        const isActive = statusFilters.includes(status);
+                                        const { icon: Icon, color } = getVoucherStatus(status);
+                                        return (
+                                            <button
+                                                key={status}
+                                                onClick={() => toggleStatusFilter(status)}
+                                                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all border flex items-center gap-2 ${
+                                                    isActive 
+                                                    ? 'bg-theme-primary text-white border-theme-primary shadow-md scale-105' 
+                                                    : 'bg-white text-theme-secondary border-theme-subtle/50 hover:border-theme-primary hover:bg-white shadow-sm'
+                                                }`}
+                                            >
+                                                <Icon size={14} className={isActive ? 'text-white' : color} />
+                                                <span className="capitalize">{status}</span>
+                                                <span className={`text-[10px] px-1.5 py-0.5 rounded-md ${isActive ? 'bg-white/20 text-white' : 'bg-theme-subtle/30 text-theme-light'}`}>
+                                                    {statusCounts[status] || 0}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
                             </div>
+
+                            {/* Standard Filter */}
+                            <div className="space-y-3">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-2">By Standard</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {availableStandards.map(standard => {
+                                        const isActive = standardFilters.includes(standard);
+                                        return (
+                                            <button
+                                                key={standard}
+                                                onClick={() => toggleStandardFilter(standard)}
+                                                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all border flex items-center gap-2 ${
+                                                    isActive 
+                                                    ? 'bg-theme-accent text-white border-theme-accent shadow-md scale-105' 
+                                                    : 'bg-white text-theme-secondary border-theme-subtle/50 hover:border-theme-accent hover:bg-white shadow-sm'
+                                                }`}
+                                            >
+                                                <span className="capitalize">{standard}</span>
+                                                <span className={`text-[10px] px-1.5 py-0.5 rounded-md ${isActive ? 'bg-white/20 text-white' : 'bg-theme-subtle/30 text-theme-light'}`}>
+                                                    {standardCounts[standard] || 0}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                            
+                            {activeFilterCount > 0 && (
+                                <div className="flex justify-end pt-2">
+                                    <button 
+                                        onClick={() => { setStatusFilters([]); setStandardFilters([]); }}
+                                        className="text-[10px] font-black text-rose-500 uppercase tracking-widest flex items-center gap-1.5 hover:underline px-2"
+                                    >
+                                        <X size={12} />
+                                        Reset Filters
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </div>
-                </div>
-            </section>
+                </Card>
 
-            {/* Voucher List */}
-            <section>
-                <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-2xl font-semibold text-theme-secondary">My Vouchers</h2>
-                    {filteredVouchers.length > 0 && (
-                        <button
-                            onClick={toggleAllVouchers}
-                            className="text-xs font-bold text-theme-accent hover:underline uppercase tracking-wider bg-theme-accent/5 px-2 py-1 rounded transition-colors"
-                        >
-                            {expandedVoucherIds.length === filteredVouchers.length ? 'Collapse All' : 'Expand All'}
-                        </button>
-                    )}
-                </div>
+                {/* Voucher List */}
                 <div className="space-y-4">
                     {filteredVouchers.length > 0 ? filteredVouchers.map(v => {
-                        const status = getVoucherStatus(v.status);
+                        const { name: statusName, color, bgColor, icon: StatusIcon } = getVoucherStatus(v.status);
                         const isExpanded = expandedVoucherIds.includes(v.local_instance_id);
+                        const hint = getSignatureHintForVoucher(v);
+                        
                         return (
-                            <div key={v.local_instance_id} className="relative">
+                            <div key={v.local_instance_id} className="relative group">
                                 {v.is_test_voucher && (
-                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-                                        <span className="text-[50px] font-semibold text-red-600/30 select-none pointer-events-none">TEST VOUCHER</span>
+                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20 overflow-hidden rounded-3xl">
+                                        <span className="text-[60px] font-black text-rose-500/10 -rotate-12 select-none uppercase tracking-[0.5em]">TEST</span>
                                     </div>
                                 )}
-                                <button
+                                
+                                <Card 
+                                    variant="default"
+                                    className={`p-0 overflow-hidden transition-all duration-500 ${isExpanded ? 'ring-2 ring-theme-primary ring-offset-4 ring-offset-bg-app' : ''}`}
+                                    hover={!isExpanded}
                                     onClick={() => {
-                                        if (isExpanded) {
-                                            props.onShowDetails(v.local_instance_id);
-                                        } else {
-                                            setExpandedVoucherIds(prev => [...prev, v.local_instance_id]);
-                                        }
+                                        if (isExpanded) props.onShowDetails(v.local_instance_id);
+                                        else setExpandedVoucherIds(prev => [...prev, v.local_instance_id]);
                                     }}
-                                    className={`w-full text-left bg-bg-card-alternate rounded-lg border border-theme-subtle shadow-sm transition-all duration-200 ease-in-out hover:shadow-md hover:border-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary focus:ring-opacity-50 relative z-10 ${isExpanded ? 'p-4' : 'p-2'}`}
                                 >
-                                    {/* Collapsed state - minimal info */}
-                                    {!isExpanded && (
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-3">
-                                                <div className="text-lg font-bold text-theme-primary">
-                                                    {formatAmount(v.current_amount)} {v.display_currency}
+                                    <div className="flex">
+                                        {/* Left Side: Status Stripe */}
+                                        <div className={`w-2 ${bgColor.replace('bg-', 'bg-opacity-100 bg-')}`}></div>
+                                        
+                                        <div className="flex-grow flex flex-col">
+                                            {/* Top Section: Standard & Meta */}
+                                            <div className="px-6 py-4 flex items-center justify-between border-b border-theme-subtle/30 bg-white/50">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-[10px] font-black text-theme-light uppercase tracking-widest">
+                                                        {v.display_standard_name}
+                                                    </span>
+                                                    {v.is_test_voucher && (
+                                                        <span className="text-[9px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">
+                                                            Test Mode
+                                                        </span>
+                                                    )}
                                                 </div>
-                                                <div className="text-xs text-theme-light">
-                                                    {v.display_standard_name}
-                                                </div>
-                                                <div className="text-xs text-theme-secondary italic border-l border-theme-subtle pl-3">
-                                                    by {v.creator_first_name} {v.creator_last_name}
+                                                <div className="flex items-center gap-2">
+                                                    <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-black uppercase ${bgColor} ${color}`}>
+                                                        <StatusIcon size={12} />
+                                                        {statusName}
+                                                    </div>
+                                                    <button className="p-1 hover:bg-theme-subtle/20 rounded-md text-theme-light transition-colors">
+                                                        <MoreVertical size={16} />
+                                                    </button>
                                                 </div>
                                             </div>
-                                            <div className="flex items-center gap-4">
-                                                <span className="text-[10px] text-theme-light">
-                                                    until {formatDate(v.valid_until)}
-                                                </span>
-                                                <span className={`px-2 py-1 text-[10px] font-bold rounded-full capitalize ${status.color}`}>
-                                                    {status.name}
-                                                </span>
-                                                {v.is_test_voucher && (
-                                                    <span className="px-2 py-1 text-[10px] font-bold rounded-full text-purple-800 bg-purple-200">Test</span>
+
+                                            {/* Middle Section: Amount & Title */}
+                                            <div className="px-6 py-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                                <div>
+                                                    <div className="flex items-baseline gap-2">
+                                                        <h3 className="text-3xl font-black text-theme-primary tracking-tighter">
+                                                            {formatAmount(v.current_amount)}
+                                                        </h3>
+                                                        <span className="text-lg font-bold text-theme-light uppercase">
+                                                            {v.display_currency}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-xs font-bold text-theme-secondary mt-1 flex items-center gap-2">
+                                                        Issued by <span className="text-theme-primary">{v.creator_first_name} {v.creator_last_name}</span>
+                                                    </p>
+                                                </div>
+                                                
+                                                {!isExpanded && (
+                                                    <div className="flex items-center gap-6">
+                                                        <div className="text-right">
+                                                            <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-1">Expires</p>
+                                                            <p className="text-xs font-bold text-theme-secondary">{formatDate(v.valid_until)}</p>
+                                                        </div>
+                                                        <ArrowUpRight size={20} className="text-theme-light opacity-30 group-hover:opacity-100 group-hover:translate-x-1 group-hover:-translate-y-1 transition-all" />
+                                                    </div>
                                                 )}
                                             </div>
-                                        </div>
-                                    )}
 
-                                    {/* Expanded state - full info */}
-                                    {isExpanded && (
-                                        <div className="space-y-3">
-                                            {/* Header: Amount and Voucher Name */}
-                                            <div className="flex justify-between items-start">
-                                                <div>
-                                                    <div className="flex items-baseline text-2xl font-bold text-theme-primary">
-                                                        <span className="inline-block min-w-[4rem] text-right">{formatAmount(v.current_amount)}</span>
-                                                        <span className="ml-2 text-lg font-normal text-theme-light">{v.display_currency}</span>
+                                            {/* Expanded Content */}
+                                            <div className={`transition-all duration-500 ease-in-out ${isExpanded ? 'max-h-[500px] opacity-100 pb-6 px-6' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+                                                <div className="space-y-6 pt-6 border-t border-theme-subtle/30">
+                                                    <div>
+                                                        <h4 className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-2">Description</h4>
+                                                        <p className="text-sm text-theme-secondary leading-relaxed bg-theme-subtle/10 p-4 rounded-xl border border-theme-subtle/20">
+                                                            {v.description || "No description provided."}
+                                                        </p>
                                                     </div>
-                                                    <p className="text-xs text-theme-light font-mono">by {v.creator_first_name} {v.creator_last_name}</p>
-                                                </div>
-                                                <div className="text-right">
-                                                    <p className="text-xl font-normal text-theme-light">{v.display_standard_name}</p>
-                                                </div>
-                                            </div>
 
-                                            {/* Body: Description */}
-                                            <p className="text-sm text-theme-secondary">{truncate(v.description, 120)}</p>
-
-                                            {/* Footer: Validity and Indicators */}
-                                            <div className="border-t border-theme-subtle pt-2">
-                                                <div className="flex justify-between items-center text-xs text-theme-light">
-                                                    <p>Valid until: <span className="font-semibold">{formatDate(v.valid_until)}</span></p>
-                                                    <div className="flex items-center space-x-3 text-sm">
-                                                        {v.has_collateral && <span title="Has Collateral">🛡️</span>}
-                                                        <span title="Signatures">✍️ {v.guarantor_signatures_count + v.additional_signatures_count}</span>
-                                                    </div>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={`px-2 py-1 text-xs font-bold rounded-full capitalize ${status.color}`} title={status.tooltip}>
-                                                            {status.name}
-                                                        </span>
-                                                        {v.is_test_voucher && (
-                                                            <span className="px-3 py-1 text-xs font-bold rounded-full text-red-800 bg-red-200" title="Non-redeemable test voucher">Testing Only</span>
-                                                        )}
-                                                    </div>
-                                                </div>
-
-                                                {/* Help text and action for incomplete vouchers */}
-                                                {status.name === 'incomplete' && (
-                                                    <div className="mt-3 space-y-2">
-                                                        <div className="p-3 bg-yellow-50 rounded-md border border-yellow-100 flex flex-col sm:flex-row items-center justify-between gap-3 animate-in fade-in zoom-in duration-300">
-                                                            <p className="text-sm text-yellow-800 leading-tight">
-                                                                <strong>Missing Signatures:</strong> This voucher needs more signatures to become active.
-                                                            </p>
-                                                            <Button 
-                                                                size="xs" 
-                                                                variant="primary" 
-                                                                className="bg-theme-accent text-white whitespace-nowrap"
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    setExportId(v.local_instance_id);
-                                                                    setShowExportModal(true);
-                                                                }}
-                                                            >
-                                                                ✍️ Request Signature
-                                                            </Button>
+                                                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                                                        <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
+                                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">Signatures</p>
+                                                            <p className="text-sm font-bold text-theme-secondary">✍️ {v.guarantor_signatures_count + v.additional_signatures_count}</p>
                                                         </div>
-                                                        {(() => {
-                                                            const hint = getSignatureHintForVoucher(v);
-                                                            return hint && (
-                                                                <div className="p-2 bg-blue-50 rounded-md border border-blue-100 flex items-center gap-2 animate-in fade-in zoom-in duration-300">
-                                                                    <span className="text-blue-400 text-sm">💡</span>
-                                                                    <p className="text-xs text-blue-800 leading-tight">
-                                                                        <strong>Hint:</strong> {hint}
+                                                        <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
+                                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">Collateral</p>
+                                                            <p className="text-sm font-bold text-theme-secondary">{v.has_collateral ? "✅ Yes" : "❌ No"}</p>
+                                                        </div>
+                                                        <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
+                                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">Validity</p>
+                                                            <p className="text-sm font-bold text-theme-secondary">Until {formatDate(v.valid_until)}</p>
+                                                        </div>
+                                                    </div>
+
+                                                    {statusName === 'incomplete' && (
+                                                        <div className="space-y-3">
+                                                            <Card variant="accent" className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4 border-none shadow-premium">
+                                                                <div className="flex items-center gap-4">
+                                                                    <div className="p-3 bg-white/20 rounded-2xl text-white">
+                                                                        <FileSignature size={24} />
+                                                                    </div>
+                                                                    <div className="text-white">
+                                                                        <p className="text-[10px] font-black uppercase tracking-widest opacity-80">Action Required</p>
+                                                                        <p className="text-base font-bold">Needs more signatures</p>
+                                                                    </div>
+                                                                </div>
+                                                                <Button 
+                                                                    size="sm" 
+                                                                    variant="secondary" 
+                                                                    className="bg-white text-theme-accent hover:bg-white/90 shadow-lg px-6"
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        setExportId(v.local_instance_id);
+                                                                        setShowExportModal(true);
+                                                                    }}
+                                                                >
+                                                                    Request Signatures
+                                                                </Button>
+                                                            </Card>
+                                                            
+                                                            {hint && (
+                                                                <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 flex items-start gap-3">
+                                                                    <span className="text-blue-500 text-sm mt-0.5">💡</span>
+                                                                    <p className="text-xs text-blue-800 font-medium leading-normal">
+                                                                        {hint}
                                                                     </p>
                                                                 </div>
-                                                            );
-                                                        })()}
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    
+                                                    <div className="flex justify-end pt-4">
+                                                        <Button variant="outline" size="sm" onClick={() => props.onShowDetails(v.local_instance_id)}>
+                                                            Full Details View
+                                                        </Button>
                                                     </div>
-                                                )}
+                                                </div>
                                             </div>
                                         </div>
-                                    )}
-                                </button>
+                                    </div>
+                                    
+                                    {/* Ticket Notch Decorations */}
+                                    <div className="absolute top-1/2 -left-3 w-6 h-6 bg-bg-app rounded-full -translate-y-1/2 border-r border-theme-subtle/30 z-10 hidden md:block"></div>
+                                    <div className="absolute top-1/2 -right-3 w-6 h-6 bg-bg-app rounded-full -translate-y-1/2 border-l border-theme-subtle/30 z-10 hidden md:block"></div>
+                                </Card>
                             </div>
                         );
                     }) : (
-                        <div className="text-center text-theme-light py-8 bg-input-readonly rounded-lg border border-theme-subtle">
-                            <p>No vouchers found.</p>
+                        <div className="text-center py-20 bg-white/50 rounded-3xl border-2 border-dashed border-theme-subtle/50">
+                            <History size={48} className="mx-auto text-theme-light opacity-20 mb-4" />
+                            <p className="text-sm font-black text-theme-placeholder uppercase tracking-[0.2em]">No vouchers found</p>
                         </div>
                     )}
                 </div>
-            </section>
+            </div>
 
             <ConfirmationModal
                 isOpen={showExportModal}
                 title="Export Signature Request"
                 description={
-                    <div className="space-y-4">
-                        <div className="flex items-center gap-2">
+                    <div className="space-y-6 pt-2">
+                        <div className="flex items-center gap-3 p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/20">
                             <input
                                 type="checkbox"
                                 id="wallet-encryptToDid"
                                 checked={encryptToDid}
                                 onChange={(e) => setEncryptToDid(e.target.checked)}
-                                className="h-4 w-4 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                                className="h-5 w-5 rounded-lg border-theme-subtle text-theme-primary focus:ring-theme-primary transition-all"
                             />
-                            <label htmlFor="wallet-encryptToDid" className="text-sm font-medium text-theme-primary">
-                                Encrypt for a specific contact (DID required)
+                            <label htmlFor="wallet-encryptToDid" className="text-sm font-bold text-theme-secondary">
+                                Encrypt for a specific contact
                             </label>
                         </div>
 
                         {encryptToDid ? (
-                            <div>
-                                <p className="text-xs text-theme-light mb-1">Enter the signer's DID:</p>
+                            <div className="space-y-2 animate-in slide-in-from-top-2 duration-300">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">Signer's DID</label>
                                 <input
                                     type="text"
                                     value={recipientId}
                                     onChange={(e) => setRecipientId(e.target.value)}
                                     placeholder="did:key:z..."
-                                    className="w-full px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
+                                    className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 focus:border-theme-primary shadow-inner-soft transition-all"
                                     autoFocus
                                 />
                             </div>
                         ) : (
-                            <div className="space-y-4">
-                                <div className="flex items-center gap-2">
+                            <div className="space-y-4 animate-in slide-in-from-top-2 duration-300">
+                                <div className="flex items-center gap-3 p-4 bg-theme-accent/5 rounded-2xl border border-theme-accent/20">
                                     <input
                                         type="checkbox"
                                         id="wallet-protectWithPassword"
                                         checked={protectWithPassword}
                                         onChange={(e) => setProtectWithPassword(e.target.checked)}
-                                        className="h-4 w-4 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                                        className="h-5 w-5 rounded-lg border-theme-subtle text-theme-accent focus:ring-theme-accent transition-all"
                                     />
-                                    <label htmlFor="wallet-protectWithPassword" className="text-sm font-medium text-theme-primary">
-                                        Protect with password (Optional)
+                                    <label htmlFor="wallet-protectWithPassword" className="text-sm font-bold text-theme-secondary">
+                                        Protect with password
                                     </label>
                                 </div>
 
                                 {protectWithPassword && (
-                                    <div className="space-y-3">
-                                        <div>
-                                            <p className="text-xs text-theme-light mb-1">Enter a password for encryption:</p>
+                                    <div className="space-y-4 animate-in slide-in-from-top-2 duration-300">
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">Password</label>
                                             <div className="relative">
                                                 <input
                                                     type={showExportPassword ? "text" : "password"}
                                                     value={exportPassword}
-                                                    onChange={(e) => {
-                                                        setExportPassword(e.target.value);
-                                                        setExportError("");
-                                                    }}
-                                                    placeholder="Password"
-                                                    className="w-full px-3 py-2 pr-20 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
+                                                    onChange={(e) => { setExportPassword(e.target.value); setExportError(""); }}
+                                                    placeholder="Enter password"
+                                                    className="w-full px-4 py-3 pr-20 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 focus:border-theme-primary shadow-inner-soft transition-all"
                                                 />
                                                 <button
                                                     type="button"
                                                     onClick={() => setShowExportPassword(!showExportPassword)}
-                                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-theme-light hover:text-theme-primary"
+                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-theme-light hover:text-theme-primary transition-colors"
                                                 >
-                                                    {showExportPassword ? "Hide" : "Show"}
+                                                    {showExportPassword ? "HIDE" : "SHOW"}
                                                 </button>
                                             </div>
                                         </div>
-                                        <div>
-                                            <p className="text-xs text-theme-light mb-1">Confirm password:</p>
-                                            <div className="relative">
-                                                <input
-                                                    type={showExportPassword ? "text" : "password"}
-                                                    value={exportPasswordConfirm}
-                                                    onChange={(e) => {
-                                                        setExportPasswordConfirm(e.target.value);
-                                                        setExportError("");
-                                                    }}
-                                                    placeholder="Confirm Password"
-                                                    className="w-full px-3 py-2 pr-20 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setShowExportPassword(!showExportPassword)}
-                                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-theme-light hover:text-theme-primary"
-                                                >
-                                                    {showExportPassword ? "Hide" : "Show"}
-                                                </button>
-                                            </div>
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">Confirm Password</label>
+                                            <input
+                                                type={showExportPassword ? "text" : "password"}
+                                                value={exportPasswordConfirm}
+                                                onChange={(e) => { setExportPasswordConfirm(e.target.value); setExportError(""); }}
+                                                placeholder="Confirm password"
+                                                className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 focus:border-theme-primary shadow-inner-soft transition-all"
+                                            />
                                         </div>
                                     </div>
                                 )}
                             </div>
                         )}
-                        {exportError && <p className="text-red-500 text-sm mt-2">{exportError}</p>}
+                        {exportError && (
+                            <div className="p-3 bg-rose-50 text-rose-600 rounded-xl text-xs font-bold border border-rose-100 animate-in shake duration-500">
+                                {exportError}
+                            </div>
+                        )}
                     </div>
                 }
-                confirmText="Export"
+                confirmText="Export Request"
                 onConfirm={handleExportSigningRequest}
                 onCancel={() => {
                     setShowExportModal(false);

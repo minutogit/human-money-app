@@ -5,11 +5,24 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
+import { Input } from './ui/Input';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
-import { AppSettings, VoucherStandardInfo, ReceiveSuccessPayload, VoucherDetails } from '../types';
+import { AppSettings, VoucherStandardInfo, ReceiveSuccessPayload } from '../types';
 import { PageLayout } from './ui/PageLayout';
+import { 
+    UploadCloud, 
+    FileCheck, 
+    ShieldAlert, 
+    FileSignature, 
+    ArrowRightLeft, 
+    Lock, 
+    X,
+    FileJson,
+    CheckCircle2,
+    AlertCircle
+} from 'lucide-react';
 
 interface ReceiveViewProps {
     onBack: () => void;
@@ -81,10 +94,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 logger.info(`File selected via dialog: ${selectedPath}`);
                 setBundlePath(selectedPath);
                 
-                // Save directory for next time
                 if (settings) {
                     updateLastUsedDirectory(selectedPath, settings, protectAction).then(() => {
-                        // Optionally refresh settings if update was successful
                         invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
                     });
                 }
@@ -101,13 +112,9 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 }
             }
         } catch (e) {
-            const msg = `Error selecting file: ${e}`;
-            logger.error(msg);
-            setFeedbackMsg(msg);
+            setFeedbackMsg(String(e));
         }
     };
-
-
 
     const clearSelection = () => {
         setBundlePath(null);
@@ -116,66 +123,36 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         setDroppedFileContent(null);
     }
 
-    // Drag and drop functionality
     const [isDragOver, setIsDragOver] = useState(false);
     const [droppedFileContent, setDroppedFileContent] = useState<number[] | null>(null);
 
-    // Prevent default browser behavior for drag events to enable drop functionality
     useEffect(() => {
-        // Add a more comprehensive drag event handler
-        const preventGlobalDefaults = (e: Event) => {
-            e.preventDefault();
-            // Don't stop propagation so events can reach our component
-        };
+        const preventGlobalDefaults = (e: Event) => e.preventDefault();
+        const handleGlobalDrop = (e: Event) => e.preventDefault();
 
-        const handleGlobalDrop = (e: Event) => {
-            // Still need to prevent default to prevent browser default behavior
-            e.preventDefault();
-        };
-
-        // Add capture-phase listeners to catch events early
         document.addEventListener("dragenter", preventGlobalDefaults, true);
         document.addEventListener("dragover", preventGlobalDefaults, true);
         document.addEventListener("dragleave", preventGlobalDefaults, true);
         document.addEventListener("drop", handleGlobalDrop, true);
 
-        // Also add bubble-phase listeners
-        document.addEventListener("dragenter", preventGlobalDefaults, false);
-        document.addEventListener("dragover", preventGlobalDefaults, false);
-        document.addEventListener("dragleave", preventGlobalDefaults, false);
-        document.addEventListener("drop", handleGlobalDrop, false);
-
-        // Cleanup
         return () => {
             document.removeEventListener("dragenter", preventGlobalDefaults, true);
             document.removeEventListener("dragover", preventGlobalDefaults, true);
             document.removeEventListener("dragleave", preventGlobalDefaults, true);
             document.removeEventListener("drop", handleGlobalDrop, true);
-
-            document.removeEventListener("dragenter", preventGlobalDefaults, false);
-            document.removeEventListener("dragover", preventGlobalDefaults, false);
-            document.removeEventListener("dragleave", preventGlobalDefaults, false);
-            document.removeEventListener("drop", handleGlobalDrop, false);
         };
     }, []);
 
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
         e.preventDefault();
         e.stopPropagation();
-        if (!isDragOver) {
-            setIsDragOver(true);
-        }
+        setIsDragOver(true);
     };
 
     const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
         e.preventDefault();
         e.stopPropagation();
-        // Only reset if we're actually leaving the element, not just moving between child elements
-        setTimeout(() => {
-            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                setIsDragOver(false);
-            }
-        }, 0);
+        setIsDragOver(false);
     };
 
     const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
@@ -183,97 +160,62 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         e.stopPropagation();
         setIsDragOver(false);
 
-        // Log data transfer info
-
         const files = e.dataTransfer.files;
-        
         if (files.length > 0) {
             const file = files[0];
-            logger.info(`Processing dropped file: ${file.name} (Size: ${file.size})`);
-            
             const validExtensions = ['.transfer', '.ask', '.sig', '.humocoreq', '.humocosig'];
             if (validExtensions.some(ext => file.name.endsWith(ext))) {
                 try {
                     const fileBuffer = await file.arrayBuffer();
                     const uint8Array = new Uint8Array(fileBuffer);
                     const bundleData = Array.from(uint8Array);
-                    logger.info(`File data length: ${bundleData.length}`);
                     
                     setBundlePath(file.name);
                     setBundleName(file.name);
                     setDroppedFileContent(bundleData);
                     
-                    if (file.name.endsWith('.transfer')) {
-                        setFileType('transfer');
-                    } else if (file.name.endsWith('.ask') || file.name.endsWith('.humocoreq')) {
-                        setFileType('ask');
-                    } else if (file.name.endsWith('.sig') || file.name.endsWith('.humocosig')) {
-                        setFileType('sig');
-                    }
-                    
-                    logger.info(`Successfully set dropped file: ${file.name}`);
+                    if (file.name.endsWith('.transfer')) setFileType('transfer');
+                    else if (file.name.endsWith('.ask') || file.name.endsWith('.humocoreq')) setFileType('ask');
+                    else if (file.name.endsWith('.sig') || file.name.endsWith('.humocosig')) setFileType('sig');
                 } catch (error) {
-                    const msg = `Error processing dropped file: ${error}`;
-                    logger.error(msg);
-                    setFeedbackMsg(msg);
+                    setFeedbackMsg(String(error));
                 }
             } else {
-                const msg = `Invalid file type. Please drop a '.transfer', '.ask', or '.sig' file. Got: ${file.name}`;
-                logger.warn(msg);
-                setFeedbackMsg(msg);
+                setFeedbackMsg("Invalid file type dropped.");
             }
-        } else {
-            const msg = "No files found in drop event. This might be due to security restrictions or an unsupported file type.";
-            logger.info(msg);
-            setFeedbackMsg(msg);
         }
     };
 
     const handleProcessClick = (event: FormEvent) => {
         event.preventDefault();
-        
         if ((!bundlePath) && !droppedFileContent) {
-            setFeedbackMsg("Please select a file.");
+            setFeedbackMsg("No payload selected.");
             return;
         }
-
         if (!fileType) {
-            setFeedbackMsg("Unable to determine file type.");
+            setFeedbackMsg("Unknown payload format.");
             return;
         }
-
         setFeedbackMsg('');
         setShowConfirm(true);
     };
 
     async function executeReceive() {
         setIsProcessing(true);
-        logger.info(`Attempting to process file of type: ${fileType}`);
         try {
             let fileData: number[];
-            if (droppedFileContent) {
-                fileData = droppedFileContent;
-            } else if (bundlePath) {
+            if (droppedFileContent) fileData = droppedFileContent;
+            else if (bundlePath) {
                 const fileUint8Array = await readFile(bundlePath);
                 fileData = Array.from(fileUint8Array);
-            } else {
-                setFeedbackMsg("No file provided");
-                setIsProcessing(false);
-                setShowConfirm(false);
-                return;
-            }
+            } else return;
 
             if (fileType === 'transfer') {
                 const standardDefinitionsToml: Record<string, string> = {};
                 voucherStandards.forEach(standard => {
                     const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
-                    if (uuidMatch && uuidMatch[1]) {
-                        const uuid = uuidMatch[1];
-                        standardDefinitionsToml[uuid] = standard.content;
-                    }
+                    if (uuidMatch && uuidMatch[1]) standardDefinitionsToml[uuidMatch[1]] = standard.content;
                 });
-
-                logger.info(`Calling receive_bundle with ${fileData.length} bytes`);
 
                 const payload = await protectAction(async (password) => {
                     return await invoke<ReceiveSuccessPayload>("receive_bundle", {
@@ -284,44 +226,21 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     });
                 });
 
-                if (!payload) return;
-                logger.info("Bundle received and processed successfully.");
-                onReceiveSuccess(payload);
+                if (payload) onReceiveSuccess(payload);
             } else if (fileType === 'ask') {
                 const openedVoucher = await invoke<any>("open_voucher_signing_request", {
                     containerBytes: fileData,
                     password: bundlePassword || null
                 });
-                logger.info("Signature request opened successfully.");
-                logger.info(`Voucher data structure keys: ${Object.keys(openedVoucher).join(", ")}`);
-                
-                // Backend now returns VoucherDetails
-                const voucherDetails: VoucherDetails = openedVoucher;
-
-                (onReceiveSuccess as any)({
-                    senderId: voucherDetails.voucher.creator?.id || "unknown",
-                    transferSummary: { summableAmounts: {}, countableItems: {} },
-                    involvedVouchers: [],
-                    voucherData: voucherDetails
-                });
+                onReceiveSuccess(openedVoucher);
             } else if (fileType === 'sig') {
                 const standardDefinitionsToml: Record<string, string> = {};
                 voucherStandards.forEach(standard => {
                     const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
-                    if (uuidMatch && uuidMatch[1]) {
-                        const uuid = uuidMatch[1];
-                        standardDefinitionsToml[uuid] = standard.content;
-                    }
+                    if (uuidMatch && uuidMatch[1]) standardDefinitionsToml[uuidMatch[1]] = standard.content;
                 });
                 
                 const standardTomlContent = Object.values(standardDefinitionsToml)[0];
-                if (!standardTomlContent) {
-                    setFeedbackMsg("No voucher standards available");
-                    setIsProcessing(false);
-                    setShowConfirm(false);
-                    return;
-                }
-
                 const updatedInstanceId = await protectAction(async (password) => {
                     return await invoke<string>("process_and_attach_signature", {
                         containerBytes: fileData,
@@ -332,73 +251,38 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 });
                 
                 if (updatedInstanceId) {
-                    logger.info(`Signature processed and attached successfully to voucher: ${updatedInstanceId}`);
                     setResultModal({
                         isOpen: true,
-                        title: "Signature Attached",
-                        content: (
-                            <div>
-                                <p className="mb-2">The signature has been successfully attached to the voucher.</p>
-                                <p className="text-theme-subtle">You will now be redirected to the voucher details.</p>
-                            </div>
-                        ),
-                        confirmText: "Go to Voucher",
+                        title: "Transfer Complete",
+                        content: <p className="text-sm font-medium text-theme-secondary">The transfer has been successfully validated and added to your wallet.</p>,
+                        confirmText: "View Details",
                         voucherId: updatedInstanceId
                     });
                 }
             }
-
         } catch (e) {
-            const errorStr = e instanceof Error ? e.message : String(e);
-            
-            // Check for tolerance zones
-            if (errorStr.includes("BundleInRecoveryToleranceZone") || errorStr.includes("shortly before the recent wallet recovery")) {
+            const errorStr = String(e);
+            if (errorStr.includes("ToleranceZone")) {
                 setToleranceModal({
-                    type: 'Soft',
-                    message: "This bundle was created shortly before your last wallet recovery. If you already received and spent this money before losing your device, importing it now will lead to a double-spend!"
+                    type: errorStr.includes("Extended") ? 'Critical' : 'Soft',
+                    message: "DANGER: This bundle predates your last wallet recovery. Re-importing may lead to double-spend conflicts."
                 });
                 return;
             }
-            if (errorStr.includes("BundleInExtendedRecoveryToleranceZone") || errorStr.includes("up to 4 weeks old")) {
-                setToleranceModal({
-                    type: 'Critical',
-                    message: "DANGER: This voucher is up to 4 weeks old. Importing it after a recovery is highly risky and will lead to a loss of reputation if it results in a double-spend!"
-                });
-                return;
-            }
-            if (errorStr.includes("BundlePredatesCurrentEpoch") || errorStr.includes("too old relative to the last wallet recovery")) {
-                setFeedbackMsg("Transaction blocked: This voucher is too old to be safely processed after your last recovery. It has been rejected for your protection.");
-                return;
-            }
-
-            // Check for "already attached" case
-            if (errorStr.includes("already attached to voucher")) {
-                // Extract local ID from our new [LOCAL_ID:...] format
+            if (errorStr.includes("already attached")) {
                 const match = errorStr.match(/\[LOCAL_ID:([\w-]+)]/);
-                const voucherId = match ? match[1] : null;
-                
-                if (voucherId) {
-                    logger.info(`Detected duplicate signature for voucher: ${voucherId}. Navigating there.`);
+                if (match) {
                     setResultModal({
                         isOpen: true,
-                        title: "Signature Already Exists",
-                        content: (
-                            <div>
-                                <p className="mb-2">This signature was already added previously to the voucher.</p>
-                                <p className="text-theme-subtle">Redirecting to the voucher details.</p>
-                            </div>
-                        ),
-                        confirmText: "Go to Voucher",
-                        voucherId: voucherId
+                        title: "Duplicate Signature",
+                        content: <p className="text-sm font-medium text-theme-secondary">This signature is already present on the selected asset.</p>,
+                        confirmText: "Go to Asset",
+                        voucherId: match[1]
                     });
                     return;
                 }
             }
-
-            const msg = `Failed during file processing. Error: ${errorStr}`;
-            logger.error(msg);
-            if (e instanceof Error && e.stack) logger.error(e.stack);
-            setFeedbackMsg(`Error: ${msg}`);
+            setFeedbackMsg(errorStr);
         } finally {
             if (!toleranceModal) {
                 setIsProcessing(false);
@@ -409,16 +293,11 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
     async function confirmToleranceImport() {
         if (!toleranceModal) return;
-        if (toleranceModal.type === 'Critical' && confirmText.toUpperCase() !== "IMPORT") {
-            return;
-        }
-
         setIsProcessing(true);
         try {
             let fileData: number[];
-            if (droppedFileContent) {
-                fileData = droppedFileContent;
-            } else if (bundlePath) {
+            if (droppedFileContent) fileData = droppedFileContent;
+            else if (bundlePath) {
                 const fileUint8Array = await readFile(bundlePath);
                 fileData = Array.from(fileUint8Array);
             } else return;
@@ -426,9 +305,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             const standardDefinitionsToml: Record<string, string> = {};
             voucherStandards.forEach(standard => {
                 const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
-                if (uuidMatch && uuidMatch[1]) {
-                    standardDefinitionsToml[uuidMatch[1]] = standard.content;
-                }
+                if (uuidMatch && uuidMatch[1]) standardDefinitionsToml[uuidMatch[1]] = standard.content;
             });
 
             const payload = await protectAction(async (password) => {
@@ -440,11 +317,9 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 });
             });
 
-            if (payload) {
-                onReceiveSuccess(payload);
-            }
+            if (payload) onReceiveSuccess(payload);
         } catch (e) {
-            setFeedbackMsg(`Failed to import with force: ${e}`);
+            setFeedbackMsg(String(e));
         } finally {
             setIsProcessing(false);
             setToleranceModal(null);
@@ -455,122 +330,188 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
     return (
         <PageLayout 
-            title="Receive & Process" 
-            description="Process transfers, signature requests, or responses you have received." 
+            title="Import File" 
+            description="Securely process incoming files." 
             onBack={onBack}
         >
-            <form onSubmit={handleProcessClick} className="space-y-6">
+            <div className="max-w-3xl mx-auto space-y-8">
+                {feedbackMsg && (
+                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-start gap-3 animate-in shake duration-500">
+                        <AlertCircle className="text-rose-500 shrink-0" size={18} />
+                        <p className="text-sm font-bold text-rose-800 leading-tight">{feedbackMsg}</p>
+                    </div>
+                )}
 
-                    {feedbackMsg && (
-                        <div className={`p-4 rounded-md text-center text-sm ${
-                            feedbackMsg.includes('Privacy Guard Integrity') || feedbackMsg.includes('Tampered') || feedbackMsg.includes('Security')
-                            ? 'bg-red-100 border border-red-300 text-red-800 font-bold' 
-                            : 'text-red-500'
-                        }`}>
-                            {feedbackMsg}
-                        </div>
-                    )}
-
+                <form onSubmit={handleProcessClick} className="space-y-8">
                     <div
                         id="bundle-drop-zone"
-                        data-testid="drop-zone"
-                        className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer ${
-                            isDragOver ? 'border-theme-primary bg-bg-input-focus' : 'border-theme-subtle'
+                        className={`relative group border-2 border-dashed rounded-[40px] p-12 transition-all flex flex-col items-center justify-center text-center overflow-hidden min-h-[340px] cursor-pointer ${
+                            isDragOver 
+                                ? 'border-theme-primary bg-theme-primary/5 shadow-premium-lg' 
+                                : bundleName 
+                                    ? 'border-emerald-500/30 bg-emerald-50/10' 
+                                    : 'border-theme-subtle hover:border-theme-primary/40 hover:bg-white/40'
                         }`}
                         onDragOver={handleDragOver}
                         onDragLeave={handleDragLeave}
                         onDrop={handleDrop}
-                        style={{ minHeight: '200px', width: '100%' }}
+                        onClick={bundleName ? undefined : handleFileSelect}
                     >
+                        {/* Background subtle pattern or glow */}
+                        <div className={`absolute inset-0 transition-opacity duration-700 pointer-events-none ${isDragOver ? 'opacity-100' : 'opacity-0'}`}>
+                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] bg-theme-primary/10 rounded-full blur-[100px]"></div>
+                        </div>
+
                         {bundleName ? (
-                            <div>
-                                <p className="font-semibold text-theme-primary">{bundleName}</p>
-                                <p className="text-sm text-theme-light mt-2">File is ready to be processed.</p>
-                                <Button type="button" variant="outline" onClick={clearSelection}>Choose a different file</Button>
+                            <div className="relative animate-in zoom-in duration-300 space-y-6">
+                                <div className="mx-auto w-24 h-24 bg-emerald-500 rounded-[32px] flex items-center justify-center shadow-lg shadow-emerald-200 text-white">
+                                    <FileCheck size={48} />
+                                </div>
+                                <div>
+                                    <h3 className="text-xl font-black text-theme-primary tracking-tight mb-2">File Detected</h3>
+                                    <div className="flex flex-col items-center gap-1.5">
+                                        <p className="text-xs font-mono font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">
+                                            {bundleName}
+                                        </p>
+                                        <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mt-2">
+                                            Ready to import
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="pt-4">
+                                    <button 
+                                        type="button" 
+                                        onClick={(e) => { e.stopPropagation(); clearSelection(); }}
+                                        className="text-[10px] font-black uppercase tracking-widest text-theme-light hover:text-rose-500 transition-colors flex items-center gap-1 mx-auto"
+                                    >
+                                        <X size={12} /> Discard File
+                                    </button>
+                                </div>
                             </div>
                         ) : (
-                            <div>
-                                <p data-testid="drop-zone-text" className="text-theme-light mb-4">Drag & Drop your '.transfer', '.ask', or '.sig' file here</p>
-                                <p className="text-theme-light text-sm mb-4">or</p>
-                                <Button type="button" onClick={handleFileSelect}>Select Bundle File</Button>
+                            <div className="relative space-y-6">
+                                <div className="mx-auto w-20 h-20 bg-theme-primary/5 rounded-[32px] flex items-center justify-center border border-theme-primary/10 text-theme-primary transition-transform group-hover:scale-110 group-hover:rotate-3 duration-500 shadow-inner-soft">
+                                    <UploadCloud size={36} />
+                                </div>
+                                <div className="space-y-2">
+                                    <h3 className="text-xl font-black text-theme-primary tracking-tight">Drop Transfer File</h3>
+                                    <p className="text-sm font-medium text-theme-light/60 max-w-[280px]">
+                                        Support for .transfer, .ask, and .sig files received from trusted parties.
+                                    </p>
+                                </div>
+                                <div className="pt-4">
+                                    <Button type="button" onClick={(e) => { e.stopPropagation(); handleFileSelect(); }} variant="secondary" className="rounded-2xl px-8 shadow-premium group-hover:bg-theme-secondary group-hover:text-white transition-all">
+                                        Select File
+                                    </Button>
+                                </div>
                             </div>
                         )}
-                     </div>
+                    </div>
 
-                     {(bundlePath || droppedFileContent) && (
-                         <Button size="lg" type="submit" className="w-full">
-                             Process File
-                         </Button>
-                     )}
-
+                    <div className="flex flex-col gap-4">
+                        <Button 
+                            size="lg" 
+                            type="submit" 
+                            disabled={(!bundlePath && !droppedFileContent) || isProcessing}
+                            className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3 disabled:opacity-30 disabled:grayscale transition-all"
+                        >
+                            {isProcessing ? <ArrowRightLeft className="animate-spin" size={24} /> : <FileSignature size={24} />}
+                            {isProcessing ? 'Loading...' : 'Import File'}
+                        </Button>
+                        <p className="text-[10px] font-bold text-theme-light text-center flex items-center justify-center gap-2">
+                            <Lock size={12} />
+                            ALL PROCESSING IS PERFORMED LOCALLY ON THIS DEVICE
+                        </p>
+                    </div>
                 </form>
 
+                {/* File Format Guide */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-10">
+                    {[
+                        { icon: FileCheck, title: 'Transfer', desc: 'Accept assets sent to you directly.', ext: '.transfer' },
+                        { icon: FileSignature, title: 'Signature Request', desc: 'Sign an asset for a peer.', ext: '.ask' },
+                        { icon: CheckCircle2, title: 'Signature Response', desc: 'Attach a peer signature.', ext: '.sig' }
+                    ].map((item, i) => (
+                        <div key={i} className="p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl flex flex-col items-center text-center">
+                            <item.icon size={18} className="text-theme-light/60 mb-2" />
+                            <h4 className="text-[10px] font-black uppercase tracking-widest text-theme-secondary mb-1">{item.title}</h4>
+                            <p className="text-[10px] text-theme-light font-medium leading-tight">{item.desc}</p>
+                            <span className="mt-2 text-[9px] font-mono font-bold bg-theme-subtle/20 px-2 py-0.5 rounded text-theme-light">{item.ext}</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* Modals */}
             <ConfirmationModal
                 isOpen={showConfirm}
-                title={`Process ${fileType === 'transfer' ? 'Transfer Bundle' : fileType === 'ask' ? 'Signature Request' : 'Signature Response'}`}
+                title={`Import ${fileType === 'transfer' ? 'Transfer' : fileType === 'ask' ? 'Signature Request' : 'Signature Response'}`}
                 description={
-                    <p>
-                        Do you want to process the file <strong>{bundleName}</strong>?<br/>
-                        {fileType === 'transfer' && 'This will check for funds and add them to your wallet.'}
-                        {fileType === 'ask' && 'This will open a signature request for you to review and sign.'}
-                        {fileType === 'sig' && 'This will attach the signature to the corresponding voucher in your wallet.'}
-                        
+                    <div className="space-y-6 pt-2">
+                        <div className="p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/20 flex items-center gap-4">
+                            <div className="p-2 bg-white rounded-xl shadow-sm text-theme-primary">
+                                <FileJson size={24} />
+                            </div>
+                            <div>
+                                <p className="text-sm font-bold text-theme-secondary truncate max-w-[200px]">{bundleName}</p>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">Type: {fileType}</p>
+                            </div>
+                        </div>
+
                         {(fileType === 'ask' || fileType === 'sig') && (
-                            <div className="mt-4">
-                                <label className="block text-sm font-medium text-theme-primary mb-1">
-                                    Bundle Password (optional)
+                            <div className="space-y-3">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-2">
+                                    <Lock size={12} /> Payload Password (Optional)
                                 </label>
-                                <input
+                                <Input
                                     type="password"
                                     value={bundlePassword}
-                                    onChange={(e) => setBundlePassword(e.target.value)}
-                                    placeholder="Only if encrypted with password"
-                                    className="w-full px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary text-sm"
+                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBundlePassword(e.target.value)}
+                                    placeholder="Enter access password if required"
                                 />
-                                <p className="text-[10px] text-theme-light mt-1">
-                                    If the sender protected the bundle with a password, enter it here.
+                                <p className="text-[10px] text-theme-light font-medium italic">
+                                    Required only if the sender encrypted this specific payload with a password.
                                 </p>
                             </div>
                         )}
-                    </p>
+                    </div>
                 }
-                confirmText="Yes, Process"
+                confirmText="Import"
                 onConfirm={executeReceive}
-                onCancel={() => {
-                    setShowConfirm(false);
-                    setBundlePassword("");
-                }}
+                onCancel={() => { setShowConfirm(false); setBundlePassword(""); }}
                 isProcessing={isProcessing}
             />
 
             {toleranceModal && (
                 <ConfirmationModal
                     isOpen={true}
-                    title={toleranceModal.type === 'Soft' ? "Recovery Warning" : "Critical Recovery Warning"}
+                    title={toleranceModal.type === 'Soft' ? "Sync from Backup" : "CRITICAL: Chronological Conflict"}
+                    confirmVariant="danger"
                     description={
-                        <div className="space-y-4">
-                            <p className="text-theme-primary">{toleranceModal.message}</p>
+                        <div className="space-y-6 pt-2">
+                            <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-3">
+                                <ShieldAlert size={20} className="text-rose-600 shrink-0 mt-0.5" />
+                                <p className="text-sm font-medium text-rose-900 leading-relaxed">{toleranceModal.message}</p>
+                            </div>
                             
                             {toleranceModal.type === 'Soft' ? (
-                                <div className="flex items-center gap-3 bg-theme-accent/10 p-3 rounded-lg border border-theme-accent/20">
+                                <label className="flex items-center gap-4 p-4 bg-white border border-theme-subtle rounded-2xl cursor-pointer group hover:border-theme-accent/40 transition-all">
                                     <input 
                                         type="checkbox" 
-                                        id="confirm-soft" 
-                                        className="w-5 h-5 rounded border-theme-subtle text-theme-accent focus:ring-theme-accent"
+                                        className="w-6 h-6 rounded-lg border-theme-subtle text-theme-accent focus:ring-theme-accent"
                                         checked={confirmText === "checked"}
                                         onChange={(e) => setConfirmText(e.target.checked ? "checked" : "")}
                                     />
-                                    <label htmlFor="confirm-soft" className="text-sm font-medium text-theme-primary cursor-pointer select-none">
-                                        I understand the risk and want to import anyway
-                                    </label>
-                                </div>
+                                    <span className="text-sm font-bold text-theme-secondary select-none">
+                                        I accept responsibility for potential double-spend conflicts.
+                                    </span>
+                                </label>
                             ) : (
-                                <div className="space-y-2">
-                                    <p className="text-sm font-bold text-red-500">To proceed, please type "IMPORT" to confirm:</p>
-                                    <input 
-                                        type="text" 
-                                        className="w-full px-4 py-3 bg-bg-app border-2 border-red-500/30 rounded-lg text-theme-primary focus:border-red-500 outline-none transition-all uppercase font-mono tracking-widest"
-                                        placeholder="TYPE IMPORT HERE"
+                                <div className="space-y-3">
+                                    <p className="text-[10px] font-black text-rose-500 uppercase tracking-[0.2em]">Mandatory Affirmation</p>
+                                    <Input 
+                                        className="border-2 border-rose-500/30 focus:border-rose-500 uppercase font-mono tracking-widest text-center py-4"
+                                        placeholder='TYPE "IMPORT" TO CONFIRM'
                                         value={confirmText}
                                         onChange={(e) => setConfirmText(e.target.value)}
                                     />
@@ -579,21 +520,10 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                         </div>
                     }
                     confirmText="Import Anyway"
-                    cancelText="Cancel"
                     onConfirm={confirmToleranceImport}
-                    onCancel={() => {
-                        setToleranceModal(null);
-                        setConfirmText("");
-                        setIsProcessing(false);
-                        setShowConfirm(false);
-                    }}
+                    onCancel={() => { setToleranceModal(null); setConfirmText(""); setIsProcessing(false); setShowConfirm(false); }}
                     isProcessing={isProcessing}
-                    // Disable confirm button if requirements not met
-                    confirmDisabled={
-                        toleranceModal.type === 'Soft' 
-                            ? confirmText !== "checked"
-                            : confirmText.toUpperCase() !== "IMPORT"
-                    }
+                    confirmDisabled={toleranceModal.type === 'Soft' ? confirmText !== "checked" : confirmText.toUpperCase() !== "IMPORT"}
                 />
             )}
 
@@ -603,7 +533,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     title={resultModal.title}
                     description={resultModal.content}
                     confirmText={resultModal.confirmText}
-                    cancelText="Close"
+                    cancelText="Dismiss"
                     onConfirm={() => {
                         if (resultModal.voucherId) {
                             onReceiveSuccess({
@@ -616,10 +546,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                         }
                         setResultModal(null);
                     }}
-                    onCancel={() => {
-                        setResultModal(null);
-                        onBack();
-                    }}
+                    onCancel={() => { setResultModal(null); onBack(); }}
                 />
             )}
         </PageLayout>

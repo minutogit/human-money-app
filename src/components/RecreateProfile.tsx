@@ -8,6 +8,7 @@ import { MnemonicLanguage } from "../types";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
+import { ArrowLeft, ArrowRight, RefreshCw, CheckCircle2 } from "lucide-react";
 
 type WizardStep = "import_seed" | "set_details";
 type InputMode = "words" | "phrase";
@@ -369,9 +370,13 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                             </div>
                         </div>
 
-                        <div className="flex justify-between items-center">
-                            <Button type="button" variant="secondary" onClick={onSwitchToLogin}>Back to Login</Button>
-                            <Button type="submit" disabled={!isValidMnemonic}>Next</Button>
+                        <div className="flex gap-4 w-full pt-4">
+                            <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="flex-1 py-4 rounded-2xl gap-2">
+                                <ArrowLeft size={18} /> Back to Login
+                            </Button>
+                            <Button type="submit" disabled={!isValidMnemonic} className="flex-1 py-4 rounded-2xl gap-2">
+                                Next <ArrowRight size={18} />
+                            </Button>
                         </div>
                     </form>
                 );
@@ -470,9 +475,12 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                     Creating profile, please wait... This may take a moment.
                                 </p>
                             )}
-                            <div className="flex justify-between items-center w-full">
-                                <Button type="button" variant="secondary" onClick={() => setWizardStep("import_seed")}>Back</Button>
-                                <Button type="submit" disabled={isLoading}>
+                            <div className="flex gap-4 w-full pt-4">
+                                <Button type="button" variant="secondary" onClick={() => setWizardStep("import_seed")} className="flex-1 py-4 rounded-2xl gap-2">
+                                    <ArrowLeft size={18} /> Back
+                                </Button>
+                                <Button type="submit" disabled={isLoading} className="flex-[2] py-4 rounded-2xl gap-2">
+                                    {isLoading ? <RefreshCw className="animate-spin" size={18} /> : <CheckCircle2 size={18} />}
                                     {isLoading ? "Creating Profile..." : "Create & Encrypt Profile"}
                                 </Button>
                             </div>

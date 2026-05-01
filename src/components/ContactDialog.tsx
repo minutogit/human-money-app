@@ -122,7 +122,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
 
                 <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
                     <div>
-                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">DID (Address)</label>
+                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">User ID (DID)</label>
                         <input
                             type="text"
                             value={did}

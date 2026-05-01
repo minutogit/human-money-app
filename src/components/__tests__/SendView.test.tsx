@@ -106,7 +106,7 @@ describe('SendView Component (Silber Standard)', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/Recipient User ID/i)).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: /User ID \(DID\)/i })).toBeInTheDocument();
       expect(screen.getByPlaceholderText(/did:key:z/i)).toBeInTheDocument();
     });
   });

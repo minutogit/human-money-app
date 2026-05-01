@@ -6,7 +6,24 @@ import { logger } from '../utils/log';
 import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
+import { Card } from './ui/Card';
+import { PageLayout } from './ui/PageLayout';
 import { useSession } from '../context/SessionContext';
+import { 
+    PenTool, 
+    ShieldCheck, 
+    ShieldAlert, 
+    Info, 
+    Lightbulb, 
+    CheckCircle2, 
+    XCircle,
+    User,
+    Calendar,
+    UserCheck,
+    FileText,
+    ArrowRight,
+    Lock
+} from 'lucide-react';
 
 interface SignRequestViewProps {
     voucherData: VoucherDetails;
@@ -35,7 +52,6 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 ]);
                 setSettings(currentSettings);
 
-                // Find the standard that matches the voucher's standard UUID
                 const matchingStandard = standards.find((s: VoucherStandardInfo) => {
                     const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
                     return uuidMatch && uuidMatch[1] === voucherData.voucher.voucher_standard.uuid;
@@ -47,14 +63,10 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                         tomlContent: matchingStandard.content
                     });
                     setAllowedRoles(roles);
-                    if (roles.length === 1) {
-                        setSelectedRole(roles[0]);
-                    }
+                    if (roles.length === 1) setSelectedRole(roles[0]);
                 }
             } catch (e) {
-                const msg = `Failed to fetch voucher standards, roles or settings: ${e}`;
-                logger.error(msg);
-                setFeedbackMsg(`Error: ${msg}`);
+                setFeedbackMsg(`Initialization Error: ${e}`);
             }
         }
         fetchData();
@@ -76,13 +88,12 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 });
                 setImpact(impactResult);
             } catch (e) {
-                logger.error(`Failed to evaluate signature impact: ${e}`);
+                logger.error(`Failed to evaluate impact: ${e}`);
                 setImpact(null);
             } finally {
                 setIsImpactLoading(false);
             }
         }
-        
         fetchImpact();
     }, [selectedRole, standardContent, voucherData]);
 
@@ -95,7 +106,6 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
         setIsSigning(true);
         setFeedbackMsg('');
         try {
-            logger.info(`Creating detached signature response for role ${selectedRole}`);
             const bundleBytes = await protectAction(async (password) => {
                 return await invoke<number[]>("create_detached_signature_response_bundle", {
                     voucher: voucherData.voucher,
@@ -110,8 +120,8 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
 
             const filePath = await save({
                 defaultPath: settings?.last_used_directory
-                    ? `${settings.last_used_directory}/signature-response-${voucherData.voucher.voucher_id.slice(0, 8)}.sig`
-                    : `signature-response-${voucherData.voucher.voucher_id.slice(0, 8)}.sig`,
+                    ? `${settings.last_used_directory}/signature-${voucherData.voucher.voucher_id.slice(0, 8)}.sig`
+                    : `signature-${voucherData.voucher.voucher_id.slice(0, 8)}.sig`,
                 filters: [
                     { name: 'Signature Response (.sig)', extensions: ['sig'] },
                     { name: 'All Files', extensions: ['*'] }
@@ -122,22 +132,18 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 const uint8Array = new Uint8Array(bundleBytes);
                 const { writeFile } = await import("@tauri-apps/plugin-fs");
                 await writeFile(filePath, uint8Array);
-                logger.info(`Signature response bundle saved to ${filePath}`);
                 
-                // Save directory for next time
                 if (settings) {
                     updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
                         invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
                     });
                 }
 
-                setFeedbackMsg("Signature response saved successfully!");
+                setFeedbackMsg("Cryptographic signature generated successfully!");
                 setTimeout(() => onBack(), 2000);
             }
         } catch (e) {
-            const msg = `Failed to create signature response: ${e}`;
-            logger.error(msg);
-            setFeedbackMsg(msg);
+            setFeedbackMsg(`Signing Failed: ${e}`);
         } finally {
             setIsSigning(false);
         }
@@ -146,150 +152,205 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
     const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
 
     return (
-        <div className="max-w-4xl mx-auto space-y-6 p-4 sm:p-6">
-            <header className="flex items-center gap-4">
-                <button
-                    onClick={onBack}
-                    className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
-                    title="Cancel"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                    </svg>
-                </button>
-                <h1 className="text-2xl font-bold text-theme-primary">Signature Request</h1>
-            </header>
+        <PageLayout 
+            title="Signature Request" 
+            description="Review and cryptographically sign the requested asset endorsement." 
+            onBack={onBack}
+        >
+            <div className="max-w-4xl mx-auto space-y-8 pb-10">
+                {feedbackMsg && (
+                    <div className={`p-5 rounded-3xl flex items-start gap-3 border shadow-sm animate-in zoom-in duration-300 ${feedbackMsg.includes('Error') || feedbackMsg.includes('Failed') ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
+                        {feedbackMsg.includes('Failed') || feedbackMsg.includes('Error') ? <ShieldAlert className="shrink-0" size={20}/> : <CheckCircle2 className="shrink-0" size={20}/>}
+                        <p className="text-sm font-bold leading-tight">{feedbackMsg}</p>
+                    </div>
+                )}
 
-            {feedbackMsg && (
-                <div className={`p-4 rounded-lg ${feedbackMsg.includes('Error') ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
-                    {feedbackMsg}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Voucher Summary */}
+                    <Card header={
+                        <div className="flex items-center gap-2">
+                            <FileText size={18} className="text-theme-primary" />
+                            <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Voucher Details</span>
+                        </div>
+                    }>
+                        <div className="space-y-4">
+                            <div className="p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/10">
+                                <div className="flex items-center justify-between mb-1">
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-theme-light">Value</span>
+                                    <div className="bg-emerald-500 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest">Valid Asset</div>
+                                </div>
+                                <p className="text-2xl font-black text-theme-primary tracking-tight">
+                                    {voucherData.voucher.nominal_value.amount} <span className="text-theme-secondary opacity-60 font-medium">{voucherData.voucher.nominal_value.unit}</span>
+                                </p>
+                            </div>
+                            
+                            <div className="space-y-3 px-1">
+                                <div className="flex items-center justify-between text-xs font-medium">
+                                    <span className="text-theme-light flex items-center gap-1.5"><ShieldCheck size={14}/> Standard</span>
+                                    <span className="text-theme-secondary font-bold">{voucherData.voucher.voucher_standard.name}</span>
+                                </div>
+                                <div className="flex items-center justify-between text-xs font-medium">
+                                    <span className="text-theme-light flex items-center gap-1.5"><User size={14}/> Creator</span>
+                                    <span className="text-theme-secondary font-bold">{voucherData.voucher.creator.first_name} {voucherData.voucher.creator.last_name}</span>
+                                </div>
+                                <div className="flex items-center justify-between text-xs font-medium">
+                                    <span className="text-theme-light flex items-center gap-1.5"><Calendar size={14}/> Created</span>
+                                    <span className="text-theme-secondary font-bold">{formatDateTime(voucherData.voucher.creation_date)}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </Card>
+
+                    {/* Role Selection */}
+                    <Card header={
+                        <div className="flex items-center gap-2">
+                            <UserCheck size={18} className="text-theme-primary" />
+                            <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Endorsement Role</span>
+                        </div>
+                    }>
+                        <div className="space-y-6">
+                            <div className="space-y-3">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Select Authority Role</label>
+                                {allowedRoles.length === 0 ? (
+                                    <div className="py-2 animate-pulse flex items-center gap-2">
+                                        <div className="h-4 w-4 bg-theme-subtle rounded-full"></div>
+                                        <div className="h-4 w-32 bg-theme-subtle rounded-full"></div>
+                                    </div>
+                                ) : allowedRoles.length === 1 ? (
+                                    <div className="p-4 bg-white border-2 border-theme-primary rounded-2xl flex items-center justify-between shadow-sm">
+                                        <span className="font-black text-theme-primary tracking-tight">{selectedRole}</span>
+                                        <CheckCircle2 size={18} className="text-theme-primary" />
+                                    </div>
+                                ) : (
+                                    <select
+                                        value={selectedRole}
+                                        onChange={(e) => setSelectedRole(e.target.value)}
+                                        className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
+                                    >
+                                        <option value="">Choose Role...</option>
+                                        {allowedRoles.map(role => <option key={role} value={role}>{role}</option>)}
+                                    </select>
+                                )}
+                            </div>
+
+                            <label className="flex items-center gap-4 p-4 bg-white/40 border border-theme-subtle rounded-2xl cursor-pointer group hover:border-theme-primary/40 transition-all shadow-sm">
+                                <input
+                                    type="checkbox"
+                                    checked={includeDetails}
+                                    onChange={(e) => setIncludeDetails(e.target.checked)}
+                                    className="w-6 h-6 rounded-lg border-theme-subtle text-theme-primary focus:ring-theme-primary transition-all"
+                                />
+                                <div>
+                                    <span className="block text-sm font-bold text-theme-secondary group-hover:text-theme-primary transition-colors">Disclose Identity</span>
+                                    <span className="block text-[10px] text-theme-light font-medium">Embed your public profile data in the signature</span>
+                                </div>
+                            </label>
+                        </div>
+                    </Card>
                 </div>
-            )}
 
-            <div className="bg-bg-card-alternate border border-theme-subtle rounded-lg shadow-sm p-6">
-                <h2 className="text-lg font-semibold text-theme-primary mb-4">Voucher Details</h2>
-                <div className="space-y-2">
-                    <p><span className="font-semibold">Standard:</span> {voucherData.voucher.voucher_standard.name}</p>
-                    <p><span className="font-semibold">Value:</span> {voucherData.voucher.nominal_value.amount} {voucherData.voucher.nominal_value.unit}</p>
-                    <p><span className="font-semibold">Creator:</span> {voucherData.voucher.creator.first_name} {voucherData.voucher.creator.last_name}</p>
-                    <p><span className="font-semibold">Created:</span> {formatDateTime(voucherData.voucher.creation_date)}</p>
-                    <p><span className="font-semibold">Valid Until:</span> {formatDateTime(voucherData.voucher.valid_until)}</p>
-                </div>
-            </div>
+                {/* Impact Analysis */}
+                <Card header={
+                    <div className="flex items-center gap-2">
+                        <PenTool size={18} className="text-theme-primary" />
+                        <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Impact Evaluation</span>
+                    </div>
+                }>
+                    <div className="min-h-[120px] flex flex-col justify-center">
+                        {isImpactLoading ? (
+                            <div className="flex flex-col items-center gap-3 animate-pulse">
+                                <div className="w-10 h-10 bg-theme-subtle/20 rounded-full border border-theme-subtle/30 flex items-center justify-center">
+                                    <ArrowRight className="text-theme-light animate-bounce" size={20} />
+                                </div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">Analyzing Cryptographic Suitability...</p>
+                            </div>
+                        ) : impact ? (
+                            <div className="space-y-4">
+                                {!impact.is_allowed_role && (
+                                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-start gap-3">
+                                        <XCircle size={20} className="text-rose-500 shrink-0" />
+                                        <p className="text-sm font-bold text-rose-800">Standard Violation: The specified role is not authorized for this asset.</p>
+                                    </div>
+                                )}
+                                
+                                {impact.fatal_conflicts.length > 0 && (
+                                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl space-y-2">
+                                        <div className="flex items-center gap-2 text-rose-600 font-black text-[10px] uppercase tracking-widest">
+                                            <ShieldAlert size={14} /> Profile Conflicts
+                                        </div>
+                                        <ul className="space-y-1.5">
+                                            {impact.fatal_conflicts.map((conflict, i) => (
+                                                <li key={i} className="text-sm font-bold text-rose-800 flex items-start gap-2">
+                                                    <span className="text-rose-400 mt-1.5 flex-shrink-0 w-1 h-1 bg-rose-400 rounded-full"></span>
+                                                    {conflict}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
 
-            <div className="bg-bg-card-alternate border border-theme-subtle rounded-lg shadow-sm p-6">
-                <h2 className="text-lg font-semibold text-theme-primary mb-4">Signature Options</h2>
-                
-                <div className="space-y-4">
-                    <div>
-                        <label className="block text-sm font-semibold text-theme-light mb-2">
-                            Signature Role
-                        </label>
-                        {allowedRoles.length === 0 ? (
-                            <p className="text-sm text-theme-light">Loading available roles...</p>
-                        ) : allowedRoles.length === 1 ? (
-                            <p className="text-base text-theme-secondary">{selectedRole}</p>
+                                {impact.resolved_rules.length > 0 && (
+                                    <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl space-y-2">
+                                        <div className="flex items-center gap-2 text-emerald-600 font-black text-[10px] uppercase tracking-widest">
+                                            <CheckCircle2 size={14} /> Rules Fulfilled
+                                        </div>
+                                        <ul className="space-y-1.5">
+                                            {impact.resolved_rules.map((rule, i) => (
+                                                <li key={i} className="text-sm font-bold text-emerald-800 flex items-start gap-2">
+                                                    <span className="text-emerald-400 mt-1.5 flex-shrink-0 w-1 h-1 bg-emerald-400 rounded-full"></span>
+                                                    {rule}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+
+                                {impact.gentle_hints.length > 0 && impact.fatal_conflicts.length === 0 && (
+                                    <div className="space-y-2">
+                                        {impact.gentle_hints.map((hint, i) => (
+                                            <div key={i} className="p-4 bg-blue-50/50 border border-blue-100 rounded-2xl flex items-start gap-3">
+                                                <Lightbulb size={20} className="text-blue-500 shrink-0" />
+                                                <p className="text-sm font-bold text-blue-800">{hint}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {impact.is_allowed_role && impact.fatal_conflicts.length === 0 && impact.resolved_rules.length === 0 && impact.gentle_hints.length === 0 && (
+                                    <div className="p-4 bg-gray-50 border border-gray-100 rounded-2xl flex items-start gap-3">
+                                        <Info size={20} className="text-gray-400 shrink-0" />
+                                        <p className="text-sm font-bold text-gray-600">This signature is valid but does not resolve any outstanding cryptographic rules.</p>
+                                    </div>
+                                )}
+                            </div>
+                        ) : selectedRole ? (
+                            <div className="text-center py-4">
+                                <p className="text-sm font-bold text-theme-light italic">Impact data unavailable for this role configuration.</p>
+                            </div>
                         ) : (
-                            <select
-                                value={selectedRole}
-                                onChange={(e) => setSelectedRole(e.target.value)}
-                                className="w-full px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary"
-                            >
-                                <option value="">Select a role...</option>
-                                {allowedRoles.map(role => (
-                                    <option key={role} value={role}>{role}</option>
-                                ))}
-                            </select>
+                            <div className="text-center py-4">
+                                <p className="text-sm font-bold text-theme-light/60 italic">Please select a role to evaluate the endorsement impact.</p>
+                            </div>
                         )}
                     </div>
+                </Card>
 
-                    <div className="flex items-center gap-2">
-                        <input
-                            type="checkbox"
-                            id="includeDetails"
-                            checked={includeDetails}
-                            onChange={(e) => setIncludeDetails(e.target.checked)}
-                            className="w-4 h-4 text-theme-primary border-theme-subtle rounded focus:ring-theme-primary"
-                        />
-                        <label htmlFor="includeDetails" className="text-sm text-theme-secondary">
-                            Include public profile details in signature
-                        </label>
-                    </div>
-                </div>
-
-                {/* Impact Evaluation UI */}
-                <div className="mt-6 pt-4 border-t border-theme-subtle">
-                    {isImpactLoading ? (
-                        <p className="text-sm text-theme-light italic">Evaluating signature impact...</p>
-                    ) : impact ? (
-                        <div className="space-y-3">
-                            {!impact.is_allowed_role && (
-                                <div className="p-3 bg-red-100 text-red-800 rounded-md flex items-start gap-2">
-                                    <span className="text-lg">🛑</span>
-                                    <p className="text-sm">The standard does not permit this role.</p>
-                                </div>
-                            )}
-                            
-                            {impact.fatal_conflicts.length > 0 && (
-                                <div className="p-3 bg-red-100 text-red-800 rounded-md flex items-start gap-2">
-                                    <span className="text-lg">🚫</span>
-                                    <div>
-                                        <p className="text-sm font-semibold mb-1">Warning: Profile conflict</p>
-                                        <ul className="list-disc pl-4 text-sm space-y-1">
-                                            {impact.fatal_conflicts.map((conflict, i) => (
-                                                <li key={i}>{conflict}</li>
-                                            ))}
-                                        </ul>
-                                    </div>
-                                </div>
-                            )}
-
-                            {impact.resolved_rules.length > 0 && (
-                                <div className="p-3 bg-green-100 text-green-800 rounded-md flex items-start gap-2">
-                                    <span className="text-lg">🌟</span>
-                                    <div>
-                                        <p className="text-sm font-semibold mb-1">Your signature will successfully fulfill:</p>
-                                        <ul className="list-disc pl-4 text-sm space-y-1">
-                                            {impact.resolved_rules.map((rule, i) => (
-                                                <li key={i}>{rule}</li>
-                                            ))}
-                                        </ul>
-                                    </div>
-                                </div>
-                            )}
-
-                            {impact.gentle_hints.length > 0 && impact.fatal_conflicts.length === 0 && (
-                                <div className="p-3 bg-blue-50 text-blue-800 border border-blue-200 rounded-md flex flex-col gap-2">
-                                    {impact.gentle_hints.map((hint, i) => (
-                                        <div key={i} className="flex items-start gap-2">
-                                            <span className="text-lg">💡</span>
-                                            <p className="text-sm">{hint}</p>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-
-                            {impact.is_allowed_role && impact.fatal_conflicts.length === 0 && impact.resolved_rules.length === 0 && impact.gentle_hints.length === 0 && (
-                                <div className="p-3 bg-gray-100 text-gray-700 rounded-md flex items-start gap-2">
-                                    <span className="text-lg">⚠️</span>
-                                    <p className="text-sm">This signature does not directly resolve any pending rules.</p>
-                                </div>
-                            )}
-                        </div>
-                    ) : selectedRole ? (
-                        <p className="text-sm text-theme-light italic">No evaluation data available.</p>
-                    ) : null}
+                <div className="flex flex-col gap-4">
+                    <Button
+                        size="lg"
+                        onClick={handleSign}
+                        disabled={!selectedRole || isSigning || (impact !== null && (!impact.is_allowed_role || impact.fatal_conflicts.length > 0))}
+                        className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3 disabled:opacity-30 disabled:grayscale transition-all"
+                    >
+                        {isSigning ? <ShieldCheck className="animate-pulse" size={24} /> : <PenTool size={24} />}
+                        {isSigning ? 'Authorizing Signature...' : 'Finalize Endorsement'}
+                    </Button>
+                    <p className="text-[10px] font-bold text-theme-light text-center flex items-center justify-center gap-2">
+                        <Lock size={12} />
+                        SIGNATURE IS GENERATED LOCALLY AND NEVER EXPOSES YOUR PRIVATE KEY
+                    </p>
                 </div>
             </div>
-
-            <Button
-                size="lg"
-                onClick={handleSign}
-                disabled={!selectedRole || isSigning || (impact !== null && (!impact.is_allowed_role || impact.fatal_conflicts.length > 0))}
-                className="w-full"
-            >
-                {isSigning ? 'Signing...' : 'Accept & Sign'}
-            </Button>
-        </div>
+        </PageLayout>
     );
 }

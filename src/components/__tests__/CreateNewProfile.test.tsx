@@ -90,7 +90,7 @@ describe('CreateNewProfile Component', () => {
       await waitFor(() => {
         const words = mockSeed12.split(' ');
         words.forEach((word, index) => {
-          expect(screen.getByTestId(`word-display-${index}`)).toHaveTextContent(new RegExp(`${index + 1}.\\s*${word}`));
+          expect(screen.getByTestId(`word-display-${index}`)).toHaveTextContent(new RegExp(`${index + 1}\\s*${word}`));
         });
       });
     });
@@ -105,10 +105,10 @@ describe('CreateNewProfile Component', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('12 Words')).toBeInTheDocument();
+        expect(screen.getByDisplayValue('12 Words (Standard Security)')).toBeInTheDocument();
       });
 
-      const wordCountSelect = screen.getByDisplayValue('12 Words');
+      const wordCountSelect = screen.getByDisplayValue('12 Words (Standard Security)');
       fireEvent.change(wordCountSelect, { target: { value: '24' } });
 
       await waitFor(() => {

@@ -24,12 +24,12 @@ export function PageLayout({
             {customHeader ? (
                 customHeader
             ) : (title || onBack) ? (
-                <header className="flex-shrink-0 mb-6">
-                    <div className="flex items-center gap-4 mb-2">
+                <header className="flex-shrink-0 sticky top-0 z-20 px-6 py-4 mb-2 glass-panel border-b-0 rounded-b-3xl">
+                    <div className="flex items-center gap-4">
                         {onBack && (
                             <button
                                 onClick={onBack}
-                                className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
+                                className="p-2.5 rounded-full bg-white/50 border border-theme-subtle hover:bg-theme-primary hover:text-white transition-all text-theme-light shadow-sm active:scale-90"
                                 title="Back"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -38,11 +38,16 @@ export function PageLayout({
                             </button>
                         )}
                         {title && (
-                            typeof title === 'string' ? (
-                                <h1 className="text-2xl font-bold text-theme-primary">{title}</h1>
-                            ) : (
-                                title
-                            )
+                            <div className="flex flex-col">
+                                {typeof title === 'string' ? (
+                                    <h1 className="text-2xl font-black text-theme-primary tracking-tight">{title}</h1>
+                                ) : (
+                                    title
+                                )}
+                                {description && (
+                                    <p className="text-xs font-medium text-theme-light uppercase tracking-widest opacity-70">{description}</p>
+                                )}
+                            </div>
                         )}
                         {actions && (
                             <div className="flex-grow flex justify-end items-center gap-2">
@@ -51,13 +56,10 @@ export function PageLayout({
                         )}
                         {!actions && <div className="flex-grow"></div>}
                     </div>
-                    {description && (
-                        <p className="text-theme-light ml-14">{description}</p>
-                    )}
                 </header>
             ) : null}
 
-            <div className="flex-grow overflow-y-auto">
+            <div className="flex-grow overflow-y-auto px-6 py-4">
                 {children}
             </div>
         </div>

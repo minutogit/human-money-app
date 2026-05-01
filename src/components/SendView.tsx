@@ -2,20 +2,47 @@
 import { useState, useEffect, useMemo, FormEvent, ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "../utils/log";
-import { VoucherSummary, VoucherStandardInfo, SourceTransfer, TransactionRecord, InvolvedVoucherInfo, Contact, TrustStatus, AppSettings } from "../types";
+import { 
+    VoucherSummary, 
+    VoucherStandardInfo, 
+    SourceTransfer, 
+    TransactionRecord, 
+    Contact, 
+    TrustStatus, 
+    AppSettings 
+} from "../types";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
+import { Card } from "./ui/Card";
 import { useSession } from "../context/SessionContext";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { ContactBadge } from "./ui/ContactBadge";
 import Avatar from "boring-avatars";
 import { PageLayout } from "./ui/PageLayout";
+import { 
+    User, 
+    Send, 
+    Shield, 
+    Lock, 
+    Eye, 
+    AlertTriangle, 
+    CheckCircle2, 
+    BookOpen, 
+    Search, 
+    Filter, 
+    CreditCard, 
+    Info, 
+    X,
+    UserPlus,
+    ArrowRight,
+    Coins
+} from "lucide-react";
 
 interface SendViewProps {
     onBack: () => void;
     onTransferPrepared: (bundleData: number[], recipientId: string, summary: string) => void;
-    profileName: string | null; // NEU: Profilname des aktuellen Benutzers
+    profileName: string | null;
 }
 
 function formatDate(isoString: string): string {
@@ -31,12 +58,11 @@ function formatAmount(amountStr: string): string {
     return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-
 export function SendView({ onBack, onTransferPrepared, profileName }: SendViewProps) {
     const { protectAction } = useSession();
     const [recipientId, setRecipientId] = useState("");
-    const [notes, setNotes] = useState(""); // NEU
-    const [sendProfileName, setSendProfileName] = useState(true); // NEU
+    const [notes, setNotes] = useState("");
+    const [sendProfileName, setSendProfileName] = useState(true);
     const [customSenderName, setCustomSenderName] = useState("");
     const [ownUserId, setOwnUserId] = useState("");
     const [targetAmountStr, setTargetAmountStr] = useState("");
@@ -53,7 +79,6 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [privacyMode, setPrivacyMode] = useState<'public' | 'stealth' | null>(null);
     const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
     
-    // Adressebuch & Vorschläge
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [suggestions, setSuggestions] = useState<Contact[]>([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
@@ -61,7 +86,6 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [recipientError, setRecipientError] = useState(false);
     const [privacyError, setPrivacyError] = useState(false);
 
-    // Reset error indicator after short delay
     useEffect(() => {
         if (recipientError) {
             const timer = setTimeout(() => setRecipientError(false), 2000);
@@ -69,7 +93,6 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         }
     }, [recipientError]);
 
-    // Reset privacy error indicator after short delay
     useEffect(() => {
         if (privacyError) {
             const timer = setTimeout(() => setPrivacyError(false), 2000);
@@ -77,14 +100,12 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         }
     }, [privacyError]);
 
-    // Reset privacy mode when selection changes (for flexible mode)
     useEffect(() => {
         if (privacyRules.mode === 'Flexible') {
             setPrivacyMode(null);
         }
     }, [selection]);
 
-    // Reputation Check useEffect
     useEffect(() => {
         if (recipientId.length < 10) {
             setTrustStatus("Clean");
@@ -105,23 +126,16 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
     useEffect(() => {
         async function fetchData() {
-            // Log added here
             logger.info("SendView component displayed. Fetching initial data...");
             try {
-                // KORREKTUR: Rufe die Gutscheine ohne Argumente ab, genau wie im Dashboard.
                 const allFetchedVouchers = await invoke<VoucherSummary[]>("get_voucher_summaries");
-                logger.info(`1. Fetched ${allFetchedVouchers.length} vouchers from backend.`);
-
-                // Use robust logic from Dashboard to handle both string and object statuses.
                 const activeVouchers = allFetchedVouchers.filter(v => {
                     const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
                     return statusName === 'Active';
                 });
-                logger.info(`2. Filtered down to ${activeVouchers.length} active vouchers.`);
 
                 const userId = await invoke<string>("get_user_id");
                 
-                // Fetch public profile to build a better default display name
                 try {
                     const userProfile = await invoke<any>("get_user_profile");
                     let defaultName = "";
@@ -134,7 +148,6 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                     }
                     setCustomSenderName(defaultName);
                 } catch (e) {
-                    logger.warn(`Could not fetch user profile for default sender name: ${e}`);
                     setCustomSenderName(profileName || "");
                 }
 
@@ -144,36 +157,25 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 const newNameMap = new Map<string, string>();
                 standards.forEach(s => {
                     const uuidMatch = s.content.match(/uuid\s*=\s*"([^"]+)"/);
-                    if (uuidMatch && uuidMatch[1]) {
-                        newMap.set(s.id, uuidMatch[1]);
-                    }
+                    if (uuidMatch && uuidMatch[1]) newMap.set(s.id, uuidMatch[1]);
                     const nameMatch = s.content.match(/name\s*=\s*"([^"]+)"/);
-                    if (nameMatch && nameMatch[1]) {
-                        newNameMap.set(s.id, nameMatch[1]);
-                    }
+                    if (nameMatch && nameMatch[1]) newNameMap.set(s.id, nameMatch[1]);
                 });
                 setStandardIdToUuidMap(newMap);
                 setStandardIdToNameMap(newNameMap);
 
-                // KORREKTUR (von 13:31): Die Annahme des Prototyps wiederherstellen.
-                // Die 'divisible'-Eigenschaft kommt noch nicht vom Backend-Summary.
                 const enrichedVouchers = activeVouchers.map(v => ({ ...v, divisible: true }));
 
-                setFeedbackMsg("");
                 setAvailableVouchers(enrichedVouchers);
                 setVoucherStandards(standards);
                 setOwnUserId(userId);
                 setAppSettings(settings);
                 
-                // Kontakte laden
                 const fetchedContacts = await invoke<Contact[]>("get_contacts");
                 setContacts(fetchedContacts);
-                
-                logger.info(`3. Set state with ${enrichedVouchers.length} vouchers and ${fetchedContacts.length} contacts.`);
             } catch (e) {
-                const msg = `Failed to fetch data for SendView: ${e}`;
-                logger.error(msg);
-                setFeedbackMsg(`Error: ${msg}`);
+                logger.error(`Failed to fetch data for SendView: ${e}`);
+                setFeedbackMsg(`Error: ${e}`);
             }
         }
         fetchData();
@@ -205,22 +207,17 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         let precision = 4;
         if (selectedStandard) {
             const match = selectedStandard.content.match(/amount_decimal_places\s*=\s*(\d+)/);
-            if (match && match[1]) {
-                precision = parseInt(match[1], 10);
-            }
+            if (match && match[1]) precision = parseInt(match[1], 10);
         }
 
-        // Calculate max possible amount for the current standard
         let maxPossibleAmount = 0;
         filteredVouchers.forEach(v => {
             const amt = parseFloat(v.current_amount);
             if (!isNaN(amt)) maxPossibleAmount += amt;
         });
         
-        // Clean up float precision issues
         maxPossibleAmount = parseFloat(maxPossibleAmount.toFixed(precision));
 
-        // Cap target amount if it exceeds max
         let finalValStr = valStr;
         if (targetAmount > maxPossibleAmount && maxPossibleAmount > 0) {
             targetAmount = maxPossibleAmount;
@@ -250,7 +247,6 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             if (currentTotal >= targetAmount) break;
         }
         
-        // Use a small epsilon to avoid floating point precision issues in comparison
         if (currentTotal < targetAmount - 0.000001) {
             setFeedbackMsg("The entered amount cannot be met with the available vouchers.");
         } else {
@@ -270,9 +266,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         let val = parseFloat(newAmountStr);
         const max = parseFloat(maxAmount);
         
-        if (!isNaN(val) && val > max) {
-            newAmountStr = maxAmount.toString();
-        }
+        if (!isNaN(val) && val > max) newAmountStr = maxAmount.toString();
 
         const newSelection = new Map(selection);
         newSelection.set(voucherId, newAmountStr);
@@ -288,7 +282,6 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         }
     };
 
-    // Vorschlaggs-Logik
     const handleRecipientChange = (e: ChangeEvent<HTMLInputElement>) => {
         const value = e.target.value;
         setRecipientId(value);
@@ -300,7 +293,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 (c.profile.last_name || '').toLowerCase().includes(value.toLowerCase()) ||
                 (c.profile.organization || '').toLowerCase().includes(value.toLowerCase())
             );
-            setSuggestions(filtered.slice(0, 5)); // Max 5 Vorschläge
+            setSuggestions(filtered.slice(0, 5));
             setShowSuggestions(filtered.length > 0);
         } else {
             setSuggestions([]);
@@ -316,66 +309,46 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         setShowContactPicker(false);
     };
 
-    // Ermittle die Privacy-Regeln basierend auf der aktuellen Auswahl
     const privacyRules = useMemo(() => {
         if (selection.size === 0) return { mode: 'Flexible', forced: false };
-        
         const selectedVoucherIds = Array.from(selection.keys());
         const selectedStandards = new Set<string>();
-        
         selectedVoucherIds.forEach(vid => {
             const v = availableVouchers.find(av => av.local_instance_id === vid);
             if (v) selectedStandards.add(v.voucher_standard_uuid);
         });
-
         let hasPublic = false;
         let hasPrivate = false;
-
         selectedStandards.forEach(uuid => {
             const standard = voucherStandards.find(s => standardIdToUuidMap.get(s.id) === uuid);
             if (standard) {
                 const match = standard.content.match(/privacy_mode\s*=\s*"([^"]+)"/);
-                const mode = match ? match[1] : "Public"; // Default
+                const mode = match ? match[1] : "Public";
                 if (mode === "Public" || mode === "public") hasPublic = true;
                 if (mode === "Stealth" || mode === "stealth" || mode === "Private" || mode === "private") hasPrivate = true;
             }
         });
-
-        // Logik für Mischpakete:
-        // Wenn sowohl Public als auch Stealth dabei sind -> Inkompatibel
         if (hasPublic && hasPrivate) return { mode: 'Incompatible', forced: false };
         if (hasPrivate) return { mode: 'Stealth', forced: true };
         if (hasPublic) return { mode: 'Public', forced: true };
         return { mode: 'Flexible', forced: false };
     }, [selection, availableVouchers, voucherStandards, standardIdToUuidMap]);
 
-    // Effekt: Setze den Privacy-Schalter automatisch, wenn er erzwungen wird
     useEffect(() => {
-        if (privacyRules.mode === 'Stealth') {
-            setPrivacyMode('stealth');
-        } else if (privacyRules.mode === 'Public') {
-            setPrivacyMode('public');
-        } else if (privacyRules.mode === 'Flexible' && privacyMode === null && appSettings) {
-            // Apply default setting when flexible mode is detected and user hasn't selected yet
-            if (appSettings.privacy_default === 'stealth') {
-                setPrivacyMode('stealth');
-            } else if (appSettings.privacy_default === 'public') {
-                setPrivacyMode('public');
-            } else {
-                // 'ask' mode - don't auto-select, require user to choose
-                setPrivacyMode(null);
-            }
+        if (privacyRules.mode === 'Stealth') setPrivacyMode('stealth');
+        else if (privacyRules.mode === 'Public') setPrivacyMode('public');
+        else if (privacyRules.mode === 'Flexible' && privacyMode === null && appSettings) {
+            if (appSettings.privacy_default === 'stealth') setPrivacyMode('stealth');
+            else if (appSettings.privacy_default === 'public') setPrivacyMode('public');
+            else setPrivacyMode(null);
         }
     }, [privacyRules, privacyMode, appSettings]);
 
 
     const handleManualVoucherSelect = (voucher: VoucherSummary) => {
         const newSelection = new Map(selection);
-        if (newSelection.has(voucher.local_instance_id)) {
-            newSelection.delete(voucher.local_instance_id);
-        } else {
-            newSelection.set(voucher.local_instance_id, voucher.current_amount);
-        }
+        if (newSelection.has(voucher.local_instance_id)) newSelection.delete(voucher.local_instance_id);
+        else newSelection.set(voucher.local_instance_id, voucher.current_amount);
         setSelection(newSelection);
 
         if (selectedStandardId) {
@@ -390,7 +363,6 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         }
     };
 
-    // KORREKTUR (von 13:28): Unterscheidet summable/countable
     const checkoutSummary = useMemo(() => {
         let count = 0;
         const summableTotals = {} as Record<string, number>;
@@ -401,45 +373,26 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             if (voucher) {
                 count++;
                 const amount = parseFloat(amountStr);
-
-                // NEUE LOGIK: Unterscheidung basierend auf 'divisible'
-                // @ts-ignore (wir wissen, dass 'divisible' durch 'enrichedVouchers' hinzugefügt wurde)
+                // @ts-ignore
                 if (voucher.divisible) {
-                    if (!summableTotals[voucher.unit]) {
-                        summableTotals[voucher.unit] = 0;
-                    }
+                    if (!summableTotals[voucher.unit]) summableTotals[voucher.unit] = 0;
                     summableTotals[voucher.unit] += amount;
                 } else {
-                    // Nicht-teilbare Gutscheine werden gezählt
-                    if (!countableTotals[voucher.unit]) {
-                        countableTotals[voucher.unit] = 0;
-                    }
-                    countableTotals[voucher.unit] += 1; // Wir senden 1 ganzen Gutschein
+                    if (!countableTotals[voucher.unit]) countableTotals[voucher.unit] = 0;
+                    countableTotals[voucher.unit] += 1;
                 }
             }
         }
         return { count, summableTotals, countableTotals };
     }, [selection, availableVouchers]);
 
-    // 1. Schritt: Validierung und Modal öffnen
     const handlePrepareTransferClick = (event: FormEvent) => {
         event.preventDefault();
-        // Prüfe zuerst recipient
-        if (!recipientId) {
-            setRecipientError(true);
-            // Scroll zum recipient Feld
-            document.getElementById('recipientId')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            return;
-        }
-        // Dann prüfe selection
-        if (selection.size === 0) {
-            setFeedbackMsg("Please select at least one voucher");
-            return;
-        }
-        // Prüfe ob Privacy Mode für flexible Standards ausgewählt wurde
+        if (!recipientId) { setRecipientError(true); document.getElementById('recipientId')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+        if (selection.size === 0) { setFeedbackMsg("Asset selection required."); return; }
         if (privacyRules.mode === 'Flexible' && privacyMode === null) {
             setPrivacyError(true);
-            setFeedbackMsg("Please select privacy mode to continue");
+            setFeedbackMsg("Privacy configuration required.");
             document.getElementById('privacyMode')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             return;
         }
@@ -447,10 +400,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         setShowConfirm(true);
     };
 
-    // 2. Schritt: Die eigentliche Ausführung (wird vom Modal aufgerufen)
     async function executeTransfer() {
         setIsProcessing(true);
-        // Modal bleibt offen oder zeigt Loading, wir schließen es erst am Ende oder bei Fehler
         try {
             const senderProfileNameToSend = (sendProfileName && customSenderName.trim() !== "") ? customSenderName.trim() : null;
             const notesToSend = notes.trim() === "" ? null : notes.trim();
@@ -461,14 +412,12 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             }));
             const standardDefinitionsToml: Record<string, string> = {};
             voucherStandards.forEach(standard => {
-                //Das Backend erwartet die UUID als Key
                 const uuid = standardIdToUuidMap.get(standard.id) || standard.id;
                 standardDefinitionsToml[uuid] = standard.content;
             });
 
-            // AKTUALISIERT: Erwarte ein Objekt statt nur bytes, um die bundle_id für den Record zu haben.
             const bundleResult = await protectAction(async (password) => {
-                return await invoke<CreateBundleResult>("create_transfer_bundle", {
+                return await invoke<any>("create_transfer_bundle", {
                     recipientId,
                     sources,
                     notes: notesToSend,
@@ -478,26 +427,12 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                     password
                 });
             });
-            if (!bundleResult) {
-                setIsProcessing(false);
-                return;
-            }
+            if (!bundleResult) { setIsProcessing(false); return; }
             
-            // NEU: Definieren der vollständigen Rückgabe-Struktur
-            interface CreateBundleResult {
-                bundleData: number[];
-                bundleId: string;
-                involvedSourcesDetails: InvolvedVoucherInfo[];
-            }
-
-            logger.info(`Successfully created transfer bundle ${bundleResult.bundleId} with ${bundleResult.bundleData.length} bytes and ${bundleResult.involvedSourcesDetails.length} source details.`);
-
-            // KORREKTUR (von 13:28): summableAmounts und countableItems getrennt verarbeiten
             const summableAmounts: Record<string, string> = {};
             Object.entries(checkoutSummary.summableTotals).forEach(([unit, total]) => {
                 summableAmounts[unit] = total.toFixed(2);
             });
-
             const countableItems: Record<string, number> = checkoutSummary.countableTotals;
 
             const record: Omit<TransactionRecord, 'bundle_data'> & { bundle_data: number[] } = {
@@ -506,409 +441,353 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 recipient_id: recipientId,
                 sender_id: ownUserId,
                 timestamp: new Date().toISOString(),
-                summableAmounts: summableAmounts, // KORREKTUR (von 13:28)
-                countableItems: countableItems, // KORREKTUR (von 13:28)
-                // NEU: Speichere sowohl die reinen IDs als auch die vollen Details
-                involved_vouchers: bundleResult.involvedSourcesDetails.map(d => d.local_instance_id),
+                summableAmounts: summableAmounts,
+                countableItems: countableItems,
+                involved_vouchers: bundleResult.involvedSourcesDetails.map((d: any) => d.local_instance_id),
                 involvedSourcesDetails: bundleResult.involvedSourcesDetails,
                 bundle_data: bundleResult.bundleData,
-                bundle_id: bundleResult.bundleId, // NEU
-                notes: notesToSend ?? undefined, // NEU
-                sender_profile_name: senderProfileNameToSend ?? undefined, // NEU
+                bundle_id: bundleResult.bundleId,
+                notes: notesToSend ?? undefined,
+                sender_profile_name: senderProfileNameToSend ?? undefined,
             };
 
-            // Auch das Speichern des Records muss geschützt sein (nutzt die selbe Session/Passwort)
             await protectAction(async (password) => {
                  await invoke("save_transaction_record", { record: record as TransactionRecord, password });
             });
-            logger.info(`Transaction record ${record.id} saved successfully.`);
 
-            // KORREKTUR (von 13:28): Detaillierte summaryString erstellen
             const summableStrings = Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => `${formatAmount(total.toString())} ${unit}`);
             const countableStrings = Object.entries(checkoutSummary.countableTotals).map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`);
             const summaryString = [...summableStrings, ...countableStrings].join(', ');
 
-            onTransferPrepared(bundleResult.bundleData, recipientId, summaryString);
+            setFeedbackMsg("Transaction successfully prepared");
+            setTimeout(() => onTransferPrepared(bundleResult.bundleData, recipientId, summaryString), 1500);
 
         } catch (e) {
-            const msg = `Failed to create transfer bundle: ${e}`;
-            logger.error(msg);
-            setFeedbackMsg(msg);
+            setFeedbackMsg(`Preparation failed: ${e}`);
             setIsProcessing(false);
-            setShowConfirm(false); // Modal schließen bei Fehler
+            setShowConfirm(false);
         }
     }
 
     return (
         <PageLayout 
             title="Create Transfer" 
-            description="Select vouchers and prepare a transfer for a recipient." 
+            description="Prepare a cryptographic asset transfer." 
             onBack={onBack}
         >
-            <form onSubmit={handlePrepareTransferClick}>
-                    {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
-                    <section className="bg-bg-card border border-theme-subtle rounded-lg p-4 mb-6">
-                        <h2 className="font-semibold text-theme-secondary mb-3">1. The Order</h2>
-                        <div className="space-y-4">
-                            <div className="relative">
-                                <label htmlFor="recipientId" className="block text-sm font-medium text-theme-light mb-1">Recipient User ID</label>
-                                <div className="flex gap-2">
-                                    <div className="relative flex-1">
+            <div className="max-w-5xl mx-auto space-y-8 pb-32">
+                {feedbackMsg && (
+                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 animate-in slide-in-from-top-2">
+                        <AlertTriangle className="text-rose-500 shrink-0" size={18} />
+                        <p className="text-sm font-bold text-rose-800 leading-tight">{feedbackMsg}</p>
+                    </div>
+                )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                    {/* Left Column: Recipient & Config */}
+                    <div className="lg:col-span-7 space-y-8">
+                        <Card header={<div className="flex items-center gap-2"><User size={18} className="text-theme-primary"/><span className="font-black text-xs uppercase tracking-widest text-theme-primary">Recipient</span></div>}>
+                            <div className="space-y-6">
+                                <div className="space-y-3">
+                                    <label htmlFor="recipientId" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
+                                        User ID (DID)
+                                        <button type="button" onClick={() => setShowContactPicker(true)} className="text-theme-primary hover:underline flex items-center gap-1"><UserPlus size={10}/> Address Book</button>
+                                    </label>
+                                    <div className="relative group">
                                         {currentContact ? (
-                                            // Badge display when contact is selected
-                                            <div className="flex items-center gap-2">
-                                                <ContactBadge did={currentContact.did} contacts={contacts} size="md" />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setRecipientId('')}
-                                                    className="flex-shrink-0 p-1 rounded hover:bg-theme-accent/20 text-theme-light hover:text-red-500 transition-colors"
-                                                    title="Remove contact"
-                                                >
-                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6 v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                                    </svg>
-                                                </button>
+                                            <div className="flex items-center justify-between p-4 bg-theme-primary/5 border-2 border-theme-primary rounded-3xl animate-in zoom-in duration-300 shadow-sm">
+                                                <ContactBadge did={currentContact.did} contacts={contacts} size="lg" />
+                                                <button type="button" onClick={() => setRecipientId('')} className="p-2 hover:bg-rose-50 text-theme-light hover:text-rose-500 rounded-xl transition-all"><X size={20}/></button>
                                             </div>
                                         ) : (
-                                            // Normal input when no contact is selected
-                                            <input
-                                                id="recipientId"
-                                                type="text"
-                                                placeholder="did:key:z..."
-                                                value={recipientId}
-                                                onChange={handleRecipientChange}
-                                                onFocus={() => recipientId.length > 0 && suggestions.length > 0 && setShowSuggestions(true)}
-                                                onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                                                className={`w-full p-3 border rounded-lg text-base transition-all duration-150 ease-in-out focus:outline-none focus:ring-2 focus:border-transparent placeholder-theme-placeholder ${
-                                                    recipientError
-                                                        ? 'border-4 border-red-500 focus:ring-red-500 text-red-900'
-                                                        : 'border border-theme-light-border text-theme-secondary focus:ring-theme-primary'
-                                                }`}
-                                            />
-                                        )}
-                                        {/* Suggestions List */}
-                                        {showSuggestions && (
-                                            <div className="absolute z-30 w-full mt-1 bg-white border border-theme-subtle rounded-xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
-                                                {suggestions.map(contact => (
-                                                    <button
-                                                        key={contact.did}
-                                                        type="button"
-                                                        onClick={() => selectContact(contact)}
-                                                        className="w-full flex items-center gap-3 p-3 hover:bg-bg-app text-left transition-colors border-b border-theme-subtle last:border-0"
-                                                    >
-                                                        <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0">
-                                                            <Avatar size={32} name={contact.did} variant="beam" colors={["#E63946", "#2B1B17", "#E76F51", "#F4A261", "#2A9D8F"]} />
-                                                        </div>
-                                                        <div className="flex-1 min-w-0">
-                                                            <p className="text-sm font-bold text-theme-secondary truncate">
-                                                                {contact.profile.first_name || contact.profile.last_name 
-                                                                    ? `${contact.profile.first_name || ''} ${contact.profile.last_name || ''}`.trim()
-                                                                    : contact.profile.organization || 'Anonymous'}
-                                                            </p>
-                                                            <p className="text-[10px] text-theme-light font-mono truncate">{contact.did}</p>
-                                                        </div>
-                                                    </button>
-                                                ))}
+                                            <div className="relative">
+                                                <Input
+                                                    id="recipientId"
+                                                    value={recipientId}
+                                                    onChange={handleRecipientChange}
+                                                    onFocus={() => recipientId.length > 0 && suggestions.length > 0 && setShowSuggestions(true)}
+                                                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                                                    placeholder="did:key:z..."
+                                                    className={`py-5 px-6 rounded-3xl font-mono text-xs ${recipientError ? 'border-rose-500 shadow-rose-100' : ''}`}
+                                                />
+                                                <div className="absolute right-4 top-1/2 -translate-y-1/2 text-theme-light"><Search size={18}/></div>
+                                                
+                                                {showSuggestions && (
+                                                    <div className="absolute z-30 w-full mt-2 bg-white/90 backdrop-blur-xl border border-theme-subtle rounded-3xl shadow-premium-lg overflow-hidden animate-in slide-in-from-top-2 duration-200">
+                                                        {suggestions.map(contact => (
+                                                            <button key={contact.did} type="button" onClick={() => selectContact(contact)} className="w-full flex items-center gap-4 p-4 hover:bg-theme-primary/5 text-left border-b border-theme-subtle/40 last:border-0 transition-all">
+                                                                <Avatar size={32} name={contact.did} variant="beam" />
+                                                                <div className="min-w-0">
+                                                                    <p className="text-sm font-black text-theme-secondary truncate">{(contact.profile.first_name || contact.profile.last_name) ? `${contact.profile.first_name || ''} ${contact.profile.last_name || ''}`.trim() : (contact.profile.organization || 'Anonymous')}</p>
+                                                                    <p className="text-[9px] font-mono text-theme-light truncate">{contact.did}</p>
+                                                                </div>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                )}
                                             </div>
                                         )}
                                     </div>
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowContactPicker(true)}
-                                        className="bg-white border border-theme-subtle p-2.5 rounded-xl text-theme-light hover:text-theme-primary hover:border-theme-primary transition-all shadow-sm active:scale-95"
-                                        title="Open Address Book"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-                                        </svg>
-                                    </button>
-                                </div>
-                                
-                                {typeof trustStatus === 'object' && 'KnownOffender' in trustStatus && (
-                                    <div className="mt-3 bg-red-50 border border-red-200 rounded-xl p-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                                        <div className="flex gap-3">
-                                            <span className="text-xl">⚠️</span>
+                                    
+                                    {typeof trustStatus === 'object' && 'KnownOffender' in trustStatus && (
+                                        <div className="p-5 bg-rose-50 border border-rose-100 rounded-[32px] flex items-start gap-4 animate-in shake duration-500 shadow-sm">
+                                            <AlertTriangle className="text-rose-500 shrink-0 mt-1" size={24} />
                                             <div>
-                                                <p className="text-sm font-bold text-red-800">High Risk Recipient</p>
-                                                <p className="text-xs text-red-700 leading-relaxed mt-1">
-                                                    CAUTION: This address has been linked to unresolved double-spend conflicts in the past. 
-                                                    This could be a mistake, but it represents a high risk. Proceed at your own risk.
-                                                </p>
+                                                <h4 className="text-sm font-black text-rose-900 uppercase tracking-widest mb-1">Reputation Alert</h4>
+                                                <p className="text-xs text-rose-800 font-medium leading-relaxed">This identity is associated with past ledger conflicts. Exercise extreme caution.</p>
                                             </div>
                                         </div>
-                                    </div>
-                                )}
-                            </div>
-                            {/* --- NEU START --- */}
-                            <div>
-                                <label htmlFor="notes" className="block text-sm font-medium text-theme-light mb-1">Notes / Purpose (Optional)</label>
-                                <Textarea
-                                    id="notes"
-                                    placeholder="e.g., Monthly contribution, Coffee..."
-                                    value={notes}
-                                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setNotes(e.target.value)}
-                                    rows={2}
-                                />
-                            </div>
-                            <div>
-                                <div className="flex items-center mb-2">
-                                     <input
-                                        id="sendProfileName"
-                                        type="checkbox"
-                                        checked={sendProfileName}
-                                        onChange={(e: ChangeEvent<HTMLInputElement>) => setSendProfileName(e.target.checked)}
-                                        className="h-4 w-4 text-theme-accent border-input-border rounded focus:ring-theme-accent"
-                                    />
-                                    <label htmlFor="sendProfileName" className="ml-2 block text-sm font-medium text-theme-light">
-                                        Include sender name in transaction
-                                    </label>
+                                    )}
                                 </div>
-                                {sendProfileName && (
-                                    <div className="ml-6 animate-in fade-in duration-200">
-                                        <label htmlFor="customSenderName" className="block text-xs font-semibold text-theme-secondary mb-1">
-                                            Sender Name
+
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><BookOpen size={10}/> Note</label>
+                                    <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Transaction context (optional)..." className="rounded-2xl min-h-[80px]" />
+                                </div>
+
+                                <div className="p-4 bg-slate-50 border border-slate-200 rounded-3xl space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <label className="flex items-center gap-3 cursor-pointer group">
+                                            <div className={`w-10 h-6 rounded-full transition-all relative ${sendProfileName ? 'bg-theme-primary shadow-inner' : 'bg-slate-300'}`}>
+                                                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md ${sendProfileName ? 'left-5' : 'left-1'}`}></div>
+                                                <input type="checkbox" className="hidden" checked={sendProfileName} onChange={(e) => setSendProfileName(e.target.checked)} />
+                                            </div>
+                                            <span className="text-xs font-black text-slate-600 uppercase tracking-widest group-hover:text-theme-primary transition-colors">Disclose My Identity</span>
                                         </label>
-                                        <Input
-                                            id="customSenderName"
-                                            type="text"
-                                            value={customSenderName}
-                                            onChange={(e: ChangeEvent<HTMLInputElement>) => setCustomSenderName(e.target.value)}
-                                            placeholder="e.g. John Doe"
-                                            className="w-full sm:max-w-xs"
-                                        />
-                                        <p className="text-[10px] text-theme-light mt-1">
-                                            <strong>Note:</strong> Only the direct recipient can read this name; it remains completely hidden from subsequent recipients. Providing a clear sender name builds trust and helps the receiver keep track of their incoming transactions.
-                                        </p>
                                     </div>
-                                )}
+                                    {sendProfileName && (
+                                        <div className="space-y-2 animate-in slide-in-from-top-2">
+                                            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Display As</label>
+                                            <Input value={customSenderName} onChange={(e) => setCustomSenderName(e.target.value)} placeholder="e.g. John Doe" className="bg-white border-slate-200 text-sm font-bold" />
+                                            <p className="text-[9px] font-medium text-slate-400 leading-tight flex items-start gap-1.5 pt-1"><Info size={10} className="shrink-0"/> This is only visible to the direct recipient to establish trust.</p>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                            
-                            {/* NEU: Privacy Mode Segmented Control */}
-                            <div id="privacyMode" className={`pt-2 border-t border-theme-subtle/50 mt-2 transition-all duration-150 ease-in-out ${privacyError ? 'border-4 border-red-500' : ''}`}>
-                                <label className={`block text-xs font-medium mb-1.5 ${privacyError ? 'text-red-900' : 'text-theme-light'}`}>
-                                    Privacy Mode
-                                </label>
-                                
+                        </Card>
+
+                        <Card header={<div id="privacyMode" className="flex items-center gap-2"><Shield size={18} className="text-theme-primary"/><span className="font-black text-xs uppercase tracking-widest text-theme-primary">Security & Privacy</span></div>}>
+                            <div className="space-y-6">
                                 {privacyRules.forced ? (
-                                    // Show read-only state when forced by standard
-                                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-bg-input-readonly rounded-md border border-theme-subtle text-xs">
-                                        <span>{privacyRules.mode === 'Stealth' ? '🔒' : '👁️'}</span>
-                                        <span className={`font-medium ${privacyRules.mode === 'Stealth' ? 'text-theme-accent' : 'text-theme-secondary'}`}>
-                                            {privacyRules.mode === 'Stealth' ? 'Stealth' : 'Public'}
-                                        </span>
-                                        <span className="text-theme-light">(forced)</span>
+                                    <div className="p-5 bg-theme-primary/5 border border-theme-primary/10 rounded-[32px] flex items-center justify-between shadow-inner-soft">
+                                        <div className="flex items-center gap-4">
+                                            <div className={`p-3 rounded-2xl ${privacyRules.mode === 'Stealth' ? 'bg-purple-500 text-white' : 'bg-blue-500 text-white'}`}>
+                                                {privacyRules.mode === 'Stealth' ? <Lock size={20}/> : <Eye size={20}/>}
+                                            </div>
+                                            <div>
+                                                <h4 className="text-sm font-black text-theme-secondary uppercase tracking-widest">{privacyRules.mode === 'Stealth' ? 'Stealth Execution' : 'Transparent Execution'}</h4>
+                                                <p className="text-[10px] font-bold text-theme-light uppercase tracking-widest">Mandatory for selected standard</p>
+                                            </div>
+                                        </div>
+                                        <CheckCircle2 className="text-theme-primary" size={24} />
                                     </div>
                                 ) : (
-                                    <div className="flex items-center gap-2">
-                                        {/* Show 2-state segmented control for flexible mode */}
-                                        <div className={`inline-flex rounded-md border overflow-hidden transition-all duration-150 ease-in-out ${
-                                            privacyError 
-                                                ? 'border-4 border-red-500' 
-                                                : 'border border-theme-subtle'
-                                        }`}>
-                                            <button
-                                                type="button"
-                                                onClick={() => setPrivacyMode('public')}
-                                                disabled={privacyRules.mode === 'Incompatible'}
-                                                className={`px-3 py-1.5 text-xs font-medium transition-colors border-r ${
-                                                    privacyError
-                                                        ? 'border-red-500 text-red-900'
-                                                        : 'border-theme-subtle'
-                                                } ${
-                                                    privacyMode === 'public'
-                                                        ? 'bg-blue-50 text-blue-700'
-                                                        : privacyError
-                                                            ? 'bg-red-50 hover:bg-red-100'
-                                                            : 'bg-white text-theme-light hover:bg-bg-input-readonly'
-                                                } ${privacyRules.mode === 'Incompatible' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                            >
-                                                👁️ Public
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => setPrivacyMode('stealth')}
-                                                disabled={privacyRules.mode === 'Incompatible'}
-                                                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                                                    privacyMode === 'stealth'
-                                                        ? 'bg-purple-50 text-purple-700'
-                                                        : privacyError
-                                                            ? 'bg-red-50 hover:bg-red-100'
-                                                            : 'bg-white text-theme-light hover:bg-bg-input-readonly'
-                                                } ${privacyRules.mode === 'Incompatible' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                            >
-                                                🔒 Stealth
-                                            </button>
-                                        </div>
-                                        {/* Show hint when not selected */}
-                                        {privacyRules.mode === 'Flexible' && privacyMode === null && (
-                                            <span className={`text-xs italic ${privacyError ? 'text-red-500' : 'text-theme-accent'}`}>select privacy mode</span>
-                                        )}
+                                    <div className={`grid grid-cols-2 gap-4 p-2 bg-slate-50 border-2 rounded-[40px] transition-all ${privacyError ? 'border-rose-500' : 'border-slate-100'}`}>
+                                        <button type="button" onClick={() => setPrivacyMode('public')} className={`flex flex-col items-center gap-2 p-6 rounded-[32px] transition-all ${privacyMode === 'public' ? 'bg-white shadow-premium-lg border border-theme-subtle' : 'opacity-50 hover:opacity-80'}`}>
+                                            <div className="p-3 bg-blue-50 text-blue-500 rounded-2xl"><Eye size={24}/></div>
+                                            <span className="text-xs font-black uppercase tracking-widest text-slate-900">Public</span>
+                                        </button>
+                                        <button type="button" onClick={() => setPrivacyMode('stealth')} className={`flex flex-col items-center gap-2 p-6 rounded-[32px] transition-all ${privacyMode === 'stealth' ? 'bg-white shadow-premium-lg border border-theme-subtle' : 'opacity-50 hover:opacity-80'}`}>
+                                            <div className="p-3 bg-purple-50 text-purple-500 rounded-2xl"><Lock size={24}/></div>
+                                            <span className="text-xs font-black uppercase tracking-widest text-slate-900">Stealth</span>
+                                        </button>
                                     </div>
                                 )}
-                                
+
                                 {privacyRules.mode === 'Incompatible' && (
-                                    <p className="mt-1.5 text-[10px] text-red-500 font-medium">
-                                        ⚠️ Incompatible privacy rules
-                                    </p>
+                                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3">
+                                        <AlertTriangle size={18} className="text-rose-500" />
+                                        <p className="text-xs font-bold text-rose-800">Privacy Conflict: Mixed privacy requirements in selection.</p>
+                                    </div>
                                 )}
-                                
-                                {/* Info Box for Privacy Modes */}
-                                <details className="mt-3 text-xs group">
-                                    <summary className="cursor-pointer text-theme-light hover:text-theme-primary flex items-center gap-1 font-medium list-none select-none">
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-theme-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                        </svg>
-                                        How do Privacy Modes work?
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 ml-1 transition-transform group-open:rotate-180 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                        </svg>
+
+                                <details className="group">
+                                    <summary className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-theme-light cursor-pointer hover:text-theme-primary transition-colors list-none">
+                                        <Info size={14}/> Privacy Details <ArrowRight size={10} className="group-open:rotate-90 transition-transform" />
                                     </summary>
-                                    <div className="mt-2 p-3 bg-bg-app rounded-md border border-theme-subtle text-theme-secondary space-y-3 leading-relaxed">
-                                        <p>
-                                            <strong>🔒 Stealth Mode:</strong> If the voucher is passed on, nobody will know you sent it. Your sender ID is hidden. This protects against mass surveillance by states or third parties. If everyone uses stealth, observers can only see how many times a voucher was transferred, but not by whom. <br/>
-                                            <em>Note: Fraud can still be detected. In the event of a double-spend, the sender's identity is cryptographically revealed.</em>
-                                        </p>
-                                        <p>
-                                            <strong>👁️ Public Mode:</strong> Useful in trusted environments or when you have no fear of negative consequences. Revealing your identity can increase trust, as it signals transparency and makes any potential fraud easier to trace.
-                                        </p>
-                                        <div className="border-t border-theme-subtle/50 pt-2 mt-1">
-                                            <p className="text-[10px] text-theme-light italic">
-                                                Important: Regardless of the mode chosen, the original creator of a voucher is always visible in plain text, and their first transaction transferring the voucher is always transparent.
-                                            </p>
+                                    <div className="mt-4 p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-4 animate-in slide-in-from-top-2">
+                                        <div className="space-y-1">
+                                            <h5 className="text-xs font-black text-slate-900">🔒 Stealth Mode</h5>
+                                            <p className="text-[11px] text-slate-600 leading-relaxed font-medium">Anonymizes your signature in the transaction chain. Prevents mass surveillance. Reveal occurs only upon double-spend detection.</p>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <h5 className="text-xs font-black text-slate-900">👁️ Public Mode</h5>
+                                            <p className="text-[11px] text-slate-600 leading-relaxed font-medium">Standard transparency. Builds high trust in closed networks and community circles.</p>
                                         </div>
                                     </div>
                                 </details>
                             </div>
-                            {/* --- NEU ENDE --- */}
-                            <div>
-                                <label className="block text-sm font-medium text-theme-light mb-1">Filter by Standard</label>
+                        </Card>
+                    </div>
+
+                    {/* Right Column: Asset Selection & Summary */}
+                    <div className="lg:col-span-5 space-y-8">
+                        <Card header={<div className="flex items-center gap-2"><Coins size={18} className="text-theme-primary"/><span className="font-black text-xs uppercase tracking-widest text-theme-primary">Voucher Selection</span></div>}>
+                            <div className="space-y-6">
                                 <div className="flex flex-wrap gap-2">
-                                    <button type="button" onClick={() => handleStandardSelect(null)} className={`px-3 py-1 text-sm rounded-full ${selectedStandardId === null ? 'bg-theme-accent text-white font-semibold' : 'bg-input-readonly hover:bg-theme-subtle'}`}>All</button>
+                                    <button type="button" onClick={() => handleStandardSelect(null)} className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-full border-2 transition-all ${selectedStandardId === null ? 'bg-theme-primary border-theme-primary text-white shadow-md' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}>All</button>
                                     {voucherStandards.map(standard => {
-                                        const displayName = standardIdToNameMap.get(standard.id) || standard.id;
+                                        const isSelected = selectedStandardId === standard.id;
                                         return (
-                                            <button type="button" key={standard.id} onClick={() => handleStandardSelect(standard.id)} className={`px-3 py-1 text-sm rounded-full ${selectedStandardId === standard.id ? 'bg-theme-accent text-white font-semibold' : 'bg-input-readonly hover:bg-theme-subtle'}`}>{displayName}</button>
+                                            <button key={standard.id} type="button" onClick={() => handleStandardSelect(standard.id)} className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-full border-2 transition-all ${isSelected ? 'bg-theme-primary border-theme-primary text-white shadow-md' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}>
+                                                {standardIdToNameMap.get(standard.id) || standard.id}
+                                            </button>
                                         );
                                     })}
                                 </div>
-                                <p className="text-xs text-theme-light mt-2">Select a specific standard to enable automatic mode by entering an amount.</p>
-                            </div>
-                            {selectedStandardId && (
-                                <div>
-                                    <label htmlFor="amount" className="block text-sm font-medium text-theme-light mb-1">Amount to Send (Automatic Mode)</label>
-                                    <Input id="amount" placeholder="e.g., 50" value={targetAmountStr} onChange={(e: ChangeEvent<HTMLInputElement>) => handleTargetAmountChange(e.target.value)} type="number" min="0" step="any" />
-                                </div>
-                            )}
-                        </div>
-                    </section>
 
-                    {/* NEW: COMPACT CHECKOUT SECTION */}
-                    <section className="rounded-lg border border-theme-accent/50 bg-bg-card-alternate p-4 mb-6">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
-                            <div className="md:col-span-1">
-                                <p className="text-sm text-theme-light">{checkoutSummary.count} Vouchers Selected</p>
-                                <div className="text-lg font-bold text-theme-primary truncate">
-                                    {/* KORREKTUR (von 13:28): Detaillierte Anzeige */}
-                                    {checkoutSummary.count > 0 ? (
-                                        <>
-                                            {Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => (
-                                                <span key={unit} className="mr-4">{formatAmount(total.toString())} <span className="text-base font-normal">{unit}</span></span>
-                                            ))}
-                                            {Object.entries(checkoutSummary.countableTotals).map(([unit, total]) => (
-                                                <span key={unit} className="mr-4">{total} <span className="text-base font-normal">{unit}{total > 1 ? 's' : ''}</span></span>
-                                            ))}
-                                        </>
-                                    ) : <span>0.00</span>}
-                                </div>
-                            </div>
-
-                            <div className="md:col-span-1">
-                                 <Button size="lg" type="button" onClick={handlePrepareTransferClick} className="w-full" disabled={isProcessing}>
-                                    {isProcessing ? "Processing..." : "Prepare Transfer"}
-                                </Button>
-                            </div>
-                        </div>
-                    </section>
-
-                    {/* NEW: SORTING MOVED HERE */}
-                    <div className="flex justify-between items-center mb-4">
-                        <h2 className="font-semibold text-theme-secondary">3. Your Inventory</h2>
-                        <select className="bg-input-readonly border border-theme-subtle rounded-md px-3 py-1.5 text-sm">
-                            <option>Sort by: Optimal</option>
-                            <option>Sort by: Validity (expiring soonest)</option>
-                            <option>Sort by: Amount (highest first)</option>
-                            <option>Sort by: Amount (lowest first)</option>
-                        </select>
-                    </div>
-
-                    <section className="mb-6">
-                        <div className="space-y-3">
-                            {filteredVouchers.length > 0 ? filteredVouchers.map(v => {
-                                // @ts-ignore (wir wissen, dass 'divisible' durch 'enrichedVouchers' hinzugefügt wurde)
-                                const selectedAmount = selection.get(v.local_instance_id);
-                                const isSelected = selectedAmount !== undefined;
-                                return (
-                                    <div key={v.local_instance_id} className={`w-full text-left bg-bg-card-alternate rounded-lg border shadow-sm p-3 transition-all duration-150 ease-in-out ${isSelected ? 'border-theme-accent ring-2 ring-theme-accent' : 'border-theme-subtle hover:border-theme-primary'}`}>
-                                        <div className="flex justify-between items-start cursor-pointer" onClick={() => handleManualVoucherSelect(v)}>
-                                            <div>
-                                                <div className="flex items-baseline text-xl font-bold text-theme-primary">
-                                                    {/* @ts-ignore */}
-                                                    {isSelected && selectedAmount !== v.current_amount ? (
-                                                        <>
-                                                            <span>{formatAmount(selectedAmount)}</span>
-                                                            {/* @ts-ignore */}
-                                                            <span className="ml-2 text-base font-normal text-gray-400">of {formatAmount(v.current_amount)}</span>
-                                                        </>
-                                                    ) : (
-                                                        // @ts-ignore
-                                                        <span>{formatAmount(v.current_amount)}</span>
-                                                    )}
-                                                    {/* @ts-ignore */}
-                                                    <span className="ml-2 text-base font-normal text-theme-light">{v.unit}</span>
-                                                </div>
-                                                {/* @ts-ignore */}
-                                                <p className="text-xs text-theme-light font-mono">by {v.creator_first_name} {v.creator_last_name}</p>
-                                            </div>
-                                            <div className="text-right">
-                                                {/* @ts-ignore */}
-                                                <p className="text-base font-medium text-theme-light">{v.voucher_standard_name}</p>
-                                                {/* @ts-ignore */}
-                                                <p className="text-xs text-theme-light">until {formatDate(v.valid_until)}</p>
-                                            </div>
+                                {selectedStandardId && (
+                                    <div className="space-y-3 animate-in slide-in-from-top-2">
+                                        <label htmlFor="target-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Target Amount</label>
+                                        <div className="relative">
+                                            <Input id="target-amount" value={targetAmountStr} onChange={(e) => handleTargetAmountChange(e.target.value)} type="number" placeholder="0.00" className="py-5 px-6 rounded-3xl font-black text-2xl tracking-tighter" />
+                                            <div className="absolute right-6 top-1/2 -translate-y-1/2 font-black text-theme-primary uppercase tracking-widest">{filteredVouchers[0]?.unit}</div>
                                         </div>
-                                        {/* @ts-ignore */}
-                                        {isSelected && v.divisible && (
-                                            <div className="mt-4 p-4 bg-theme-accent/5 rounded-xl border-2 border-theme-accent/20 flex items-center justify-between animate-in fade-in slide-in-from-top-2 duration-200 shadow-inner">
-                                                <label className="text-sm font-bold text-theme-primary">Adjust Amount:</label>
-                                                <div className="flex items-center gap-2">
-                                                    <Input 
-                                                        type="number" 
-                                                        value={selectedAmount} 
-                                                        onChange={(e: ChangeEvent<HTMLInputElement>) => handleVoucherAmountChange(v.local_instance_id, e.target.value, v.current_amount)}
-                                                        className="w-32 text-right !py-2 !px-3 h-10 !text-lg !font-black !border-2 !border-theme-accent/40 !bg-white !shadow-sm !rounded-md"
-                                                        max={v.current_amount}
-                                                        min="0"
-                                                        step="any"
-                                                    />
-                                                    {/* @ts-ignore */}
-                                                    <span className="text-sm font-black text-theme-primary">{v.unit}</span>
+                                        <p className="text-[10px] font-bold text-theme-light italic text-center">Automatic selection will prioritize optimal ledger fragmentation.</p>
+                                    </div>
+                                )}
+
+                                <div className="space-y-3 pt-4 border-t border-theme-subtle/40">
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="text-[10px] font-black text-theme-light uppercase tracking-widest">Available Vouchers</h3>
+                                        <button type="button" className="text-theme-primary hover:underline flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest"><Filter size={10}/> Sort Optimal</button>
+                                    </div>
+                                    
+                                    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-theme-subtle">
+                                        {filteredVouchers.length > 0 ? filteredVouchers.map(v => {
+                                            const selectedAmount = selection.get(v.local_instance_id);
+                                            const isSelected = selectedAmount !== undefined;
+                                            return (
+                                                <div key={v.local_instance_id} className={`p-4 rounded-[32px] border-2 transition-all duration-300 relative overflow-hidden group shadow-sm ${isSelected ? 'bg-theme-primary/5 border-theme-primary ring-4 ring-theme-primary/10' : 'bg-white border-slate-100 hover:border-slate-200'}`}>
+                                                    <div className="flex justify-between items-start cursor-pointer" onClick={() => handleManualVoucherSelect(v)}>
+                                                        <div>
+                                                            <div className="flex items-baseline gap-2">
+                                                                <span className="text-xl font-black text-theme-secondary tracking-tight">
+                                                                    {isSelected && selectedAmount !== v.current_amount ? formatAmount(selectedAmount) : formatAmount(v.current_amount)}
+                                                                </span>
+                                                                <span className="text-[10px] font-black text-theme-primary uppercase tracking-widest">{v.unit}</span>
+                                                            </div>
+                                                            <div className="flex items-center gap-1.5 mt-1">
+                                                                <Avatar size={14} name={v.local_instance_id} variant="pixel" />
+                                                                <span className="text-[9px] font-bold text-theme-light uppercase tracking-widest truncate max-w-[120px]">{v.creator_first_name} {v.creator_last_name}</span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest">{v.voucher_standard_name}</p>
+                                                            <p className="text-[9px] font-bold text-slate-400 mt-0.5">{formatDate(v.valid_until)}</p>
+                                                        </div>
+                                                    </div>
+                                                    {isSelected && v.divisible && (
+                                                        <div className="mt-4 pt-4 border-t border-theme-primary/10 animate-in fade-in slide-in-from-top-2">
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-[9px] font-black text-theme-primary uppercase tracking-widest">Partial Send</span>
+                                                                <div className="flex items-center gap-2">
+                                                                    <Input 
+                                                                        type="number" 
+                                                                        value={selectedAmount} 
+                                                                        onChange={(e) => handleVoucherAmountChange(v.local_instance_id, e.target.value, v.current_amount)}
+                                                                        className="w-24 py-1.5 px-3 text-right font-black text-xs rounded-xl border-theme-primary/30"
+                                                                        max={v.current_amount}
+                                                                        min="0"
+                                                                        step="any"
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {isSelected && (
+                                                        <div className="absolute top-3 right-3 opacity-20 group-hover:opacity-40 transition-opacity">
+                                                            <CheckCircle2 className="text-theme-primary" size={16} />
+                                                        </div>
+                                                    )}
                                                 </div>
+                                            );
+                                        }) : (
+                                            <div className="text-center py-10 bg-slate-50 rounded-[32px] border-2 border-dashed border-slate-200">
+                                                <CreditCard className="mx-auto text-slate-300 mb-2" size={32} />
+                                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Inventory Depleted</p>
                                             </div>
                                         )}
                                     </div>
-                                )
-                            }) : (
-                                <div className="text-center text-theme-light py-8 bg-input-readonly rounded-lg border border-theme-subtle"><p>No active vouchers found matching your criteria.</p></div>
-                            )}
+                                </div>
+                            </div>
+                        </Card>
+
+                        {/* Summary Sticky Card */}
+                        <div className="sticky bottom-8 z-20">
+                            <Card className="shadow-premium-xl border-theme-primary/20 bg-theme-primary text-white overflow-hidden p-0 rounded-[40px]">
+                                <div className="p-8 space-y-6">
+                                    <div className="flex justify-between items-center">
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60">Disbursement Summary</p>
+                                            <h3 className="text-2xl font-black tracking-tighter">
+                                                {checkoutSummary.count > 0 ? (
+                                                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                                                        {Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => (
+                                                            <span key={unit} className="flex items-baseline gap-1.5">
+                                                                {formatAmount(total.toString())}
+                                                                <span className="text-sm font-bold uppercase tracking-widest opacity-70">{unit}</span>
+                                                            </span>
+                                                        ))}
+                                                        {Object.entries(checkoutSummary.countableTotals).map(([unit, total]) => (
+                                                            <span key={unit} className="flex items-baseline gap-1.5">
+                                                                {total}
+                                                                <span className="text-sm font-bold uppercase tracking-widest opacity-70">{unit}{total > 1 ? 's' : ''}</span>
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                ) : "0.00"}
+                                            </h3>
+                                        </div>
+                                        <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center shadow-inner">
+                                            <Send size={28} />
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="flex items-center justify-between pt-4 border-t border-white/20">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-2 h-2 rounded-full bg-white animate-pulse"></div>
+                                            <span className="text-[9px] font-black uppercase tracking-widest">{checkoutSummary.count} Vouchers Selected</span>
+                                        </div>
+                                        <Button 
+                                            onClick={handlePrepareTransferClick} 
+                                            disabled={isProcessing} 
+                                            className="!bg-white !text-theme-primary rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest shadow-lg hover:scale-105 active:scale-95 transition-all"
+                                        >
+                                            {isProcessing ? "Sending..." : "Send Voucher"}
+                                        </Button>
+                                    </div>
+                                </div>
+                            </Card>
                         </div>
-                    </section>
-                </form>
-            
+                    </div>
+                </div>
+            </div>
+
             <ConfirmationModal 
                 isOpen={showConfirm}
                 title="Confirm Transfer"
                 description={
-                    <p>Are you sure you want to send vouchers worth <br/><span className="font-bold text-theme-primary">{Object.entries(checkoutSummary.summableTotals).map(([u, t]) => `${t.toFixed(2)} ${u}`).join(', ')} {Object.entries(checkoutSummary.countableTotals).map(([u, t]) => `${t} ${u}`).join(', ')}</span><br/> to <span className="font-mono text-xs break-all">{recipientId}</span>?</p>
+                    <div className="space-y-4 pt-2">
+                        <div className="p-6 bg-theme-primary/5 rounded-[32px] border border-theme-primary/20 text-center space-y-2">
+                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">Net Disbursement</p>
+                            <div className="flex flex-col items-center">
+                                {Object.entries(checkoutSummary.summableTotals).map(([u, t]) => (
+                                    <p key={u} className="text-3xl font-black text-theme-primary tracking-tighter">{t.toFixed(2)} {u}</p>
+                                ))}
+                                {Object.entries(checkoutSummary.countableTotals).map(([u, t]) => (
+                                    <p key={u} className="text-3xl font-black text-theme-primary tracking-tighter">{t} {u}</p>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="space-y-2">
+                            <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">Recipient ID</p>
+                            <p className="text-xs font-mono break-all p-3 bg-slate-50 border border-slate-100 rounded-2xl text-slate-600">{recipientId}</p>
+                        </div>
+                        <p className="text-sm font-medium text-theme-secondary leading-relaxed pt-2">
+                            This action will cryptographically sign the transfer bundle. All selected vouchers will be fragmented and locked for export. Proceed?
+                        </p>
+                    </div>
                 }
                 confirmText="Yes, Prepare Transfer"
                 onConfirm={executeTransfer}
@@ -918,45 +797,40 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
             {/* Contact Picker Modal */}
             {showContactPicker && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px] p-4">
-                    <div className="w-full max-w-lg bg-bg-app border border-theme-subtle rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col max-h-[80vh]">
-                        <div className="p-4 border-b border-theme-subtle bg-white flex justify-between items-center">
-                            <h2 className="text-xl font-extrabold text-theme-secondary">Select Contact</h2>
-                            <button onClick={() => setShowContactPicker(false)} className="p-1 hover:bg-bg-app rounded-full transition-colors">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                </svg>
-                            </button>
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/40 backdrop-blur-md p-4 animate-in fade-in duration-300">
+                    <Card className="w-full max-w-lg shadow-premium-xl rounded-[48px] p-0 overflow-hidden animate-in zoom-in duration-300 flex flex-col max-h-[85vh]">
+                        <div className="p-8 border-b border-theme-subtle/40 flex justify-between items-center bg-slate-50/50">
+                            <div>
+                                <h2 className="text-2xl font-black text-theme-secondary tracking-tight uppercase">Address Book</h2>
+                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">Select recipient</p>
+                            </div>
+                            <button onClick={() => setShowContactPicker(false)} className="p-3 hover:bg-white rounded-2xl transition-all shadow-sm border border-transparent hover:border-slate-100"><X size={20}/></button>
                         </div>
-                        <div className="flex-grow overflow-y-auto p-4 space-y-2">
+                        <div className="flex-grow overflow-y-auto p-8 space-y-4 scrollbar-thin scrollbar-thumb-theme-subtle">
                             {contacts.length === 0 ? (
-                                <p className="text-center text-theme-light py-8">No contacts in address book.</p>
+                                <div className="text-center py-20 space-y-4">
+                                    <div className="mx-auto w-16 h-16 bg-slate-50 text-slate-300 rounded-3xl flex items-center justify-center"><UserPlus size={32}/></div>
+                                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Address Book Empty</p>
+                                </div>
                             ) : (
                                 contacts.map(contact => (
-                                    <button
-                                        key={contact.did}
-                                        onClick={() => selectContact(contact)}
-                                        className="w-full flex items-center gap-4 p-4 bg-white hover:bg-bg-input-readonly border border-theme-subtle rounded-xl transition-all shadow-sm hover:shadow-md text-left"
-                                    >
-                                        <div className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0 border border-theme-subtle">
-                                            <Avatar size={40} name={contact.did} variant="beam" colors={["#E63946", "#2B1B17", "#E76F51", "#F4A261", "#2A9D8F"]} />
+                                    <button key={contact.did} onClick={() => selectContact(contact)} className="w-full flex items-center gap-4 p-5 bg-white hover:bg-theme-primary/5 border border-slate-100 hover:border-theme-primary/30 rounded-[32px] transition-all shadow-sm hover:shadow-md text-left group">
+                                        <div className="w-12 h-12 rounded-2xl overflow-hidden flex-shrink-0 border-2 border-white shadow-sm group-hover:scale-110 transition-transform">
+                                            <Avatar size={48} name={contact.did} variant="beam" />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className="font-bold text-theme-secondary truncate">
-                                                {contact.profile.first_name || contact.profile.last_name 
-                                                    ? `${contact.profile.first_name || ''} ${contact.profile.last_name || ''}`.trim()
-                                                    : contact.profile.organization || 'Anonymous'}
-                                            </p>
-                                            <p className="text-xs text-theme-light font-mono truncate">{contact.did}</p>
+                                            <p className="text-sm font-black text-theme-secondary truncate uppercase group-hover:text-theme-primary">{(contact.profile.first_name || contact.profile.last_name) ? `${contact.profile.first_name || ''} ${contact.profile.last_name || ''}`.trim() : (contact.profile.organization || 'Anonymous')}</p>
+                                            <p className="text-[9px] font-mono text-theme-light truncate opacity-60">{contact.did}</p>
                                         </div>
+                                        <div className="p-2 bg-slate-50 rounded-xl text-slate-300 group-hover:text-theme-primary group-hover:bg-theme-primary/10 transition-all"><ArrowRight size={16}/></div>
                                     </button>
                                 ))
                             )}
                         </div>
-                        <div className="p-4 bg-white border-t border-theme-subtle">
-                            <Button variant="secondary" onClick={() => setShowContactPicker(false)} className="w-full">Close</Button>
+                        <div className="p-8 bg-slate-50/50 border-t border-theme-subtle/40">
+                            <Button variant="secondary" onClick={() => setShowContactPicker(false)} className="w-full rounded-2xl">Close</Button>
                         </div>
-                    </div>
+                    </Card>
                 </div>
             )}
         </PageLayout>
