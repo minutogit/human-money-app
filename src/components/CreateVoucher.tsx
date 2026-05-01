@@ -49,7 +49,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const [amount, setAmount] = useState("");
     const [validityValue, setValidityValue] = useState<number>(3);
     const [validityUnit, setValidityUnit] = useState<"Y" | "M" | "D">("Y");
-    const [nonRedeemable] = useState(true);
+    const [nonRedeemable, setNonRedeemable] = useState(true);
 
     const [firstName, setFirstName] = useState("");
     const [lastName, setLastName] = useState("");
@@ -76,6 +76,11 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const [isLoading, setIsLoading] = useState(true);
     const [feedback, setFeedback] = useState<{ type: 'error' | 'success', msg: string } | null>(null);
     const [showConfirm, setShowConfirm] = useState(false);
+    const [showTestVoucherWarning, setShowTestVoucherWarning] = useState(false);
+    const [highlightStandardSelect, setHighlightStandardSelect] = useState(false);
+    const [highlightAmount, setHighlightAmount] = useState(false);
+    const [highlightFirstName, setHighlightFirstName] = useState(false);
+    const [highlightLastName, setHighlightLastName] = useState(false);
 
     useEffect(() => {
         logger.info("CreateVoucher component displayed");
@@ -84,15 +89,6 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                 info("CreateVoucher: Fetching voucher standards.");
                 const fetchedStandards = await invoke<VoucherStandardInfo[]>("get_voucher_standards");
                 setStandards(fetchedStandards);
-                if (fetchedStandards.length > 0) {
-                    setSelectedStandardId(fetchedStandards[0].id);
-                    const { validity } = parseStandardInfo(fetchedStandards[0].content);
-                    if (validity) {
-                        setValidityValue(validity.value);
-                        setValidityUnit(validity.unit);
-                        info(`CreateVoucher: Applied default validity P${validity.value}${validity.unit}`);
-                    }
-                }
                 info(`CreateVoucher: Loaded ${fetchedStandards.length} standards.`);
             } catch (e) {
                 const msg = `Failed to fetch voucher standards: ${e}`;
@@ -122,6 +118,41 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         event.preventDefault();
         if (isLoading) return;
         setFeedback(null);
+        
+        // Reset all highlights
+        setHighlightStandardSelect(false);
+        setHighlightAmount(false);
+        setHighlightFirstName(false);
+        setHighlightLastName(false);
+        
+        if (!selectedStandardId) {
+            setHighlightStandardSelect(true);
+            document.getElementById('standard-select')?.focus();
+            document.getElementById('standard-select')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
+        
+        if (!amount) {
+            setHighlightAmount(true);
+            document.getElementById('amount-input')?.focus();
+            document.getElementById('amount-input')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
+        
+        if (!firstName) {
+            setHighlightFirstName(true);
+            document.getElementById('first-name-input')?.focus();
+            document.getElementById('first-name-input')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
+        
+        if (!lastName) {
+            setHighlightLastName(true);
+            document.getElementById('last-name-input')?.focus();
+            document.getElementById('last-name-input')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
+        
         const selectedStandard = standards.find(s => s.id === selectedStandardId);
         if (!selectedStandard) {
             setFeedback({ type: 'error', msg: "Selected standard not found." });
@@ -232,7 +263,8 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                     <Fieldset legend="Basic Information">
                         <div>
                             <label htmlFor="standard-select" className="block text-sm font-medium text-theme-secondary mb-1">Voucher Type</label>
-                            <select id="standard-select" value={selectedStandardId} onChange={handleStandardChange} disabled={isLoading || standards.length === 0} className={inputClass}>
+                            <select id="standard-select" value={selectedStandardId} onChange={(e) => { handleStandardChange(e); setHighlightStandardSelect(false); }} disabled={isLoading || standards.length === 0} className={`${inputClass} ${highlightStandardSelect ? 'border-4 border-red-500 ring-4 ring-red-200' : ''}`}>
+                                <option value="">-- Please select a voucher standard --</option>
                                 {standards.map(s => {
                                     const { name, issuer } = parseStandardInfo(s.content);
                                     let label = name ? name : s.id;
@@ -246,7 +278,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         </div>
                         <div>
                             <label htmlFor="amount-input" className="block text-sm font-medium text-theme-secondary mb-1">Amount (e.g., 60)</label>
-                            <input id="amount-input" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} required disabled={isLoading} className={inputClass} title="Please enter an amount."/>
+                            <input id="amount-input" type="number" value={amount} onChange={(e) => { setAmount(e.target.value); setHighlightAmount(false); }} disabled={isLoading} className={`${inputClass} ${highlightAmount ? 'border-4 border-red-500 ring-4 ring-red-200' : ''}`}/>
                         </div>
                         <div>
                             <label htmlFor="validityValue" className="block text-sm font-medium text-theme-secondary mb-1">Validity</label>
@@ -260,10 +292,15 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
-                            <input id="nonRedeemable" type="checkbox" checked={nonRedeemable} disabled className="h-4 w-4 rounded border-gray-300 text-theme-accent focus:ring-theme-accent cursor-not-allowed"/>
-                            <label htmlFor="nonRedeemable" className="block text-sm font-medium text-theme-secondary cursor-not-allowed">Non-redeemable Test Voucher</label>
+                            <input id="nonRedeemable" type="checkbox" checked={nonRedeemable} onChange={(e) => {
+                                if (e.target.checked) {
+                                    setNonRedeemable(true);
+                                } else {
+                                    setShowTestVoucherWarning(true);
+                                }
+                            }} disabled={isLoading} className="h-4 w-4 rounded border-gray-300 text-theme-accent focus:ring-theme-accent"/>
+                            <label htmlFor="nonRedeemable" className="block text-sm font-medium text-theme-secondary">Non-redeemable Test Voucher</label>
                         </div>
-                        <p className="text-xs text-theme-light mt-1 italic">Early phase: Only non-redeemable test vouchers can be created at this time.</p>
                     </Fieldset>
 
                     <Fieldset legend="Creator Details">
@@ -285,11 +322,11 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                             <div>
                                 <label htmlFor="first-name-input" className="block text-sm font-medium text-theme-secondary mb-1">First Name (Required)</label>
-                                <input id="first-name-input" type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} required disabled={isLoading} className={inputClass} title="Please enter a first name."/>
+                                <input id="first-name-input" type="text" value={firstName} onChange={(e) => { setFirstName(e.target.value); setHighlightFirstName(false); }} disabled={isLoading} className={`${inputClass} ${highlightFirstName ? 'border-4 border-red-500 ring-4 ring-red-200' : ''}`}/>
                             </div>
                             <div>
                                 <label htmlFor="last-name-input" className="block text-sm font-medium text-theme-secondary mb-1">Last Name (Required)</label>
-                                <input id="last-name-input" type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} required disabled={isLoading} className={inputClass} title="Please enter a last name."/>
+                                <input id="last-name-input" type="text" value={lastName} onChange={(e) => { setLastName(e.target.value); setHighlightLastName(false); }} disabled={isLoading} className={`${inputClass} ${highlightLastName ? 'border-4 border-red-500 ring-4 ring-red-200' : ''}`}/>
                             </div>
                         </div>
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -328,8 +365,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                             </div>
                             <div>
                                 <label htmlFor="coordinates" className="block text-sm font-medium text-theme-secondary mb-1">Coordinates (Optional)</label>
-                                <input id="coordinates" type="text" value={coordinates} placeholder="e.g. 51.16, 10.45" onChange={(e) => { setCoordinates(e.target.value); if(coordWarning) setCoordWarning("");}} onBlur={handleCoordBlur} disabled={isLoading} className={`${inputClass} ${coordWarning ? 'border-red-500 ring-red-500' : ''}`}/>
-                                {coordWarning && <p className="text-[10px] text-red-500 mt-1 font-medium">{coordWarning}</p>}
+                                <input id="coordinates" type="text" value={coordinates} placeholder="e.g. 51.16, 10.45" onChange={(e) => { setCoordinates(e.target.value); if(coordWarning) setCoordWarning("");}} onBlur={handleCoordBlur} disabled={isLoading} className={`${inputClass} ${coordWarning ? 'border-4 border-red-500 ring-4 ring-red-200' : ''}`}/>
                             </div>
                         </div>
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -395,7 +431,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                     </div>
 
                     <div className="flex justify-end gap-4 pt-6">
-                        <Button type="submit" disabled={isLoading || !amount || !firstName || !lastName}>{isLoading ? "Creating..." : "Create Voucher"}</Button>
+                        <Button type="submit" disabled={isLoading}>{isLoading ? "Creating..." : "Create Voucher"}</Button>
                     </div>
                 </form>
             </div>
@@ -407,14 +443,39 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                     const selected = standards.find(s => s.id === selectedStandardId);
                     if (!selected) return `${amount}`;
                     const { name, abbreviation, unit } = parseStandardInfo(selected.content);
-                    const displayName = name || selected.id;
-                    const displayUnit = abbreviation || unit || 'Units';
+                    let displayName = name || selected.id;
+                    let displayUnit = abbreviation || unit || 'Units';
+
+                    // BFF Pattern: Add TEST- prefix manually because the voucher doesn't exist yet,
+                    // so the core query logic (format_bff_name) hasn't processed it.
+                    if (nonRedeemable) {
+                        if (!displayName.startsWith("TEST-")) displayName = `TEST-${displayName}`;
+                        if (!displayUnit.startsWith("TEST-")) displayUnit = `TEST-${displayUnit}`;
+                    }
+
                     return `${amount} ${displayUnit} of ${displayName}`;
                 })()}</strong> voucher?<br/><br/>This action will sign the voucher with your private key.</p>}
                 confirmText="Yes, Create"
                 onConfirm={executeCreation}
                 onCancel={() => setShowConfirm(false)}
                 isProcessing={isLoading}
+            />
+
+            <ConfirmationModal
+                isOpen={showTestVoucherWarning}
+                title="Early Phase Warning"
+                description={<p>In this early phase, we recommend creating only <strong>non-redeemable test vouchers</strong> without real value. This allows you to test the system without financial risk.<br/><br/>Do you want to proceed with creating a real, redeemable voucher?</p>}
+                confirmText="I still want to create a real voucher"
+                cancelText="OK, I'll create only a test voucher"
+                onConfirm={() => {
+                    setNonRedeemable(false);
+                    setShowTestVoucherWarning(false);
+                }}
+                onCancel={() => {
+                    setNonRedeemable(true);
+                    setShowTestVoucherWarning(false);
+                }}
+                confirmVariant="danger"
             />
         </div>
     );
