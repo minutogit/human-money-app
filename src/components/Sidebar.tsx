@@ -1,6 +1,7 @@
 // src/components/Sidebar.tsx
 import React from 'react';
 import Avatar from "boring-avatars";
+import logo from '../assets/logo.png';
 import { AppState } from '../App';
 import { 
   LayoutDashboard, 
@@ -113,12 +114,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
           isOpen ? "translate-x-0" : "-translate-x-full"
         } flex flex-col border-r border-theme-subtle`}
       >
+        {/* Brand Header */}
+        <div className="px-6 py-4 flex items-center gap-3 border-b border-theme-subtle/50">
+          <div className="w-8 h-8 rounded-lg bg-white shadow-sm flex items-center justify-center overflow-hidden border border-theme-subtle">
+            <img src={logo} alt="Logo" className="w-7 h-7 object-contain" />
+          </div>
+          <h1 className="text-sm font-bold text-theme-secondary tracking-tight">Human Money App</h1>
+        </div>
+
         {/* Profile Header */}
-        <div className="p-6 border-b border-theme-subtle bg-bg-app/30">
-          <div className="flex items-center gap-4">
-            <div className="ring-2 ring-theme-primary/20 rounded-full p-0.5">
+        <div className="p-3 border-b border-theme-subtle bg-bg-app/30">
+          <div className="flex items-center gap-3">
+            <div className="ring-2 ring-theme-primary/20 rounded-full p-0.5 shadow-sm">
               <Avatar
-                size={48}
+                size={32}
                 name={profileName || "Guest"}
                 variant="beam"
                 colors={["#E63946", "#F4A261", "#E76F51", "#2A9D8F", "#2B1B17"]}

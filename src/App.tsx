@@ -5,6 +5,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { error } from "@tauri-apps/plugin-log";
 import { logger } from "./utils/log";
+import logo from './assets/logo.png';
 import { CreateNewProfile } from './components/CreateNewProfile';
 import { Login } from "./components/Login";
 import { CreateVoucher } from "./components/CreateVoucher";
@@ -284,7 +285,11 @@ function AppContent() {
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path>
                                 </svg>
                             </button>
-                            <h1 className="text-lg font-bold text-theme-primary">Human Money App</h1>
+                            <div className="flex items-center gap-2">
+                                <img src={logo} alt="Logo" className="w-8 h-8 object-contain" />
+                                <h1 className="text-lg font-bold text-theme-primary">Human Money App</h1>
+                            </div>
+                            <div className="w-10"></div> {/* Spacer for symmetry */}
                         </header>
                     )}
 
