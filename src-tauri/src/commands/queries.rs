@@ -173,3 +173,12 @@ pub fn check_reputation(
     let service = state.service.lock().unwrap();
     service.check_reputation(&offender_id)
 }
+#[tauri::command]
+pub fn get_event_history(
+    offset: usize,
+    limit: usize,
+    state: tauri::State<AppState>,
+) -> Result<Vec<human_money_core::models::wallet_event::WalletEvent>, String> {
+    let mut service = state.service.lock().unwrap();
+    service.get_event_history(offset, limit, None)
+}

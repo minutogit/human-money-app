@@ -140,6 +140,7 @@ pub fn run() {
             get_double_spend_conflicts, get_proof_of_double_spend, get_proof_id_for_voucher,
             get_voucher_source_sender,
             check_reputation, set_conflict_local_override,
+            get_event_history,
             // Address Book
             get_contacts, save_contact, delete_contact,
             // WalletSeal / Sync

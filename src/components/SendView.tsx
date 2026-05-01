@@ -509,7 +509,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 countableItems: countableItems, // KORREKTUR (von 13:28)
                 // NEU: Speichere sowohl die reinen IDs als auch die vollen Details
                 involved_vouchers: bundleResult.involvedSourcesDetails.map(d => d.local_instance_id),
-                involved_sources_details: bundleResult.involvedSourcesDetails,
+                involvedSourcesDetails: bundleResult.involvedSourcesDetails,
                 bundle_data: bundleResult.bundleData,
                 bundle_id: bundleResult.bundleId, // NEU
                 notes: notesToSend ?? undefined, // NEU

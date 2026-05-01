@@ -14,6 +14,7 @@ import { SettingsView } from "./components/SettingsView";
 import { TransactionHistoryView } from "./components/TransactionHistoryView";
 import { TransferSuccessView } from "./components/TransferSuccessView";
 import { VoucherDetailsView } from './components/VoucherDetailsView';
+import { Activities } from './components/Activities';
 import { ReceiveView } from './components/ReceiveView';
 import { ReceiveSuccessView } from './components/ReceiveSuccessView';
 import { Dashboard } from './components/Dashboard';
@@ -43,6 +44,7 @@ type AppState =
     | { view: "send_vouchers" }
     | { view: "receive_bundle" }
     | { view: "transaction_history" }
+    | { view: "activities" }
     | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string }
     | { view: "receive_success"; payload: ReceiveSuccessPayload & { voucherData?: any } }
     | { view: "address_book"; initialSearchQuery?: string; previousView?: AppState }
@@ -146,9 +148,11 @@ function AppContent() {
                     onNavigateToSend={() => setAppState({ view: "send_vouchers" })}
                     onNavigateToReceive={() => setAppState({ view: "receive_bundle" })}
                     onNavigateToHistory={() => setAppState({ view: "transaction_history" })}
+                    onNavigateToActivities={() => setAppState({ view: "activities" })}
                     onNavigateToConflicts={() => setAppState({ view: "conflict_list" })}
                     onNavigateToWallet={(filter) => setAppState({ view: "wallet", initialStatusFilter: filter?.status, initialStandardFilter: filter?.standard })}
                     onNavigateToSettings={() => setAppState({ view: "settings" })}
+                    onNavigateToVoucherDetail={(voucherId) => setAppState({ view: "voucher_details", voucherId, previousView: appState })}
                 />;
             case "recreate_profile":
                 return <RecreateProfile
@@ -207,6 +211,12 @@ function AppContent() {
                 />;
             case "transaction_history":
                 return <TransactionHistoryView onBack={() => setAppState({ view: "logged_in" })} />;
+            case "activities":
+                return <Activities 
+                    onBack={() => setAppState({ view: "logged_in" })} 
+                    onNavigateToVoucherDetail={(voucherId) => setAppState({ view: "voucher_details", voucherId, previousView: appState })}
+                    onNavigateToHistory={() => setAppState({ view: "transaction_history" })}
+                />;
             case "transfer_success":
                 return <TransferSuccessView
                     bundleData={appState.bundleData}
@@ -275,7 +285,13 @@ function AppContent() {
                                     </button>
                                     <button onClick={() => setAppState({ view: "send_vouchers" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Send</button>
                                     <button onClick={() => setAppState({ view: "receive_bundle" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Receive / Process</button>
-                                    <button onClick={() => setAppState({ view: "transaction_history" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">History</button>
+                                    <button onClick={() => setAppState({ view: "activities" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left flex items-center gap-2">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        Activity Log
+                                    </button>
+                                    <button onClick={() => setAppState({ view: "transaction_history" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Bundle History</button>
                                     <button onClick={() => setAppState({ view: "address_book" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Address Book</button>
                                     <button onClick={() => setAppState({ view: "conflict_list" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left flex items-center gap-2">
                                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

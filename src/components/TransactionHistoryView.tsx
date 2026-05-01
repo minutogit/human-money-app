@@ -256,11 +256,11 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                 <span className="font-medium text-theme-secondary">Bundle ID:</span> {record.bundle_id}
                                             </p>
 
-                                            {/* Fall 1: Wir haben reiche Details (NUR für "Sent" Transaktionen) */}
-                                            {record.involved_sources_details && record.involved_sources_details.length > 0 && (
+                                            {/* Fall 1: Wir haben reiche Details */}
+                                            {record.involvedSourcesDetails && record.involvedSourcesDetails.length > 0 && (
                                                 <div className="text-theme-light pt-2">
                                                     <span className="font-medium text-theme-secondary">
-                                                        {record.direction === 'sent' ? 'Sent from Vouchers' : 'Received into Vouchers'} ({record.involved_sources_details.length}):
+                                                        {record.direction === 'sent' ? 'Sent from Vouchers' : 'Received into Vouchers'} ({record.involvedSourcesDetails.length}):
                                                     </span>
                                                     <div className="mt-2 space-y-2 font-mono text-xs">
                                                         {/* Header für die "Tabelle" */}
@@ -272,7 +272,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                             <span>Local-ID</span>
                                                         </div>
                                                         {/* Datenzeilen */}
-                                                        {record.involved_sources_details!.map((detail, index) => (
+                                                        {record.involvedSourcesDetails!.map((detail, index) => (
                                                             <div key={index} className="grid grid-cols-5 gap-2 p-1.5 bg-black/10 rounded items-center">
                                                                 <span className="truncate" title={detail.standard_name}>{detail.standard_name}</span>
                                                                 <span className="text-right font-semibold" title={detail.amount}>{detail.amount}</span>
@@ -285,12 +285,12 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                 </div>
                                             )}
 
-                                            {/* Fall 2: Wir haben NUR IDs (NUR für "Received" Transaktionen) */}
+                                            {/* Fall 2: Wir haben NUR IDs */}
                                             {/* Zeige dies nur an, wenn Fall 1 nicht zutrifft */}
-                                            {record.involved_vouchers && record.involved_vouchers.length > 0 && !(record.involved_sources_details && record.involved_sources_details.length > 0) && (
+                                            {record.involved_vouchers && record.involved_vouchers.length > 0 && !(record.involvedSourcesDetails && record.involvedSourcesDetails.length > 0) && (
                                                 <div className="text-theme-light pt-2">
                                                     <span className="font-medium text-theme-secondary">
-                                                        Received into Vouchers ({record.involved_vouchers.length}):
+                                                        {record.direction === 'sent' ? 'Sent from Vouchers' : 'Received into Vouchers'} ({record.involved_vouchers.length}):
                                                     </span>
                                                     <ul className="list-disc list-inside pl-2 font-mono text-xs mt-1">
                                                         {record.involved_vouchers.map(id => (

@@ -12,10 +12,12 @@ interface DashboardProps {
     onNavigateToCreateVoucher: () => void;
     onNavigateToSend: () => void;
     onNavigateToHistory: () => void;
+    onNavigateToActivities: () => void;
     onNavigateToReceive: () => void;
     onNavigateToConflicts?: () => void;
     onNavigateToWallet: (filter?: { status?: string; standard?: string }) => void;
     onNavigateToSettings?: () => void;
+    onNavigateToVoucherDetail: (voucherId: string) => void;
     profileName: string;
 }
 
@@ -23,6 +25,7 @@ export function Dashboard(props: DashboardProps) {
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<AggregatedBalance[]>([]);
     const [recentTransactions, setRecentTransactions] = useState<TransactionRecord[]>([]);
+    const [recentEvents, setRecentEvents] = useState<any[]>([]);
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [copied, setCopied] = useState(false);
@@ -39,17 +42,19 @@ export function Dashboard(props: DashboardProps) {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, history, voucherSummaries, userProfile, contactsList] = await Promise.all([
+                const [id, balanceList, history, voucherSummaries, userProfile, contactsList, eventHistory] = await Promise.all([
                     invoke<string>("get_user_id"),
                     invoke<AggregatedBalance[]>("get_total_balance_by_currency"),
                     invoke<TransactionRecord[]>("get_transaction_history").catch(() => []),
                     invoke<VoucherSummary[]>("get_voucher_summaries").catch(() => []),
                     invoke<any>("get_user_profile").catch(() => null),
-                    invoke<Contact[]>("get_contacts").catch(() => [])
+                    invoke<Contact[]>("get_contacts").catch(() => []),
+                    invoke<any[]>("get_event_history", { offset: 0, limit: 5 }).catch(() => [])
                 ]);
                 setUserId(id);
                 setBalances(balanceList || []);
                 setContacts(contactsList || []);
+                setRecentEvents(eventHistory || []);
                 // Sort by timestamp, newest first, and take only the first 5
                 const sortedHistory = (history || [])
                     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -145,6 +150,33 @@ export function Dashboard(props: DashboardProps) {
             }
         }
         return did.substring(0, 10) + '...';
+    }
+
+    function getEventDetails(event: any): { label: string; icon: string; color: string } {
+        const type = event.event_type;
+        const bff = event.bff_data;
+
+        if (typeof type === 'string') {
+            switch (type) {
+                case 'VoucherCreated':
+                    return { label: 'Voucher Created', icon: '✨', color: 'bg-blue-100 text-blue-700' };
+                case 'TransferSent':
+                    return { label: `Sent to ${bff.counterparty_name || 'Anonymous'}`, icon: '↑', color: 'bg-red-100 text-red-700' };
+                case 'TransferReceived':
+                    return { label: `Received from ${bff.counterparty_name || 'Anonymous'}`, icon: '↓', color: 'bg-green-100 text-green-700' };
+                case 'VoucherQuarantined':
+                    return { label: 'Voucher Quarantined', icon: '⚠️', color: 'bg-amber-100 text-amber-700' };
+                case 'VoucherActivated':
+                    return { label: 'Voucher Activated', icon: '✅', color: 'bg-emerald-100 text-emerald-700' };
+                case 'VoucherVoided':
+                    return { label: 'Voucher Voided', icon: '🚫', color: 'bg-gray-100 text-gray-700' };
+                case 'VoucherExpired':
+                    return { label: 'Voucher Expired', icon: '⏰', color: 'bg-orange-100 text-orange-700' };
+            }
+        } else if (type && typeof type === 'object' && 'Unknown' in type) {
+            return { label: type.Unknown, icon: '❓', color: 'bg-gray-100 text-gray-700' };
+        }
+        return { label: 'Unknown Event', icon: '?', color: 'bg-gray-100 text-gray-700' };
     }
 
     function getContactForTransaction(record: TransactionRecord, contacts: Contact[]): { name: string; notes?: string } {
@@ -404,10 +436,60 @@ export function Dashboard(props: DashboardProps) {
                     )}
 
                     {/* Zone 5: Recent Activity & History Link OR Welcome Empty State */}
-                    {recentTransactions.length > 0 ? (
+                    {recentEvents.length > 0 ? (
                         <section className="mb-8">
                             <div className="flex items-center justify-between mb-4">
                                 <h2 className="text-lg font-semibold text-theme-secondary">Recent Activity</h2>
+                                <button 
+                                    onClick={props.onNavigateToActivities}
+                                    className="text-sm text-theme-accent hover:underline"
+                                >
+                                    View All ➔
+                                </button>
+                            </div>
+                            <div className="space-y-3">
+                                {recentEvents.map(event => {
+                                    const { label, icon, color } = getEventDetails(event);
+                                    return (
+                                        <button
+                                            key={event.event_id}
+                                            onClick={() => {
+                                                const type = event.event_type;
+                                                if (type === 'TransferSent' || type === 'TransferReceived') {
+                                                    props.onNavigateToHistory();
+                                                } else {
+                                                    props.onNavigateToVoucherDetail(event.local_instance_id);
+                                                }
+                                            }}
+                                            className="w-full bg-bg-card rounded-lg p-3 border border-theme-subtle flex items-center justify-between hover:border-theme-primary hover:shadow-sm transition-all text-left group"
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <div className={`flex items-center justify-center h-8 w-8 rounded-full font-bold transition-transform group-hover:scale-110 ${color}`}>
+                                                    {icon}
+                                                </div>
+                                                <div>
+                                                    <p className="font-semibold text-sm text-theme-primary">
+                                                        {label}
+                                                    </p>
+                                                    <p className="text-xs text-theme-secondary mt-0.5">
+                                                        {event.bff_data.display_currency && `${event.bff_data.amount} ${event.bff_data.display_currency}`}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-xs text-theme-light mt-0.5">
+                                                    {formatTimestamp(event.timestamp)}
+                                                </p>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </section>
+                    ) : recentTransactions.length > 0 ? (
+                        <section className="mb-8">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-lg font-semibold text-theme-secondary">Recent Transfers</h2>
                                 <button 
                                     onClick={props.onNavigateToHistory}
                                     className="text-sm text-theme-accent hover:underline"

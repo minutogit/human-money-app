@@ -253,7 +253,7 @@ export interface TransactionRecord {
     bundle_id?: string;
     notes?: string;
     sender_profile_name?: string;
-    involved_sources_details?: InvolvedVoucherInfo[];
+    involvedSourcesDetails?: InvolvedVoucherInfo[];
 }
 
 export interface TransferSummary {
@@ -364,3 +364,32 @@ export type IntegrityReport =
     | { type: "IntegrityOutdated" }
     | { type: "InvalidSignature" }
     | { type: "MissingIntegrityRecord" };
+
+// --- Event Log / Activity History ---
+
+export type WalletEventType =
+    | "VoucherCreated"
+    | "TransferSent"
+    | "TransferReceived"
+    | "VoucherQuarantined"
+    | "VoucherActivated"
+    | "VoucherVoided"
+    | "VoucherExpired"
+    | { Unknown: string };
+
+export interface EventBffData {
+    display_currency: string;
+    amount: string;
+    is_test_voucher: boolean;
+    counterparty_id?: string;
+    counterparty_name?: string;
+}
+
+export interface WalletEvent {
+    event_id: string;
+    local_instance_id: string;
+    voucher_id: string;
+    timestamp: string; // ISO 8601
+    event_type: WalletEventType;
+    bff_data: EventBffData;
+}
