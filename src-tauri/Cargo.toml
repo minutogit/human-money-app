@@ -1,6 +1,6 @@
 [package]
 name = "human_money_app"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 description = "A decentralized wallet client for the Human Money system."
 authors = ["Human Money Team"]
 edition = "2021"
@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "~2.11", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -35,5 +35,5 @@ tauri-plugin-fs = "2.4.2"
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
-tauri = { version = "2", features = ["test"] }
+tauri = { version = "~2.11", features = ["test"] }
 

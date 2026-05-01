@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { CreateVoucher } from '../CreateVoucher';
 import { invoke } from '@tauri-apps/api/core';
@@ -94,14 +95,17 @@ amount_decimal_places = 2`,
     expect(await screen.findByText(/Silver Standard/i)).toBeInTheDocument();
   });
 
-  it('prevents form submission when required fields are empty', async () => {
+  it('validates required fields when form is submitted without data', async () => {
     render(
       <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
     );
 
+    const createButton = await screen.findByRole('button', { name: /Create Voucher/i });
+    await userEvent.click(createButton);
+
+    // Should not show confirmation modal (validation failed)
     await waitFor(() => {
-      const createButton = screen.getByRole('button', { name: /Create Voucher/i });
-      expect(createButton).toBeDisabled();
+      expect(screen.queryByText(/Create Voucher\?/i)).not.toBeInTheDocument();
     });
   });
 });

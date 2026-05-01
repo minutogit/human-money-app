@@ -49,6 +49,7 @@ To ensure successful builds on GitHub:
 3.  **Type Checking:** After code changes, run `npx tsc --noEmit` to verify frontend types. For configuration files in the root (like `vite.config.ts`), run `npx tsc -p tsconfig.node.json --noEmit`. You are expected to run these commands independently to catch and fix errors.
 4.  **Release Trigger:** Push a tag starting with `v` (e.g., `v0.1.0-alpha.3`) from any branch to trigger the production build and GitHub release.
 5.  **Core State:** Ensure the `master` branch of `human-money-core` is up-to-date before pushing the app tag.
+6.  **Tauri Version Synchronization:** Tauri 2 requires the Rust `tauri` crate and NPM `@tauri-apps/api`/`@tauri-apps/cli` packages to be on the same major/minor version. Always keep these synchronized in `package.json` and `src-tauri/Cargo.toml`. Run `npm run check-versions` to verify synchronization. This check is automatically included in `run-tests.sh`.
 
 ## Project Structure
 

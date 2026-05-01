@@ -128,28 +128,28 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         if (!selectedStandardId) {
             setHighlightStandardSelect(true);
             document.getElementById('standard-select')?.focus();
-            document.getElementById('standard-select')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            document.getElementById('standard-select')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
             return;
         }
         
         if (!amount) {
             setHighlightAmount(true);
             document.getElementById('amount-input')?.focus();
-            document.getElementById('amount-input')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            document.getElementById('amount-input')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
             return;
         }
         
         if (!firstName) {
             setHighlightFirstName(true);
             document.getElementById('first-name-input')?.focus();
-            document.getElementById('first-name-input')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            document.getElementById('first-name-input')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
             return;
         }
         
         if (!lastName) {
             setHighlightLastName(true);
             document.getElementById('last-name-input')?.focus();
-            document.getElementById('last-name-input')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            document.getElementById('last-name-input')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
             return;
         }
         

@@ -136,13 +136,14 @@ jobs:
           draft: false
           target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: true
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          # Mark as prerelease if it's NOT a tag (nightly) OR if the tag name contains a hyphen
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') || contains(github.ref_name, '-') }}
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
           files: release-assets/**/*
           body: |
-            ${{ startsWith(github.ref, 'refs/tags/') && '## 🎉 Official Release' || '## 🚧 Nightly Development Build' }}
+            ${{ !startsWith(github.ref, 'refs/tags/') && '## 🚧 Nightly Development Build' || (contains(github.ref_name, '-') && '## 🧪 Beta / Prerelease' || '## 🎉 Official Stable Release') }}
             
-            ${{ startsWith(github.ref, 'refs/tags/') && 'This is a stable release of the Human Money App.' || 'This is an automated snapshot from the current development branch. **Use with caution.**' }}
+            ${{ !startsWith(github.ref, 'refs/tags/') && 'This is an automated snapshot from the current development branch. **Use with caution.**' || (contains(github.ref_name, '-') && 'This is a pre-release version for testing and feedback.' || 'This is a stable release of the Human Money App.') }}
             
             **Build Details:**
             - ℹ️ Version: `${{ env.APP_VERSION }}`

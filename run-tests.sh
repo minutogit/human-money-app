@@ -4,6 +4,15 @@
 clear
 echo "🧪 Starte alle Tests..."
 
+# 0. Tauri Version Check
+echo "🔍 Prüfe Tauri Versionssynchronisation..."
+npm run check-versions
+if [ $? -ne 0 ]; then
+    echo "❌ Tauri Versionscheck fehlgeschlagen!"
+    exit 1
+fi
+echo "✅ Tauri Versionscheck erfolgreich."
+
 # 1. TypeScript Check
 echo "🔍 Prüfe TypeScript Typen (Frontend)..."
 npx tsc --noEmit
