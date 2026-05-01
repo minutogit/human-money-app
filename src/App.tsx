@@ -30,8 +30,9 @@ import { Button } from './components/ui/Button';
 import { ProfileInfo, ReceiveSuccessPayload } from './types';
 // WICHTIG: Der Import für den Provider
 import { SessionProvider, useSession } from './context/SessionContext';
+import { Sidebar, INTERNAL_VIEWS } from './components/Sidebar';
 
-type AppState =
+export type AppState =
     | { view: "loading" }
     | { view: "needs_profile" }
     | { view: "needs_login" }
@@ -261,67 +262,18 @@ function AppContent() {
 
     return (
         <div className="flex h-screen w-full bg-bg-app font-sans text-theme-secondary overflow-hidden">
-                {appState.view === "logged_in" && (
-                    <>
-                        {/* Adding 'will-change-transform' fixes the rendering bug with animations */}
-                        <aside
-                            className={`fixed inset-y-0 left-0 z-40 w-64 transform transition-transform duration-300 ease-in-out will-change-transform md:relative md:translate-x-0 ${
-                                isSidebarOpen ? "translate-x-0" : "-translate-x-full"
-                            }`}
-                        >
-                            <div className="flex h-full flex-col bg-white dark:bg-gray-800 p-4 shadow-lg">
-                                <div className="mb-8 text-center">
-                                    <h1 className="text-xl font-bold text-theme-primary">Human Money App</h1>
-                                    <p className="text-sm text-theme-light">V{appVersion}</p>
-                                </div>
-                                <nav className="flex flex-grow flex-col space-y-2 text-left">
-                                    <button onClick={() => setAppState({ view: "logged_in" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Dashboard</button>
-                                    <button onClick={() => setAppState({ view: "wallet" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Wallet</button>
-                                    <button onClick={() => setAppState({ view: "create_voucher", previousView: appState })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left flex items-center gap-2">
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                        </svg>
-                                        Create Voucher
-                                    </button>
-                                    <button onClick={() => setAppState({ view: "send_vouchers" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Send</button>
-                                    <button onClick={() => setAppState({ view: "receive_bundle" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Receive / Process</button>
-                                    <button onClick={() => setAppState({ view: "activities" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left flex items-center gap-2">
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                        </svg>
-                                        Activity Log
-                                    </button>
-                                    <button onClick={() => setAppState({ view: "transaction_history" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Bundle History</button>
-                                    <button onClick={() => setAppState({ view: "address_book" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left">Address Book</button>
-                                    <button onClick={() => setAppState({ view: "conflict_list" })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app text-left flex items-center gap-2">
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                                        </svg>
-                                        Fraud Reports
-                                    </button>
-                                    <a href="#" onClick={() => setAppState({ view: 'settings' })} className="rounded-md px-4 py-2 text-theme-secondary hover:bg-bg-app">Settings</a>
-                                </nav>
-                                <div className="mt-auto border-t border-theme-subtle pt-4">
-                                    <button onClick={handleLogout} className="w-full rounded-md px-4 py-2 text-left text-theme-secondary hover:bg-bg-app focus:outline-none focus:ring-2 focus:ring-theme-accent">
-                                        Logout
-                                    </button>
-                                </div>
-                            </div>
-                        </aside>
+                <Sidebar 
+                    appState={appState}
+                    setAppState={setAppState}
+                    profileName={profileName}
+                    appVersion={appVersion}
+                    onLogout={handleLogout}
+                    isOpen={isSidebarOpen}
+                    setIsOpen={setSidebarOpen}
+                />
 
-                        {/* Overlay for mobile view */}
-                        {isSidebarOpen && (
-                            <div
-                                className="fixed inset-0 z-30 bg-black/50 md:hidden"
-                                onClick={() => setSidebarOpen(false)}
-                            ></div>
-                        )}
-                    </>
-                )}
-
-                {/* Main content area */}
                 <div className="flex flex-1 flex-col overflow-y-auto">
-                    {appState.view === "logged_in" && (
+                    {INTERNAL_VIEWS.includes(appState.view) && (
                         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-theme-subtle bg-card px-4 shadow-sm md:hidden">
                             <button
                                 onClick={() => setSidebarOpen(true)}

@@ -1,0 +1,214 @@
+// src/components/Sidebar.tsx
+import React from 'react';
+import Avatar from "boring-avatars";
+import { AppState } from '../App';
+import { 
+  LayoutDashboard, 
+  Wallet, 
+  Send, 
+  Download, 
+  PlusCircle, 
+  History, 
+  ClipboardList, 
+  Contact, 
+  ShieldAlert, 
+  Settings, 
+  LogOut,
+  ChevronRight
+} from 'lucide-react';
+
+interface SidebarProps {
+  appState: AppState;
+  setAppState: (state: AppState) => void;
+  profileName: string;
+  appVersion: string;
+  onLogout: () => void;
+  isOpen: boolean;
+  setIsOpen: (open: boolean) => void;
+}
+
+export const INTERNAL_VIEWS = [
+  'logged_in', 
+  'wallet', 
+  'activities', 
+  'transaction_history', 
+  'address_book', 
+  'conflict_list', 
+  'settings', 
+  'create_voucher', 
+  'send_vouchers', 
+  'receive_bundle', 
+  'voucher_details', 
+  'conflict_details',
+  'receive_success',
+  'transfer_success',
+  'sign_request'
+];
+
+export const Sidebar: React.FC<SidebarProps> = ({
+  appState,
+  setAppState,
+  profileName,
+  appVersion,
+  onLogout,
+  isOpen,
+  setIsOpen
+}) => {
+  const currentView = appState.view;
+
+  // Only show sidebar for internal views
+  if (!INTERNAL_VIEWS.includes(currentView)) {
+    return null;
+  }
+
+  const navGroups = [
+    {
+      label: 'Main',
+      items: [
+        { id: 'logged_in', label: 'Dashboard', icon: LayoutDashboard, view: { view: 'logged_in' } },
+        { id: 'wallet', label: 'Wallet', icon: Wallet, view: { view: 'wallet' } },
+      ]
+    },
+    {
+      label: 'Actions',
+      items: [
+        { id: 'send_vouchers', label: 'Send', icon: Send, view: { view: 'send_vouchers' } },
+        { id: 'receive_bundle', label: 'Receive / Process', icon: Download, view: { view: 'receive_bundle' } },
+        { id: 'create_voucher', label: 'Create Voucher', icon: PlusCircle, view: { view: 'create_voucher', previousView: appState } },
+      ]
+    },
+    {
+      label: 'Records & Network',
+      items: [
+        { id: 'activities', label: 'Activity Log', icon: ClipboardList, view: { view: 'activities' } },
+        { id: 'transaction_history', label: 'Bundle History', icon: History, view: { view: 'transaction_history' } },
+        { id: 'address_book', label: 'Address Book', icon: Contact, view: { view: 'address_book' } },
+      ]
+    },
+    {
+      label: 'Security',
+      items: [
+        { id: 'conflict_list', label: 'Fraud Reports', icon: ShieldAlert, view: { view: 'conflict_list' } },
+      ]
+    }
+  ];
+
+  const isActive = (itemId: string) => {
+    if (itemId === 'logged_in' && currentView === 'logged_in') return true;
+    return currentView === itemId;
+  };
+
+  return (
+    <>
+      {/* Sidebar Overlay for Mobile */}
+      {isOpen && (
+        <div 
+          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm transition-opacity md:hidden"
+          onClick={() => setIsOpen(false)}
+        />
+      )}
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 w-72 transform bg-white dark:bg-gray-900 shadow-2xl transition-all duration-300 ease-in-out will-change-transform md:relative md:translate-x-0 ${
+          isOpen ? "translate-x-0" : "-translate-x-full"
+        } flex flex-col border-r border-theme-subtle`}
+      >
+        {/* Profile Header */}
+        <div className="p-6 border-b border-theme-subtle bg-bg-app/30">
+          <div className="flex items-center gap-4">
+            <div className="ring-2 ring-theme-primary/20 rounded-full p-0.5">
+              <Avatar
+                size={48}
+                name={profileName || "Guest"}
+                variant="beam"
+                colors={["#E63946", "#F4A261", "#E76F51", "#2A9D8F", "#2B1B17"]}
+              />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <h2 className="text-sm font-bold text-theme-secondary truncate">
+                {profileName || "Not Logged In"}
+              </h2>
+              <span className="text-[10px] font-medium text-theme-light uppercase tracking-widest flex items-center gap-1">
+                <span className="w-1.5 h-1.5 bg-theme-success rounded-full animate-pulse"></span>
+                Active Wallet
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Navigation Content */}
+        <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8 scrollbar-hide">
+          {navGroups.map((group) => (
+            <div key={group.label} className="space-y-2">
+              <h3 className="px-4 text-[11px] font-bold text-theme-placeholder uppercase tracking-[0.15em]">
+                {group.label}
+              </h3>
+              <div className="space-y-1">
+                {group.items.map((item) => {
+                  const active = isActive(item.id);
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        setAppState(item.view as AppState);
+                        setIsOpen(false);
+                      }}
+                      className={`w-full group flex items-center justify-between px-4 py-2.5 rounded-xl transition-all duration-200 ${
+                        active 
+                          ? "bg-theme-primary/10 text-theme-primary font-semibold shadow-sm" 
+                          : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <item.icon 
+                          size={18} 
+                          className={`transition-transform duration-200 group-hover:scale-110 ${
+                            active ? "text-theme-primary" : "text-theme-placeholder"
+                          }`} 
+                        />
+                        <span className="text-sm">{item.label}</span>
+                      </div>
+                      {active && <ChevronRight size={14} className="text-theme-primary/50" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer Section */}
+        <div className="p-4 mt-auto border-t border-theme-subtle bg-bg-app/10 space-y-2">
+          <button 
+            onClick={() => {
+              setAppState({ view: 'settings' });
+              setIsOpen(false);
+            }}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 ${
+              currentView === 'settings' 
+                ? "bg-theme-primary/10 text-theme-primary font-semibold" 
+                : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
+            }`}
+          >
+            <Settings size={18} className={currentView === 'settings' ? "text-theme-primary" : "text-theme-placeholder"} />
+            <span className="text-sm">Settings</span>
+          </button>
+          
+          <button 
+            onClick={onLogout}
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-theme-light hover:bg-red-50 hover:text-theme-error transition-all duration-200"
+          >
+            <LogOut size={18} className="text-theme-placeholder group-hover:text-theme-error" />
+            <span className="text-sm">Logout</span>
+          </button>
+
+          <div className="pt-4 text-center">
+            <span className="text-[10px] font-medium text-theme-placeholder bg-theme-subtle/30 px-2 py-1 rounded-full">
+              Version {appVersion}
+            </span>
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+};
