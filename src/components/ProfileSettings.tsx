@@ -150,13 +150,23 @@ export function ProfileSettings() {
                                 <option value="9">Not Applicable</option>
                             </select>
                         </div>
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Affiliation / Organization</label>
-                            <Input
-                                value={profile.organization || ''}
-                                onChange={(e) => setProfile({ ...profile, organization: e.target.value })}
-                                placeholder="Organization Name"
-                            />
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Organization / Company</label>
+                                <Input
+                                    value={profile.organization || ''}
+                                    onChange={(e) => setProfile({ ...profile, organization: e.target.value })}
+                                    placeholder="Organization Name"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Community</label>
+                                <Input
+                                    value={profile.community || ''}
+                                    onChange={(e) => setProfile({ ...profile, community: e.target.value })}
+                                    placeholder="Community Name"
+                                />
+                            </div>
                         </div>
                     </div>
                 </Card>
@@ -204,6 +214,14 @@ export function ProfileSettings() {
                                     placeholder="City Name"
                                 />
                             </div>
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Country</label>
+                            <Input
+                                value={profile.address?.country || ''}
+                                onChange={(e) => updateAddress('country', e.target.value)}
+                                placeholder="Country Name"
+                            />
                         </div>
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Map Coordinates (Lat, Long)</label>
@@ -254,6 +272,14 @@ export function ProfileSettings() {
                                 value={profile.url || ''}
                                 onChange={(e) => setProfile({ ...profile, url: e.target.value })}
                                 placeholder="https://profile.com"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><User size={10}/> Profile Picture URL</label>
+                            <Input
+                                value={profile.picture_url || ''}
+                                onChange={(e) => setProfile({ ...profile, picture_url: e.target.value })}
+                                placeholder="https://domain.com/avatar.jpg"
                             />
                         </div>
                     </div>

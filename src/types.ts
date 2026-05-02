@@ -70,6 +70,7 @@ export interface CreatorData {
     service_offer?: string;
     needs?: string;
     coordinates: string;
+    picture_url?: string;
 }
 
 export interface AggregatedBalance {

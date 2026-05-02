@@ -28,7 +28,9 @@ import {
     UserPlus,
     ExternalLink,
     MapPin,
-    Building2
+    Building2,
+    Heart,
+    Briefcase
 } from "lucide-react";
 
 interface VoucherDetailsViewProps {
@@ -309,13 +311,19 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                         <InfoRow label="Postal Address" icon={MapPin}>
                                             {creator.address?.street} {creator.address?.house_number}<br/>
                                             {creator.address?.zip_code} {creator.address?.city}
+                                            {creator.address?.country && <><br/>{creator.address.country}</>}
                                         </InfoRow>
+                                        <InfoRow label="Map Coordinates" icon={MapPin}>{creator.coordinates}</InfoRow>
                                     </div>
                                     <div className="space-y-6">
-                                        <InfoRow label="Community / Org" icon={Building2}>{creator.organization || creator.community || "Independent"}</InfoRow>
+                                        <InfoRow label="Organization / Community" icon={Building2}>{creator.organization || creator.community || "Independent"}</InfoRow>
                                         <InfoRow label="Contact Channels" icon={ExternalLink}>
                                             {creator.email && <div className="text-theme-accent">{creator.email}</div>}
                                             {creator.phone && <div>{creator.phone}</div>}
+                                            {creator.url && <a href={creator.url} target="_blank" rel="noopener noreferrer" className="text-theme-primary hover:underline block">{creator.url}</a>}
+                                        </InfoRow>
+                                        <InfoRow label="Gender Orientation">
+                                            {creator.gender === "1" ? "Male" : creator.gender === "2" ? "Female" : creator.gender === "0" ? "Other / Not Declared" : creator.gender === "9" ? "Not Applicable" : "Unknown"}
                                         </InfoRow>
                                         <InfoRow label="Reputation Status">
                                             {typeof trustStatus === 'object' && 'KnownOffender' in trustStatus ? (
@@ -331,6 +339,21 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                     </div>
                                 </div>
                             </Card>
+
+                            {/* Community Offerings */}
+                            {(creator.service_offer || creator.needs) && (
+                                <Card className="border-none shadow-premium" header={
+                                    <div className="flex items-center gap-2">
+                                        <Heart size={18} className="text-theme-primary" />
+                                        <span className="font-black text-xs uppercase tracking-widest">Community Offerings</span>
+                                    </div>
+                                }>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 p-2">
+                                        <InfoRow label="I can help with..." icon={Briefcase}>{creator.service_offer}</InfoRow>
+                                        <InfoRow label="I am looking for..." icon={Heart}>{creator.needs}</InfoRow>
+                                    </div>
+                                </Card>
+                            )}
 
                             {/* Signatures Timeline */}
                             <Card className="border-none shadow-premium" header={
@@ -408,7 +431,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                             <Card className="border-none shadow-premium" header={
                                 <div className="flex items-center gap-2">
                                     <History size={16} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">Activity History</span>
+                                    <span className="font-black text-xs uppercase tracking-widest">Transaction History</span>
                                 </div>
                             }>
                                 <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">

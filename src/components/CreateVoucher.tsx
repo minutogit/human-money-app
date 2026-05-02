@@ -74,6 +74,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const [community, setCommunity] = useState("");
     const [serviceOffer, setServiceOffer] = useState("");
     const [needs, setNeeds] = useState("");
+    const [pictureUrl, setPictureUrl] = useState("");
     const [coordWarning, setCoordWarning] = useState("");
 
     const [collateralAmount, setCollateralAmount] = useState("");
@@ -148,6 +149,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             if (profile.coordinates) setCoordinates(profile.coordinates);
             if (profile.service_offer) setServiceOffer(profile.service_offer);
             if (profile.needs) setNeeds(profile.needs);
+            if (profile.picture_url) setPictureUrl(profile.picture_url);
             if (profile.address) {
                 if (profile.address.street) setStreet(profile.address.street);
                 if (profile.address.house_number) setHouseNumber(profile.address.house_number);
@@ -199,6 +201,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                 community: community || undefined,
                 service_offer: serviceOffer || undefined,
                 needs: needs || undefined,
+                picture_url: pictureUrl || undefined,
             },
         };
         try {
@@ -345,7 +348,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                                             <Input value={community} onChange={(e) => setCommunity(e.target.value)} placeholder="Optional" />
                                         </div>
                                         <div className="space-y-2">
-                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Organization</label>
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Organization / Company</label>
                                             <Input value={organization} onChange={(e) => setOrganization(e.target.value)} placeholder="Optional" />
                                         </div>
                                     </div>
@@ -407,6 +410,10 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                                     <div className="space-y-2">
                                         <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Globe size={10}/> Website</label>
                                         <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://..." />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><UserCircle size={10}/> Profile Picture URL</label>
+                                        <Input value={pictureUrl} onChange={(e) => setPictureUrl(e.target.value)} placeholder="https://domain.com/avatar.jpg" />
                                     </div>
                                 </div>
                                 <div className="space-y-6">
