@@ -1,7 +1,13 @@
 use crate::{AppState, models::{FrontendUserProfile, FrontendAddressData}};
 use human_money_core::{
-    wallet::{AggregatedBalance, VoucherSummary, VoucherDetails, ProofOfDoubleSpendSummary},
+    wallet::{AggregatedBalance, VoucherSummary, VoucherDetails, ProofOfDoubleSpendSummary, types::AssetClassSummary},
 };
+
+#[tauri::command]
+pub fn get_active_asset_classes(state: tauri::State<AppState>) -> Result<Vec<AssetClassSummary>, String> {
+    let service = state.service.lock().unwrap();
+    service.get_active_asset_classes()
+}
 
 #[tauri::command]
 pub fn get_user_profile(state: tauri::State<AppState>) -> Result<FrontendUserProfile, String> {
@@ -48,10 +54,10 @@ pub fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<Ve
 }
 
 #[tauri::command]
-pub fn get_voucher_summaries(state: tauri::State<AppState>) -> Result<Vec<VoucherSummary>, String> {
+pub fn get_voucher_summaries(test_filter: Option<bool>, state: tauri::State<AppState>) -> Result<Vec<VoucherSummary>, String> {
     let service = state.service.lock().unwrap();
-    // The robust filtering is handled in the frontend; the backend's job is to fetch all summaries.
-    service.get_voucher_summaries(None, None, None)
+    // Use the optional test_filter provided by the frontend.
+    service.get_voucher_summaries(None, None, test_filter)
 }
 
 #[tauri::command]

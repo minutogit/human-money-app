@@ -180,14 +180,14 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                     <div className="bg-emerald-500 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest">Valid Asset</div>
                                 </div>
                                 <p className="text-2xl font-black text-theme-primary tracking-tight">
-                                    {voucherData.voucher.nominal_value.amount} <span className="text-theme-secondary opacity-60 font-medium">{voucherData.voucher.nominal_value.unit}</span>
+                                    {voucherData.voucher.nominal_value.amount} <span className="text-theme-secondary opacity-60 font-medium">{voucherData.display_currency}</span>
                                 </p>
                             </div>
                             
                             <div className="space-y-3 px-1">
                                 <div className="flex items-center justify-between text-xs font-medium">
                                     <span className="text-theme-light flex items-center gap-1.5"><ShieldCheck size={14}/> Standard</span>
-                                    <span className="text-theme-secondary font-bold">{voucherData.voucher.voucher_standard.name}</span>
+                                    <span className="text-theme-secondary font-bold">{voucherData.display_standard_name}</span>
                                 </div>
                                 <div className="flex items-center justify-between text-xs font-medium">
                                     <span className="text-theme-light flex items-center gap-1.5"><User size={14}/> Creator</span>

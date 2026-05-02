@@ -283,7 +283,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                                     {record.involvedSourcesDetails.map((detail, idx) => (
                                                                         <tr key={idx} className="hover:bg-theme-subtle/5 transition-colors">
                                                                             <td className="px-4 py-2.5 font-bold text-theme-secondary">{detail.standard_name}</td>
-                                                                            <td className="px-4 py-2.5 font-black text-theme-primary text-right">{detail.amount} {detail.unit}</td>
+                                                                            <td className="px-4 py-2.5 font-black text-theme-primary text-right">{detail.amount} {detail.display_currency}</td>
                                                                             <td className="px-4 py-2.5 font-mono text-theme-light opacity-60">{truncateId(detail.local_instance_id)}</td>
                                                                         </tr>
                                                                     ))}

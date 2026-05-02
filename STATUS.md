@@ -150,6 +150,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] UI Layout Standardization (Centralized PageLayout, unified header design, and consistent full-width layout across all views)
 - [x] Human-Centered UI Refactoring (Reverted technical jargon to accessible language across all core components)
 - [x] Fixed TypeScript errors in CreateVoucher (Unused imports and missing Lock icon)
+- [x] UI Label Refactoring (Humanized Profile and Voucher Creation labels for consistency)
 
 ## Next Milestones
 

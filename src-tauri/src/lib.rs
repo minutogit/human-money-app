@@ -128,6 +128,7 @@ pub fn run() {
             unlock_session, lock_session, refresh_session_activity, // <--- NEU
             generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic, get_local_instance_id,
             get_user_id, get_user_profile, get_total_balance_by_currency, get_voucher_summaries, get_voucher_details,
+            get_active_asset_classes,
             create_new_voucher, create_transfer_bundle, receive_bundle, save_transaction_record,
             get_transaction_history,
             get_app_settings, save_app_settings,

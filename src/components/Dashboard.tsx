@@ -189,10 +189,12 @@ export function Dashboard(props: DashboardProps) {
         >
             <div className="max-w-5xl mx-auto space-y-8">
                 {/* Welcome Message */}
-                <div className="px-2 pt-4">
-                    <h1 className="text-3xl font-black text-theme-primary tracking-tighter">👋 Welcome to your Wallet!</h1>
-                    <p className="text-sm font-medium text-theme-light mt-1">Manage your community vouchers and local currency.</p>
-                </div>
+                {balances.length === 0 && (
+                    <div className="px-2 pt-4">
+                        <h1 className="text-3xl font-black text-theme-primary tracking-tighter">👋 Welcome to your Wallet!</h1>
+                        <p className="text-sm font-medium text-theme-light mt-1">Manage your community vouchers and local currency.</p>
+                    </div>
+                )}
 
                 {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
 
@@ -285,7 +287,7 @@ export function Dashboard(props: DashboardProps) {
                                         variant="default"
                                         className={`relative overflow-hidden p-6 h-48 flex flex-col justify-between group ${
                                             idx % 2 === 0 
-                                            ? 'bg-gradient-to-br from-theme-secondary to-[#4A342E]' 
+                                            ? 'bg-gradient-to-br from-slate-500 to-slate-700' 
                                             : 'bg-gradient-to-br from-theme-primary to-theme-accent'
                                         }`}
                                         hover

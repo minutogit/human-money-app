@@ -226,7 +226,7 @@ export function ProfileSettings() {
                 <Card header={
                     <div className="flex items-center gap-2">
                         <Globe size={18} className="text-theme-primary" />
-                        <span className="font-black text-xs uppercase tracking-widest">Social Media</span>
+                        <span className="font-black text-xs uppercase tracking-widest">Contact & Links</span>
                     </div>
                 }>
                     <div className="space-y-6 p-2">
@@ -268,7 +268,7 @@ export function ProfileSettings() {
                 }>
                     <div className="space-y-6 p-2">
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> I can help with...</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> Service Offer (I can help with)</label>
                             <textarea
                                 className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[80px]"
                                 value={profile.service_offer || ''}
@@ -277,7 +277,7 @@ export function ProfileSettings() {
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Heart size={10}/> I'm looking for...</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Heart size={10}/> Needs (I'm looking for)</label>
                             <textarea
                                 className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[80px]"
                                 value={profile.needs || ''}

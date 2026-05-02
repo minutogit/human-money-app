@@ -19,10 +19,12 @@ import {
     CheckCircle2,
     Clock,
     AlertCircle,
-    Lock,
-    Mail,
-    Phone,
-    PlusCircle
+    Lock, 
+    Mail, 
+    Phone, 
+    PlusCircle,
+    Heart,
+    Globe
 } from "lucide-react";
 
 interface CreateVoucherProps {
@@ -402,10 +404,20 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                                         <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Phone size={10}/> Public Phone</label>
                                         <Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
                                     </div>
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Globe size={10}/> Website</label>
+                                        <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://..." />
+                                    </div>
                                 </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> Service Offer</label>
-                                    <textarea value={serviceOffer} onChange={(e) => setServiceOffer(e.target.value)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[100px]" placeholder="What do you offer?" />
+                                <div className="space-y-6">
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> Service Offer (I can help with)</label>
+                                        <textarea value={serviceOffer} onChange={(e) => setServiceOffer(e.target.value)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[80px]" placeholder="What do you offer?" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Heart size={10}/> Needs (I'm looking for)</label>
+                                        <textarea value={needs} onChange={(e) => setNeeds(e.target.value)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[80px]" placeholder="What do you need?" />
+                                    </div>
                                 </div>
                             </div>
                         </div>

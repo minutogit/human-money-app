@@ -9,7 +9,8 @@ import {
     TransactionRecord, 
     Contact, 
     TrustStatus, 
-    AppSettings 
+    AppSettings,
+    AssetClassSummary
 } from "../types";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -69,11 +70,12 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [availableVouchers, setAvailableVouchers] = useState<VoucherSummary[]>([]);
     const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
     const [selectedStandardId, setSelectedStandardId] = useState<string | null>(null);
+    const [selectedIsTest, setSelectedIsTest] = useState<boolean | null>(null);
+    const [activeAssetClasses, setActiveAssetClasses] = useState<AssetClassSummary[]>([]);
     const [selection, setSelection] = useState<Map<string, string>>(new Map());
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isProcessing, setIsProcessing] = useState(false);
     const [standardIdToUuidMap, setStandardIdToUuidMap] = useState<Map<string, string>>(new Map());
-    const [standardIdToNameMap, setStandardIdToNameMap] = useState<Map<string, string>>(new Map());
     const [showConfirm, setShowConfirm] = useState(false);
     const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
     const [privacyMode, setPrivacyMode] = useState<'public' | 'stealth' | null>(null);
@@ -154,15 +156,11 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 const standards = await invoke<VoucherStandardInfo[]>("get_voucher_standards");
                 const settings = await invoke<AppSettings>("get_app_settings");
                 const newMap = new Map<string, string>();
-                const newNameMap = new Map<string, string>();
                 standards.forEach(s => {
                     const uuidMatch = s.content.match(/uuid\s*=\s*"([^"]+)"/);
                     if (uuidMatch && uuidMatch[1]) newMap.set(s.id, uuidMatch[1]);
-                    const nameMatch = s.content.match(/name\s*=\s*"([^"]+)"/);
-                    if (nameMatch && nameMatch[1]) newNameMap.set(s.id, nameMatch[1]);
                 });
                 setStandardIdToUuidMap(newMap);
-                setStandardIdToNameMap(newNameMap);
 
                 const enrichedVouchers = activeVouchers.map(v => ({ ...v, divisible: true }));
 
@@ -173,6 +171,9 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 
                 const fetchedContacts = await invoke<Contact[]>("get_contacts");
                 setContacts(fetchedContacts);
+
+                const activeClasses = await invoke<AssetClassSummary[]>("get_active_asset_classes");
+                setActiveAssetClasses(activeClasses);
             } catch (e) {
                 logger.error(`Failed to fetch data for SendView: ${e}`);
                 setFeedbackMsg(`Error: ${e}`);
@@ -185,8 +186,12 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         if (!selectedStandardId) return availableVouchers;
         const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId);
         if (!selectedStandardUuid) return [];
-        return availableVouchers.filter(v => v.voucher_standard_uuid === selectedStandardUuid);
-    }, [availableVouchers, selectedStandardId, standardIdToUuidMap]);
+        return availableVouchers.filter(v => {
+            if (v.voucher_standard_uuid !== selectedStandardUuid) return false;
+            if (selectedIsTest !== null && v.is_test_voucher !== selectedIsTest) return false;
+            return true;
+        });
+    }, [availableVouchers, selectedStandardId, selectedIsTest, standardIdToUuidMap]);
 
 
     const handleTargetAmountChange = (valStr: string) => {
@@ -255,8 +260,9 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         setSelection(newSelection);
     };
 
-    const handleStandardSelect = (id: string | null) => {
+    const handleStandardSelect = (id: string | null, isTest: boolean | null = null) => {
         setSelectedStandardId(id);
+        setSelectedIsTest(isTest);
         setTargetAmountStr("");
         setSelection(new Map());
         setFeedbackMsg("");
@@ -375,11 +381,11 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 const amount = parseFloat(amountStr);
                 // @ts-ignore
                 if (voucher.divisible) {
-                    if (!summableTotals[voucher.unit]) summableTotals[voucher.unit] = 0;
-                    summableTotals[voucher.unit] += amount;
+                    if (!summableTotals[voucher.display_currency]) summableTotals[voucher.display_currency] = 0;
+                    summableTotals[voucher.display_currency] += amount;
                 } else {
-                    if (!countableTotals[voucher.unit]) countableTotals[voucher.unit] = 0;
-                    countableTotals[voucher.unit] += 1;
+                    if (!countableTotals[voucher.display_currency]) countableTotals[voucher.display_currency] = 0;
+                    countableTotals[voucher.display_currency] += 1;
                 }
             }
         }
@@ -626,11 +632,18 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                             <div className="space-y-6">
                                 <div className="flex flex-wrap gap-2">
                                     <button type="button" onClick={() => handleStandardSelect(null)} className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-full border-2 transition-all ${selectedStandardId === null ? 'bg-theme-primary border-theme-primary text-white shadow-md' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}>All</button>
-                                    {voucherStandards.map(standard => {
-                                        const isSelected = selectedStandardId === standard.id;
+                                    {activeAssetClasses.map(group => {
+                                        const standardId = [...standardIdToUuidMap.entries()].find(([, uuid]) => uuid === group.standard_uuid)?.[0] || group.standard_uuid;
+                                        const key = `${standardId}:${group.is_test_voucher}`;
+                                        const isSelected = selectedStandardId === standardId && selectedIsTest === group.is_test_voucher;
                                         return (
-                                            <button key={standard.id} type="button" onClick={() => handleStandardSelect(standard.id)} className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-full border-2 transition-all ${isSelected ? 'bg-theme-primary border-theme-primary text-white shadow-md' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}>
-                                                {standardIdToNameMap.get(standard.id) || standard.id}
+                                            <button
+                                                key={key}
+                                                type="button"
+                                                onClick={() => handleStandardSelect(standardId, group.is_test_voucher)}
+                                                className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-full border-2 transition-all ${isSelected ? (group.is_test_voucher ? 'bg-rose-500 border-rose-500 text-white shadow-md' : 'bg-theme-primary border-theme-primary text-white shadow-md') : (group.is_test_voucher ? 'border-rose-200 text-rose-400 hover:border-rose-300' : 'border-slate-100 text-slate-400 hover:border-slate-200')}`}
+                                            >
+                                                {group.display_standard_name}
                                             </button>
                                         );
                                     })}
@@ -641,7 +654,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                         <label htmlFor="target-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Target Amount</label>
                                         <div className="relative">
                                             <Input id="target-amount" value={targetAmountStr} onChange={(e) => handleTargetAmountChange(e.target.value)} type="number" placeholder="0.00" className="py-5 px-6 rounded-3xl font-black text-2xl tracking-tighter" />
-                                            <div className="absolute right-6 top-1/2 -translate-y-1/2 font-black text-theme-primary uppercase tracking-widest">{filteredVouchers[0]?.unit}</div>
+                                            <div className="absolute right-6 top-1/2 -translate-y-1/2 font-black text-theme-primary uppercase tracking-widest">{filteredVouchers[0]?.display_currency}</div>
                                         </div>
                                         <p className="text-[10px] font-bold text-theme-light italic text-center">Automatic selection will prioritize optimal ledger fragmentation.</p>
                                     </div>
@@ -665,7 +678,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                                                 <span className="text-xl font-black text-theme-secondary tracking-tight">
                                                                     {isSelected && selectedAmount !== v.current_amount ? formatAmount(selectedAmount) : formatAmount(v.current_amount)}
                                                                 </span>
-                                                                <span className="text-[10px] font-black text-theme-primary uppercase tracking-widest">{v.unit}</span>
+                                                                <span className="text-[10px] font-black text-theme-primary uppercase tracking-widest">{v.display_currency}</span>
                                                             </div>
                                                             <div className="flex items-center gap-1.5 mt-1">
                                                                 <Avatar size={14} name={v.local_instance_id} variant="pixel" />
@@ -673,7 +686,12 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                                             </div>
                                                         </div>
                                                         <div className="text-right">
-                                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest">{v.voucher_standard_name}</p>
+                                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest">{v.display_standard_name}</p>
+                                                            {v.is_test_voucher && (
+                                                                <span className="text-[9px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">
+                                                                    Test Mode
+                                                                </span>
+                                                            )}
                                                             <p className="text-[9px] font-bold text-slate-400 mt-0.5">{formatDate(v.valid_until)}</p>
                                                         </div>
                                                     </div>
@@ -715,7 +733,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
                         {/* Summary Sticky Card */}
                         <div className="sticky bottom-8 z-20">
-                            <Card className="shadow-premium-xl border-theme-primary/20 bg-theme-primary text-white overflow-hidden p-0 rounded-[40px]">
+                            <Card variant="none" className="shadow-premium-xl border-theme-primary/20 bg-theme-primary text-white overflow-hidden p-0 rounded-[40px]">
                                 <div className="p-8 space-y-6">
                                     <div className="flex justify-between items-center">
                                         <div className="space-y-1">
@@ -752,7 +770,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                         <Button 
                                             onClick={handlePrepareTransferClick} 
                                             disabled={isProcessing} 
-                                            className="!bg-white !text-theme-primary rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest shadow-lg hover:scale-105 active:scale-95 transition-all"
+                                            className="!bg-white !bg-none !text-theme-primary rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest shadow-lg hover:scale-105 active:scale-95 transition-all"
                                         >
                                             {isProcessing ? "Sending..." : "Send Voucher"}
                                         </Button>

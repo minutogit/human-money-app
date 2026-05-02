@@ -32,7 +32,7 @@ describe('SendView Component (Silber Standard)', () => {
       description: 'Silver voucher',
       current_amount: '100.00',
       unit: 'AG',
-      voucher_standard_name: 'Silver Standard',
+      raw_standard_name: 'Silver Standard',
       voucher_standard_uuid: 'silver-uuid-123',
       transaction_count: 0,
       guarantor_signatures_count: 0,
@@ -91,6 +91,23 @@ describe('SendView Component (Silber Standard)', () => {
       }
       if (cmd === 'get_contacts') {
         return Promise.resolve(mockContacts);
+      }
+      if (cmd === 'get_active_asset_classes') {
+        return Promise.resolve([
+          {
+            standard_uuid: 'silver-uuid-123',
+            is_test_voucher: false,
+            display_standard_name: 'Silver Standard',
+            display_currency: 'AG',
+          },
+        ]);
+      }
+      if (cmd === 'get_user_profile') {
+        return Promise.resolve({
+          organization: 'Test Org',
+          first_name: 'Test',
+          last_name: 'User',
+        });
       }
       return Promise.resolve(undefined);
     });

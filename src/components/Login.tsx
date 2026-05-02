@@ -1,5 +1,7 @@
 // src/components/Login.tsx
 import { useState, useEffect, useRef } from "react";
+import logo from "../assets/logo.png";
+
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
@@ -15,7 +17,6 @@ import {
     RefreshCw, 
     AlertTriangle, 
     CheckCircle2, 
-    Fingerprint, 
     Key, 
     ArrowRight,
     PlusCircle,
@@ -283,20 +284,22 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     </Card>
                 </div>
             ) : (
-                <div className="w-full max-w-2xl bg-white/80 backdrop-blur-xl border border-theme-subtle rounded-[48px] p-12 shadow-premium-lg space-y-10 relative animate-in fade-in zoom-in duration-700">
+                <div className="w-full max-w-2xl bg-white/80 backdrop-blur-xl border border-theme-subtle rounded-[48px] p-10 pb-12 shadow-premium-lg space-y-8 relative animate-in fade-in zoom-in duration-700">
                     <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-theme-primary/20 to-transparent"></div>
                     
-                    <div className="text-center space-y-4">
-                        <div className="mx-auto w-24 h-24 bg-theme-primary text-white rounded-[40px] flex items-center justify-center shadow-premium-lg transform rotate-3 hover:rotate-0 transition-transform duration-500">
-                            <Fingerprint size={52} />
-                        </div>
-                        <div className="space-y-1">
-                            <h1 className="text-5xl font-black text-theme-primary tracking-tighter">HUMAN MONEY</h1>
+                    <div className="flex items-center justify-center gap-6">
+                        <img 
+                            src={logo} 
+                            alt="Human Money Logo" 
+                            className="w-20 h-20 object-contain drop-shadow-sm" 
+                        />
+                        <div className="text-left space-y-0.5">
+                            <h1 className="text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
                             <p className="text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">Login to Your Wallet</p>
                         </div>
                     </div>
 
-                    <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
+                    <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
                         {profiles.length > 0 && (
                             <div className="space-y-3">
                                 <label htmlFor="profile-select" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><UserCircle size={12}/> Select Profile</label>

@@ -105,7 +105,7 @@ export interface VoucherSummary {
     description: string;
     current_amount: string;
     unit: string;
-    voucher_standard_name: string;
+    raw_standard_name: string;
     voucher_standard_uuid: string;
     transaction_count: number;
     guarantor_signatures_count: number;
@@ -155,6 +155,13 @@ export interface CollateralData {
     abbreviation?: string; // Optional gemacht um Konflikte zu vermeiden
     type?: string;
     redeem_condition?: string;
+}
+
+export interface AssetClassSummary {
+    standard_uuid: string;
+    is_test_voucher: boolean;
+    display_standard_name: string;
+    display_currency: string;
 }
 
 export interface VoucherSignature {
