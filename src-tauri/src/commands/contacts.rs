@@ -44,16 +44,22 @@ pub fn get_contacts(state: tauri::State<AppState>) -> Result<Vec<FrontendContact
 #[tauri::command]
 pub fn save_contact(
     contact: FrontendContact,
+    password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
     info!("Saving contact for DID: {}", contact.did);
     let mut service = state.service.lock().unwrap();
     
     // 1. Lade bestehendes Adressbuch
-    let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, None) {
+    let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password.as_deref()) {
         Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data)
             .unwrap_or_default(),
-        Err(_) => FrontendAddressBook::default(),
+        Err(e) => {
+            if e.contains("Password required") || e.contains("Session timed out") || e.contains("Wallet is locked") {
+                return Err(e);
+            }
+            FrontendAddressBook::default()
+        },
     };
 
     // 2. Kontakt hinzufügen oder aktualisieren
@@ -63,23 +69,29 @@ pub fn save_contact(
     let data = serde_json::to_vec(&address_book)
         .map_err(|e| format!("Failed to serialize address book: {}", e))?;
     
-    service.save_encrypted_data(CONTACTS_DATA_NAME, &data, None)
+    service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password.as_deref())
         .map_err(|e| format!("Failed to save address book: {}", e))
 }
 
 #[tauri::command]
 pub fn delete_contact(
     did: String,
+    password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
     info!("Deleting contact for DID: {}", did);
     let mut service = state.service.lock().unwrap();
     
     // 1. Lade bestehendes Adressbuch
-    let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, None) {
+    let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password.as_deref()) {
         Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data)
             .unwrap_or_default(),
-        Err(_) => return Ok(()), // Nichts zu löschen, wenn kein Buch existiert
+        Err(e) => {
+            if e.contains("Password required") || e.contains("Session timed out") || e.contains("Wallet is locked") {
+                return Err(e);
+            }
+            return Ok(()); // Nichts zu löschen, wenn kein Buch existiert oder anderer Fehler
+        }
     };
 
     // 2. Entfernen
@@ -88,7 +100,7 @@ pub fn delete_contact(
         let data = serde_json::to_vec(&address_book)
             .map_err(|e| format!("Failed to serialize address book: {}", e))?;
         
-        service.save_encrypted_data(CONTACTS_DATA_NAME, &data, None)
+        service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password.as_deref())
             .map_err(|e| format!("Failed to save address book: {}", e))?;
     }
 

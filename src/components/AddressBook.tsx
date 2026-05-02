@@ -8,6 +8,7 @@ import Avatar from 'boring-avatars';
 import ContactDialog from './ContactDialog';
 import { logger } from '../utils/log';
 import { ConfirmationModal } from './ui/ConfirmationModal';
+import { useSession } from '../context/SessionContext';
 import { 
     UserPlus, 
     Search, 
@@ -26,6 +27,7 @@ interface AddressBookProps {
 }
 
 const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery }) => {
+    const { protectAction } = useSession();
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [searchQuery, setSearchQuery] = useState(initialSearchQuery || '');
     const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -58,7 +60,9 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
 
     const handleSaveContact = async (contact: Contact) => {
         try {
-            await invoke('save_contact', { contact });
+            await protectAction(async (pwd) => {
+                await invoke('save_contact', { contact, password: pwd });
+            });
             await loadContacts();
             logger.info("Contact saved successfully");
         } catch (err) {
@@ -71,7 +75,9 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         if (!deleteRequest) return;
         
         try {
-            await invoke('delete_contact', { did: deleteRequest });
+            await protectAction(async (pwd) => {
+                await invoke('delete_contact', { did: deleteRequest, password: pwd });
+            });
             await loadContacts();
             logger.info("Contact deleted");
         } catch (err) {

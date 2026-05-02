@@ -27,6 +27,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [notes, setNotes] = useState('');
     const [newTag, setNewTag] = useState('');
     const [isSaving, setIsSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const predefinedTags = ["Friends", "Business", "Favorites", "Trusted"];
     const availableTags = Array.from(new Set([...predefinedTags, ...tags]));
@@ -61,6 +62,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         if (!did.trim()) return;
         
         setIsSaving(true);
+        setError(null);
         try {
             const contact: Contact = {
                 did: did.trim(),
@@ -76,8 +78,9 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             };
             await onSave(contact);
             onClose();
-        } catch (error) {
-            console.error("Failed to save contact:", error);
+        } catch (e: any) {
+            console.error("Failed to save contact:", e);
+            setError(e.message || String(e));
         } finally {
             setIsSaving(false);
         }
@@ -214,6 +217,17 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                             className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 resize-none shadow-sm"
                         />
                     </div>
+
+                    {error && (
+                        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-3 animate-in slide-in-from-top-1">
+                            <div className="bg-rose-500 rounded-full p-1 text-white shrink-0 mt-0.5">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                </svg>
+                            </div>
+                            <p className="text-xs font-bold text-rose-600 leading-tight">{error}</p>
+                        </div>
+                    )}
                 </div>
 
                 <div className="p-6 bg-white border-t border-theme-subtle flex gap-3">

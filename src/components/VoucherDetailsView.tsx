@@ -275,7 +275,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                 {showJson ? (
                     <Card variant="glass" className="bg-slate-900 border-none shadow-2xl p-0 overflow-hidden">
                         <pre className="text-[11px] leading-relaxed text-indigo-300 font-mono p-6 overflow-x-auto selection:bg-indigo-500 selection:text-white max-h-[600px]">
-                            {JSON.stringify(details, null, 2)}
+                            {JSON.stringify(details.voucher, null, 2)}
                         </pre>
                     </Card>
                 ) : (
@@ -550,8 +550,10 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                     setExistingContact(null);
                 }}
                 onSave={async (contact: Contact) => {
-                    await invoke('save_contact', { contact });
-                    await invoke<Contact[]>('get_contacts').then(setContacts);
+                    await protectAction(async (pwd) => {
+                        await invoke('save_contact', { contact, password: pwd });
+                        await invoke<Contact[]>('get_contacts').then(setContacts);
+                    });
                 }}
                 existingContact={existingContact}
                 initialProfile={pendingContactDID ? voucher.signatures.find(s => s.signer_id === pendingContactDID)?.details : voucher.creator}

@@ -30,10 +30,10 @@ priority_tasks:
     status: "open"
     priority: "low"
     depends_on: []
-    description: "Harden L2 synchronization for production use"
+    description: "Harden L2 synchronization for production use (Post-MVP)"
   - id: "APP-005"
     title: "Stabilize existing features"
-    status: "open"
+    status: "completed"
     priority: "high"
     depends_on: []
     description: "Fix remaining bugs and polish existing voucher workflow"
@@ -97,6 +97,18 @@ priority_tasks:
     priority: "high"
     depends_on: ["APP-014"]
     description: "Anti-cloning system binding wallet state to a unique Host/Instance ID. Prevents accidental state forks and enforces device handovers."
+  - id: "APP-016"
+    title: "Audit local_instance_id exposure"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Investigate why local_instance_id is visible in JSON view and ensure it is not included in exported/sent vouchers."
+  - id: "APP-017"
+    title: "Improve Session Timeout UX"
+    status: "open"
+    priority: "high"
+    depends_on: []
+    description: "Handle session timeouts gracefully in the UI. Ensure components like Activity Log don't just 'disappear' but prompt for re-auth or show clear state."
 ---
 
 # Human Money App — Status
@@ -151,12 +163,18 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Human-Centered UI Refactoring (Reverted technical jargon to accessible language across all core components)
 - [x] Fixed TypeScript errors in CreateVoucher (Unused imports and missing Lock icon)
 - [x] UI Label Refactoring (Humanized Profile and Voucher Creation labels for consistency)
+- [x] Unified Password Protection for Address Book (Standardized protectAction for contact saving/deletion)
+- [x] Address book / contact list UI polish
+- [x] Stabilize existing features and fix edge cases
+- [x] Audit local_instance_id exposure in JSON view
+
+
+
 
 ## Next Milestones
 
-- [ ] Stabilize existing features and fix edge cases (MVP)
 - [ ] Internationalization (i18n) - German/English (MVP)
-- [ ] Address book / contact list UI polish
-- [ ] L2 sync hardening
+- [ ] Improve Session Timeout UX (Activity Log visibility etc.) (MVP)
+- [ ] L2 sync hardening (Post-MVP)
 - [ ] Trust level badges for contacts (Post-MVP)
 - [ ] BLE/NFC stranger discovery (Post-MVP)
