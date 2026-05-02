@@ -74,13 +74,13 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     const [isRemovingSignature, setIsRemovingSignature] = useState(false);
     const [proofId, setProofId] = useState<string | null>(null);
     const [isFetchingProofId, setIsFetchingProofId] = useState(false);
-    const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
+    const [trustStatus, setTrustStatus] = useState<TrustStatus>("clean");
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
     const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
     const [contacts, setContacts] = useState<Contact[]>([]);
 
     const voucher = details?.voucher;
-    const isQuarantined = details && typeof details.status === 'object' && 'Quarantined' in details.status;
+    const isQuarantined = details && details.status === 'quarantined';
 
     useEffect(() => {
         if (voucher?.creator.id) {
@@ -136,7 +136,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             const fetchProofId = async () => {
                 setIsFetchingProofId(true);
                 try {
-                    const id = await invoke<string | null>("get_proof_id_for_voucher", { localId: voucherId });
+                    const id = await invoke<string | null>("get_proofId_for_voucher", { localId: voucherId });
                     setProofId(id);
                 } catch (e) {
                     logger.error(`Failed to fetch proof ID for voucher ${voucherId}: ${e}`);
@@ -159,14 +159,13 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
 
     function getDerivedVoucherStatus(details: VoucherDetails): { name: string; color: string; bgColor: string; icon: any; tooltip: string } {
         const { status } = details;
-        if (status === "Active") return { name: 'Active', color: 'text-emerald-600', bgColor: 'bg-emerald-50', icon: CheckCircle2, tooltip: 'Fully signed and ready.' };
-        if (status === "Archived") return { name: 'Archived', color: 'text-gray-600', bgColor: 'bg-gray-50', icon: History, tooltip: 'Fully spent.' };
+        if (status === "active") return { name: 'Active', color: 'text-emerald-600', bgColor: 'bg-emerald-50', icon: CheckCircle2, tooltip: 'Fully signed and ready.' };
+        if (status === "archived") return { name: 'Archived', color: 'text-gray-600', bgColor: 'bg-gray-50', icon: History, tooltip: 'Fully spent.' };
+        if (status === "incomplete") return { name: 'Incomplete', color: 'text-amber-600', bgColor: 'bg-amber-50', icon: Clock, tooltip: 'Awaiting signatures.' };
+        if (status === "quarantined") return { name: 'Quarantined', color: 'text-rose-600', bgColor: 'bg-rose-50', icon: ShieldAlert, tooltip: 'Double-spend detected.' };
+        if (status === "endorsed") return { name: 'Endorsed', color: 'text-indigo-600', bgColor: 'bg-indigo-50', icon: FileSignature, tooltip: 'Signed by you.' };
+        if (status === "expired") return { name: 'Expired', color: 'text-orange-600', bgColor: 'bg-orange-50', icon: Clock, tooltip: 'Voucher expired.' };
         
-        if (typeof status === 'object') {
-            if ('Incomplete' in status) return { name: 'Incomplete', color: 'text-amber-600', bgColor: 'bg-amber-50', icon: Clock, tooltip: 'Awaiting signatures.' };
-            if ('Quarantined' in status) return { name: 'Quarantined', color: 'text-rose-600', bgColor: 'bg-rose-50', icon: ShieldAlert, tooltip: 'Double-spend detected.' };
-            if ('Endorsed' in status) return { name: 'Endorsed', color: 'text-indigo-600', bgColor: 'bg-indigo-50', icon: FileSignature, tooltip: 'Signed by you.' };
-        }
         return { name: 'Unknown', color: 'text-gray-600', bgColor: 'bg-gray-50', icon: Info, tooltip: 'Status unknown.' };
     }
 
@@ -180,7 +179,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     const creator = voucher.creator;
     const signatureHint = statusInfo?.name === 'Incomplete' && userProfile && voucherStandards.length > 0
         ? (() => {
-            const targetUuid = voucher.voucher_standard.uuid;
+            const targetUuid = voucher.voucherStandard.uuid;
             const standard = voucherStandards.find(s => s.id === targetUuid || s.content.includes(targetUuid));
             return standard ? getMissingProfileHint(standard.content, userProfile) : null;
         })() : null;
@@ -188,7 +187,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     return (
         <PageLayout 
             title="Voucher Details" 
-            description={details.display_standard_name}
+            description={details.displayStandardName}
             onBack={onBack}
             actions={
                 <div className="flex items-center gap-2">
@@ -215,7 +214,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
         >
             <div className="max-w-5xl mx-auto space-y-6">
                 {/* Status Hero Card */}
-                <Card variant={isQuarantined ? "danger" : (details.is_test_voucher ? "warning" : "glass")} className="border-none shadow-premium overflow-hidden">
+                <Card variant={isQuarantined ? "danger" : (details.isTestVoucher ? "warning" : "glass")} className="border-none shadow-premium overflow-hidden">
                     <div className="p-8 flex flex-col md:flex-row items-center justify-between gap-8">
                         <div className="flex items-center gap-6">
                             <div className={`p-5 rounded-3xl shadow-xl transition-transform hover:scale-105 ${statusInfo?.bgColor} ${statusInfo?.color}`}>
@@ -224,15 +223,15 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                             <div>
                                 <div className="flex items-baseline gap-2">
                                     <h1 className="text-5xl font-black text-theme-primary tracking-tighter">
-                                        {voucher.nominal_value.amount}
+                                        {voucher.nominalValue.amount}
                                     </h1>
-                                    <span className="text-xl font-bold text-theme-light uppercase tracking-widest">{details.display_currency}</span>
+                                    <span className="text-xl font-bold text-theme-light uppercase tracking-widest">{details.displayCurrency}</span>
                                 </div>
                                 <div className="flex items-center gap-2 mt-2">
                                     <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${statusInfo?.bgColor} ${statusInfo?.color}`}>
                                         {statusInfo?.name}
                                     </span>
-                                    {details.is_test_voucher && (
+                                    {details.isTestVoucher && (
                                         <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-500 text-white shadow-lg shadow-rose-200">
                                             Test Voucher
                                         </span>
@@ -256,7 +255,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                             )}
                             <div className="bg-white/20 backdrop-blur-md px-4 py-2 rounded-2xl border border-white/30">
                                 <p className="text-[9px] font-black text-theme-light uppercase tracking-[0.2em] mb-1">Standard</p>
-                                <p className="text-xs font-bold text-theme-secondary truncate max-w-[200px]">{details.display_standard_name}</p>
+                                <p className="text-xs font-bold text-theme-secondary truncate max-w-[200px]">{details.displayStandardName}</p>
                             </div>
                         </div>
                     </div>
@@ -306,11 +305,11 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                             }>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 p-2">
                                     <div className="space-y-6">
-                                        <InfoRow label="Legal Name" icon={User}>{creator.first_name} {creator.last_name}</InfoRow>
+                                        <InfoRow label="Legal Name" icon={User}>{creator.firstName} {creator.lastName}</InfoRow>
                                         <InfoRow label="DID / Identifier" icon={Shield} isMono>{creator.id}</InfoRow>
                                         <InfoRow label="Postal Address" icon={MapPin}>
-                                            {creator.address?.street} {creator.address?.house_number}<br/>
-                                            {creator.address?.zip_code} {creator.address?.city}
+                                            {creator.address?.street} {creator.address?.houseNumber}<br/>
+                                            {creator.address?.zipCode} {creator.address?.city}
                                             {creator.address?.country && <><br/>{creator.address.country}</>}
                                         </InfoRow>
                                         <InfoRow label="Map Coordinates" icon={MapPin}>{creator.coordinates}</InfoRow>
@@ -326,7 +325,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                             {creator.gender === "1" ? "Male" : creator.gender === "2" ? "Female" : creator.gender === "0" ? "Other / Not Declared" : creator.gender === "9" ? "Not Applicable" : "Unknown"}
                                         </InfoRow>
                                         <InfoRow label="Reputation Status">
-                                            {typeof trustStatus === 'object' && 'KnownOffender' in trustStatus ? (
+                                            {typeof trustStatus === 'object' && 'knownOffender' in trustStatus ? (
                                                 <span className="text-rose-500 font-black uppercase text-[10px] tracking-widest flex items-center gap-2">
                                                     <ShieldAlert size={14} /> High Risk Account
                                                 </span>
@@ -341,7 +340,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                             </Card>
 
                             {/* Community Offerings */}
-                            {(creator.service_offer || creator.needs) && (
+                            {(creator.serviceOffer || creator.needs) && (
                                 <Card className="border-none shadow-premium" header={
                                     <div className="flex items-center gap-2">
                                         <Heart size={18} className="text-theme-primary" />
@@ -349,14 +348,14 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                     </div>
                                 }>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8 p-2">
-                                        <InfoRow label="I can help with..." icon={Briefcase}>{creator.service_offer}</InfoRow>
+                                        <InfoRow label="I can help with..." icon={Briefcase}>{creator.serviceOffer}</InfoRow>
                                         <InfoRow label="I am looking for..." icon={Heart}>{creator.needs}</InfoRow>
                                     </div>
                                 </Card>
                             )}
 
                             {/* Policy & Conditions */}
-                            {(voucher.voucher_standard.template.description || voucher.voucher_standard.template.footnote) && (
+                            {(voucher.voucherStandard.template.description || voucher.voucherStandard.template.footnote) && (
                                 <Card className="border-none shadow-premium" header={
                                     <div className="flex items-center gap-2">
                                         <Info size={18} className="text-theme-primary" />
@@ -364,19 +363,19 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                     </div>
                                 }>
                                     <div className="space-y-6 p-2">
-                                        {voucher.voucher_standard.template.description && (
+                                        {voucher.voucherStandard.template.description && (
                                             <div className="space-y-2">
                                                 <p className="text-[10px] font-black text-theme-light uppercase tracking-widest opacity-60">Description</p>
                                                 <p className="text-sm text-theme-secondary leading-relaxed italic">
-                                                    "{voucher.voucher_standard.template.description}"
+                                                    "{voucher.voucherStandard.template.description}"
                                                 </p>
                                             </div>
                                         )}
-                                        {voucher.voucher_standard.template.footnote && (
+                                        {voucher.voucherStandard.template.footnote && (
                                             <div className="space-y-2 pt-4 border-t border-theme-subtle/30">
                                                 <p className="text-[10px] font-black text-theme-light uppercase tracking-widest opacity-60">Footnote</p>
                                                 <p className="text-xs text-theme-light leading-relaxed">
-                                                    {voucher.voucher_standard.template.footnote}
+                                                    {voucher.voucherStandard.template.footnote}
                                                 </p>
                                             </div>
                                         )}
@@ -395,7 +394,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                     {voucher.signatures.map((sig) => {
                                         const isCreator = sig.role === "creator" || sig.role === "issuer";
                                         return (
-                                            <div key={sig.signature_id} className="relative pl-8 pb-4 last:pb-0">
+                                            <div key={sig.signatureId} className="relative pl-8 pb-4 last:pb-0">
                                                 {/* Timeline Line */}
                                                 <div className="absolute left-[11px] top-2 bottom-0 w-0.5 bg-theme-subtle/30"></div>
                                                 {/* Timeline Dot */}
@@ -408,16 +407,16 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                                         <div className="flex items-center gap-2 mb-1">
                                                             <span className="text-[10px] font-black uppercase tracking-widest text-theme-light">{sig.role}</span>
                                                             <span className="text-xs font-bold text-theme-secondary">
-                                                                {sig.details?.first_name} {sig.details?.last_name}
+                                                                {sig.details?.firstName} {sig.details?.lastName}
                                                             </span>
                                                         </div>
-                                                        <p className="text-[10px] font-mono text-theme-light opacity-50 truncate max-w-[200px]">{sig.signer_id}</p>
+                                                        <p className="text-[10px] font-mono text-theme-light opacity-50 truncate max-w-[200px]">{sig.signerId}</p>
                                                     </div>
                                                     <div className="flex items-center gap-3">
-                                                        <span className="text-[10px] font-bold text-theme-light opacity-60">{formatDateTime(sig.signature_time)}</span>
+                                                        <span className="text-[10px] font-bold text-theme-light opacity-60">{formatDateTime(sig.signatureTime)}</span>
                                                         <button 
                                                             className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-rose-50 text-rose-500 transition-all"
-                                                            onClick={() => setShowRemoveSignatureModal(sig.signature_id)}
+                                                            onClick={() => setShowRemoveSignatureModal(sig.signatureId)}
                                                         >
                                                             <Trash2 size={14} />
                                                         </button>
@@ -440,13 +439,13 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                 </div>
                             }>
                                 <div className="space-y-6">
-                                    <InfoRow label="Voucher ID" isMono icon={Shield}>{voucher.voucher_id}</InfoRow>
-                                    <InfoRow label="Issue Date" icon={Clock}>{formatDateTime(voucher.creation_date)}</InfoRow>
-                                    <InfoRow label="Valid Until" icon={AlertCircle}>{formatDateTime(voucher.valid_until || undefined)}</InfoRow>
+                                    <InfoRow label="Voucher ID" isMono icon={Shield}>{voucher.voucherId}</InfoRow>
+                                    <InfoRow label="Issue Date" icon={Clock}>{formatDateTime(voucher.creationDate)}</InfoRow>
+                                    <InfoRow label="Valid Until" icon={AlertCircle}>{formatDateTime(voucher.validUntil || undefined)}</InfoRow>
                                     <div className="pt-4 border-t border-theme-subtle/30 grid grid-cols-2 gap-4">
                                         <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
                                             <p className="text-[9px] font-black uppercase text-theme-light mb-1">Divisible</p>
-                                            <p className="text-xs font-bold">{voucher.voucher_standard.template.divisible ? "YES" : "NO"}</p>
+                                            <p className="text-xs font-bold">{voucher.voucherStandard.template.divisible ? "YES" : "NO"}</p>
                                         </div>
                                         <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
                                             <p className="text-[9px] font-black uppercase text-theme-light mb-1">Collateral</p>
@@ -465,19 +464,19 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                             }>
                                 <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                                     {voucher.transactions.slice().reverse().map((t) => (
-                                        <div key={t.t_id} className="p-3 bg-white/40 border border-theme-subtle/30 rounded-xl relative">
+                                        <div key={t.tId} className="p-3 bg-white/40 border border-theme-subtle/30 rounded-xl relative">
                                             <div className="flex justify-between items-start mb-2">
-                                                <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${t.t_type === 'init' ? 'bg-emerald-500 text-white' : 'bg-theme-secondary text-white'}`}>
-                                                    {t.t_type}
+                                                <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${t.tType === 'init' ? 'bg-emerald-500 text-white' : 'bg-theme-secondary text-white'}`}>
+                                                    {t.tType}
                                                 </span>
                                                 <span className="text-xs font-black text-theme-primary">
-                                                    {t.amount} {details.display_currency}
+                                                    {t.amount} {details.displayCurrency}
                                                 </span>
                                             </div>
                                             <div className="space-y-1">
                                                 <p className="text-[9px] text-theme-light flex items-center justify-between">
-                                                    <span>By: {t.sender_id ? t.sender_id.slice(0, 12) + "..." : "SYSTEM"}</span>
-                                                    <span>{formatDateTime(t.t_time).split(',')[0]}</span>
+                                                    <span>By: {t.senderId ? t.senderId.slice(0, 12) + "..." : "SYSTEM"}</span>
+                                                    <span>{formatDateTime(t.tTime).split(',')[0]}</span>
                                                 </p>
                                             </div>
                                         </div>
@@ -585,7 +584,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                     });
                 }}
                 existingContact={existingContact}
-                initialProfile={pendingContactDID ? voucher.signatures.find(s => s.signer_id === pendingContactDID)?.details : voucher.creator}
+                initialProfile={pendingContactDID ? voucher.signatures.find(s => s.signerId === pendingContactDID)?.details : voucher.creator}
                 initialDid={pendingContactDID || voucher.creator.id}
             />
 
@@ -659,8 +658,8 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             });
 
             const filePath = await save({
-                defaultPath: settings?.last_used_directory 
-                    ? `${settings.last_used_directory}/signature-request-${voucherId.slice(0, 8)}.ask`
+                defaultPath: settings?.lastUsedDirectory 
+                    ? `${settings.lastUsedDirectory}/signature-request-${voucherId.slice(0, 8)}.ask`
                     : `signature-request-${voucherId.slice(0, 8)}.ask`,
                 filters: [{ name: 'Signature Request (.ask)', extensions: ['ask'] }]
             });

@@ -36,39 +36,39 @@ vi.mock('../../context/SessionContext', () => ({
 
 describe('SignRequestView Component (Minuto Standard)', () => {
   const mockVoucherDetails: VoucherDetails = {
-    local_instance_id: 'voucher-123',
-    status: 'Active',
+    localInstanceId: 'voucher-123',
+    status: 'active',
     voucher: {
-      voucher_standard: {
+      voucherStandard: {
         name: 'Minuto Standard',
         uuid: 'minuto-uuid-123',
-        standard_definition_hash: 'hash-123',
+        standardDefinitionHash: 'hash-123',
         template: {
           description: 'Minuto test voucher',
           divisible: true,
         },
       },
-      voucher_id: 'voucher-id-123',
-      voucher_nonce: 'nonce-123',
-      creation_date: '2024-01-01T00:00:00Z',
-      valid_until: '2025-12-31T00:00:00Z',
-      non_redeemable_test_voucher: false,
-      nominal_value: {
+      voucherId: 'voucher-id-123',
+      voucherNonce: 'nonce-123',
+      creationDate: '2024-01-01T00:00:00Z',
+      validUntil: '2025-12-31T00:00:00Z',
+      nonRedeemableTestVoucher: false,
+      nominalValue: {
         unit: 'Minutos',
         amount: '100',
         abbreviation: 'MIN',
       },
       creator: {
         id: 'did:key:z123',
-        first_name: 'John',
-        last_name: 'Doe',
+        firstName: 'John',
+        lastName: 'Doe',
       },
       signatures: [],
       transactions: [],
     },
-    display_currency: 'MIN',
-    display_standard_name: 'Minuto Standard',
-    is_test_voucher: false,
+    displayCurrency: 'MIN',
+    displayStandardName: 'Minuto Standard',
+    isTestVoucher: false,
   };
 
   const mockStandards: VoucherStandardInfo[] = [
@@ -79,16 +79,16 @@ describe('SignRequestView Component (Minuto Standard)', () => {
   ];
 
   const mockSettings: AppSettings = {
-    bundle_retention_days: 30,
-    session_timeout_seconds: 300,
-    privacy_default: 'public',
+    bundleRetentionDays: 30,
+    sessionTimeoutSeconds: 300,
+    privacyDefault: 'public',
   };
 
   const mockSignatureImpact: SignatureImpact = {
-    is_allowed_role: true,
-    fatal_conflicts: [],
-    resolved_rules: ['Guarantor signature required'],
-    gentle_hints: [],
+    isAllowedRole: true,
+    fatalConflicts: [],
+    resolvedRules: ['Guarantor signature required'],
+    gentleHints: [],
   };
 
   const mockOnBack = vi.fn();

@@ -21,9 +21,14 @@ fi
 # 1. TypeScript Check
 echo "🔍 Prüfe TypeScript Typen (Frontend)..."
 npx tsc --noEmit
-if [ $? -ne 0 ]; then
+TSC_EXIT=$?
+echo "🔍 Prüfe TypeScript Typen (Node/Configs)..."
+npx tsc -p tsconfig.node.json --noEmit
+TSC_NODE_EXIT=$?
+
+if [ $TSC_EXIT -ne 0 ] || [ $TSC_NODE_EXIT -ne 0 ]; then
     echo "❌ TypeScript Check fehlgeschlagen!"
-    FAILED_TESTS+=("TypeScript Check (Frontend)")
+    FAILED_TESTS+=("TypeScript Check (Frontend/Node)")
 else
     echo "✅ TypeScript Check erfolgreich."
 fi

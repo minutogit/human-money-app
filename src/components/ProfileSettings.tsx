@@ -85,8 +85,8 @@ export function ProfileSettings() {
         setProfile(prev => {
             if (!prev) return null;
             const newAddress = { ...(prev.address || {}), [field]: value };
-            const parts = [newAddress.street, newAddress.house_number, newAddress.zip_code, newAddress.city, newAddress.country].filter(Boolean);
-            newAddress.full_address = parts.join(', ');
+            const parts = [newAddress.street, newAddress.houseNumber, newAddress.zipCode, newAddress.city, newAddress.country].filter(Boolean);
+            newAddress.fullAddress = parts.join(', ');
             return { ...prev, address: newAddress };
         });
     };
@@ -125,8 +125,8 @@ export function ProfileSettings() {
                                     <span className="text-theme-accent text-[8px]">(Required)</span>
                                 </label>
                                 <Input
-                                    value={profile.first_name || ''}
-                                    onChange={(e) => setProfile({ ...profile, first_name: e.target.value })}
+                                    value={profile.firstName || ''}
+                                    onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
                                     placeholder="e.g. Alice"
                                 />
                             </div>
@@ -136,8 +136,8 @@ export function ProfileSettings() {
                                     <span className="text-theme-accent text-[8px]">(Required)</span>
                                 </label>
                                 <Input
-                                    value={profile.last_name || ''}
-                                    onChange={(e) => setProfile({ ...profile, last_name: e.target.value })}
+                                    value={profile.lastName || ''}
+                                    onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
                                     placeholder="e.g. Smith"
                                 />
                             </div>
@@ -197,8 +197,8 @@ export function ProfileSettings() {
                             <div className="space-y-2">
                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Nr.</label>
                                 <Input
-                                    value={profile.address?.house_number || ''}
-                                    onChange={(e) => updateAddress('house_number', e.target.value)}
+                                    value={profile.address?.houseNumber || ''}
+                                    onChange={(e) => updateAddress('houseNumber', e.target.value)}
                                     placeholder="123"
                                 />
                             </div>
@@ -207,8 +207,8 @@ export function ProfileSettings() {
                             <div className="space-y-2">
                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">ZIP</label>
                                 <Input
-                                    value={profile.address?.zip_code || ''}
-                                    onChange={(e) => updateAddress('zip_code', e.target.value)}
+                                    value={profile.address?.zipCode || ''}
+                                    onChange={(e) => updateAddress('zipCode', e.target.value)}
                                     placeholder="12345"
                                 />
                             </div>
@@ -286,8 +286,8 @@ export function ProfileSettings() {
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><User size={10}/> Profile Picture URL</label>
                             <Input
-                                value={profile.picture_url || ''}
-                                onChange={(e) => setProfile({ ...profile, picture_url: e.target.value })}
+                                value={profile.pictureUrl || ''}
+                                onChange={(e) => setProfile({ ...profile, pictureUrl: e.target.value })}
                                 placeholder="https://domain.com/avatar.jpg"
                             />
                         </div>
@@ -306,8 +306,8 @@ export function ProfileSettings() {
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> Service Offer (I can help with)</label>
                             <textarea
                                 className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[120px]"
-                                value={profile.service_offer || ''}
-                                onChange={(e) => setProfile({ ...profile, service_offer: e.target.value })}
+                                value={profile.serviceOffer || ''}
+                                onChange={(e) => setProfile({ ...profile, serviceOffer: e.target.value })}
                                 placeholder="Describe what you bring to the network..."
                             />
                         </div>

@@ -62,7 +62,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
             setProfiles(availableProfiles);
             if (availableProfiles.length > 0 && !selectedProfile) {
-                setSelectedProfile(availableProfiles[0].folder_name);
+                setSelectedProfile(availableProfiles[0].folderName);
             }
         } catch (e) {
             setFeedbackMsg(`Profile Access Error: ${e}`);
@@ -90,8 +90,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     localInstanceId,
                 });
                 
-                const loggedInProfile = profiles.find(p => p.folder_name === selectedProfile);
-                if (loggedInProfile) onLoginSuccess(loggedInProfile.profile_name);
+                const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
+                if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName);
             } catch (e: any) {
                 const msg = String(e);
                 if (msg.includes("Device Mismatch") || msg.includes("different device")) {
@@ -160,7 +160,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             setDeletePassword("");
             await refreshProfiles();
             const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
-            if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folder_name);
+            if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folderName);
             else onSwitchToCreate();
         } catch (e) {
             setFeedbackMsg(`Purge failure: ${e}`);
@@ -169,8 +169,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
         }
     }
 
-    const activeProfile = profiles.find(p => p.folder_name === selectedProfile);
-    const activeProfileName = activeProfile?.profile_name || "Unknown Profile";
+    const activeProfile = profiles.find(p => p.folderName === selectedProfile);
+    const activeProfileName = activeProfile?.profileName || "Unknown Profile";
 
     return (
         <div className="w-full min-h-screen flex items-start sm:items-center justify-center py-4 sm:py-20 px-4 relative overflow-hidden bg-white">
@@ -276,8 +276,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                         </div>
 
                         <Button onClick={() => {
-                            const loggedInProfile = profiles.find(p => p.folder_name === selectedProfile);
-                            if (loggedInProfile) onLoginSuccess(loggedInProfile.profile_name);
+                            const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
+                            if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName);
                         }} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
                             Acknowledge & Access Dashboard <ArrowRight size={20} />
                         </Button>
@@ -312,8 +312,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                             className="w-full bg-white border border-theme-subtle rounded-2xl px-5 py-4 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all group-hover:border-theme-primary/30"
                                         >
                                             {profiles.map((profile) => (
-                                                <option key={profile.folder_name} value={profile.folder_name}>
-                                                    {profile.profile_name}
+                                                <option key={profile.folderName} value={profile.folderName}>
+                                                    {profile.profileName}
                                                 </option>
                                             ))}
                                         </select>

@@ -57,8 +57,8 @@ export const ContactBadge: React.FC<ContactBadgeProps> = ({ did, contacts, size 
                 </div>
                 <div className="flex-1 min-w-0 flex flex-col">
                     <p className={`${config.name} font-black text-theme-secondary truncate uppercase tracking-tight`}>
-                        {contact.profile.first_name || contact.profile.last_name
-                            ? `${contact.profile.first_name || ''} ${contact.profile.last_name || ''}`.trim()
+                        {contact.profile.firstName || contact.profile.lastName
+                            ? `${contact.profile.firstName || ''} ${contact.profile.lastName || ''}`.trim()
                             : contact.profile.organization || 'Anonymous'}
                     </p>
                     <p className={`${config.text} text-theme-light font-mono opacity-60`}>{truncateDid(contact.did)}</p>

@@ -28,8 +28,8 @@ describe('WalletRecovery Component', () => {
   const mockSeed24 = 'apple banana cherry date elderberry fig grape honey iris jasmine kiwi lemon mango nut olive peach quince raspberry strawberry tangerine umbrella violet watermelon xylem yellow zebra';
   const mockWordlist = ['apple', 'banana', 'cherry', 'date', 'elderberry', 'fig', 'grape', 'honey', 'iris', 'jasmine', 'kiwi', 'lemon', 'mango', 'nut', 'olive', 'peach', 'quince', 'raspberry', 'strawberry', 'tangerine', 'umbrella', 'violet', 'watermelon', 'xylem', 'yellow', 'zebra'];
   const mockProfiles: ProfileInfo[] = [
-    { profile_name: 'Test Profile 1', folder_name: 'profile1' },
-    { profile_name: 'Test Profile 2', folder_name: 'profile2' },
+    { profileName: 'Test Profile 1', folderName: 'profile1' },
+    { profileName: 'Test Profile 2', folderName: 'profile2' },
   ];
 
   beforeEach(() => {

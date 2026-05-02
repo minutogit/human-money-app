@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0-beta.5"
+version: "0.1.0-beta.7"
 phase: "beta"
 health: "green"
-last_updated: "2026-05-02"
+last_updated: "2026-05-03"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -121,6 +121,12 @@ priority_tasks:
     priority: "high"
     depends_on: []
     description: "Replace legacy 'Silber' standard with 'FreeTaler'. Includes core standard definition, signature update, and app-level integration."
+  - id: "APP-020"
+    title: "IPC Stabilization & DTO Pattern"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Strict separation of Core (snake_case) and Frontend (camelCase) using dedicated DTOs in the Tauri bridge. Ensures architectural integrity and cryptographic stability."
 ---
 
 # Human Money App — Status
@@ -183,6 +189,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Migrated legacy 'Silber' standard to 'FreeTaler' (Core & App) (APP-019)
 - [x] Stabilized core test suite after standard migration (127 tests passing)
 - [x] Refined transactionality and state management for FreeTaler precision (4 decimals)
+- [x] IPC Stabilization & DTO Pattern Implementation (Strict snake_case core vs camelCase frontend) (APP-020)
 
 
 

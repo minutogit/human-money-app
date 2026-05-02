@@ -91,8 +91,8 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
 
     const filteredContacts = contacts.filter(contact => {
         const matchesSearch = 
-            (contact.profile.first_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (contact.profile.last_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (contact.profile.firstName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (contact.profile.lastName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
             (contact.profile.organization || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
             contact.did.toLowerCase().includes(searchQuery.toLowerCase());
         
@@ -243,8 +243,8 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
 
                                     <div className="flex-1">
                                         <h3 className="text-lg font-black text-theme-primary tracking-tight leading-tight group-hover:text-theme-accent transition-colors">
-                                            {contact.profile.first_name || contact.profile.last_name 
-                                                ? `${contact.profile.first_name || ''} ${contact.profile.last_name || ''}`.trim()
+                                            {contact.profile.firstName || contact.profile.lastName 
+                                                ? `${contact.profile.firstName || ''} ${contact.profile.lastName || ''}`.trim()
                                                 : contact.profile.organization || 'Unnamed Identity'}
                                         </h3>
                                         

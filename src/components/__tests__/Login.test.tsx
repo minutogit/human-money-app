@@ -35,8 +35,8 @@ vi.mock('../../utils/log', () => ({
 
 describe('Login Component', () => {
   const mockProfiles: ProfileInfo[] = [
-    { profile_name: 'Test Profile 1', folder_name: 'profile1' },
-    { profile_name: 'Test Profile 2', folder_name: 'profile2' },
+    { profileName: 'Test Profile 1', folderName: 'profile1' },
+    { profileName: 'Test Profile 2', folderName: 'profile2' },
   ];
 
   const mockOnLoginSuccess = vi.fn();

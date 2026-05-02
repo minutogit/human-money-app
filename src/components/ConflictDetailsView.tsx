@@ -70,7 +70,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
     );
     if (!details) return <div className="text-center p-8 text-theme-light">Proof not found.</div>;
 
-    const { proof, local_override, conflict_role } = details;
+    const { proof, localOverride, conflictRole } = details;
     const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
 
     return (
@@ -86,12 +86,12 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                     </svg>
                 </button>
                 <h1 className="text-2xl font-bold text-theme-primary flex items-center gap-2">
-                    <span>{conflict_role === 'Victim' ? '🛑' : '👁️'}</span> 
-                    {conflict_role === 'Victim' ? 'Critical Payment Conflict' : 'Network Observation Report'}
+                    <span>{conflictRole === 'victim' ? '🛑' : '👁️'}</span> 
+                    {conflictRole === 'victim' ? 'Critical Payment Conflict' : 'Network Observation Report'}
                 </h1>
             </header>
 
-            {conflict_role === 'Victim' ? (
+            {conflictRole === 'victim' ? (
                 <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-lg">
                     <div className="flex">
                         <div className="flex-shrink-0">
@@ -128,7 +128,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                         <div className="space-y-4">
                             <div>
                                 <p className="text-xs font-semibold text-theme-light uppercase tracking-wider">Offender ID (DID)</p>
-                                <p className="font-mono text-sm break-all text-red-700 bg-red-50 p-2 rounded mt-1">{proof.offender_id}</p>
+                                <p className="font-mono text-sm break-all text-red-700 bg-red-50 p-2 rounded mt-1">{proof.offenderId}</p>
                             </div>
                             <p className="text-sm text-theme-light leading-relaxed italic">
                                 This user has been mathematically proven to have spent funds multiple times. 
@@ -143,30 +143,30 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <p className="text-xs font-semibold text-theme-light uppercase">Report Date</p>
-                                    <p className="text-sm">{formatDateTime(proof.report_timestamp)}</p>
+                                    <p className="text-sm">{formatDateTime(proof.reportTimestamp)}</p>
                                 </div>
                                 <div>
                                     <p className="text-xs font-semibold text-theme-light uppercase">Trust Status</p>
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${local_override ? 'bg-blue-100 text-blue-800' : proof.is_resolved ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                        {proof.is_resolved ? 'Officially Resolved' : local_override ? 'Locally Settled' : 'Unresolved'}
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${localOverride ? 'bg-blue-100 text-blue-800' : proof.isResolved ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                        {proof.isResolved ? 'Officially Resolved' : localOverride ? 'Locally Settled' : 'Unresolved'}
                                     </span>
                                 </div>
                             </div>
-                            {details.local_note && (
+                            {details.localNote && (
                                 <div className="space-y-1">
                                     <p className="text-[10px] font-bold text-blue-600 uppercase tracking-tight">Personal Resolution Note:</p>
                                     <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg text-sm italic text-blue-900 shadow-sm leading-relaxed">
-                                        "{details.local_note}"
+                                        "{details.localNote}"
                                     </div>
                                 </div>
                             )}
                             <div>
                                 <p className="text-xs font-semibold text-theme-light uppercase">Affected Voucher</p>
-                                <p className="text-sm font-medium">{proof.affected_voucher_name || 'Generic Voucher-Instance'}</p>
+                                <p className="text-sm font-medium">{proof.affectedVoucherName || 'Generic Voucher-Instance'}</p>
                             </div>
                             <div>
                                 <p className="text-xs font-semibold text-theme-light uppercase">Proof ID</p>
-                                <p className="font-mono text-[10px] break-all text-theme-light">{proof.proof_id}</p>
+                                <p className="font-mono text-[10px] break-all text-theme-light">{proof.proofId}</p>
                             </div>
                         </div>
                     </div>
@@ -177,16 +177,16 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                     <p className="text-xs text-theme-light mb-4">Cryptographic proof of conflicting transactions:</p>
                     
                     <div className="space-y-4">
-                        {proof.conflicting_transactions.map((tx, idx) => (
-                            <div key={tx.t_id} className={`p-3 rounded border-l-4 ${idx === 0 ? 'border-green-500 bg-green-50/30' : 'border-red-500 bg-red-50/30'}`}>
+                        {proof.conflictingTransactions.map((tx, idx) => (
+                            <div key={tx.tId} className={`p-3 rounded border-l-4 ${idx === 0 ? 'border-green-500 bg-green-50/30' : 'border-red-500 bg-red-50/30'}`}>
                                 <div className="flex justify-between items-center mb-2">
                                     <span className="text-[10px] font-bold uppercase text-gray-400">Transaction {idx + 1} {idx === 0 && '(Winner)'}</span>
                                     <span className="text-sm font-bold">{tx.amount}</span>
                                 </div>
                                 <div className="space-y-1 text-[10px] font-mono text-theme-light">
-                                    <p><strong>ID:</strong> {tx.t_id}</p>
-                                    <p><strong>Time:</strong> {formatDateTime(tx.t_time)}</p>
-                                    <p><strong>Recipient:</strong> {tx.recipient_id.slice(0, 20)}...</p>
+                                    <p><strong>ID:</strong> {tx.tId}</p>
+                                    <p><strong>Time:</strong> {formatDateTime(tx.tTime)}</p>
+                                    <p><strong>Recipient:</strong> {tx.recipientId.slice(0, 20)}...</p>
                                 </div>
                             </div>
                         ))}
@@ -199,7 +199,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                 </div>
             </div>
 
-            {!local_override && !proof.is_resolved && (
+            {!localOverride && !proof.isResolved && (
                 <div className="bg-white rounded-lg border border-theme-subtle p-8 shadow-sm text-center">
                     <h3 className="text-lg font-bold text-theme-primary mb-2">Resolution</h3>
                     <p className="text-sm text-theme-light mb-6 max-w-lg mx-auto">
@@ -230,12 +230,12 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                     <h2 className="text-lg font-bold text-green-800 mb-4">Official Resolutions</h2>
                     <div className="space-y-3">
                         {proof.resolutions.map(res => (
-                            <div key={res.endorsement_id} className="bg-white p-3 rounded border border-green-100 shadow-sm text-sm">
+                            <div key={res.endorsementId} className="bg-white p-3 rounded border border-green-100 shadow-sm text-sm">
                                 <div className="flex justify-between mb-1">
                                     <p className="font-bold">Compensation Endorsement</p>
-                                    <p className="text-xs text-gray-400">{formatDateTime(res.resolution_timestamp)}</p>
+                                    <p className="text-xs text-gray-400">{formatDateTime(res.resolutionTimestamp)}</p>
                                 </div>
-                                <p className="text-gray-600 text-xs">The victim ({res.victim_id.slice(0, 15)}...) confirmed solution.</p>
+                                <p className="text-gray-600 text-xs">The victim ({res.victimId.slice(0, 15)}...) confirmed solution.</p>
                                 {res.notes && <p className="mt-2 text-xs italic text-gray-500">"{res.notes}"</p>}
                             </div>
                         ))}

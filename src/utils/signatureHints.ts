@@ -15,7 +15,7 @@ export const PROFILE_FIELD_MAPPINGS: Record<string, { label: string; checkFn: (p
         checkFn: (profile) => !!profile.address && (
             !!profile.address.street?.trim() ||
             !!profile.address.city?.trim() ||
-            !!profile.address.zip_code?.trim()
+            !!profile.address.zipCode?.trim()
         )
     },
     'coordinates': {
@@ -42,9 +42,9 @@ export const PROFILE_FIELD_MAPPINGS: Record<string, { label: string; checkFn: (p
         label: 'Website',
         checkFn: (profile) => !!profile.url && profile.url.trim() !== ''
     },
-    'service_offer': {
+    'serviceOffer': {
         label: 'Service Offer',
-        checkFn: (profile) => !!profile.service_offer && profile.service_offer.trim() !== ''
+        checkFn: (profile) => !!profile.serviceOffer && profile.serviceOffer.trim() !== ''
     },
     'needs': {
         label: 'Needs',

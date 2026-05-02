@@ -28,7 +28,7 @@ function formatAmount(amountStr: string): string {
 }
 
 export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps) {
-    const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
+    const [trustStatus, setTrustStatus] = useState<TrustStatus>("clean");
 
     const summable = Object.entries(payload.transferSummary.summableAmounts)
         .map(([unit, total]) => `${formatAmount(total)} ${unit}`);
@@ -113,7 +113,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                             </div>
                             
                             {/* Reputation Warning */}
-                            {typeof trustStatus === 'object' && 'KnownOffender' in trustStatus && (
+                            {typeof trustStatus === 'object' && 'knownOffender' in trustStatus && (
                                 <div className="flex items-center gap-2 px-3 py-2 bg-rose-50 rounded-xl border border-rose-100">
                                     <UserX size={14} className="text-rose-500" />
                                     <span className="text-[10px] font-bold text-rose-700">Flagged for past conflicts</span>
@@ -145,7 +145,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                                     <div key={index} className="flex items-center justify-between p-3 bg-white border border-theme-subtle rounded-xl shadow-sm">
                                         <div className="flex items-center gap-2">
                                             <div className="w-1.5 h-1.5 rounded-full bg-theme-primary/40"></div>
-                                            <span className="text-[11px] font-bold text-theme-secondary">{detail.standard_name}</span>
+                                            <span className="text-[11px] font-bold text-theme-secondary">{detail.standardName}</span>
                                         </div>
                                         <span className="text-[11px] font-black text-theme-primary">
                                             {detail.amount} {detail.unit}

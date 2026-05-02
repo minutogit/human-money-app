@@ -82,14 +82,14 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
     }, []);
 
     async function handleSaveBundle(record: TransactionRecord) {
-        if (!record.bundle_data || record.bundle_data.length === 0) {
+        if (!record.bundleData || record.bundleData.length === 0) {
             setFeedback(f => ({ ...f, [record.id]: 'Error: No bundle data available.' }));
             return;
         }
 
         setIsSaving(record.id);
         try {
-            const recipientNameMatch = record.recipient_id?.match(/(.+)@/);
+            const recipientNameMatch = record.recipientId?.match(/(.+)@/);
             const recipientName = recipientNameMatch ? recipientNameMatch[1] : 'transfer';
             const txDate = new Date(record.timestamp);
             const dateTimePart = txDate.toISOString().substring(0, 16).replace(/-/g, '').replace('T', '_').replace(/:/g, '');
@@ -102,7 +102,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
             });
 
             if (filePath) {
-                const content = new Uint8Array(record.bundle_data);
+                const content = new Uint8Array(record.bundleData);
                 await writeFile(filePath, content);
                 setFeedback(f => ({ ...f, [record.id]: `Saved!` }));
             }
@@ -117,9 +117,9 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
         const query = searchQuery.toLowerCase();
         return (
             record.notes?.toLowerCase().includes(query) ||
-            record.recipient_id?.toLowerCase().includes(query) ||
-            record.sender_id?.toLowerCase().includes(query) ||
-            record.sender_profile_name?.toLowerCase().includes(query)
+            record.recipientId?.toLowerCase().includes(query) ||
+            record.senderId?.toLowerCase().includes(query) ||
+            record.senderProfileName?.toLowerCase().includes(query)
         );
     });
 
@@ -186,9 +186,9 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                     <div className="flex flex-col">
                                                         <p className="text-sm font-bold text-theme-secondary truncate">
                                                             {isSent ? (
-                                                                <>To: <span className="text-theme-primary">{record.recipient_id?.split('@')[0] || truncateId(record.recipient_id || '')}</span></>
+                                                                <>To: <span className="text-theme-primary">{record.recipientId?.split('@')[0] || truncateId(record.recipientId || '')}</span></>
                                                             ) : (
-                                                                <>From: <span className="text-theme-primary">{record.sender_profile_name || truncateId(record.sender_id || '')}</span></>
+                                                                <>From: <span className="text-theme-primary">{record.senderProfileName || truncateId(record.senderId || '')}</span></>
                                                             )}
                                                         </p>
                                                         {record.notes && (
@@ -219,7 +219,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                                 <Hash size={10} /> Bundle Identifier
                                                             </p>
                                                             <p className="text-xs font-mono text-theme-secondary break-all bg-theme-subtle/10 p-3 rounded-xl border border-theme-subtle/20">
-                                                                {record.bundle_id}
+                                                                {record.bundleId}
                                                             </p>
                                                         </div>
                                                         <div>
@@ -227,7 +227,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                                 <User size={10} /> Full {isSent ? 'Recipient' : 'Sender'} DID
                                                             </p>
                                                             <p className="text-xs font-mono text-theme-secondary break-all bg-theme-subtle/10 p-3 rounded-xl border border-theme-subtle/20">
-                                                                {isSent ? record.recipient_id : record.sender_id}
+                                                                {isSent ? record.recipientId : record.senderId}
                                                             </p>
                                                         </div>
                                                     </div>
@@ -241,7 +241,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                             </div>
                                                         </div>
                                                         
-                                                        {isSent && record.bundle_data && record.bundle_data.length > 0 && (
+                                                        {isSent && record.bundleData && record.bundleData.length > 0 && (
                                                             <div className="mt-4 flex items-center gap-3">
                                                                 <Button 
                                                                     size="sm" 
@@ -282,9 +282,9 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                                 <tbody className="divide-y divide-theme-subtle/50">
                                                                     {record.involvedSourcesDetails.map((detail, idx) => (
                                                                         <tr key={idx} className="hover:bg-theme-subtle/5 transition-colors">
-                                                                            <td className="px-4 py-2.5 font-bold text-theme-secondary">{detail.standard_name}</td>
-                                                                            <td className="px-4 py-2.5 font-black text-theme-primary text-right">{detail.amount} {detail.display_currency}</td>
-                                                                            <td className="px-4 py-2.5 font-mono text-theme-light opacity-60">{truncateId(detail.local_instance_id)}</td>
+                                                                            <td className="px-4 py-2.5 font-bold text-theme-secondary">{detail.standardName}</td>
+                                                                            <td className="px-4 py-2.5 font-black text-theme-primary text-right">{detail.amount} {detail.displayCurrency}</td>
+                                                                            <td className="px-4 py-2.5 font-mono text-theme-light opacity-60">{truncateId(detail.localInstanceId)}</td>
                                                                         </tr>
                                                                     ))}
                                                                 </tbody>

@@ -35,14 +35,14 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     useEffect(() => {
         if (existingContact) {
             setDid(existingContact.did);
-            setFirstName(existingContact.profile.first_name || '');
-            setLastName(existingContact.profile.last_name || '');
+            setFirstName(existingContact.profile.firstName || '');
+            setLastName(existingContact.profile.lastName || '');
             setOrganization(existingContact.profile.organization || '');
             setTags(existingContact.tags);
             setNotes(existingContact.notes || '');
         } else if (initialProfile) {
-            setFirstName(initialProfile.first_name || '');
-            setLastName(initialProfile.last_name || '');
+            setFirstName(initialProfile.firstName || '');
+            setLastName(initialProfile.lastName || '');
             setOrganization(initialProfile.organization || '');
             if (initialDid) setDid(initialDid);
         } else {
@@ -68,13 +68,13 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 did: did.trim(),
                 profile: {
                     id: did.trim(),
-                    first_name: firstName.trim() || undefined,
-                    last_name: lastName.trim() || undefined,
+                    firstName: firstName.trim() || undefined,
+                    lastName: lastName.trim() || undefined,
                     organization: organization.trim() || undefined,
                 },
                 tags,
                 notes: notes.trim() || undefined,
-                added_at: existingContact?.added_at || new Date().toISOString(),
+                addedAt: existingContact?.addedAt || new Date().toISOString(),
             };
             await onSave(contact);
             onClose();

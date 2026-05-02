@@ -25,22 +25,21 @@ vi.mock('../../context/SessionContext', () => ({
 describe('SendView Component (FreeTaler Standard)', () => {
   const mockVouchers: VoucherSummary[] = [
     {
-      local_instance_id: 'voucher1',
-      status: 'Active',
-      valid_until: '2025-12-31',
-      creator_id: 'did:key:z123',
+      localInstanceId: 'voucher1',
+      status: 'active',
+      validUntil: '2025-12-31',
+      creatorId: 'did:key:z123',
       description: 'FreeTaler voucher',
-      current_amount: '100.00',
+      currentAmount: '100.00',
       unit: 'Taler',
-      raw_standard_name: 'FreeTaler',
-      voucher_standard_uuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
-      transaction_count: 0,
-      guarantor_signatures_count: 0,
-      additional_signatures_count: 0,
-      has_collateral: false,
-      is_test_voucher: false,
-      display_currency: 'Taler',
-      display_standard_name: 'FreeTaler',
+      rawStandardName: 'FreeTaler',
+      voucherStandardUuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
+      transactionCount: 0,
+      signaturesCount: 0,
+      hasCollateral: false,
+      isTestVoucher: false,
+      displayCurrency: 'Taler',
+      displayStandardName: 'FreeTaler',
       divisible: true,
     },
   ];
@@ -57,18 +56,18 @@ describe('SendView Component (FreeTaler Standard)', () => {
       did: 'did:key:z456',
       profile: {
         id: 'did:key:z456',
-        first_name: 'Jane',
-        last_name: 'Smith',
+        firstName: 'Jane',
+        lastName: 'Smith',
       },
       tags: ['friend'],
-      added_at: '2024-01-01',
+      addedAt: '2024-01-01',
     },
   ];
 
   const mockSettings: AppSettings = {
-    bundle_retention_days: 30,
-    session_timeout_seconds: 300,
-    privacy_default: 'public',
+    bundleRetentionDays: 30,
+    sessionTimeoutSeconds: 300,
+    privacyDefault: 'public',
   };
 
   const mockOnBack = vi.fn();
@@ -95,18 +94,18 @@ describe('SendView Component (FreeTaler Standard)', () => {
       if (cmd === 'get_active_asset_classes') {
         return Promise.resolve([
           {
-            standard_uuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
-            is_test_voucher: false,
-            display_standard_name: 'FreeTaler',
-            display_currency: 'Taler',
+            standardUuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
+            isTestVoucher: false,
+            displayStandardName: 'FreeTaler',
+            displayCurrency: 'Taler',
           },
         ]);
       }
       if (cmd === 'get_user_profile') {
         return Promise.resolve({
           organization: 'Test Org',
-          first_name: 'Test',
-          last_name: 'User',
+          firstName: 'Test',
+          lastName: 'User',
         });
       }
       return Promise.resolve(undefined);
@@ -145,10 +144,10 @@ describe('SendView Component (FreeTaler Standard)', () => {
   it('formats amount in voucher list according to standard precision', async () => {
     const customVoucher: VoucherSummary = {
       ...mockVouchers[0],
-      local_instance_id: 'precision-test',
-      current_amount: '100.1234',
-      voucher_standard_uuid: 'uuid-2',
-      display_standard_name: 'PrecisionStd',
+      localInstanceId: 'precision-test',
+      currentAmount: '100.1234',
+      voucherStandardUuid: 'uuid-2',
+      displayStandardName: 'PrecisionStd',
     };
     const customStandard: VoucherStandardInfo = {
       id: 'precision_std',
@@ -162,10 +161,10 @@ describe('SendView Component (FreeTaler Standard)', () => {
       if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_active_asset_classes') return Promise.resolve([{
-        standard_uuid: 'uuid-2',
-        is_test_voucher: false,
-        display_standard_name: 'PrecisionStd',
-        display_currency: 'Taler',
+        standardUuid: 'uuid-2',
+        isTestVoucher: false,
+        displayStandardName: 'PrecisionStd',
+        displayCurrency: 'Taler',
       }]);
       if (cmd === 'get_user_profile') return Promise.resolve({});
       return Promise.resolve(undefined);

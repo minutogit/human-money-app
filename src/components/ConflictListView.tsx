@@ -64,14 +64,14 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
         );
     }
 
-    const victimConflicts = conflicts.filter(c => c.conflict_role === "Victim");
-    const witnessConflicts = conflicts.filter(c => c.conflict_role === "Witness");
+    const victimConflicts = conflicts.filter(c => c.conflictRole === "victim");
+    const witnessConflicts = conflicts.filter(c => c.conflictRole === "witness");
 
     const ConflictCard = ({ conflict }: { conflict: ProofOfDoubleSpendSummary }) => (
         <div
-            key={conflict.proof_id}
+            key={conflict.proofId}
             className={`border rounded-lg shadow-sm hover:shadow-md transition-all ${
-                conflict.conflict_role === 'Victim' 
+                conflict.conflictRole === 'victim' 
                     ? 'bg-red-50 border-red-200 hover:border-red-400' 
                     : 'bg-bg-card-alternate border-theme-subtle hover:border-theme-primary'
             }`}
@@ -81,17 +81,17 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                     <div className="flex-grow">
                         <div className="flex flex-wrap items-center gap-2 mb-2">
                             <span className={`px-3 py-1 text-xs font-bold rounded-full ${
-                                conflict.conflict_role === 'Victim'
+                                conflict.conflictRole === 'victim'
                                     ? 'bg-red-600 text-white'
                                     : 'bg-gray-500 text-white'
                             }`}>
-                                {conflict.conflict_role === 'Victim' ? 'URGENT: Affected Your Vouchers' : 'Network Observation'}
+                                {conflict.conflictRole === 'victim' ? 'URGENT: Affected Your Vouchers' : 'Network Observation'}
                             </span>
-                            {conflict.is_resolved ? (
+                            {conflict.isResolved ? (
                                 <span className="px-3 py-1 text-xs font-bold rounded-full bg-green-100 text-green-800 border border-green-200">
                                     ✓ Officially Resolved
                                 </span>
-                            ) : conflict.local_override ? (
+                            ) : conflict.localOverride ? (
                                 <span className="px-3 py-1 text-xs font-bold rounded-full bg-blue-100 text-blue-800 border border-blue-200">
                                     ✓ Locally Settled
                                 </span>
@@ -100,36 +100,36 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                                     ⚠ Unresolved
                                 </span>
                             )}
-                            {conflict.has_l2_verdict && (
+                            {conflict.hasL2Verdict && (
                                 <span className="px-3 py-1 text-xs font-bold rounded-full bg-purple-100 text-purple-800">
                                     L2 Verdict Available
                                 </span>
                             )}
                         </div>
                         <h3 className="font-semibold text-theme-primary mb-1">
-                            {conflict.affected_voucher_name || "Unknown Voucher"}
+                            {conflict.affectedVoucherName || "Unknown Voucher"}
                         </h3>
-                        {conflict.local_note && (
+                        {conflict.localNote && (
                              <div className="mb-3">
                                 <p className="text-[10px] font-bold text-blue-600 uppercase tracking-tight mb-1">Personal Note:</p>
                                 <p className="text-xs italic text-blue-800 bg-blue-50 px-2 py-1.5 rounded border border-blue-100 line-clamp-1 max-w-lg">
-                                   "{conflict.local_note}"
+                                   "{conflict.localNote}"
                                 </p>
                              </div>
                         )}
                         <p className="text-sm text-theme-light">
-                            ID: <span className="font-mono text-xs">{truncateId(conflict.proof_id)}</span>
+                            ID: <span className="font-mono text-xs">{truncateId(conflict.proofId)}</span>
                         </p>
                         <p className="text-sm text-theme-light">
-                            Offender: <span className="font-mono text-xs">{truncateId(conflict.offender_id)}</span>
+                            Offender: <span className="font-mono text-xs">{truncateId(conflict.offenderId)}</span>
                         </p>
                         <p className="text-sm text-theme-light">
-                            Reported: {formatTimestamp(conflict.report_timestamp)}
+                            Reported: {formatTimestamp(conflict.reportTimestamp)}
                         </p>
                     </div>
                     <Button
-                        onClick={() => onViewConflict(conflict.proof_id)}
-                        variant={conflict.conflict_role === 'Victim' && !conflict.local_override && !conflict.is_resolved ? 'primary' : 'secondary'}
+                        onClick={() => onViewConflict(conflict.proofId)}
+                        variant={conflict.conflictRole === 'victim' && !conflict.localOverride && !conflict.isResolved ? 'primary' : 'secondary'}
                         size="sm"
                         className="whitespace-nowrap"
                     >
@@ -138,7 +138,7 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                 </div>
                 <div className="border-t border-theme-subtle pt-3">
                     <p className="text-xs text-theme-light">
-                        <strong>Fork Point:</strong> <span className="font-mono">{truncateId(conflict.fork_point_prev_hash)}</span>
+                        <strong>Fork Point:</strong> <span className="font-mono">{truncateId(conflict.forkPointPrevHash)}</span>
                     </p>
                 </div>
             </div>
@@ -180,7 +180,7 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                                     Requires Action: Your Payments ({victimConflicts.length})
                                 </h2>
                                 <div className="space-y-4">
-                                    {victimConflicts.map(c => <ConflictCard key={c.proof_id} conflict={c} />)}
+                                    {victimConflicts.map(c => <ConflictCard key={c.proofId} conflict={c} />)}
                                 </div>
                             </section>
                         )}
@@ -198,7 +198,7 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                                         Show indirect network observations
                                     </summary>
                                     <div className="space-y-4 mt-4 pt-4 border-t border-theme-subtle">
-                                        {witnessConflicts.map(c => <ConflictCard key={c.proof_id} conflict={c} />)}
+                                        {witnessConflicts.map(c => <ConflictCard key={c.proofId} conflict={c} />)}
                                     </div>
                                 </details>
                             </section>

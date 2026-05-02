@@ -66,19 +66,15 @@ export function Dashboard(props: DashboardProps) {
                 setBalances(balanceList || []);
                 setRecentEvents(eventHistory || []);
                 
-                const activeCount = (voucherSummaries || []).filter(v => v.status === "Active").length;
-                const incompleteCount = (voucherSummaries || []).filter(v => {
-                    return typeof v.status === 'object' && 'Incomplete' in v.status;
-                }).length;
-                const quarantinedCount = (voucherSummaries || []).filter(v => {
-                    return typeof v.status === 'object' && 'Quarantined' in v.status;
-                }).length;
+                const activeCount = (voucherSummaries || []).filter(v => v.status === "active").length;
+                const incompleteCount = (voucherSummaries || []).filter(v => v.status === "incomplete").length;
+                const quarantinedCount = (voucherSummaries || []).filter(v => v.status === "quarantined").length;
 
                 const countsByStandard: Record<string, number> = {};
                 (voucherSummaries || [])
-                    .filter(v => v.status === "Active")
+                    .filter(v => v.status === "active")
                     .forEach(v => {
-                        const standardUuid = v.voucher_standard_uuid;
+                        const standardUuid = v.voucherStandardUuid;
                         if (standardUuid) {
                             countsByStandard[standardUuid] = (countsByStandard[standardUuid] || 0) + 1;
                         }
@@ -89,7 +85,7 @@ export function Dashboard(props: DashboardProps) {
                 setIncompleteCount(incompleteCount);
                 setQuarantinedCount(quarantinedCount);
 
-                const profileComplete = userProfile && userProfile.first_name && userProfile.last_name && userProfile.address?.city;
+                const profileComplete = userProfile && userProfile.firstName && userProfile.lastName && userProfile.address?.city;
                 setIsProfileComplete(!!profileComplete);
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${e}`;
@@ -129,24 +125,24 @@ export function Dashboard(props: DashboardProps) {
     }
 
     function getEventDetails(event: any): { label: string; icon: any; color: string; bgColor: string } {
-        const type = event.event_type;
-        const bff = event.bff_data;
+        const type = event.eventType;
+        const bff = event.bffData;
 
         if (typeof type === 'string') {
             switch (type) {
-                case 'VoucherCreated':
+                case 'voucherCreated':
                     return { label: 'Voucher Created', icon: Plus, color: 'text-blue-600', bgColor: 'bg-blue-50' };
-                case 'TransferSent':
-                    return { label: `Sent to ${bff.counterparty_name || 'Anonymous'}`, icon: ArrowUpRight, color: 'text-rose-600', bgColor: 'bg-rose-50' };
-                case 'TransferReceived':
-                    return { label: `Received from ${bff.counterparty_name || 'Anonymous'}`, icon: ArrowDownLeft, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
-                case 'VoucherQuarantined':
+                case 'transferSent':
+                    return { label: `Sent to ${bff.counterpartyName || 'Anonymous'}`, icon: ArrowUpRight, color: 'text-rose-600', bgColor: 'bg-rose-50' };
+                case 'transferReceived':
+                    return { label: `Received from ${bff.counterpartyName || 'Anonymous'}`, icon: ArrowDownLeft, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
+                case 'voucherQuarantined':
                     return { label: 'Voucher Quarantined', icon: AlertCircle, color: 'text-amber-600', bgColor: 'bg-amber-50' };
-                case 'VoucherActivated':
+                case 'voucherActivated':
                     return { label: 'Voucher Activated', icon: CheckCircle2, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
-                case 'VoucherVoided':
+                case 'voucherVoided':
                     return { label: 'Voucher Voided', icon: AlertCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
-                case 'VoucherExpired':
+                case 'voucherExpired':
                     return { label: 'Voucher Expired', icon: Clock, color: 'text-orange-600', bgColor: 'bg-orange-50' };
             }
         }
@@ -200,11 +196,11 @@ export function Dashboard(props: DashboardProps) {
 
                 {/* Warning Banners Section */}
                 <div className="space-y-3">
-                    {integrityReport && integrityReport.type !== 'Valid' && (
+                    {integrityReport && integrityReport.type !== 'valid' && (
                         <Card 
                             variant="glass" 
                             className={`py-2 px-4 flex items-center justify-between cursor-pointer border-l-4 ${
-                                integrityReport.type === 'UnknownItems' || integrityReport.type === 'MissingIntegrityRecord'
+                                integrityReport.type === 'unknownItems' || integrityReport.type === 'missingIntegrityRecord'
                                 ? 'border-l-blue-500' : 'border-l-red-500'
                             }`}
                             onClick={() => setShowIntegrityModal(true)}
@@ -212,7 +208,7 @@ export function Dashboard(props: DashboardProps) {
                         >
                             <div className="flex items-center gap-4">
                                 <div className={`p-2 rounded-xl ${
-                                    integrityReport.type === 'UnknownItems' || integrityReport.type === 'MissingIntegrityRecord'
+                                    integrityReport.type === 'unknownItems' || integrityReport.type === 'missingIntegrityRecord'
                                     ? 'bg-blue-500 text-white' : 'bg-red-500 text-white'
                                 }`}>
                                     <ShieldAlert size={20} />
@@ -280,10 +276,10 @@ export function Dashboard(props: DashboardProps) {
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             {balances.map((balance, idx) => {
-                                const count = voucherCountsByStandard[balance.standard_uuid] || 0;
+                                const count = voucherCountsByStandard[balance.standardUuid] || 0;
                                 return (
                                     <Card 
-                                        key={balance.standard_uuid}
+                                        key={balance.standardUuid}
                                         variant="default"
                                         className={`relative overflow-hidden p-6 h-48 flex flex-col justify-between group ${
                                             idx % 2 === 0 
@@ -291,7 +287,7 @@ export function Dashboard(props: DashboardProps) {
                                             : 'bg-gradient-to-br from-theme-primary to-theme-accent'
                                         }`}
                                         hover
-                                        onClick={() => props.onNavigateToWallet({ standard: balance.display_standard_name, status: 'active' })}
+                                        onClick={() => props.onNavigateToWallet({ standard: balance.displayStandardName, status: 'active' })}
                                     >
                                         {/* Decorative Circles */}
                                         <div className="absolute -right-8 -top-8 w-32 h-32 bg-white/10 rounded-full blur-2xl group-hover:bg-white/20 transition-all duration-500"></div>
@@ -300,10 +296,10 @@ export function Dashboard(props: DashboardProps) {
                                         <div className="relative z-10 flex justify-between items-start">
                                             <div className="flex flex-col">
                                                 <span className="text-[10px] font-black text-white/60 uppercase tracking-[0.15em] mb-1">
-                                                    {balance.display_standard_name}
+                                                    {balance.displayStandardName}
                                                 </span>
                                                 <h3 className="text-xl font-bold text-white leading-tight">
-                                                    {balance.display_currency}
+                                                    {balance.displayCurrency}
                                                 </h3>
                                             </div>
                                             <div className="px-2 py-1 bg-white/20 backdrop-blur-md rounded-lg border border-white/20 text-[10px] font-bold text-white">
@@ -313,7 +309,7 @@ export function Dashboard(props: DashboardProps) {
 
                                         <div className="relative z-10 flex items-baseline gap-2">
                                             <span className="text-4xl font-black text-white tracking-tighter">
-                                                {formatAmount(balance.total_amount)}
+                                                {formatAmount(balance.totalAmount)}
                                             </span>
                                         </div>
 
@@ -413,16 +409,16 @@ export function Dashboard(props: DashboardProps) {
                             const { label, icon: Icon, color, bgColor } = getEventDetails(event);
                             return (
                                 <Card 
-                                    key={event.event_id}
+                                    key={event.eventId}
                                     variant="default"
                                     className="p-4 flex items-center justify-between group"
                                     hover
                                     onClick={() => {
-                                        const type = event.event_type;
-                                        if (type === 'TransferSent' || type === 'TransferReceived') {
+                                        const type = event.eventType;
+                                        if (type === 'transferSent' || type === 'transferReceived') {
                                             props.onNavigateToHistory();
                                         } else {
-                                            props.onNavigateToVoucherDetail(event.local_instance_id);
+                                            props.onNavigateToVoucherDetail(event.localInstanceId);
                                         }
                                     }}
                                 >
@@ -433,7 +429,7 @@ export function Dashboard(props: DashboardProps) {
                                         <div>
                                             <p className="font-bold text-sm text-theme-secondary">{label}</p>
                                             <p className="text-[10px] font-bold text-theme-light uppercase tracking-widest mt-0.5">
-                                                {event.bff_data.display_currency && `${event.bff_data.amount} ${event.bff_data.display_currency}`}
+                                                {event.bffData.displayCurrency && `${event.bffData.amount} ${event.bffData.displayCurrency}`}
                                             </p>
                                         </div>
                                     </div>

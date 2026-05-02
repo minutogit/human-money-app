@@ -119,9 +119,9 @@ export function WalletView(props: WalletViewProps) {
     const getSignatureHintForVoucher = (voucher: VoucherSummary): string | null => {
         if (!userProfile || voucherStandards.length === 0) return null;
         const standard = voucherStandards.find(s => {
-            if (s.id === voucher.voucher_standard_uuid) return true;
+            if (s.id === voucher.voucherStandardUuid) return true;
             const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
-            return uuidMatch && uuidMatch[1] === voucher.voucher_standard_uuid;
+            return uuidMatch && uuidMatch[1] === voucher.voucherStandardUuid;
         });
         if (!standard) return null;
         return getMissingProfileHint(standard.content, userProfile);
@@ -167,8 +167,8 @@ export function WalletView(props: WalletViewProps) {
             });
 
             const filePath = await save({
-                defaultPath: settings?.last_used_directory 
-                    ? `${settings.last_used_directory}/signature-request-${exportId.slice(0, 8)}.ask`
+                defaultPath: settings?.lastUsedDirectory 
+                    ? `${settings.lastUsedDirectory}/signature-request-${exportId.slice(0, 8)}.ask`
                     : `signature-request-${exportId.slice(0, 8)}.ask`,
                 filters: [
                     { name: 'Signature Request (.ask)', extensions: ['ask'] },
@@ -211,14 +211,14 @@ export function WalletView(props: WalletViewProps) {
     }, {} as Record<string, number>);
 
     const standardCounts = (vouchers || []).reduce((acc, v) => {
-        if (!v || !v.display_standard_name) return acc;
-        acc[v.display_standard_name] = (acc[v.display_standard_name] || 0) + 1;
+        if (!v || !v.displayStandardName) return acc;
+        acc[v.displayStandardName] = (acc[v.displayStandardName] || 0) + 1;
         return acc;
     }, {} as Record<string, number>);
 
     const allStatusNames = ['active', 'incomplete', 'archived', 'quarantined'];
     const availableStatuses = allStatusNames.filter(s => statusCounts[s] > 0 || statusFilters.includes(s));
-    const availableStandards = Array.from(new Set((vouchers || []).map(v => v?.display_standard_name).filter(Boolean))).sort() as string[];
+    const availableStandards = Array.from(new Set((vouchers || []).map(v => v?.displayStandardName).filter(Boolean))).sort() as string[];
 
     const toggleStatusFilter = (status: string) => {
         setStatusFilters(prev => prev.includes(status) ? prev.filter(s => s !== status) : [...prev, status]);
@@ -232,7 +232,7 @@ export function WalletView(props: WalletViewProps) {
         if (!v) return false;
         const statusName = getVoucherStatus(v.status).name;
         const matchesStatus = statusFilters.length === 0 || statusFilters.includes(statusName);
-        const matchesStandard = standardFilters.length === 0 || standardFilters.includes(v.display_standard_name || "");
+        const matchesStandard = standardFilters.length === 0 || standardFilters.includes(v.displayStandardName || "");
         return matchesStatus && matchesStandard;
     });
 
@@ -346,12 +346,12 @@ export function WalletView(props: WalletViewProps) {
                 <div className="space-y-4">
                     {filteredVouchers.length > 0 ? filteredVouchers.map(v => {
                         const { name: statusName, color, bgColor, icon: StatusIcon } = getVoucherStatus(v.status);
-                        const isExpanded = expandedVoucherIds.includes(v.local_instance_id);
+                        const isExpanded = expandedVoucherIds.includes(v.localInstanceId);
                         const hint = getSignatureHintForVoucher(v);
                         
                         return (
-                            <div key={v.local_instance_id} className="relative group">
-                                {v.is_test_voucher && (
+                            <div key={v.localInstanceId} className="relative group">
+                                {v.isTestVoucher && (
                                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20 overflow-hidden rounded-3xl">
                                         <span className="text-[60px] font-black text-rose-500/10 -rotate-12 select-none uppercase tracking-[0.5em]">TEST</span>
                                     </div>
@@ -362,8 +362,8 @@ export function WalletView(props: WalletViewProps) {
                                     className={`p-0 overflow-hidden transition-all duration-500 ${isExpanded ? 'ring-2 ring-theme-primary ring-offset-4 ring-offset-bg-app' : ''}`}
                                     hover={!isExpanded}
                                     onClick={() => {
-                                        if (isExpanded) props.onShowDetails(v.local_instance_id);
-                                        else setExpandedVoucherIds(prev => [...prev, v.local_instance_id]);
+                                        if (isExpanded) props.onShowDetails(v.localInstanceId);
+                                        else setExpandedVoucherIds(prev => [...prev, v.localInstanceId]);
                                     }}
                                 >
                                     <div className="flex">
@@ -375,9 +375,9 @@ export function WalletView(props: WalletViewProps) {
                                             <div className="px-6 py-4 flex items-center justify-between border-b border-theme-subtle/30 bg-white/50">
                                                 <div className="flex items-center gap-3">
                                                     <span className="text-[10px] font-black text-theme-light uppercase tracking-widest">
-                                                        {v.display_standard_name}
+                                                        {v.displayStandardName}
                                                     </span>
-                                                    {v.is_test_voucher && (
+                                                    {v.isTestVoucher && (
                                                         <span className="text-[9px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">
                                                             Test Mode
                                                         </span>
@@ -399,14 +399,14 @@ export function WalletView(props: WalletViewProps) {
                                                 <div>
                                                     <div className="flex items-baseline gap-2">
                                                         <h3 className="text-3xl font-black text-theme-primary tracking-tighter">
-                                                            {formatAmount(v.current_amount)}
+                                                            {formatAmount(v.currentAmount)}
                                                         </h3>
                                                         <span className="text-lg font-bold text-theme-light uppercase">
-                                                            {v.display_currency}
+                                                            {v.displayCurrency}
                                                         </span>
                                                     </div>
                                                     <p className="text-xs font-bold text-theme-secondary mt-1 flex items-center gap-2">
-                                                        Issued by <span className="text-theme-primary">{v.creator_first_name} {v.creator_last_name}</span>
+                                                        Issued by <span className="text-theme-primary">{v.creatorFirstName} {v.creatorLastName}</span>
                                                     </p>
                                                 </div>
                                                 
@@ -414,7 +414,7 @@ export function WalletView(props: WalletViewProps) {
                                                     <div className="flex items-center gap-6">
                                                         <div className="text-right">
                                                             <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-1">Expires</p>
-                                                            <p className="text-xs font-bold text-theme-secondary">{formatDate(v.valid_until)}</p>
+                                                            <p className="text-xs font-bold text-theme-secondary">{formatDate(v.validUntil)}</p>
                                                         </div>
                                                         <ArrowUpRight size={20} className="text-theme-light opacity-30 group-hover:opacity-100 group-hover:translate-x-1 group-hover:-translate-y-1 transition-all" />
                                                     </div>
@@ -434,15 +434,15 @@ export function WalletView(props: WalletViewProps) {
                                                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                                                         <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
                                                             <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">Signatures</p>
-                                                            <p className="text-sm font-bold text-theme-secondary">✍️ {v.guarantor_signatures_count + v.additional_signatures_count}</p>
+                                                            <p className="text-sm font-bold text-theme-secondary">✍️ {v.signaturesCount}</p>
                                                         </div>
                                                         <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
                                                             <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">Collateral</p>
-                                                            <p className="text-sm font-bold text-theme-secondary">{v.has_collateral ? "✅ Yes" : "❌ No"}</p>
+                                                            <p className="text-sm font-bold text-theme-secondary">{v.hasCollateral ? "✅ Yes" : "❌ No"}</p>
                                                         </div>
                                                         <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
                                                             <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">Validity</p>
-                                                            <p className="text-sm font-bold text-theme-secondary">Until {formatDate(v.valid_until)}</p>
+                                                            <p className="text-sm font-bold text-theme-secondary">Until {formatDate(v.validUntil)}</p>
                                                         </div>
                                                     </div>
 
@@ -464,7 +464,7 @@ export function WalletView(props: WalletViewProps) {
                                                                     className="bg-white text-theme-accent hover:bg-white/90 shadow-lg px-6"
                                                                     onClick={(e) => {
                                                                         e.stopPropagation();
-                                                                        setExportId(v.local_instance_id);
+                                                                        setExportId(v.localInstanceId);
                                                                         setShowExportModal(true);
                                                                     }}
                                                                 >
@@ -484,7 +484,7 @@ export function WalletView(props: WalletViewProps) {
                                                     )}
                                                     
                                                     <div className="flex justify-end pt-4">
-                                                        <Button variant="outline" size="sm" onClick={() => props.onShowDetails(v.local_instance_id)}>
+                                                        <Button variant="outline" size="sm" onClick={() => props.onShowDetails(v.localInstanceId)}>
                                                             Full Details View
                                                         </Button>
                                                     </div>

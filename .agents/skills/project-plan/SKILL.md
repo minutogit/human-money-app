@@ -22,9 +22,12 @@ description: 4-phase MVP project plan for the Human Money App, from core transac
 2. **Contact Management (Address Book)** — Simple UI for contacts (Name + User-ID), stored via `save/load_encrypted_data` ✅ (APP-001, APP-015)
 3. **Guarantor Flow** — Signing request UI + detached signature response ✅ (APP-007)
 4. **Audit local_instance_id** — Ensure local-only metadata isn't leaked in JSON views or exports ✅ (APP-016)
-5. **Session Timeout UX** — Graceful handling of expired sessions in read-views (e.g. Activity Log) 🔜 (APP-017)
-6. **Voucher Details Polish** — Display description and footnote in `VoucherDetailsView.tsx` ✅ (APP-018)
-7. **Internationalization (i18n)** — `i18next` integration (German/English) 🔜
+5. **Serialization & IPC Stabilization (DTO Pattern)** — Migrated to camelCase DTOs for frontend communication while preserving snake_case in Core for cryptographic integrity ✅ (APP-019)
+6. **Wallet Cloning Protection (Host Binding)** — Anti-cloning system binding wallet state to a unique Instance ID. Enforces device handovers and prevents accidental state forks ✅ (APP-015)
+7. **Multi-Language Support** — Support for multi-language seed phrases (BIP-39) and high-security German wordlists ✅ (APP-013)
+8. **Session Timeout UX** — Graceful handling of expired sessions in read-views (e.g. Activity Log) 🔜 (APP-017)
+9. **Voucher Details Polish** — Display description and footnote in `VoucherDetailsView.tsx` ✅ (APP-018)
+10. **Internationalization (i18n)** — `i18next` integration for German/English UI 🔜
 
 ## Phase 3: Extended Functionality (Post-MVP)
 

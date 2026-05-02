@@ -1,5 +1,5 @@
 // src-tauri/src/commands/actions.rs
-use crate::{models::{FrontendNewVoucherData, FrontendUserProfile}, AppState, settings::{AppSettings, SETTINGS_KEY}};
+use crate::{models::{FrontendNewVoucherData, FrontendUserProfile, FrontendTransactionRecord, TransactionRecord}, AppState, settings::{AppSettings, SETTINGS_KEY}};
 use chrono::Utc;
 use log::{info, error}; // <--- 'debug' wieder entfernt, wir nutzen info!
 use uuid::Uuid;
@@ -11,40 +11,16 @@ use human_money_core::{
     models::voucher::Voucher,
     models::secure_container::ContainerConfig,
     services::voucher_manager::NewVoucherData,
-    services::signature_manager::SignatureImpact,
-    wallet::{MultiTransferRequest, SourceTransfer, InvolvedVoucherInfo},
+    wallet::{MultiTransferRequest, SourceTransfer},
 };
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendSourceTransfer {
     local_instance_id: String,
     amount_to_send: String,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct TransactionRecord {
-    pub id: String,
-    pub direction: String, // "sent" or "received"
-    pub recipient_id: String,
-    pub sender_id: String,
-    pub timestamp: String, // ISO 8601
-
-    // Rust-Feldnamen sind jetzt snake_case, um Warnings zu beheben.
-    #[serde(rename = "summableAmounts", alias = "total_amount_by_unit", alias = "summable_amounts", default)] // Serialisiert als camelCase, fängt alle alten Varianten ab
-    pub summable_amounts: HashMap<String, String>,
-
-    #[serde(rename = "countableItems", alias = "countable_items", default)] // Serialisiert als camelCase, fängt alle alten Varianten ab
-    pub countable_items: HashMap<String, u32>,
-    pub involved_vouchers: Vec<String>, // local_instance_ids
-    // DAS FEHLENDE FELD:
-    #[serde(rename = "involvedSourcesDetails", alias = "involved_sources_details", default)]
-    pub involved_sources_details: Option<Vec<InvolvedVoucherInfo>>, // Muss Option<> sein, da es bei "received" fehlt
-
-    pub bundle_data: Vec<u8>,
-    pub bundle_id: String,
-    pub notes: Option<String>,
-    pub sender_profile_name: Option<String>,
-}
 
 // NEU: Diese Struktur wird an das Frontend zurückgegeben, wenn der Empfang erfolgreich war.
 #[derive(Serialize, Clone)]
@@ -53,9 +29,9 @@ pub struct ReceiveSuccessPayload {
     pub sender_id: String,
     pub sender_profile_name: Option<String>,
     pub notes: Option<String>,
-    pub transfer_summary: FrontendTransferSummary, // <--- Geändert
+    pub transfer_summary: crate::models::FrontendTransferSummary, // <--- Geändert
     pub involved_vouchers: Vec<String>,
-    pub involved_vouchers_details: Vec<InvolvedVoucherInfo>,
+    pub involved_vouchers_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
     pub verifiable_conflicts: HashMap<String, Vec<human_money_core::models::conflict::TransactionFingerprint>>,
 }
 
@@ -67,7 +43,7 @@ pub struct CreateBundleResult {
     pub bundle_data: Vec<u8>,
     pub bundle_id: String,
     // NEU: Dieses Feld wird jetzt an das Frontend durchgereicht.
-    pub involved_sources_details: Vec<InvolvedVoucherInfo>,
+    pub involved_sources_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
 }
 
 #[tauri::command]
@@ -112,7 +88,7 @@ pub fn create_transfer_bundle(
             Ok(CreateBundleResult {
                 bundle_data: result.bundle_bytes, // Feld 'bundle_bytes' verwenden
                 bundle_id: result.bundle_id,     // Feld 'bundle_id' verwenden
-                involved_sources_details: result.involved_sources_details, // NEU: Details durchreichen
+                involved_sources_details: result.involved_sources_details.into_iter().map(|s| s.into()).collect(), // NEU: Details durchreichen
             })
         }
         Err(e) => Err(e),
@@ -178,11 +154,7 @@ pub fn receive_bundle(
                 sender_profile_name: sender_profile_name.clone(),
             };
 
-            // Erstelle die Frontend-kompatible TransferSummary
-            let fe_transfer_summary = FrontendTransferSummary {
-                summable_amounts: transfer_summary.summable_amounts.clone(),
-                countable_items: transfer_summary.countable_items.clone(),
-            };
+
 
             // Speichere den neuen Eintrag atomar in der Historie.
             let mut history = load_history_from_disk(&mut service, password.as_deref())?;
@@ -204,9 +176,9 @@ pub fn receive_bundle(
                 sender_id: result.header.sender_id,
                 sender_profile_name,
                 notes,
-                transfer_summary: fe_transfer_summary, // <--- Geändert
+                transfer_summary: result.transfer_summary.into(), // <--- Geändert
                 involved_vouchers: involved_vouchers_ids, // <--- KORRIGIERT
-                involved_vouchers_details, // <--- KORRIGIERT
+                involved_vouchers_details: involved_vouchers_details.into_iter().map(|d| d.into()).collect(), // <--- KORRIGIERT
                 verifiable_conflicts: result.check_result.verifiable_conflicts,
             })
         }
@@ -217,23 +189,17 @@ pub fn receive_bundle(
     }
 }
 
-// NEU: Eine lokale Struktur, die #[serde(rename_all = "camelCase")] erzwingt,
-// da die TransferSummary aus der human_money_core dies nicht garantiert.
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendTransferSummary {
-    pub summable_amounts: HashMap<String, String>,
-    pub countable_items: HashMap<String, u32>,
-}
+
 
 pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
 
 #[tauri::command]
 pub fn save_transaction_record(
-    record: TransactionRecord,
-    password: Option<String>, // <--- GEÄNDERT
+    record: FrontendTransactionRecord,
+    password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
+    let record: TransactionRecord = record.into();
     info!("Saving new transaction record with id: {}", record.id);
     let mut service = state.service.lock().unwrap();
 
@@ -290,13 +256,21 @@ pub fn load_history_from_disk(
 }
 
 #[tauri::command]
-pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<TransactionRecord>, String> {
-    info!("Getting transaction history from cache...");
-    let history_cache = state.history.lock().unwrap();
-    history_cache
-        .as_ref()
-        .cloned()
-        .ok_or_else(|| "Transaction history not available. User might be logged out or initialization failed.".to_string())
+pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<FrontendTransactionRecord>, String> {
+    info!("Loading transaction history...");
+    
+    // 1. Check if cache is empty
+    let mut history_cache = state.history.lock().unwrap();
+    if history_cache.is_none() {
+        info!("History cache empty, loading from disk...");
+        let mut service = state.service.lock().unwrap();
+        let history = load_history_from_disk(&mut service, None)?;
+        *history_cache = Some(history);
+    }
+    
+    // 2. Map from cache (now guaranteed to be Some)
+    let history = history_cache.as_ref().unwrap();
+    Ok(history.iter().map(|r| r.into()).collect())
 }
 
 #[tauri::command]
@@ -331,7 +305,7 @@ pub fn create_new_voucher(
     data: FrontendNewVoucherData,
     password: Option<String>, // <--- GEÄNDERT
     state: tauri::State<AppState>,
-) -> Result<Voucher, String> {
+) -> Result<crate::models::FrontendVoucher, String> {
     info!("Attempting to create a new voucher...");
     let mut service = state.service.lock().unwrap();
     let lang_preference = "en-US";
@@ -380,7 +354,8 @@ pub fn create_new_voucher(
         non_redeemable_test_voucher: data.non_redeemable_test_voucher,
     };
 
-    service.create_new_voucher(&standard_toml_content, lang_preference, voucher_data, password.as_deref())
+    let voucher = service.create_new_voucher(&standard_toml_content, lang_preference, voucher_data, password.as_deref())?;
+    Ok(voucher.into())
 }
 
 // ===== Multi-Signature Commands =====
@@ -404,7 +379,7 @@ pub fn open_voucher_signing_request(
     container_bytes: Vec<u8>,
     password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<human_money_core::wallet::types::VoucherDetails, String> {
+) -> Result<crate::models::FrontendVoucherDetails, String> {
     info!("Opening voucher signing request bundle...");
     let service = state.service.lock().unwrap();
     match service.open_voucher_signing_request(&container_bytes, password.as_deref()) {
@@ -416,10 +391,10 @@ pub fn open_voucher_signing_request(
             let display_standard_name = v.voucher_standard.name.clone();
             let is_test_voucher = v.non_redeemable_test_voucher;
             
-            Ok(human_money_core::wallet::types::VoucherDetails {
+            Ok(crate::models::FrontendVoucherDetails {
                 local_instance_id: format!("external-{}", v.voucher_id.chars().take(8).collect::<String>()),
-                status: human_money_core::VoucherStatus::Active, // Placeholder status
-                voucher: v,
+                status: "Active".to_string(), // Placeholder status
+                voucher: v.into(),
                 display_currency,
                 display_standard_name,
                 is_test_voucher,
@@ -497,10 +472,11 @@ pub fn evaluate_signature_suitability(
     role: String,
     standard_toml_content: String,
     state: tauri::State<AppState>,
-) -> Result<SignatureImpact, String> {
+) -> Result<crate::models::FrontendSignatureImpact, String> {
     info!("Evaluating signature suitability for role: {}", role);
     let service = state.service.lock().unwrap();
-    service.evaluate_signature_suitability(&voucher, &role, &standard_toml_content)
+    let impact = service.evaluate_signature_suitability(&voucher, &role, &standard_toml_content)?;
+    Ok(impact.into())
 }
 
 #[tauri::command]
@@ -588,10 +564,15 @@ pub fn get_seal_sync_status(state: tauri::State<AppState>) -> Result<String, Str
     let service = state.service.lock().unwrap();
     let status = service.get_seal_sync_status()?;
     // We return the debug/display string of the enum for simplicity in the frontend
-    Ok(format!("{:?}", status))
+    let status_str = match status {
+        human_money_core::models::seal::SyncStatus::PendingUpload => "PendingUpload",
+        human_money_core::models::seal::SyncStatus::Synced => "Synced",
+    };
+    Ok(status_str.to_string())
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SealUploadData {
     pub seal_bytes: Vec<u8>,
     pub seal_hash: String,
@@ -638,9 +619,9 @@ mod tests {
     fn test_create_new_voucher_ipc_parsing() {
         // Test that FrontendNewVoucherData can be parsed from JSON
         let valid_json = r#"{
-            "validity_duration": "P3Y",
-            "non_redeemable_test_voucher": true,
-            "nominal_value": {
+            "validityDuration": "P3Y",
+            "nonRedeemableTestVoucher": true,
+            "nominalValue": {
                 "amount": "100",
                 "unit": "Silver"
             },
@@ -650,19 +631,19 @@ mod tests {
                 "abbreviation": ""
             },
             "creator": {
-                "first_name": "John",
-                "last_name": "Doe",
+                "firstName": "John",
+                "lastName": "Doe",
                 "address": {
                     "street": "Test Street",
-                    "house_number": "123",
-                    "zip_code": "12345",
+                    "houseNumber": "123",
+                    "zipCode": "12345",
                     "city": "Test City",
                     "country": "Germany",
-                    "full_address": "Test Street 123, 12345 Test City, Germany"
+                    "fullAddress": "Test Street 123, 12345 Test City, Germany"
                 },
                 "gender": "1",
                 "coordinates": "51.16, 10.45",
-                "protocol_version": "1.0"
+                "protocolVersion": "1.0"
             }
         }"#;
 
@@ -683,8 +664,8 @@ mod tests {
             "recipientId": "did:key:z123",
             "sources": [
                 {
-                    "local_instance_id": "voucher1",
-                    "amount_to_send": "50.00"
+                    "localInstanceId": "voucher1",
+                    "amountToSend": "50.00"
                 }
             ],
             "notes": "Test transfer",

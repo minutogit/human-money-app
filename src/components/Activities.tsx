@@ -31,34 +31,34 @@ function formatTimestamp(isoString: string): string {
 }
 
 function getEventDetails(event: WalletEvent): { label: string; icon: any; color: string; bgColor: string } {
-    const type = event.event_type;
-    const bff = event.bff_data;
+    const type = event.eventType;
+    const bff = event.bffData;
 
     if (typeof type === 'string') {
         switch (type) {
-            case 'VoucherCreated':
+            case 'voucherCreated':
                 return { label: 'Voucher Created', icon: PlusCircle, color: 'text-blue-600', bgColor: 'bg-blue-50' };
-            case 'TransferSent':
+            case 'transferSent':
                 return { 
-                    label: `Sent to ${bff.counterparty_name || 'Anonymous'}`, 
+                    label: `Sent to ${bff.counterpartyName || 'Anonymous'}`, 
                     icon: ArrowUpRight, 
                     color: 'text-rose-600', 
                     bgColor: 'bg-rose-50' 
                 };
-            case 'TransferReceived':
+            case 'transferReceived':
                 return { 
-                    label: `Received from ${bff.counterparty_name || 'Anonymous'}`, 
+                    label: `Received from ${bff.counterpartyName || 'Anonymous'}`, 
                     icon: ArrowDownLeft, 
                     color: 'text-emerald-600', 
                     bgColor: 'bg-emerald-50' 
                 };
-            case 'VoucherQuarantined':
+            case 'voucherQuarantined':
                 return { label: 'Security Quarantine', icon: ShieldAlert, color: 'text-amber-600', bgColor: 'bg-amber-50' };
-            case 'VoucherActivated':
+            case 'voucherActivated':
                 return { label: 'Voucher Activated', icon: CheckCircle2, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
-            case 'VoucherVoided':
+            case 'voucherVoided':
                 return { label: 'Voucher Voided', icon: XCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
-            case 'VoucherExpired':
+            case 'voucherExpired':
                 return { label: 'Voucher Expired', icon: Clock, color: 'text-orange-600', bgColor: 'bg-orange-50' };
         }
     }
@@ -111,13 +111,13 @@ export function Activities({ onBack, onNavigateToVoucherDetail, onNavigateToHist
                             const { label, icon: Icon, color, bgColor } = getEventDetails(event);
                             return (
                                 <button 
-                                    key={event.event_id} 
+                                    key={event.eventId} 
                                     onClick={() => {
-                                        const type = event.event_type;
-                                        if (type === 'TransferSent' || type === 'TransferReceived') {
+                                        const type = event.eventType;
+                                        if (type === 'transferSent' || type === 'transferReceived') {
                                             onNavigateToHistory();
                                         } else {
-                                            onNavigateToVoucherDetail(event.local_instance_id);
+                                            onNavigateToVoucherDetail(event.localInstanceId);
                                         }
                                     }}
                                     className="w-full text-left group"
@@ -131,11 +131,11 @@ export function Activities({ onBack, onNavigateToVoucherDetail, onNavigateToHist
                                                 <p className="font-bold text-theme-primary truncate tracking-tight">{label}</p>
                                                 <div className="flex items-center gap-2 mt-0.5">
                                                     <span className="text-[10px] font-mono font-bold text-theme-light/60">
-                                                        #{event.local_instance_id.substring(0, 8)}
+                                                        #{event.localInstanceId.substring(0, 8)}
                                                     </span>
-                                                    {event.bff_data.display_currency && (
+                                                    {event.bffData.displayCurrency && (
                                                         <span className="text-[10px] font-black text-theme-accent uppercase tracking-widest">
-                                                            {event.bff_data.amount} {event.bff_data.display_currency}
+                                                            {event.bffData.amount} {event.bffData.displayCurrency}
                                                         </span>
                                                     )}
                                                 </div>

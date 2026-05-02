@@ -43,14 +43,14 @@ async function performSync() {
             if (uploadData) {
                 // MOCK UPLOAD PROCESS
                 // In a production app, this would be a POST request to a coordinating server.
-                logger.info(`Uploading seal to coordinator (Mock)... Hash: ${uploadData.seal_hash}`);
+                logger.info(`Uploading seal to coordinator (Mock)... Hash: ${uploadData.sealHash}`);
                 
                 // Simulate network latency
                 await new Promise(resolve => setTimeout(resolve, 1000));
                 
                 // After successful "upload", acknowledge it in the core
                 await invoke("acknowledge_seal_sync", {
-                    uploadedSealHash: uploadData.seal_hash,
+                    uploadedSealHash: uploadData.sealHash,
                     password: null // Use session key if available (handled in backend)
                 });
                 

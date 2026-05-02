@@ -39,7 +39,7 @@ describe('CreateVoucher Component', () => {
 issuer_name = "Human Money Project"
 unit = "Taler"
 abbreviation = "Taler"
-default_validity_duration = "P1Y"
+default_validityDuration = "P1Y"
 amount_decimal_places = 4`,
     },
   ];
@@ -55,8 +55,8 @@ amount_decimal_places = 4`,
       }
       if (cmd === 'get_user_profile') {
         return Promise.resolve({
-          first_name: 'John',
-          last_name: 'Doe',
+          firstName: 'John',
+          lastName: 'Doe',
           organization: 'Test Org',
           community: 'Test Community',
           gender: '1',
@@ -64,12 +64,12 @@ amount_decimal_places = 4`,
           phone: '123456789',
           url: 'https://example.com',
           coordinates: '51.16, 10.45',
-          service_offer: 'Test services',
+          serviceOffer: 'Test services',
           needs: 'Test needs',
           address: {
             street: 'Test Street',
-            house_number: '123',
-            zip_code: '12345',
+            houseNumber: '123',
+            zipCode: '12345',
             city: 'Test City',
             country: 'Germany',
           },

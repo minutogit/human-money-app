@@ -118,16 +118,16 @@ mod tests {
             "did": "did:key:z123",
             "profile": {
                 "id": "did:key:z123",
-                "first_name": "John",
-                "last_name": "Doe",
+                "firstName": "John",
+                "lastName": "Doe",
                 "organization": "Test Org",
                 "address": {
                     "street": "Test Street",
-                    "house_number": "123",
-                    "zip_code": "12345",
+                    "houseNumber": "123",
+                    "zipCode": "12345",
                     "city": "Test City",
                     "country": "Germany",
-                    "full_address": "Test Street 123, 12345 Test City, Germany"
+                    "fullAddress": "Test Street 123, 12345 Test City, Germany"
                 },
                 "gender": "1",
                 "email": "john@example.com",
@@ -136,7 +136,7 @@ mod tests {
                 "url": "https://example.com"
             },
             "tags": ["friend", "family"],
-            "added_at": "2024-01-01T00:00:00Z",
+            "addedAt": "2024-01-01T00:00:00Z",
             "notes": "Test contact"
         }"#;
 
@@ -160,11 +160,11 @@ mod tests {
             "did": "did:key:z456",
             "profile": {
                 "id": "did:key:z456",
-                "first_name": "Jane",
-                "last_name": "Smith"
+                "firstName": "Jane",
+                "lastName": "Smith"
             },
             "tags": ["colleague"],
-            "added_at": "2024-01-02T00:00:00Z"
+            "addedAt": "2024-01-02T00:00:00Z"
         }"#;
 
         let contact: FrontendContact = serde_json::from_str(contact_json).unwrap();
@@ -188,28 +188,28 @@ mod tests {
             "did": "did:key:z789",
             "profile": {
                 "id": "did:key:z789",
-                "first_name": "Alice",
-                "last_name": "Wonder",
+                "firstName": "Alice",
+                "lastName": "Wonder",
                 "organization": "Wonderland Inc",
                 "community": "Fantasy",
                 "address": {
                     "street": "Wonder Lane",
-                    "house_number": "42",
-                    "zip_code": "54321",
+                    "houseNumber": "42",
+                    "zipCode": "54321",
                     "city": "Wonder City",
                     "country": "Wonderland",
-                    "full_address": "Wonder Lane 42, 54321 Wonder City, Wonderland"
+                    "fullAddress": "Wonder Lane 42, 54321 Wonder City, Wonderland"
                 },
                 "gender": "2",
                 "email": "alice@wonderland.com",
                 "phone": "987654321",
                 "coordinates": "52.52, 13.40",
                 "url": "https://wonderland.com",
-                "service_offer": "Wonderful services",
+                "serviceOffer": "Wonderful services",
                 "needs": "Nothing"
             },
             "tags": ["vip", "friend"],
-            "added_at": "2024-01-03T00:00:00Z",
+            "addedAt": "2024-01-03T00:00:00Z",
             "notes": "VIP contact"
         }"#;
 

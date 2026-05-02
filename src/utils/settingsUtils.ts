@@ -27,10 +27,10 @@ export async function updateLastUsedDirectory(
     const newDir = getDirectoryFromPath(fullPath);
     if (!newDir) return;
 
-    if (currentSettings.last_used_directory === newDir) return;
+    if (currentSettings.lastUsedDirectory === newDir) return;
 
     try {
-        const updatedSettings = { ...currentSettings, last_used_directory: newDir };
+        const updatedSettings = { ...currentSettings, lastUsedDirectory: newDir };
         
         await protectAction(async (password) => {
             await invoke("save_app_settings", { 

@@ -54,8 +54,8 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
 
             const filePath = await save({
                 title: 'Export Transfer Bundle',
-                defaultPath: settings?.last_used_directory 
-                    ? `${settings.last_used_directory}/${suggestedFilename}`
+                defaultPath: settings?.lastUsedDirectory 
+                    ? `${settings.lastUsedDirectory}/${suggestedFilename}`
                     : suggestedFilename,
                 filters: [{
                     name: 'Transfer Bundle',

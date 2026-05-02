@@ -34,40 +34,40 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
 
     const getReportDetails = () => {
         switch (report.type) {
-            case 'MissingItems':
+            case 'missingItems':
                 return {
                     title: "Missing Items",
                     description: "Some critical wallet data items are missing from the disk. This could lead to data loss.",
                     severity: "error",
                     items: report.items
                 };
-            case 'ManipulatedItems':
+            case 'manipulatedItems':
                 return {
                     title: "Manipulated Items",
                     description: "Data items have been modified outside of this application. This is a security risk.",
                     severity: "error",
                     items: report.items
                 };
-            case 'UnknownItems':
+            case 'unknownItems':
                 return {
                     title: "Unknown Items",
                     description: "Unrecognized data items were found in your wallet directory.",
                     severity: "warning",
                     items: report.items
                 };
-            case 'IntegrityOutdated':
+            case 'integrityOutdated':
                 return {
                     title: "Outdated Integrity Record",
                     description: "The security integrity record does not match the current wallet state epoch. Possible rollback attempt.",
                     severity: "error"
                 };
-            case 'InvalidSignature':
+            case 'invalidSignature':
                 return {
                     title: "Invalid Signature",
                     description: "The security integrity record signature is invalid. The record itself might have been tampered with.",
                     severity: "error"
                 };
-            case 'MissingIntegrityRecord':
+            case 'missingIntegrityRecord':
                 return {
                     title: "Missing Integrity Record",
                     description: "Your wallet does not have a security integrity record yet. You should create one to enable protection.",

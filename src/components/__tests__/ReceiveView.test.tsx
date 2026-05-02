@@ -44,9 +44,9 @@ describe('ReceiveView Component (FreeTaler Standard)', () => {
   ];
 
   const mockSettings: AppSettings = {
-    bundle_retention_days: 30,
-    session_timeout_seconds: 300,
-    privacy_default: 'public',
+    bundleRetentionDays: 30,
+    sessionTimeoutSeconds: 300,
+    privacyDefault: 'public',
   };
 
   const mockOnBack = vi.fn();
@@ -83,6 +83,42 @@ describe('ReceiveView Component (FreeTaler Standard)', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Select File/i })).toBeInTheDocument();
+    });
+  });
+
+  it('calls receive_bundle with correct camelCase arguments when importing a transfer', async () => {
+    // 1. Mock file selection
+    (open as Mock).mockResolvedValue('/path/to/test.transfer');
+    
+    // 2. Mock file reading (empty array for simplicity)
+    const { readFile } = await import('@tauri-apps/plugin-fs');
+    (readFile as Mock).mockResolvedValue(new Uint8Array([1, 2, 3]));
+
+    render(
+      <ReceiveView onBack={mockOnBack} onReceiveSuccess={mockOnReceiveSuccess} />
+    );
+
+    // 3. Click Select File
+    const selectButton = screen.getByRole('button', { name: /Select File/i });
+    selectButton.click();
+
+    // 4. Wait for file to be "detected"
+    expect(await screen.findByText(/File Detected/i)).toBeInTheDocument();
+
+    // 5. Click Import File
+    const importButton = await screen.findByRole('button', { name: /Import File/i });
+    importButton.click();
+
+    // 6. Click Confirm in the modal
+    const confirmButton = await screen.findByRole('button', { name: /^Import$/ });
+    confirmButton.click();
+
+    // 7. Verify invoke call
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('receive_bundle', expect.objectContaining({
+        forceAcceptToleranceBundle: false,
+        bundleData: [1, 2, 3]
+      }));
     });
   });
 });

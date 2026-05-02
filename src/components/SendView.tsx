@@ -86,7 +86,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [standardIdToUuidMap, setStandardIdToUuidMap] = useState<Map<string, string>>(new Map());
     const [uuidToPrecisionMap, setUuidToPrecisionMap] = useState<Map<string, number>>(new Map());
     const [showConfirm, setShowConfirm] = useState(false);
-    const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
+    const [trustStatus, setTrustStatus] = useState<TrustStatus>("clean");
     const [privacyMode, setPrivacyMode] = useState<'public' | 'stealth' | null>(null);
     const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
     
@@ -119,7 +119,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
     useEffect(() => {
         if (recipientId.length < 10) {
-            setTrustStatus("Clean");
+            setTrustStatus("clean");
             return;
         }
 
@@ -142,7 +142,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 const allFetchedVouchers = await invoke<VoucherSummary[]>("get_voucher_summaries");
                 const activeVouchers = allFetchedVouchers.filter(v => {
                     const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
-                    return statusName === 'Active';
+                    return statusName.toLowerCase() === 'active';
                 });
 
                 const userId = await invoke<string>("get_user_id");
@@ -152,8 +152,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                     let defaultName = "";
                     if (userProfile.organization) {
                         defaultName = userProfile.organization;
-                    } else if (userProfile.first_name || userProfile.last_name) {
-                        defaultName = `${userProfile.first_name || ''} ${userProfile.last_name || ''}`.trim();
+                    } else if (userProfile.firstName || userProfile.lastName) {
+                        defaultName = `${userProfile.firstName || ''} ${userProfile.lastName || ''}`.trim();
                     } else {
                         defaultName = profileName || "";
                     }
@@ -202,8 +202,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId);
         if (!selectedStandardUuid) return [];
         return availableVouchers.filter(v => {
-            if (v.voucher_standard_uuid !== selectedStandardUuid) return false;
-            if (selectedIsTest !== null && v.is_test_voucher !== selectedIsTest) return false;
+            if (v.voucherStandardUuid !== selectedStandardUuid) return false;
+            if (selectedIsTest !== null && v.isTestVoucher !== selectedIsTest) return false;
             return true;
         });
     }, [availableVouchers, selectedStandardId, selectedIsTest, standardIdToUuidMap]);
@@ -228,7 +228,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
         let maxPossibleAmount = 0;
         filteredVouchers.forEach(v => {
-            const amt = parseFloat(v.current_amount);
+            const amt = parseFloat(v.currentAmount);
             if (!isNaN(amt)) maxPossibleAmount += amt;
         });
         
@@ -245,17 +245,17 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         const newSelection = new Map<string, string>();
         let currentTotal = 0;
 
-        const sortedVouchers = [...filteredVouchers].sort((a, b) => parseFloat(a.current_amount) - parseFloat(b.current_amount));
+        const sortedVouchers = [...filteredVouchers].sort((a, b) => parseFloat(a.currentAmount) - parseFloat(b.currentAmount));
         for (const voucher of sortedVouchers) {
-            const voucherAmount = parseFloat(voucher.current_amount);
+            const voucherAmount = parseFloat(voucher.currentAmount);
             if (currentTotal + voucherAmount <= targetAmount) {
-                newSelection.set(voucher.local_instance_id, voucher.current_amount);
+                newSelection.set(voucher.localInstanceId, voucher.currentAmount);
                 currentTotal += voucherAmount;
             } else {
                 const neededAmount = targetAmount - currentTotal;
                 // @ts-ignore
                 if (voucher.divisible) {
-                    newSelection.set(voucher.local_instance_id, neededAmount.toFixed(precision));
+                    newSelection.set(voucher.localInstanceId, neededAmount.toFixed(precision));
                     currentTotal += neededAmount;
                     break;
                 }
@@ -289,9 +289,9 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         }
 
         // Enforce precision
-        const voucher = availableVouchers.find(v => v.local_instance_id === voucherId);
+        const voucher = availableVouchers.find(v => v.localInstanceId === voucherId);
         if (voucher && !isNaN(val)) {
-            const precision = uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 4;
+            const precision = uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4;
             const parts = newAmountStr.split('.');
             if (parts.length > 1 && parts[1].length > precision) {
                 newAmountStr = parts[0] + '.' + parts[1].substring(0, precision);
@@ -321,8 +321,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         if (value.length > 0) {
             const filtered = contacts.filter(c =>
                 c.did.toLowerCase().includes(value.toLowerCase()) ||
-                (c.profile.first_name || '').toLowerCase().includes(value.toLowerCase()) ||
-                (c.profile.last_name || '').toLowerCase().includes(value.toLowerCase()) ||
+                (c.profile.firstName || '').toLowerCase().includes(value.toLowerCase()) ||
+                (c.profile.lastName || '').toLowerCase().includes(value.toLowerCase()) ||
                 (c.profile.organization || '').toLowerCase().includes(value.toLowerCase())
             );
             setSuggestions(filtered.slice(0, 5));
@@ -346,15 +346,15 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         const selectedVoucherIds = Array.from(selection.keys());
         const selectedStandards = new Set<string>();
         selectedVoucherIds.forEach(vid => {
-            const v = availableVouchers.find(av => av.local_instance_id === vid);
-            if (v) selectedStandards.add(v.voucher_standard_uuid);
+            const v = availableVouchers.find(av => av.localInstanceId === vid);
+            if (v) selectedStandards.add(v.voucherStandardUuid);
         });
         let hasPublic = false;
         let hasPrivate = false;
         selectedStandards.forEach(uuid => {
             const standard = voucherStandards.find(s => standardIdToUuidMap.get(s.id) === uuid);
             if (standard) {
-                const match = standard.content.match(/privacy_mode\s*=\s*"([^"]+)"/);
+                const match = standard.content.match(/privacyMode\s*=\s*"([^"]+)"/);
                 const mode = match ? match[1] : "Public";
                 if (mode === "Public" || mode === "public") hasPublic = true;
                 if (mode === "Stealth" || mode === "stealth" || mode === "Private" || mode === "private") hasPrivate = true;
@@ -370,8 +370,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         if (privacyRules.mode === 'Stealth') setPrivacyMode('stealth');
         else if (privacyRules.mode === 'Public') setPrivacyMode('public');
         else if (privacyRules.mode === 'Flexible' && privacyMode === null && appSettings) {
-            if (appSettings.privacy_default === 'stealth') setPrivacyMode('stealth');
-            else if (appSettings.privacy_default === 'public') setPrivacyMode('public');
+            if (appSettings.privacyDefault === 'stealth') setPrivacyMode('stealth');
+            else if (appSettings.privacyDefault === 'public') setPrivacyMode('public');
             else setPrivacyMode(null);
         }
     }, [privacyRules, privacyMode, appSettings]);
@@ -379,12 +379,12 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
     const handleManualVoucherSelect = (voucher: VoucherSummary) => {
         const newSelection = new Map(selection);
-        if (newSelection.has(voucher.local_instance_id)) {
-            newSelection.delete(voucher.local_instance_id);
+        if (newSelection.has(voucher.localInstanceId)) {
+            newSelection.delete(voucher.localInstanceId);
         } else {
-            const precision = uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 4;
-            const amount = parseFloat(voucher.current_amount);
-            newSelection.set(voucher.local_instance_id, isNaN(amount) ? voucher.current_amount : amount.toFixed(precision));
+            const precision = uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4;
+            const amount = parseFloat(voucher.currentAmount);
+            newSelection.set(voucher.localInstanceId, isNaN(amount) ? voucher.currentAmount : amount.toFixed(precision));
         }
         setSelection(newSelection);
 
@@ -408,17 +408,17 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         const countableTotals = {} as Record<string, number>;
 
         for (const [voucherId, amountStr] of selection.entries()) {
-            const voucher = availableVouchers.find(v => v.local_instance_id === voucherId);
+            const voucher = availableVouchers.find(v => v.localInstanceId === voucherId);
             if (voucher) {
                 count++;
                 const amount = parseFloat(amountStr);
                 // @ts-ignore
                 if (voucher.divisible) {
-                    if (!summableTotals[voucher.display_currency]) summableTotals[voucher.display_currency] = 0;
-                    summableTotals[voucher.display_currency] += amount;
+                    if (!summableTotals[voucher.displayCurrency]) summableTotals[voucher.displayCurrency] = 0;
+                    summableTotals[voucher.displayCurrency] += amount;
                 } else {
-                    if (!countableTotals[voucher.display_currency]) countableTotals[voucher.display_currency] = 0;
-                    countableTotals[voucher.display_currency] += 1;
+                    if (!countableTotals[voucher.displayCurrency]) countableTotals[voucher.displayCurrency] = 0;
+                    countableTotals[voucher.displayCurrency] += 1;
                 }
             }
         }
@@ -446,8 +446,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             const notesToSend = notes.trim() === "" ? null : notes.trim();
 
             const sources: SourceTransfer[] = Array.from(selection.entries()).map(([id, amount]) => ({
-                local_instance_id: id,
-                amount_to_send: amount,
+                localInstanceId: id,
+                amountToSend: amount,
             }));
             const standardDefinitionsToml: Record<string, string> = {};
             voucherStandards.forEach(standard => {
@@ -471,26 +471,26 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             const summableAmounts: Record<string, string> = {};
             Object.entries(checkoutSummary.summableTotals).forEach(([unit, total]) => {
                 // Find precision for this unit
-                const voucher = availableVouchers.find(v => v.display_currency === unit);
-                const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 2) : 2;
+                const voucher = availableVouchers.find(v => v.displayCurrency === unit);
+                const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
                 summableAmounts[unit] = total.toFixed(precision);
             });
             const countableItems: Record<string, number> = checkoutSummary.countableTotals;
 
-            const record: Omit<TransactionRecord, 'bundle_data'> & { bundle_data: number[] } = {
+            const record: Omit<TransactionRecord, 'bundleData'> & { bundleData: number[] } = {
                 id: crypto.randomUUID(),
                 direction: 'sent',
-                recipient_id: recipientId,
-                sender_id: ownUserId,
+                recipientId: recipientId,
+                senderId: ownUserId,
                 timestamp: new Date().toISOString(),
                 summableAmounts: summableAmounts,
                 countableItems: countableItems,
-                involved_vouchers: bundleResult.involvedSourcesDetails.map((d: any) => d.local_instance_id),
+                involvedVouchers: bundleResult.involvedSourcesDetails.map((d: any) => d.localInstanceId),
                 involvedSourcesDetails: bundleResult.involvedSourcesDetails,
-                bundle_data: bundleResult.bundleData,
-                bundle_id: bundleResult.bundleId,
+                bundleData: bundleResult.bundleData,
+                bundleId: bundleResult.bundleId,
                 notes: notesToSend ?? undefined,
-                sender_profile_name: senderProfileNameToSend ?? undefined,
+                senderProfileName: senderProfileNameToSend ?? undefined,
             };
 
             await protectAction(async (password) => {
@@ -498,8 +498,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             });
 
             const summableStrings = Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => {
-                const voucher = availableVouchers.find(v => v.display_currency === unit);
-                const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 2) : 2;
+                const voucher = availableVouchers.find(v => v.displayCurrency === unit);
+                const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
                 return `${formatAmount(total.toString(), precision)} ${unit}`;
             });
             const countableStrings = Object.entries(checkoutSummary.countableTotals).map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`);
@@ -564,7 +564,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                                             <button key={contact.did} type="button" onClick={() => selectContact(contact)} className="w-full flex items-center gap-4 p-4 hover:bg-theme-primary/5 text-left border-b border-theme-subtle/40 last:border-0 transition-all">
                                                                 <Avatar size={32} name={contact.did} variant="beam" />
                                                                 <div className="min-w-0">
-                                                                    <p className="text-sm font-black text-theme-secondary truncate">{(contact.profile.first_name || contact.profile.last_name) ? `${contact.profile.first_name || ''} ${contact.profile.last_name || ''}`.trim() : (contact.profile.organization || 'Anonymous')}</p>
+                                                                    <p className="text-sm font-black text-theme-secondary truncate">{(contact.profile.firstName || contact.profile.lastName) ? `${contact.profile.firstName || ''} ${contact.profile.lastName || ''}`.trim() : (contact.profile.organization || 'Anonymous')}</p>
                                                                     <p className="text-[9px] font-mono text-theme-light truncate">{contact.did}</p>
                                                                 </div>
                                                             </button>
@@ -673,17 +673,17 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                 <div className="flex flex-wrap gap-2">
                                     <button type="button" onClick={() => handleStandardSelect(null)} className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-full border-2 transition-all ${selectedStandardId === null ? 'bg-theme-primary border-theme-primary text-white shadow-md' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}>All</button>
                                     {activeAssetClasses.map(group => {
-                                        const standardId = [...standardIdToUuidMap.entries()].find(([, uuid]) => uuid === group.standard_uuid)?.[0] || group.standard_uuid;
-                                        const key = `${standardId}:${group.is_test_voucher}`;
-                                        const isSelected = selectedStandardId === standardId && selectedIsTest === group.is_test_voucher;
+                                        const standardId = [...standardIdToUuidMap.entries()].find(([, uuid]) => uuid === group.standardUuid)?.[0] || group.standardUuid;
+                                        const key = `${standardId}:${group.isTestVoucher}`;
+                                        const isSelected = selectedStandardId === standardId && selectedIsTest === group.isTestVoucher;
                                         return (
                                             <button
                                                 key={key}
                                                 type="button"
-                                                onClick={() => handleStandardSelect(standardId, group.is_test_voucher)}
-                                                className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-full border-2 transition-all ${isSelected ? (group.is_test_voucher ? 'bg-rose-500 border-rose-500 text-white shadow-md' : 'bg-theme-primary border-theme-primary text-white shadow-md') : (group.is_test_voucher ? 'border-rose-200 text-rose-400 hover:border-rose-300' : 'border-slate-100 text-slate-400 hover:border-slate-200')}`}
+                                                onClick={() => handleStandardSelect(standardId, group.isTestVoucher)}
+                                                className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-full border-2 transition-all ${isSelected ? (group.isTestVoucher ? 'bg-rose-500 border-rose-500 text-white shadow-md' : 'bg-theme-primary border-theme-primary text-white shadow-md') : (group.isTestVoucher ? 'border-rose-200 text-rose-400 hover:border-rose-300' : 'border-slate-100 text-slate-400 hover:border-slate-200')}`}
                                             >
-                                                {group.display_standard_name}
+                                                {group.displayStandardName}
                                             </button>
                                         );
                                     })}
@@ -694,7 +694,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                         <label htmlFor="target-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Target Amount</label>
                                         <div className="relative">
                                             <Input id="target-amount" value={targetAmountStr} onChange={(e) => handleTargetAmountChange(e.target.value)} type="number" placeholder="0.00" className="py-5 px-6 rounded-3xl font-black text-2xl tracking-tighter" />
-                                            <div className="absolute right-6 top-1/2 -translate-y-1/2 font-black text-theme-primary uppercase tracking-widest">{filteredVouchers[0]?.display_currency}</div>
+                                            <div className="absolute right-6 top-1/2 -translate-y-1/2 font-black text-theme-primary uppercase tracking-widest">{filteredVouchers[0]?.displayCurrency}</div>
                                         </div>
                                         <p className="text-[10px] font-bold text-theme-light italic text-center">Automatic selection will prioritize optimal ledger fragmentation.</p>
                                     </div>
@@ -708,34 +708,34 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                     
                                     <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-theme-subtle">
                                         {filteredVouchers.length > 0 ? filteredVouchers.map(v => {
-                                            const selectedAmount = selection.get(v.local_instance_id);
+                                            const selectedAmount = selection.get(v.localInstanceId);
                                             const isSelected = selectedAmount !== undefined;
                                             return (
-                                                <div key={v.local_instance_id} className={`p-4 rounded-[32px] border-2 transition-all duration-300 relative overflow-hidden group shadow-sm ${isSelected ? 'bg-theme-primary/5 border-theme-primary ring-4 ring-theme-primary/10' : 'bg-white border-slate-100 hover:border-slate-200'}`}>
+                                                <div key={v.localInstanceId} className={`p-4 rounded-[32px] border-2 transition-all duration-300 relative overflow-hidden group shadow-sm ${isSelected ? 'bg-theme-primary/5 border-theme-primary ring-4 ring-theme-primary/10' : 'bg-white border-slate-100 hover:border-slate-200'}`}>
                                                     <div className="flex justify-between items-start cursor-pointer" onClick={() => handleManualVoucherSelect(v)}>
                                                         <div>
                                                             <div className="flex items-baseline gap-2">
                                                                 <span className="text-xl font-black text-theme-secondary tracking-tight">
                                                                     {(() => {
-                                                                        const precision = uuidToPrecisionMap.get(v.voucher_standard_uuid) ?? 2;
-                                                                        return isSelected && selectedAmount !== v.current_amount ? formatAmount(selectedAmount, precision) : formatAmount(v.current_amount, precision);
+                                                                        const precision = uuidToPrecisionMap.get(v.voucherStandardUuid) ?? 2;
+                                                                        return isSelected && selectedAmount !== v.currentAmount ? formatAmount(selectedAmount, precision) : formatAmount(v.currentAmount, precision);
                                                                     })()}
                                                                 </span>
-                                                                <span className="text-[10px] font-black text-theme-primary uppercase tracking-widest">{v.display_currency}</span>
+                                                                <span className="text-[10px] font-black text-theme-primary uppercase tracking-widest">{v.displayCurrency}</span>
                                                             </div>
                                                             <div className="flex items-center gap-1.5 mt-1">
-                                                                <Avatar size={14} name={v.local_instance_id} variant="pixel" />
-                                                                <span className="text-[9px] font-bold text-theme-light uppercase tracking-widest truncate max-w-[120px]">{v.creator_first_name} {v.creator_last_name}</span>
+                                                                <Avatar size={14} name={v.localInstanceId} variant="pixel" />
+                                                                <span className="text-[9px] font-bold text-theme-light uppercase tracking-widest truncate max-w-[120px]">{v.creatorFirstName} {v.creatorLastName}</span>
                                                             </div>
                                                         </div>
                                                         <div className="text-right">
-                                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest">{v.display_standard_name}</p>
-                                                            {v.is_test_voucher && (
+                                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest">{v.displayStandardName}</p>
+                                                            {v.isTestVoucher && (
                                                                 <span className="text-[9px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">
                                                                     Test Mode
                                                                 </span>
                                                             )}
-                                                            <p className="text-[9px] font-bold text-slate-400 mt-0.5">{formatDate(v.valid_until)}</p>
+                                                            <p className="text-[9px] font-bold text-slate-400 mt-0.5">{formatDate(v.validUntil)}</p>
                                                         </div>
                                                     </div>
                                                     {isSelected && v.divisible && (
@@ -746,9 +746,9 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                                                     <Input 
                                                                         type="number" 
                                                                         value={selectedAmount} 
-                                                                        onChange={(e) => handleVoucherAmountChange(v.local_instance_id, e.target.value, v.current_amount)}
+                                                                        onChange={(e) => handleVoucherAmountChange(v.localInstanceId, e.target.value, v.currentAmount)}
                                                                         className="w-24 py-1.5 px-3 text-right font-black text-xs rounded-xl border-theme-primary/30"
-                                                                        max={v.current_amount}
+                                                                        max={v.currentAmount}
                                                                         min="0"
                                                                         step="any"
                                                                     />
@@ -785,8 +785,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                                 {checkoutSummary.count > 0 ? (
                                                     <div className="flex flex-wrap gap-x-4 gap-y-1">
                                                         {Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => {
-                                                            const voucher = availableVouchers.find(v => v.display_currency === unit);
-                                                            const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 2) : 2;
+                                                            const voucher = availableVouchers.find(v => v.displayCurrency === unit);
+                                                            const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
                                                             return (
                                                                 <span key={unit} className="flex items-baseline gap-1.5">
                                                                     {formatAmount(total.toString(), precision)}
@@ -838,8 +838,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">Net Disbursement</p>
                             <div className="flex flex-col items-center">
                                 {Object.entries(checkoutSummary.summableTotals).map(([u, t]) => {
-                                    const voucher = availableVouchers.find(v => v.display_currency === u);
-                                    const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 2) : 2;
+                                    const voucher = availableVouchers.find(v => v.displayCurrency === u);
+                                    const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
                                     return (
                                         <p key={u} className="text-3xl font-black text-theme-primary tracking-tighter">{t.toFixed(precision)} {u}</p>
                                     );
@@ -888,7 +888,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                             <Avatar size={48} name={contact.did} variant="beam" />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-black text-theme-secondary truncate uppercase group-hover:text-theme-primary">{(contact.profile.first_name || contact.profile.last_name) ? `${contact.profile.first_name || ''} ${contact.profile.last_name || ''}`.trim() : (contact.profile.organization || 'Anonymous')}</p>
+                                            <p className="text-sm font-black text-theme-secondary truncate uppercase group-hover:text-theme-primary">{(contact.profile.firstName || contact.profile.lastName) ? `${contact.profile.firstName || ''} ${contact.profile.lastName || ''}`.trim() : (contact.profile.organization || 'Anonymous')}</p>
                                             <p className="text-[9px] font-mono text-theme-light truncate opacity-60">{contact.did}</p>
                                         </div>
                                         <div className="p-2 bg-slate-50 rounded-xl text-slate-300 group-hover:text-theme-primary group-hover:bg-theme-primary/10 transition-all"><ArrowRight size={16}/></div>

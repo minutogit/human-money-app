@@ -17,24 +17,24 @@ export type MnemonicLanguage =
 // --- Basis-Strukturen ---
 
 export interface ProfileInfo {
-    profile_name: string;
-    folder_name: string;
-    last_used?: string; // ISO 8601 timestamp
+    profileName: string;
+    folderName: string;
+    lastUsed?: string; // ISO 8601 timestamp
 }
 
 export interface Address {
     street?: string;
-    house_number?: string;
-    zip_code?: string;
+    houseNumber?: string;
+    zipCode?: string;
     city?: string;
     country?: string;
-    full_address?: string;
+    fullAddress?: string;
 }
 
 export interface PublicProfile {
     id: string;
-    first_name?: string;
-    last_name?: string;
+    firstName?: string;
+    lastName?: string;
     organization?: string;
     community?: string;
     address?: Address;
@@ -43,23 +43,23 @@ export interface PublicProfile {
     phone?: string;
     coordinates?: string;
     url?: string;
-    service_offer?: string;
+    serviceOffer?: string;
     needs?: string;
-    picture_url?: string;
+    pictureUrl?: string;
 }
 
 export interface Contact {
     did: string;
     profile: PublicProfile;
     tags: string[];
-    added_at: string;
+    addedAt: string;
     notes?: string;
 }
 
 // Struktur für das Erstellen neuer Gutscheine (CreateVoucher.tsx)
 export interface CreatorData {
-    first_name: string;
-    last_name: string;
+    firstName: string;
+    lastName: string;
     address: Address;
     organization?: string;
     community?: string;
@@ -67,57 +67,57 @@ export interface CreatorData {
     email?: string;
     url?: string;
     gender: string;
-    service_offer?: string;
+    serviceOffer?: string;
     needs?: string;
     coordinates: string;
-    picture_url?: string;
+    pictureUrl?: string;
 }
 
 export interface AggregatedBalance {
-    standard_name: string;
-    standard_uuid: string;
+    standardName: string;
+    standardUuid: string;
     unit: string;
-    total_amount: string;
-    display_currency: string;
-    display_standard_name: string;
-    is_test_voucher: boolean;
+    totalAmount: string;
+    displayCurrency: string;
+    displayStandardName: string;
+    isTestVoucher: boolean;
 }
 
 // --- Voucher Strukturen ---
 
 export type VoucherStatus = 
-    | "Active" 
-    | "Archived" 
-    | { Incomplete: { reasons: ValidationFailureReason[] } } 
-    | { Quarantined: { reason: string } }
-    | { Endorsed: { role: string } };
+    | "active" 
+    | "archived" 
+    | "incomplete"
+    | "quarantined"
+    | "endorsed"
+    | "expired";
 
 export interface ValidationFailureReason {
     BusinessRule?: { message: string };
     AdditionalSignatureCountLow?: { required: number; current: number };
-    RequiredSignatureMissing?: { role_description: string };
+    RequiredSignatureMissing?: { roleDescription: string };
 }
 
 export interface VoucherSummary {
-    local_instance_id: string;
+    localInstanceId: string;
     status: VoucherStatus;
-    valid_until: string;
-    creator_id: string;
+    validUntil: string;
+    creatorId: string;
     description: string;
-    current_amount: string;
+    currentAmount: string;
     unit: string;
-    raw_standard_name: string;
-    voucher_standard_uuid: string;
-    transaction_count: number;
-    guarantor_signatures_count: number;
-    additional_signatures_count: number;
-    has_collateral: boolean;
-    creator_first_name?: string;
-    creator_last_name?: string;
-    creator_coordinates?: string;
-    is_test_voucher: boolean;
-    display_currency: string;
-    display_standard_name: string;
+    rawStandardName: string;
+    voucherStandardUuid: string;
+    transactionCount: number;
+    signaturesCount: number; // In core it was changed to signaturesCount (from guarantor_signaturesCount + additional_signaturesCount)
+    hasCollateral: boolean;
+    creatorFirstName?: string;
+    creatorLastName?: string;
+    creatorCoordinates?: string;
+    isTestVoucher: boolean;
+    displayCurrency: string;
+    displayStandardName: string;
     // Client-side enrichment
     divisible?: boolean;
 }
@@ -129,17 +129,17 @@ export interface VoucherStandardInfo {
 
 export interface VoucherTemplateData {
     description: string;
-    primary_redemption_type?: string;
+    primaryRedemptionType?: string;
     divisible: boolean;
-    standard_minimum_issuance_validity?: string;
-    signature_requirements_description?: string;
+    standardMinimumIssuanceValidity?: string;
+    signatureRequirementsDescription?: string;
     footnote?: string;
 }
 
 export interface VoucherStandardData {
     name: string;
     uuid: string;
-    standard_definition_hash: string;
+    standardDefinitionHash: string;
     template: VoucherTemplateData;
 }
 
@@ -153,32 +153,32 @@ export interface NominalValueData {
 export interface CollateralData {
     unit: string;
     amount: string;
-    abbreviation?: string; // Optional gemacht um Konflikte zu vermeiden
+    abbreviation?: string;
     type?: string;
-    redeem_condition?: string;
+    redeemCondition?: string;
 }
 
 export interface AssetClassSummary {
-    standard_uuid: string;
-    is_test_voucher: boolean;
-    display_standard_name: string;
-    display_currency: string;
+    standardUuid: string;
+    isTestVoucher: boolean;
+    displayStandardName: string;
+    displayCurrency: string;
 }
 
 export interface VoucherSignature {
-    voucher_id: string;
-    signature_id: string;
-    signer_id: string;
+    voucherId: string;
+    signatureId: string;
+    signerId: string;
     signature: string;
-    signature_time: string;
+    signatureTime: string;
     role: string;
     details?: PublicProfile;
 }
 
 export interface NewVoucherData {
-    validity_duration: string | null;
-    non_redeemable_test_voucher: boolean;
-    nominal_value: {
+    validityDuration: string | null;
+    nonRedeemableTestVoucher: boolean;
+    nominalValue: {
         amount: string;
         unit: string;
     };
@@ -188,31 +188,31 @@ export interface NewVoucherData {
 
 
 export interface TransactionHistoryEntry {
-    t_id: string;
-    t_type: string;
-    t_time: string;
-    sender_id: string;
-    recipient_id: string;
+    tId: string;
+    tType: string;
+    tTime: string;
+    senderId: string;
+    recipientId: string;
     amount: string;
 }
 
 export interface VoucherDetails {
-    local_instance_id: string;
+    localInstanceId: string;
     status: VoucherStatus;
     voucher: Voucher;
-    display_currency: string;
-    display_standard_name: string;
-    is_test_voucher: boolean;
+    displayCurrency: string;
+    displayStandardName: string;
+    isTestVoucher: boolean;
 }
 
 export interface Voucher {
-    voucher_standard: VoucherStandardData;
-    voucher_id: string;
-    voucher_nonce: string;
-    creation_date: string;
-    valid_until?: string;
-    non_redeemable_test_voucher: boolean;
-    nominal_value: NominalValueData;
+    voucherStandard: VoucherStandardData;
+    voucherId: string;
+    voucherNonce: string;
+    creationDate: string;
+    validUntil?: string;
+    nonRedeemableTestVoucher: boolean;
+    nominalValue: NominalValueData;
     collateral?: CollateralData;
     creator: PublicProfile;
     signatures: VoucherSignature[];
@@ -222,19 +222,19 @@ export interface Voucher {
 // --- Transaktion & Transfer Strukturen ---
 
 export interface InvolvedVoucherInfo {
-    local_instance_id: string;
-    voucher_id?: string;
-    standard_name: string;
+    localInstanceId: string;
+    voucherId: string;
+    standardName: string;
     amount: string;
     unit: string;
-    is_test_voucher: boolean;
-    display_currency: string;
-    display_standard_name: string;
+    isTestVoucher: boolean;
+    displayCurrency: string;
+    displayStandardName: string;
 }
 
 export interface SourceTransfer {
-    local_instance_id: string;
-    amount_to_send: string;
+    localInstanceId: string;
+    amountToSend: string;
 }
 
 export interface MultiTransferRequest {
@@ -243,24 +243,46 @@ export interface MultiTransferRequest {
     notes?: string | null;
     senderProfileName?: string | null;
     standardDefinitionsToml: Record<string, string>;
-    use_privacy_mode?: boolean | null;
+    usePrivacyMode?: boolean | null;
+    password?: string | null;
+}
+
+// --- Tauri Command Argument Interfaces ---
+
+export interface ReceiveBundleArgs {
+    bundleData: number[];
+    standardDefinitionsToml: Record<string, string>;
+    password?: string | null;
+    forceAcceptToleranceBundle: boolean;
+}
+
+export interface OpenVoucherSigningRequestArgs {
+    containerBytes: number[];
+    password?: string | null;
+}
+
+export interface ProcessAndAttachSignatureArgs {
+    containerBytes: number[];
+    standardTomlContent: string;
+    containerPassword?: string | null;
+    walletPassword?: string | null;
 }
 
 export interface TransactionRecord {
     id: string;
     direction: 'sent' | 'received';
-    recipient_id?: string;
-    sender_id?: string;
+    recipientId?: string;
+    senderId?: string;
     timestamp: string;
     summableAmounts: Record<string, string>;
     countableItems: Record<string, number>;
-    involved_vouchers: string[];
+    involvedVouchers: string[];
 
     // Optionale Felder für detaillierte Records
-    bundle_data?: number[];
-    bundle_id?: string;
+    bundleData?: number[];
+    bundleId?: string;
     notes?: string;
-    sender_profile_name?: string;
+    senderProfileName?: string;
     involvedSourcesDetails?: InvolvedVoucherInfo[];
 }
 
@@ -282,57 +304,57 @@ export interface ReceiveSuccessPayload {
 }
 
 export interface TransactionFingerprint {
-    ds_tag: string;
+    dsTag: string;
     u: string;
-    blinded_id: string;
-    t_id: string;
-    encrypted_timestamp: string; // u128 usually serializes to string
-    layer2_signature: string;
-    deletable_at: string;
+    blindedId: string;
+    tId: string;
+    encryptedTimestamp: string; // u128 usually serializes to string
+    layer2Signature: string;
+    deletableAt: string;
 }
 
-export type ConflictRole = "Victim" | "Witness";
-export type TrustStatus = "Clean" | { KnownOffender: string } | { Resolved: [string, boolean] };
+export type ConflictRole = "victim" | "witness";
+export type TrustStatus = "clean" | { knownOffender: string } | { resolved: [string, boolean] };
 
 export interface ProofOfDoubleSpendSummary {
-    proof_id: string;
-    offender_id: string;
-    fork_point_prev_hash: string;
-    report_timestamp: string;
-    is_resolved: boolean;
-    has_l2_verdict: boolean;
-    local_override: boolean;
-    conflict_role: ConflictRole;
-    affected_voucher_name?: string;
-    voucher_standard_uuid?: string;
-    local_note?: string;
-    is_test_voucher: boolean;
+    proofId: string;
+    offenderId: string;
+    forkPointPrevHash: string;
+    reportTimestamp: string;
+    isResolved: boolean;
+    hasL2Verdict: boolean;
+    localOverride: boolean;
+    conflictRole: ConflictRole;
+    affectedVoucherName?: string;
+    voucherStandardUuid?: string;
+    localNote?: string;
+    isTestVoucher: boolean;
 }
 
 export interface ProofOfDoubleSpend {
-    proof_id: string;
-    offender_id: string;
-    fork_point_prev_hash: string;
-    conflicting_transactions: TransactionHistoryEntry[];
-    deletable_at: string;
-    reporter_id: string;
-    report_timestamp: string;
-    reporter_signature: string;
+    proofId: string;
+    offenderId: string;
+    forkPointPrevHash: string;
+    conflictingTransactions: TransactionHistoryEntry[];
+    deletableAt: string;
+    reporterId: string;
+    reportTimestamp: string;
+    reporterSignature: string;
     resolutions?: ResolutionEndorsement[];
-    layer2_verdict?: any;
-    affected_voucher_name?: string;
-    voucher_standard_uuid?: string;
-    is_resolved?: boolean;
-    non_redeemable_test_voucher: boolean;
+    layer2Verdict?: any;
+    affectedVoucherName?: string;
+    voucherStandardUuid?: string;
+    isResolved?: boolean;
+    nonRedeemableTestVoucher: boolean;
 }
 
 export interface ResolutionEndorsement {
-    endorsement_id: string;
-    proof_id: string;
-    victim_id: string;
-    resolution_timestamp: string;
+    endorsementId: string;
+    proofId: string;
+    victimId: string;
+    resolutionTimestamp: string;
     notes?: string;
-    victim_signature: string;
+    victimSignature: string;
 }
 
 export type PrivacyDefault = 'ask' | 'stealth' | 'public';
@@ -340,64 +362,64 @@ export type PrivacyDefault = 'ask' | 'stealth' | 'public';
 export type SealSyncStatus = 'Synced' | 'PendingUpload';
 
 export interface SealUploadData {
-    seal_bytes: number[];
-    seal_hash: string;
+    sealBytes: number[];
+    sealHash: string;
 }
 
 export interface AppSettings {
-    bundle_retention_days: number;
-    session_timeout_seconds: number;
-    last_used_directory?: string;
-    privacy_default: PrivacyDefault;
+    bundleRetentionDays: number;
+    sessionTimeoutSeconds: number;
+    lastUsedDirectory?: string;
+    privacyDefault: PrivacyDefault;
 }
 
 export interface SignatureImpact {
-    is_allowed_role: boolean;
-    fatal_conflicts: string[];
-    resolved_rules: string[];
-    gentle_hints: string[];
+    isAllowedRole: boolean;
+    fatalConflicts: string[];
+    resolvedRules: string[];
+    gentleHints: string[];
 }
 export interface FullProofDetails {
     proof: ProofOfDoubleSpend;
-    local_override: boolean;
-    conflict_role: ConflictRole;
-    local_note?: string;
+    localOverride: boolean;
+    conflictRole: ConflictRole;
+    localNote?: string;
 }
 
 export type IntegrityReport =
-    | { type: "Valid" }
-    | { type: "MissingItems", items: string[] }
-    | { type: "ManipulatedItems", items: string[] }
-    | { type: "UnknownItems", items: string[] }
-    | { type: "IntegrityOutdated" }
-    | { type: "InvalidSignature" }
-    | { type: "MissingIntegrityRecord" };
+    | { type: "valid" }
+    | { type: "missingItems", items: string[] }
+    | { type: "manipulatedItems", items: string[] }
+    | { type: "unknownItems", items: string[] }
+    | { type: "integrityOutdated" }
+    | { type: "invalidSignature" }
+    | { type: "missingIntegrityRecord" };
 
 // --- Event Log / Activity History ---
 
 export type WalletEventType =
-    | "VoucherCreated"
-    | "TransferSent"
-    | "TransferReceived"
-    | "VoucherQuarantined"
-    | "VoucherActivated"
-    | "VoucherVoided"
-    | "VoucherExpired"
-    | { Unknown: string };
+    | "voucherCreated"
+    | "transferSent"
+    | "transferReceived"
+    | "voucherQuarantined"
+    | "voucherActivated"
+    | "voucherVoided"
+    | "voucherExpired"
+    | { unknown: string };
 
 export interface EventBffData {
-    display_currency: string;
+    displayCurrency: string;
     amount: string;
-    is_test_voucher: boolean;
-    counterparty_id?: string;
-    counterparty_name?: string;
+    isTestVoucher: boolean;
+    counterpartyId?: string;
+    counterpartyName?: string;
 }
 
 export interface WalletEvent {
-    event_id: string;
-    local_instance_id: string;
-    voucher_id: string;
+    eventId: string;
+    localInstanceId: string;
+    voucherId: string;
     timestamp: string; // ISO 8601
-    event_type: WalletEventType;
-    bff_data: EventBffData;
+    eventType: WalletEventType;
+    bffData: EventBffData;
 }

@@ -1,27 +1,25 @@
-use crate::{AppState, models::{FrontendUserProfile, FrontendAddressData}};
-use human_money_core::{
-    wallet::{AggregatedBalance, VoucherSummary, VoucherDetails, ProofOfDoubleSpendSummary, types::AssetClassSummary},
-};
+use crate::AppState;
 
 #[tauri::command]
-pub fn get_active_asset_classes(state: tauri::State<AppState>) -> Result<Vec<AssetClassSummary>, String> {
+pub fn get_active_asset_classes(state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendAssetClassSummary>, String> {
     let service = state.service.lock().unwrap();
-    service.get_active_asset_classes()
+    let asset_classes = service.get_active_asset_classes()?;
+    Ok(asset_classes.into_iter().map(|s| s.into()).collect())
 }
 
 #[tauri::command]
-pub fn get_user_profile(state: tauri::State<AppState>) -> Result<FrontendUserProfile, String> {
+pub fn get_user_profile(state: tauri::State<AppState>) -> Result<crate::models::FrontendUserProfile, String> {
     let service = state.service.lock().unwrap();
     let profile = service.get_public_profile()?;
     
-    Ok(FrontendUserProfile {
+    Ok(crate::models::FrontendUserProfile {
         protocol_version: profile.protocol_version,
         id: profile.id,
         first_name: profile.first_name,
         last_name: profile.last_name,
         organization: profile.organization,
         community: profile.community,
-        address: profile.address.map(|a| FrontendAddressData {
+        address: profile.address.map(|a| crate::models::FrontendAddressData {
             street: a.street,
             house_number: a.house_number,
             zip_code: a.zip_code,
@@ -48,22 +46,25 @@ pub fn get_user_id(state: tauri::State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<Vec<AggregatedBalance>, String> {
+pub fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendAggregatedBalance>, String> {
     let service = state.service.lock().unwrap();
-    service.get_total_balance_by_currency()
+    let balances = service.get_total_balance_by_currency()?;
+    Ok(balances.into_iter().map(|b| b.into()).collect())
 }
 
 #[tauri::command]
-pub fn get_voucher_summaries(test_filter: Option<bool>, state: tauri::State<AppState>) -> Result<Vec<VoucherSummary>, String> {
+pub fn get_voucher_summaries(test_filter: Option<bool>, state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendVoucherSummary>, String> {
     let service = state.service.lock().unwrap();
     // Use the optional test_filter provided by the frontend.
-    service.get_voucher_summaries(None, None, test_filter)
+    let summaries = service.get_voucher_summaries(None, None, test_filter)?;
+    Ok(summaries.into_iter().map(|s| s.into()).collect())
 }
 
 #[tauri::command]
-pub fn get_voucher_details(local_id: String, state: tauri::State<AppState>) -> Result<VoucherDetails, String> {
+pub fn get_voucher_details(local_id: String, state: tauri::State<AppState>) -> Result<crate::models::FrontendVoucherDetails, String> {
     let service = state.service.lock().unwrap();
-    service.get_voucher_details(&local_id)
+    let details = service.get_voucher_details(&local_id)?;
+    Ok(details.into())
 }
 
 #[tauri::command]
@@ -73,9 +74,10 @@ pub fn get_voucher_source_sender(local_id: String, state: tauri::State<AppState>
 }
 
 #[tauri::command]
-pub fn get_double_spend_conflicts(state: tauri::State<AppState>) -> Result<Vec<ProofOfDoubleSpendSummary>, String> {
+pub fn get_double_spend_conflicts(state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendProofOfDoubleSpendSummary>, String> {
     let service = state.service.lock().unwrap();
-    service.list_conflicts()
+    let conflicts = service.list_conflicts()?;
+    Ok(conflicts.into_iter().map(|s| s.into()).collect())
 }
 
 #[tauri::command]
@@ -87,11 +89,16 @@ pub fn get_proof_of_double_spend(proof_id: String, state: tauri::State<AppState>
     
     let proof = service.get_proof_of_double_spend(&proof_id)?;
     
+    let conflict_role = match summary.conflict_role {
+        human_money_core::models::conflict::ConflictRole::Victim => "Victim",
+        human_money_core::models::conflict::ConflictRole::Witness => "Witness",
+    };
+    
     Ok(crate::models::FullProofDetails {
-        proof,
+        proof: proof.into(),
         local_override: summary.local_override,
         local_note: summary.local_note,
-        conflict_role: summary.conflict_role,
+        conflict_role: conflict_role.to_string(),
     })
 }
 
@@ -174,17 +181,19 @@ pub fn get_proof_id_for_voucher(local_id: String, state: tauri::State<AppState>)
 pub fn check_reputation(
     offender_id: String,
     state: tauri::State<AppState>,
-) -> Result<human_money_core::models::conflict::TrustStatus, String> {
+) -> Result<crate::models::FrontendTrustStatus, String> {
     log::info!("Checking reputation for offender: {}", offender_id);
     let service = state.service.lock().unwrap();
-    service.check_reputation(&offender_id)
+    let status = service.check_reputation(&offender_id)?;
+    Ok(status.into())
 }
 #[tauri::command]
 pub fn get_event_history(
     offset: usize,
     limit: usize,
     state: tauri::State<AppState>,
-) -> Result<Vec<human_money_core::models::wallet_event::WalletEvent>, String> {
+) -> Result<Vec<crate::models::FrontendWalletEvent>, String> {
     let mut service = state.service.lock().unwrap();
-    service.get_event_history(offset, limit, None)
+    let events = service.get_event_history(offset, limit, None)?;
+    Ok(events.into_iter().map(|e| e.into()).collect())
 }

@@ -27,7 +27,7 @@ vi.mock('../ContactDialog', () => ({
     if (!isOpen) return null;
     return (
       <div data-testid="contact-dialog">
-        <button onClick={() => onSave({ did: 'did:key:z789', profile: { id: 'did:key:z789', first_name: 'New', last_name: 'Contact' }, tags: [], added_at: '2024-01-03' })}>Save</button>
+        <button onClick={() => onSave({ did: 'did:key:z789', profile: { id: 'did:key:z789', firstName: 'New', lastName: 'Contact' }, tags: [], addedAt: '2024-01-03' })}>Save</button>
         <button onClick={onClose}>Cancel</button>
       </div>
     );
@@ -42,21 +42,21 @@ describe('AddressBook Component', () => {
       did: 'did:key:z123',
       profile: {
         id: 'did:key:z123',
-        first_name: 'John',
-        last_name: 'Doe',
+        firstName: 'John',
+        lastName: 'Doe',
       },
       tags: ['friend'],
-      added_at: '2024-01-01',
+      addedAt: '2024-01-01',
     },
     {
       did: 'did:key:z456',
       profile: {
         id: 'did:key:z456',
-        first_name: 'Jane',
-        last_name: 'Smith',
+        firstName: 'Jane',
+        lastName: 'Smith',
       },
       tags: ['colleague'],
-      added_at: '2024-01-02',
+      addedAt: '2024-01-02',
     },
   ];
 

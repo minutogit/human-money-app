@@ -51,6 +51,16 @@ To ensure successful builds on GitHub:
 5.  **Core State:** Ensure the `master` branch of `human-money-core` is up-to-date before pushing the app tag.
 6.  **Tauri Version Synchronization:** Tauri 2 requires the Rust `tauri` crate and NPM `@tauri-apps/api`/`@tauri-apps/cli` packages to be on the same major/minor version. Always keep these synchronized in `package.json` and `src-tauri/Cargo.toml`. Run `npm run check-versions` to verify synchronization. This check is automatically included in `run-tests.sh`.
 
+## IPC Communication & DTO Pattern
+
+To keep the architecture clean and avoid polluting `human_money_core` with frontend-specific formatting, strictly apply the **DTO (Data Transfer Object)** pattern:
+
+- **Pure Core Library:** `human_money_core` provides and expects data in Rust-native `snake_case`. NEVER modify the core library for UI purposes.
+- **Backend DTOs:** Create specific data structures in the Tauri bridge (`src-tauri/src/models.rs`) for data exchange with the frontend (e.g., `FrontendVoucherSummary`, `FrontendTransferSummary`).
+- **camelCase Serialization:** Use `#[serde(rename_all = "camelCase")]` ONLY on these Tauri DTOs to satisfy Tauri v2/TypeScript conventions.
+- **Mapping in Commands:** Tauri commands (in `src-tauri/src/commands/...`) act as translators. Convert Core structs into Frontend DTOs before returning them (ideally by implementing the `From` trait, e.g., `impl From<VoucherSummary> for FrontendVoucherSummary`). Apply the same logic in reverse for data sent from the frontend.
+- **TypeScript Interfaces:** Frontend interfaces (`src/types.ts`) must exactly match the `camelCase` structure of the backend DTOs.
+
 ## Project Structure
 
 ```

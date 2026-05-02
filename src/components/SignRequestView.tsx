@@ -54,7 +54,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
 
                 const matchingStandard = standards.find((s: VoucherStandardInfo) => {
                     const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
-                    return uuidMatch && uuidMatch[1] === voucherData.voucher.voucher_standard.uuid;
+                    return uuidMatch && uuidMatch[1] === voucherData.voucher.voucherStandard.uuid;
                 });
 
                 if (matchingStandard) {
@@ -70,7 +70,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
             }
         }
         fetchData();
-    }, [voucherData.voucher.voucher_standard.uuid]);
+    }, [voucherData.voucher.voucherStandard.uuid]);
 
     useEffect(() => {
         if (!selectedRole || !standardContent) {
@@ -119,9 +119,9 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
             if (!bundleBytes) return;
 
             const filePath = await save({
-                defaultPath: settings?.last_used_directory
-                    ? `${settings.last_used_directory}/signature-${voucherData.voucher.voucher_id.slice(0, 8)}.sig`
-                    : `signature-${voucherData.voucher.voucher_id.slice(0, 8)}.sig`,
+                defaultPath: settings?.lastUsedDirectory
+                    ? `${settings.lastUsedDirectory}/signature-${voucherData.voucher.voucherId.slice(0, 8)}.sig`
+                    : `signature-${voucherData.voucher.voucherId.slice(0, 8)}.sig`,
                 filters: [
                     { name: 'Signature Response (.sig)', extensions: ['sig'] },
                     { name: 'All Files', extensions: ['*'] }
@@ -180,22 +180,22 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                     <div className="bg-emerald-500 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest">Valid Asset</div>
                                 </div>
                                 <p className="text-2xl font-black text-theme-primary tracking-tight">
-                                    {voucherData.voucher.nominal_value.amount} <span className="text-theme-secondary opacity-60 font-medium">{voucherData.display_currency}</span>
+                                    {voucherData.voucher.nominalValue.amount} <span className="text-theme-secondary opacity-60 font-medium">{voucherData.displayCurrency}</span>
                                 </p>
                             </div>
                             
                             <div className="space-y-3 px-1">
                                 <div className="flex items-center justify-between text-xs font-medium">
                                     <span className="text-theme-light flex items-center gap-1.5"><ShieldCheck size={14}/> Standard</span>
-                                    <span className="text-theme-secondary font-bold">{voucherData.display_standard_name}</span>
+                                    <span className="text-theme-secondary font-bold">{voucherData.displayStandardName}</span>
                                 </div>
                                 <div className="flex items-center justify-between text-xs font-medium">
                                     <span className="text-theme-light flex items-center gap-1.5"><User size={14}/> Creator</span>
-                                    <span className="text-theme-secondary font-bold">{voucherData.voucher.creator.first_name} {voucherData.voucher.creator.last_name}</span>
+                                    <span className="text-theme-secondary font-bold">{voucherData.voucher.creator.firstName} {voucherData.voucher.creator.lastName}</span>
                                 </div>
                                 <div className="flex items-center justify-between text-xs font-medium">
                                     <span className="text-theme-light flex items-center gap-1.5"><Calendar size={14}/> Created</span>
-                                    <span className="text-theme-secondary font-bold">{formatDateTime(voucherData.voucher.creation_date)}</span>
+                                    <span className="text-theme-secondary font-bold">{formatDateTime(voucherData.voucher.creationDate)}</span>
                                 </div>
                             </div>
                         </div>
@@ -266,20 +266,20 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                             </div>
                         ) : impact ? (
                             <div className="space-y-4">
-                                {!impact.is_allowed_role && (
+                                {!impact.isAllowedRole && (
                                     <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-start gap-3">
                                         <XCircle size={20} className="text-rose-500 shrink-0" />
                                         <p className="text-sm font-bold text-rose-800">Standard Violation: The specified role is not authorized for this asset.</p>
                                     </div>
                                 )}
                                 
-                                {impact.fatal_conflicts.length > 0 && (
+                                {impact.fatalConflicts.length > 0 && (
                                     <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl space-y-2">
                                         <div className="flex items-center gap-2 text-rose-600 font-black text-[10px] uppercase tracking-widest">
                                             <ShieldAlert size={14} /> Profile Conflicts
                                         </div>
                                         <ul className="space-y-1.5">
-                                            {impact.fatal_conflicts.map((conflict, i) => (
+                                            {impact.fatalConflicts.map((conflict, i) => (
                                                 <li key={i} className="text-sm font-bold text-rose-800 flex items-start gap-2">
                                                     <span className="text-rose-400 mt-1.5 flex-shrink-0 w-1 h-1 bg-rose-400 rounded-full"></span>
                                                     {conflict}
@@ -289,13 +289,13 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                     </div>
                                 )}
 
-                                {impact.resolved_rules.length > 0 && (
+                                {impact.resolvedRules.length > 0 && (
                                     <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl space-y-2">
                                         <div className="flex items-center gap-2 text-emerald-600 font-black text-[10px] uppercase tracking-widest">
                                             <CheckCircle2 size={14} /> Rules Fulfilled
                                         </div>
                                         <ul className="space-y-1.5">
-                                            {impact.resolved_rules.map((rule, i) => (
+                                            {impact.resolvedRules.map((rule, i) => (
                                                 <li key={i} className="text-sm font-bold text-emerald-800 flex items-start gap-2">
                                                     <span className="text-emerald-400 mt-1.5 flex-shrink-0 w-1 h-1 bg-emerald-400 rounded-full"></span>
                                                     {rule}
@@ -305,9 +305,9 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                     </div>
                                 )}
 
-                                {impact.gentle_hints.length > 0 && impact.fatal_conflicts.length === 0 && (
+                                {impact.gentleHints.length > 0 && impact.fatalConflicts.length === 0 && (
                                     <div className="space-y-2">
-                                        {impact.gentle_hints.map((hint, i) => (
+                                        {impact.gentleHints.map((hint, i) => (
                                             <div key={i} className="p-4 bg-blue-50/50 border border-blue-100 rounded-2xl flex items-start gap-3">
                                                 <Lightbulb size={20} className="text-blue-500 shrink-0" />
                                                 <p className="text-sm font-bold text-blue-800">{hint}</p>
@@ -316,7 +316,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                     </div>
                                 )}
 
-                                {impact.is_allowed_role && impact.fatal_conflicts.length === 0 && impact.resolved_rules.length === 0 && impact.gentle_hints.length === 0 && (
+                                {impact.isAllowedRole && impact.fatalConflicts.length === 0 && impact.resolvedRules.length === 0 && impact.gentleHints.length === 0 && (
                                     <div className="p-4 bg-gray-50 border border-gray-100 rounded-2xl flex items-start gap-3">
                                         <Info size={20} className="text-gray-400 shrink-0" />
                                         <p className="text-sm font-bold text-gray-600">This signature is valid but does not resolve any outstanding cryptographic rules.</p>
@@ -339,7 +339,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     <Button
                         size="lg"
                         onClick={handleSign}
-                        disabled={!selectedRole || isSigning || (impact !== null && (!impact.is_allowed_role || impact.fatal_conflicts.length > 0))}
+                        disabled={!selectedRole || isSigning || (impact !== null && (!impact.isAllowedRole || impact.fatalConflicts.length > 0))}
                         className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3 disabled:opacity-30 disabled:grayscale transition-all"
                     >
                         {isSigning ? <ShieldCheck className="animate-pulse" size={24} /> : <PenTool size={24} />}

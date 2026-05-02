@@ -125,8 +125,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                         <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Bundle Retention (Days)</label>
                                         <Input
                                             type="number"
-                                            value={settings?.bundle_retention_days ?? 30}
-                                            onChange={(e) => setSettings(s => s ? { ...s, bundle_retention_days: parseInt(e.target.value, 10) } : null)}
+                                            value={settings?.bundleRetentionDays ?? 30}
+                                            onChange={(e) => setSettings(s => s ? { ...s, bundleRetentionDays: parseInt(e.target.value, 10) } : null)}
                                             min="1"
                                             className="font-bold"
                                         />
@@ -149,10 +149,10 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                         <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Timeout Interval (Minutes)</label>
                                         <Input
                                             type="number"
-                                            value={settings ? Math.floor(settings.session_timeout_seconds / 60) : 10}
+                                            value={settings ? Math.floor(settings.sessionTimeoutSeconds / 60) : 10}
                                             onChange={(e) => {
                                                 const minutes = parseInt(e.target.value, 10);
-                                                setSettings(s => s ? { ...s, session_timeout_seconds: isNaN(minutes) ? 0 : minutes * 60 } : null);
+                                                setSettings(s => s ? { ...s, sessionTimeoutSeconds: isNaN(minutes) ? 0 : minutes * 60 } : null);
                                             }}
                                             min="0"
                                             className="font-bold"
@@ -182,20 +182,20 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                     ].map((mode) => (
                                         <label 
                                             key={mode.id}
-                                            className={`relative flex flex-col p-4 rounded-2xl border-2 transition-all cursor-pointer group ${settings?.privacy_default === mode.id ? 'bg-theme-primary/5 border-theme-primary shadow-sm' : 'bg-white border-theme-subtle hover:border-theme-primary/30'}`}
+                                            className={`relative flex flex-col p-4 rounded-2xl border-2 transition-all cursor-pointer group ${settings?.privacyDefault === mode.id ? 'bg-theme-primary/5 border-theme-primary shadow-sm' : 'bg-white border-theme-subtle hover:border-theme-primary/30'}`}
                                         >
                                             <input
                                                 type="radio"
                                                 name="privacyDefault"
                                                 value={mode.id}
-                                                checked={settings?.privacy_default === mode.id}
-                                                onChange={(e) => setSettings(s => s ? { ...s, privacy_default: e.target.value as PrivacyDefault } : null)}
+                                                checked={settings?.privacyDefault === mode.id}
+                                                onChange={(e) => setSettings(s => s ? { ...s, privacyDefault: e.target.value as PrivacyDefault } : null)}
                                                 className="absolute opacity-0"
                                             />
-                                            <mode.icon className={`mb-3 transition-colors ${settings?.privacy_default === mode.id ? 'text-theme-primary' : 'text-theme-light group-hover:text-theme-secondary'}`} size={20} />
-                                            <span className={`text-sm font-black tracking-tight ${settings?.privacy_default === mode.id ? 'text-theme-primary' : 'text-theme-secondary'}`}>{mode.label}</span>
+                                            <mode.icon className={`mb-3 transition-colors ${settings?.privacyDefault === mode.id ? 'text-theme-primary' : 'text-theme-light group-hover:text-theme-secondary'}`} size={20} />
+                                            <span className={`text-sm font-black tracking-tight ${settings?.privacyDefault === mode.id ? 'text-theme-primary' : 'text-theme-secondary'}`}>{mode.label}</span>
                                             <span className="text-[10px] font-medium text-theme-light mt-1">{mode.desc}</span>
-                                            {settings?.privacy_default === mode.id && (
+                                            {settings?.privacyDefault === mode.id && (
                                                 <div className="absolute top-3 right-3 text-theme-primary">
                                                     <CheckCircle2 size={16} />
                                                 </div>

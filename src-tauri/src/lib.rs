@@ -20,7 +20,7 @@ use tauri_plugin_log::{
 use human_money_core::app_service::AppService;
 
 use crate::commands::{actions::*, auth::*, queries::*, utils::*, contacts::*, integrity::*};
-use crate::commands::actions::TransactionRecord;
+use crate::models::TransactionRecord;
 use crate::settings::AppSettings;
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";

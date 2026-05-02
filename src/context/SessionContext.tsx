@@ -126,7 +126,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
         try {
             const settings = await invoke<AppSettings>('get_app_settings');
-            const timeout = settings.session_timeout_seconds;
+            const timeout = settings.sessionTimeoutSeconds;
 
             // MODUS A: Immer Passwort fragen (Timeout = 0)
             if (timeout === 0) {
@@ -168,7 +168,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
         try {
             const settings = await invoke<AppSettings>('get_app_settings');
-            const timeout = settings.session_timeout_seconds;
+            const timeout = settings.sessionTimeoutSeconds;
 
             if (timeout > 0) {
                 // Session im Backend starten
@@ -206,7 +206,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         try {
             const report = await invoke<import('../types').IntegrityReport>("check_wallet_integrity");
             setIntegrityReport(report);
-            if (report.type !== 'Valid') {
+            if (report.type !== 'valid') {
                 logger.warn(`Integrity issue detected: ${report.type}`);
             }
         } catch (e) {

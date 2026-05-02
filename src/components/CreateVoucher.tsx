@@ -41,7 +41,7 @@ function parseStandardInfo(tomlContent: string) {
     const unit = unitMatch ? unitMatch[1] : null;
     const abbreviationMatch = tomlContent.match(/abbreviation\s*=\s*"([^"]+)"/);
     const abbreviation = abbreviationMatch ? abbreviationMatch[1] : null;
-    const durationMatch = tomlContent.match(/default_validity_duration\s*=\s*"P(\d+)([YMD])"/);
+    const durationMatch = tomlContent.match(/default_validityDuration\s*=\s*"P(\d+)([YMD])"/);
     let validity = null;
     if (durationMatch) {
         validity = { value: parseInt(durationMatch[1], 10), unit: durationMatch[2] as "Y" | "M" | "D" };
@@ -158,8 +158,8 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const handleLoadProfile = async () => {
         try {
             const profile = await invoke<PublicProfile>('get_user_profile');
-            if (profile.first_name) setFirstName(profile.first_name);
-            if (profile.last_name) setLastName(profile.last_name);
+            if (profile.firstName) setFirstName(profile.firstName);
+            if (profile.lastName) setLastName(profile.lastName);
             if (profile.organization) setOrganization(profile.organization);
             if (profile.community) setCommunity(profile.community);
             if (profile.gender) setGender(profile.gender);
@@ -167,13 +167,13 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             if (profile.phone) setPhone(profile.phone);
             if (profile.url) setUrl(profile.url);
             if (profile.coordinates) setCoordinates(profile.coordinates);
-            if (profile.service_offer) setServiceOffer(profile.service_offer);
+            if (profile.serviceOffer) setServiceOffer(profile.serviceOffer);
             if (profile.needs) setNeeds(profile.needs);
-            if (profile.picture_url) setPictureUrl(profile.picture_url);
+            if (profile.pictureUrl) setPictureUrl(profile.pictureUrl);
             if (profile.address) {
                 if (profile.address.street) setStreet(profile.address.street);
-                if (profile.address.house_number) setHouseNumber(profile.address.house_number);
-                if (profile.address.zip_code) setZipCode(profile.address.zip_code);
+                if (profile.address.houseNumber) setHouseNumber(profile.address.houseNumber);
+                if (profile.address.zipCode) setZipCode(profile.address.zipCode);
                 if (profile.address.city) setCity(profile.address.city);
                 if (profile.address.country) setCountry(profile.address.country);
             }
@@ -204,14 +204,14 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         const validityDuration = validityValue > 0 ? `P${validityValue}${validityUnit}` : null;
         const fullAddress = `${street} ${houseNumber}, ${zipCode} ${city}, ${country}`.trim();
         const voucherData: NewVoucherData = {
-            validity_duration: validityDuration,
-            non_redeemable_test_voucher: nonRedeemable,
-            nominal_value: { amount, unit: standardUnit || "Units" },
+            validityDuration: validityDuration,
+            nonRedeemableTestVoucher: nonRedeemable,
+            nominalValue: { amount, unit: standardUnit || "Units" },
             collateral: { amount: collateralAmount, unit: collateralUnit, abbreviation: collateralAbbreviation },
             creator: {
-                first_name: firstName,
-                last_name: lastName,
-                address: { street, house_number: houseNumber, zip_code: zipCode, city, country, full_address: fullAddress },
+                firstName: firstName,
+                lastName: lastName,
+                address: { street, houseNumber: houseNumber, zipCode: zipCode, city, country, fullAddress: fullAddress },
                 gender,
                 coordinates,
                 email: email || undefined,
@@ -219,9 +219,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                 url: url || undefined,
                 organization: organization || undefined,
                 community: community || undefined,
-                service_offer: serviceOffer || undefined,
+                serviceOffer: serviceOffer || undefined,
                 needs: needs || undefined,
-                picture_url: pictureUrl || undefined,
+                pictureUrl: pictureUrl || undefined,
             },
         };
         try {

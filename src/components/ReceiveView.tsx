@@ -9,7 +9,14 @@ import { Input } from './ui/Input';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
-import { AppSettings, VoucherStandardInfo, ReceiveSuccessPayload } from '../types';
+import { 
+    AppSettings, 
+    VoucherStandardInfo, 
+    ReceiveSuccessPayload,
+    ReceiveBundleArgs,
+    OpenVoucherSigningRequestArgs,
+    ProcessAndAttachSignatureArgs
+} from '../types';
 import { PageLayout } from './ui/PageLayout';
 import { 
     UploadCloud, 
@@ -80,7 +87,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         try {
             const selectedPath = await open({
                 multiple: false,
-                defaultPath: settings?.last_used_directory,
+                defaultPath: settings?.lastUsedDirectory,
                 filters: [
                     { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'humocoreq', 'humocosig'] },
                     { name: 'Transfer Bundle (.transfer)', extensions: ['transfer'] },
@@ -218,20 +225,22 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 });
 
                 const payload = await protectAction(async (password) => {
-                    return await invoke<ReceiveSuccessPayload>("receive_bundle", {
+                    const args: ReceiveBundleArgs = {
                         bundleData: fileData,
                         standardDefinitionsToml,
                         password,
-                        force_accept_tolerance_bundle: false
-                    });
+                        forceAcceptToleranceBundle: false
+                    };
+                    return await invoke<ReceiveSuccessPayload>("receive_bundle", args as any);
                 });
 
                 if (payload) onReceiveSuccess(payload);
             } else if (fileType === 'ask') {
-                const openedVoucher = await invoke<any>("open_voucher_signing_request", {
+                const args: OpenVoucherSigningRequestArgs = {
                     containerBytes: fileData,
                     password: bundlePassword || null
-                });
+                };
+                const openedVoucher = await invoke<any>("open_voucher_signing_request", args as any);
                 onReceiveSuccess(openedVoucher);
             } else if (fileType === 'sig') {
                 const standardDefinitionsToml: Record<string, string> = {};
@@ -242,12 +251,13 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 
                 const standardTomlContent = Object.values(standardDefinitionsToml)[0];
                 const updatedInstanceId = await protectAction(async (password) => {
-                    return await invoke<string>("process_and_attach_signature", {
+                    const args: ProcessAndAttachSignatureArgs = {
                         containerBytes: fileData,
                         standardTomlContent,
                         containerPassword: bundlePassword || null,
                         walletPassword: password
-                    });
+                    };
+                    return await invoke<string>("process_and_attach_signature", args as any);
                 });
                 
                 if (updatedInstanceId) {
@@ -309,12 +319,13 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             });
 
             const payload = await protectAction(async (password) => {
-                return await invoke<ReceiveSuccessPayload>("receive_bundle", {
+                const args: ReceiveBundleArgs = {
                     bundleData: fileData,
                     standardDefinitionsToml,
                     password,
-                    force_accept_tolerance_bundle: true
-                });
+                    forceAcceptToleranceBundle: true
+                };
+                return await invoke<ReceiveSuccessPayload>("receive_bundle", args as any);
             });
 
             if (payload) onReceiveSuccess(payload);
