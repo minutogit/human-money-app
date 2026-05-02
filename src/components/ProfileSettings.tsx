@@ -102,9 +102,9 @@ export function ProfileSettings() {
                     <Lock size={24} />
                 </div>
                 <div>
-                    <h3 className="text-sm font-black text-emerald-900 uppercase tracking-widest mb-1">Privacy</h3>
+                    <h3 className="text-sm font-black text-emerald-900 uppercase tracking-widest mb-1">Vault Security</h3>
                     <p className="text-xs text-emerald-800/80 font-medium leading-relaxed">
-                        Your profile is saved locally and only shared when you sign a voucher.
+                        Your identity is stored encrypted on your local device. It is only shared with counterparties when you explicitly sign a voucher.
                     </p>
                 </div>
             </div>
@@ -120,7 +120,10 @@ export function ProfileSettings() {
                     <div className="space-y-6 p-2">
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">First Name</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
+                                    First Name
+                                    <span className="text-theme-accent text-[8px]">(Required)</span>
+                                </label>
                                 <Input
                                     value={profile.first_name || ''}
                                     onChange={(e) => setProfile({ ...profile, first_name: e.target.value })}
@@ -128,7 +131,10 @@ export function ProfileSettings() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Last Name</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
+                                    Last Name
+                                    <span className="text-theme-accent text-[8px]">(Required)</span>
+                                </label>
                                 <Input
                                     value={profile.last_name || ''}
                                     onChange={(e) => setProfile({ ...profile, last_name: e.target.value })}
@@ -137,7 +143,7 @@ export function ProfileSettings() {
                             </div>
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Gender Orientation</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Gender</label>
                             <select
                                 className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
                                 value={profile.gender || ''}
@@ -207,7 +213,10 @@ export function ProfileSettings() {
                                 />
                             </div>
                             <div className="col-span-2 space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">City</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
+                                    City
+                                    <span className="text-theme-accent text-[8px]">(Required)</span>
+                                </label>
                                 <Input
                                     value={profile.address?.city || ''}
                                     onChange={(e) => updateAddress('city', e.target.value)}
@@ -296,7 +305,7 @@ export function ProfileSettings() {
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> Service Offer (I can help with)</label>
                             <textarea
-                                className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[80px]"
+                                className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[120px]"
                                 value={profile.service_offer || ''}
                                 onChange={(e) => setProfile({ ...profile, service_offer: e.target.value })}
                                 placeholder="Describe what you bring to the network..."
@@ -305,7 +314,7 @@ export function ProfileSettings() {
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Heart size={10}/> Needs (I'm looking for)</label>
                             <textarea
-                                className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[80px]"
+                                className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[120px]"
                                 value={profile.needs || ''}
                                 onChange={(e) => setProfile({ ...profile, needs: e.target.value })}
                                 placeholder="Describe what you are looking for..."

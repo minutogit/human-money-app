@@ -173,7 +173,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     const activeProfileName = activeProfile?.profile_name || "Unknown Profile";
 
     return (
-        <div className="w-full min-h-screen flex items-center justify-center p-4 relative overflow-hidden bg-white">
+        <div className="w-full min-h-screen flex items-start sm:items-center justify-center py-4 sm:py-20 px-4 relative overflow-hidden bg-white">
             {/* Background elements */}
             <div className="absolute top-0 left-1/4 w-96 h-96 bg-theme-primary/5 rounded-full blur-3xl -translate-y-1/2"></div>
             <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-theme-primary/5 rounded-full blur-3xl translate-y-1/2"></div>
@@ -284,18 +284,18 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     </Card>
                 </div>
             ) : (
-                <div className="w-full max-w-2xl bg-white/80 backdrop-blur-xl border border-theme-subtle rounded-[48px] p-10 pb-12 shadow-premium-lg space-y-8 relative animate-in fade-in zoom-in duration-700">
+                <div className="w-full max-w-2xl bg-white/80 backdrop-blur-xl border border-theme-subtle rounded-[48px] p-6 sm:p-10 sm:pb-12 shadow-premium-lg space-y-6 sm:space-y-8 relative animate-in fade-in zoom-in duration-700">
                     <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-theme-primary/20 to-transparent"></div>
                     
-                    <div className="flex items-center justify-center gap-6">
+                    <div className="flex items-center justify-center gap-3 sm:gap-6">
                         <img 
                             src={logo} 
                             alt="Human Money Logo" 
-                            className="w-20 h-20 object-contain drop-shadow-sm" 
+                            className="w-12 h-12 sm:w-20 sm:h-20 object-contain drop-shadow-sm" 
                         />
-                        <div className="text-left space-y-0.5">
-                            <h1 className="text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
-                            <p className="text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">Login to Your Wallet</p>
+                        <div className="text-left space-y-0 sm:space-y-0.5">
+                            <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
+                            <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">Login to Your Wallet</p>
                         </div>
                     </div>
 

@@ -47,9 +47,13 @@ export function Card({
                     {header}
                 </div>
             )}
-            <div className={header ? "p-6" : ""}>
-                {children}
-            </div>
+            {header ? (
+                <div className="p-6">
+                    {children}
+                </div>
+            ) : (
+                children
+            )}
         </div>
     );
 }

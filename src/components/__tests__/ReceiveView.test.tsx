@@ -35,11 +35,11 @@ vi.mock('../../context/SessionContext', () => ({
   }),
 }));
 
-describe('ReceiveView Component (Silber Standard)', () => {
+describe('ReceiveView Component (FreeTaler Standard)', () => {
   const mockStandards: VoucherStandardInfo[] = [
     {
-      id: 'silver_v1',
-      content: `name = "Silver Standard"`,
+      id: 'freetaler_v1',
+      content: `name = "FreeTaler"`,
     },
   ];
 

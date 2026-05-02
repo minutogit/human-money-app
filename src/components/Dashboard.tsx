@@ -190,7 +190,7 @@ export function Dashboard(props: DashboardProps) {
             <div className="max-w-5xl mx-auto space-y-8">
                 {/* Welcome Message */}
                 {balances.length === 0 && (
-                    <div className="px-2 pt-4">
+                    <div className="px-2 pt-4 text-center">
                         <h1 className="text-3xl font-black text-theme-primary tracking-tighter">👋 Welcome to your Wallet!</h1>
                         <p className="text-sm font-medium text-theme-light mt-1">Manage your community vouchers and local currency.</p>
                     </div>
@@ -203,7 +203,7 @@ export function Dashboard(props: DashboardProps) {
                     {integrityReport && integrityReport.type !== 'Valid' && (
                         <Card 
                             variant="glass" 
-                            className={`p-4 flex items-center justify-between cursor-pointer border-l-4 ${
+                            className={`py-2 px-4 flex items-center justify-between cursor-pointer border-l-4 ${
                                 integrityReport.type === 'UnknownItems' || integrityReport.type === 'MissingIntegrityRecord'
                                 ? 'border-l-blue-500' : 'border-l-red-500'
                             }`}
@@ -229,7 +229,7 @@ export function Dashboard(props: DashboardProps) {
                     {!isProfileComplete && (
                         <Card 
                             variant="glass" 
-                            className="p-4 flex items-center justify-between border-l-4 border-l-amber-500"
+                            className="py-2 px-4 flex items-center justify-between border-l-4 border-l-amber-500"
                             hover
                             onClick={props.onNavigateToSettings}
                         >
@@ -249,7 +249,7 @@ export function Dashboard(props: DashboardProps) {
                     {quarantinedCount > 0 && (
                         <Card 
                             variant="glass" 
-                            className="p-4 flex items-center justify-between border-l-4 border-l-rose-500"
+                            className="py-2 px-4 flex items-center justify-between border-l-4 border-l-rose-500"
                             hover
                             onClick={props.onNavigateToConflicts}
                         >

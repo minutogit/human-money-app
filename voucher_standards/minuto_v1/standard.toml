@@ -4,7 +4,7 @@
 # ==============================================================================
 [immutable.identity]
 uuid = "MINUTO-V1-2025-09"
-name = "Minuto-Gutschein"
+name = "Minuto"
 abbreviation = "Minuto"
 
 [immutable.blueprint]
@@ -18,7 +18,7 @@ balances_are_summable = true
 amount_decimal_places = 0
 privacy_mode = "flexible"
 
-allowed_t_types = ["init", "transfer", "split", "merge"]
+allowed_t_types = ["init", "transfer", "split"]
 [immutable.issuance]
 validity_duration_range = ["P1Y", "P10Y"]
 issuance_minimum_validity_duration = "P3Y"
@@ -28,19 +28,19 @@ allowed_signature_roles = ["guarantor"]
 
 [immutable.custom_rules.gender_balance_male]
 expression = "Voucher.signatures.filter(s, s.role != 'creator' && has(s.details.gender) && s.details.gender == '1').size() == 1"
-message = "Gemäß ISO 5218 wird genau ein männlicher (1) Bürge benötigt."
+message = "According to ISO 5218, exactly one male (1) guarantor is required."
 
 [immutable.custom_rules.gender_balance_female]
 expression = "Voucher.signatures.filter(s, s.role != 'creator' && has(s.details.gender) && s.details.gender == '2').size() == 1"
-message = "Gemäß ISO 5218 wird genau eine weibliche (2) Bürgin benötigt."
+message = "According to ISO 5218, exactly one female (2) guarantor is required."
 
 # ==============================================================================
 # MUTABLE-ZONE
 # ==============================================================================
 [mutable.metadata]
-issuer_name = "Minuto Community Council"
-homepage_url = "https://minuto.org/standard-info"
-documentation_url = "https://github.com/minuto/standards/tree/main/minuto_v1"
+issuer_name = "Human Money Project"
+homepage_url = "https://minutocash.org/"
+documentation_url = "https://www.minuto.wiki/"
 keywords = [
     "community-currency",
     "time-based",
@@ -59,10 +59,11 @@ en = "A voucher for goods or services worth {{amount}} minutes of quality perfor
 
 [mutable.i18n.footnotes]
 de = "Gutschein-Nutzung nur für Mitspieler/innen."
+en = "Voucher use for participants only."
 
 [signature]
 # Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.
 issuer_id = "0:riw@did:key:z6Mki8QqVMb66hjtTwcceVXbZuSHTk61jqiprRvEhuotZmSA"
 
 # Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).
-signature = "5vkqeksRaoq7GyoEdMVGrxZgYYMDdpGnWTQNMumU5SsHrZ1o6tdz1yanKJZcrBABgfqUiwDhU5wexbEBLVgxg6br"
+signature = "5aomSjj76rEb4VVjhAd6p6qvmU79wkkTpj84AnY3D9p8xRDNfxBqKL4EbEHTKfPevggafJeJuzhgYV4rvhLgMs5m"

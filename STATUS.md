@@ -1,7 +1,7 @@
 ---
 project: human-money-app
-version: "0.1.0-alpha.10"
-phase: "alpha"
+version: "0.1.0-beta.5"
+phase: "beta"
 health: "green"
 last_updated: "2026-05-02"
 blocks: []
@@ -109,6 +109,18 @@ priority_tasks:
     priority: "high"
     depends_on: []
     description: "Handle session timeouts gracefully in the UI. Ensure components like Activity Log don't just 'disappear' but prompt for re-auth or show clear state."
+  - id: "APP-018"
+    title: "Display Voucher Description and Footnote"
+    status: "completed"
+    priority: "medium"
+    depends_on: []
+    description: "Display the voucher description and footnote (if present) in the VoucherDetailsView to provide more context to the user."
+  - id: "APP-019"
+    title: "FreeTaler Standard Migration"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Replace legacy 'Silber' standard with 'FreeTaler'. Includes core standard definition, signature update, and app-level integration."
 ---
 
 # Human Money App — Status
@@ -167,6 +179,10 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Address book / contact list UI polish
 - [x] Stabilize existing features and fix edge cases
 - [x] Audit local_instance_id exposure in JSON view
+- [x] Display Voucher Description and Footnote in details (MVP) (APP-018)
+- [x] Migrated legacy 'Silber' standard to 'FreeTaler' (Core & App) (APP-019)
+- [x] Stabilized core test suite after standard migration (127 tests passing)
+- [x] Refined transactionality and state management for FreeTaler precision (4 decimals)
 
 
 

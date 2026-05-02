@@ -23,7 +23,8 @@ description: 4-phase MVP project plan for the Human Money App, from core transac
 3. **Guarantor Flow** — Signing request UI + detached signature response ✅ (APP-007)
 4. **Audit local_instance_id** — Ensure local-only metadata isn't leaked in JSON views or exports ✅ (APP-016)
 5. **Session Timeout UX** — Graceful handling of expired sessions in read-views (e.g. Activity Log) 🔜 (APP-017)
-6. **Internationalization (i18n)** — `i18next` integration (German/English) 🔜
+6. **Voucher Details Polish** — Display description and footnote in `VoucherDetailsView.tsx` ✅ (APP-018)
+7. **Internationalization (i18n)** — `i18next` integration (German/English) 🔜
 
 ## Phase 3: Extended Functionality (Post-MVP)
 

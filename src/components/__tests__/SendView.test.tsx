@@ -22,33 +22,33 @@ vi.mock('../../context/SessionContext', () => ({
   }),
 }));
 
-describe('SendView Component (Silber Standard)', () => {
+describe('SendView Component (FreeTaler Standard)', () => {
   const mockVouchers: VoucherSummary[] = [
     {
       local_instance_id: 'voucher1',
       status: 'Active',
       valid_until: '2025-12-31',
       creator_id: 'did:key:z123',
-      description: 'Silver voucher',
+      description: 'FreeTaler voucher',
       current_amount: '100.00',
-      unit: 'AG',
-      raw_standard_name: 'Silver Standard',
-      voucher_standard_uuid: 'silver-uuid-123',
+      unit: 'Taler',
+      raw_standard_name: 'FreeTaler',
+      voucher_standard_uuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
       transaction_count: 0,
       guarantor_signatures_count: 0,
       additional_signatures_count: 0,
       has_collateral: false,
       is_test_voucher: false,
-      display_currency: 'AG',
-      display_standard_name: 'Silver Standard',
+      display_currency: 'Taler',
+      display_standard_name: 'FreeTaler',
       divisible: true,
     },
   ];
 
   const mockStandards: VoucherStandardInfo[] = [
     {
-      id: 'silver_v1',
-      content: `name = "Silver Standard"`,
+      id: 'freetaler_v1',
+      content: `name = "FreeTaler"`,
     },
   ];
 
@@ -95,10 +95,10 @@ describe('SendView Component (Silber Standard)', () => {
       if (cmd === 'get_active_asset_classes') {
         return Promise.resolve([
           {
-            standard_uuid: 'silver-uuid-123',
+            standard_uuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
             is_test_voucher: false,
-            display_standard_name: 'Silver Standard',
-            display_currency: 'AG',
+            display_standard_name: 'FreeTaler',
+            display_currency: 'Taler',
           },
         ]);
       }
@@ -140,5 +140,47 @@ describe('SendView Component (Silber Standard)', () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalled();
     });
+  });
+
+  it('formats amount in voucher list according to standard precision', async () => {
+    const customVoucher: VoucherSummary = {
+      ...mockVouchers[0],
+      local_instance_id: 'precision-test',
+      current_amount: '100.1234',
+      voucher_standard_uuid: 'uuid-2',
+      display_standard_name: 'PrecisionStd',
+    };
+    const customStandard: VoucherStandardInfo = {
+      id: 'precision_std',
+      content: 'name = "PrecisionStd"\nuuid = "uuid-2"\namount_decimal_places = 2',
+    };
+
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_summaries') return Promise.resolve([customVoucher]);
+      if (cmd === 'get_voucher_standards') return Promise.resolve([customStandard]);
+      if (cmd === 'get_user_id') return Promise.resolve('did:key:z789');
+      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_active_asset_classes') return Promise.resolve([{
+        standard_uuid: 'uuid-2',
+        is_test_voucher: false,
+        display_standard_name: 'PrecisionStd',
+        display_currency: 'Taler',
+      }]);
+      if (cmd === 'get_user_profile') return Promise.resolve({});
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <SendView
+        onBack={mockOnBack}
+        onTransferPrepared={mockOnTransferPrepared}
+        profileName="Test Profile"
+      />
+    );
+
+    await waitFor(() => expect(screen.getAllByText(/PrecisionStd/i).length).toBeGreaterThan(0));
+    expect(await screen.findByText(/100.12/)).toBeInTheDocument();
+    expect(screen.queryByText('100.1234')).not.toBeInTheDocument();
   });
 });

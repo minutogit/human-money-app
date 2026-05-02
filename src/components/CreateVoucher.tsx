@@ -1,5 +1,5 @@
 // src/components/CreateVoucher.tsx
-import { useState, useEffect, FormEvent, ChangeEvent } from "react";
+import { useState, useEffect, FormEvent, ChangeEvent, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
@@ -89,6 +89,12 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     // Validierungs-Status
     const [errors, setErrors] = useState<Record<string, boolean>>({});
 
+    // Refs für Fokus-Management
+    const standardRef = useRef<HTMLSelectElement>(null);
+    const amountRef = useRef<HTMLInputElement>(null);
+    const firstNameRef = useRef<HTMLInputElement>(null);
+    const lastNameRef = useRef<HTMLInputElement>(null);
+
     useEffect(() => {
         async function fetchStandards() {
             try {
@@ -129,6 +135,20 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
 
         if (Object.keys(newErrors).length > 0) {
             setErrors(newErrors);
+            
+            // Fokus auf das erste fehlerhafte Feld setzen und dorthin scrollen
+            let firstErrorRef: React.RefObject<HTMLElement | null> | null = null;
+            if (newErrors.standard) firstErrorRef = standardRef;
+            else if (newErrors.amount) firstErrorRef = amountRef;
+            else if (newErrors.firstName) firstErrorRef = firstNameRef;
+            else if (newErrors.lastName) firstErrorRef = lastNameRef;
+
+            if (firstErrorRef?.current) {
+                firstErrorRef.current.focus();
+                firstErrorRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            
+            setFeedback({ type: 'error', msg: "Please fill in all required fields." });
             return;
         }
 
@@ -245,6 +265,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                                     <label htmlFor="voucher-type" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Voucher Type</label>
                                     <select 
                                         id="voucher-type"
+                                        ref={standardRef}
                                         value={selectedStandardId} 
                                         onChange={handleStandardChange} 
                                         disabled={isLoading || standards.length === 0} 
@@ -262,6 +283,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                                         <label htmlFor="voucher-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Amount (e.g., 60)</label>
                                         <Input 
                                             id="voucher-amount"
+                                            ref={amountRef}
                                             type="number" 
                                             value={amount} 
                                             onChange={(e) => { setAmount(e.target.value); setErrors(prev => ({ ...prev, amount: false })); }} 
@@ -335,11 +357,11 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-2">
                                             <label htmlFor="creator-first-name" className="text-[10px] font-black text-theme-light uppercase tracking-widest">First Name (Required)</label>
-                                            <Input id="creator-first-name" value={firstName} onChange={(e) => { setFirstName(e.target.value); setErrors(prev => ({ ...prev, firstName: false })); }} className={errors.firstName ? 'border-rose-500' : ''} />
+                                            <Input id="creator-first-name" ref={firstNameRef} value={firstName} onChange={(e) => { setFirstName(e.target.value); setErrors(prev => ({ ...prev, firstName: false })); }} className={errors.firstName ? 'border-rose-500' : ''} />
                                         </div>
                                         <div className="space-y-2">
                                             <label htmlFor="creator-last-name" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Last Name (Required)</label>
-                                            <Input id="creator-last-name" value={lastName} onChange={(e) => { setLastName(e.target.value); setErrors(prev => ({ ...prev, lastName: false })); }} className={errors.lastName ? 'border-rose-500' : ''} />
+                                            <Input id="creator-last-name" ref={lastNameRef} value={lastName} onChange={(e) => { setLastName(e.target.value); setErrors(prev => ({ ...prev, lastName: false })); }} className={errors.lastName ? 'border-rose-500' : ''} />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-4">
@@ -467,6 +489,12 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                     </div>
 
                     <div className="flex flex-col items-center gap-4 py-4">
+                        {Object.keys(errors).length > 0 && (
+                            <div className="flex items-center gap-2 text-rose-600 bg-rose-50 px-4 py-2 rounded-xl border border-rose-100 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                <AlertCircle size={16} />
+                                <span className="text-xs font-bold">Please fill in all required fields.</span>
+                            </div>
+                        )}
                         <Button type="submit" disabled={isLoading} className="min-w-[320px] py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
                             {isLoading ? <Clock className="animate-spin" size={24} /> : <PlusCircle size={24} />}
                             {isLoading ? "Creating..." : "Create Voucher"}

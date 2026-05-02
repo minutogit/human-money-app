@@ -28,16 +28,19 @@ vi.mock('../../context/SessionContext', () => ({
   }),
 }));
 
+// Mock scrollIntoView as it's not implemented in JSDOM
+window.HTMLElement.prototype.scrollIntoView = vi.fn();
+
 describe('CreateVoucher Component', () => {
   const mockStandards: VoucherStandardInfo[] = [
     {
-      id: 'silver_v1',
-      content: `name = "Silver Standard"
-issuer_name = "Silver Issuer"
-unit = "Silver"
-abbreviation = "AG"
-default_validity_duration = "P3Y"
-amount_decimal_places = 2`,
+      id: 'freetaler_v1',
+      content: `name = "FreeTaler"
+issuer_name = "Human Money Project"
+unit = "Taler"
+abbreviation = "Taler"
+default_validity_duration = "P1Y"
+amount_decimal_places = 4`,
     },
   ];
 
@@ -92,7 +95,7 @@ amount_decimal_places = 2`,
       <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
     );
 
-    expect(await screen.findByText(/Silver Standard/i)).toBeInTheDocument();
+    expect(await screen.findByText(/FreeTaler/i)).toBeInTheDocument();
   });
 
   it('validates required fields when form is submitted without data', async () => {
@@ -107,5 +110,35 @@ amount_decimal_places = 2`,
     await waitFor(() => {
       expect(screen.queryByText(/Create Voucher\?/i)).not.toBeInTheDocument();
     });
+  });
+
+  it('focuses the first invalid field when form is submitted without data', async () => {
+    render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    const createButton = await screen.findByRole('button', { name: /Create Voucher/i });
+    await userEvent.click(createButton);
+
+    // First required field is "Voucher Type"
+    const voucherTypeSelect = await screen.findByLabelText(/Voucher Type/i);
+    expect(document.activeElement).toBe(voucherTypeSelect);
+    expect(voucherTypeSelect).toHaveClass('border-rose-500');
+
+    // Other required fields should also be highlighted
+    const amountInput = await screen.findByLabelText(/Amount \(e\.g\., 60\)/i);
+    const firstNameInput = await screen.findByLabelText(/First Name \(Required\)/i);
+    const lastNameInput = await screen.findByLabelText(/Last Name \(Required\)/i);
+
+    expect(amountInput).toHaveClass('border-rose-500');
+    expect(firstNameInput).toHaveClass('border-rose-500');
+    expect(lastNameInput).toHaveClass('border-rose-500');
+
+    // Both top feedback and bottom error message should be visible
+    const errorMessages = await screen.findAllByText(/Please fill in all required fields\./i);
+    expect(errorMessages.length).toBeGreaterThanOrEqual(1);
+
+    // scrollIntoView should have been called
+    expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
   });
 });

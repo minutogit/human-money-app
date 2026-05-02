@@ -160,7 +160,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
         switch (wizardStep) {
             case "display_seed":
                 return (
-                    <div className="space-y-8 animate-in fade-in duration-500">
+                    <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-500">
                         <div className="text-center space-y-2">
                             <h2 className="text-2xl font-black text-theme-primary tracking-tight">Step 1: Your Secret Seed Phrase</h2>
                             <p className="text-sm font-medium text-theme-light">This unique word sequence is your physical backup. Store it offline.</p>
@@ -228,7 +228,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
 
             case "confirm_seed":
                 return (
-                    <form onSubmit={handleConfirmSeedSubmit} className="space-y-8 animate-in slide-in-from-right-8 duration-500">
+                    <form onSubmit={handleConfirmSeedSubmit} className="space-y-6 sm:space-y-8 animate-in slide-in-from-right-8 duration-500">
                         <div className="text-center space-y-2">
                             <h2 className="text-2xl font-black text-theme-primary tracking-tight">Step 2: Confirm Your Seed Phrase</h2>
                             <p className="text-sm font-medium text-theme-light">Confirm the key sequence to ensure backup integrity.</p>
@@ -285,7 +285,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
 
             case "set_password":
                 return (
-                    <form onSubmit={handleCreateProfileSubmit} className="space-y-8 animate-in slide-in-from-right-8 duration-500 pb-10">
+                    <form onSubmit={handleCreateProfileSubmit} className="space-y-6 sm:space-y-8 animate-in slide-in-from-right-8 duration-500 pb-10">
                         <div className="text-center space-y-2">
                             <h2 className="text-2xl font-black text-theme-primary tracking-tight">Step 3: Secure Your Wallet</h2>
                             <p className="text-sm font-medium text-theme-light">Create your access credentials for this device.</p>
@@ -359,17 +359,18 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
     };
 
     return (
-        <div className="w-full min-h-screen flex items-center justify-center py-20 px-4 animate-in fade-in duration-700">
-            <div className="w-full max-w-2xl bg-white/80 backdrop-blur-xl border border-theme-subtle rounded-[48px] p-12 shadow-premium-lg space-y-10 relative overflow-hidden">
+        <div className="w-full min-h-screen flex items-start sm:items-center justify-center py-4 sm:py-20 px-4 animate-in fade-in duration-700">
+            <div className="w-full max-w-2xl bg-white/80 backdrop-blur-xl border border-theme-subtle rounded-[48px] p-6 sm:p-12 shadow-premium-lg space-y-6 sm:space-y-10 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-theme-primary/20 to-transparent"></div>
                 
-                <div className="text-center space-y-4">
-                    <div className="mx-auto w-20 h-20 bg-theme-primary text-white rounded-[32px] flex items-center justify-center shadow-premium-lg transform -rotate-6 group-hover:rotate-0 transition-transform duration-500">
-                        <ShieldCheck size={40} />
+                <div className="text-center space-y-2 sm:space-y-4">
+                    <div className="mx-auto w-16 h-16 sm:w-20 sm:h-20 bg-theme-primary text-white rounded-[24px] sm:rounded-[32px] flex items-center justify-center shadow-premium-lg transform -rotate-6 group-hover:rotate-0 transition-transform duration-500">
+                        <ShieldCheck size={32} className="sm:hidden" />
+                        <ShieldCheck size={40} className="hidden sm:block" />
                     </div>
-                    <div className="space-y-1">
-                        <h1 className="text-4xl font-black text-theme-primary tracking-tighter">HUMAN MONEY</h1>
-                        <p className="text-[10px] font-black uppercase tracking-[0.3em] text-theme-light">Create a New Profile</p>
+                    <div className="space-y-0.5 sm:space-y-1">
+                        <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter">HUMAN MONEY</h1>
+                        <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.3em] text-theme-light">Create a New Profile</p>
                     </div>
                 </div>
 

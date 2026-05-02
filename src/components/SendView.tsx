@@ -53,10 +53,18 @@ function formatDate(isoString: string): string {
     });
 }
 
-function formatAmount(amountStr: string): string {
+function getPrecision(content: string): number {
+    const match = content.match(/amount_decimal_places\s*=\s*(\d+)/i);
+    return match && match[1] ? parseInt(match[1], 10) : 4;
+}
+
+function formatAmount(amountStr: string, precision: number = 2): string {
     const num = parseFloat(amountStr);
     if (isNaN(num)) return amountStr;
-    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return num.toLocaleString(undefined, { 
+        minimumFractionDigits: precision, 
+        maximumFractionDigits: precision 
+    });
 }
 
 export function SendView({ onBack, onTransferPrepared, profileName }: SendViewProps) {
@@ -76,6 +84,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isProcessing, setIsProcessing] = useState(false);
     const [standardIdToUuidMap, setStandardIdToUuidMap] = useState<Map<string, string>>(new Map());
+    const [uuidToPrecisionMap, setUuidToPrecisionMap] = useState<Map<string, number>>(new Map());
     const [showConfirm, setShowConfirm] = useState(false);
     const [trustStatus, setTrustStatus] = useState<TrustStatus>("Clean");
     const [privacyMode, setPrivacyMode] = useState<'public' | 'stealth' | null>(null);
@@ -155,12 +164,18 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
                 const standards = await invoke<VoucherStandardInfo[]>("get_voucher_standards");
                 const settings = await invoke<AppSettings>("get_app_settings");
-                const newMap = new Map<string, string>();
+                const newIdMap = new Map<string, string>();
+                const newPrecisionMap = new Map<string, number>();
                 standards.forEach(s => {
-                    const uuidMatch = s.content.match(/uuid\s*=\s*"([^"]+)"/);
-                    if (uuidMatch && uuidMatch[1]) newMap.set(s.id, uuidMatch[1]);
+                    const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
+                    if (uuidMatch && uuidMatch[1]) {
+                        const uuid = uuidMatch[1];
+                        newIdMap.set(s.id, uuid);
+                        newPrecisionMap.set(uuid, getPrecision(s.content));
+                    }
                 });
-                setStandardIdToUuidMap(newMap);
+                setStandardIdToUuidMap(newIdMap);
+                setUuidToPrecisionMap(newPrecisionMap);
 
                 const enrichedVouchers = activeVouchers.map(v => ({ ...v, divisible: true }));
 
@@ -208,12 +223,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             return;
         }
 
-        const selectedStandard = voucherStandards.find(s => s.id === selectedStandardId);
-        let precision = 4;
-        if (selectedStandard) {
-            const match = selectedStandard.content.match(/amount_decimal_places\s*=\s*(\d+)/);
-            if (match && match[1]) precision = parseInt(match[1], 10);
-        }
+        const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId) || selectedStandardId;
+        const precision = uuidToPrecisionMap.get(selectedStandardUuid) ?? 4;
 
         let maxPossibleAmount = 0;
         filteredVouchers.forEach(v => {
@@ -272,7 +283,20 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         let val = parseFloat(newAmountStr);
         const max = parseFloat(maxAmount);
         
-        if (!isNaN(val) && val > max) newAmountStr = maxAmount.toString();
+        if (!isNaN(val) && val > max) {
+            newAmountStr = maxAmount.toString();
+            val = max;
+        }
+
+        // Enforce precision
+        const voucher = availableVouchers.find(v => v.local_instance_id === voucherId);
+        if (voucher && !isNaN(val)) {
+            const precision = uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 4;
+            const parts = newAmountStr.split('.');
+            if (parts.length > 1 && parts[1].length > precision) {
+                newAmountStr = parts[0] + '.' + parts[1].substring(0, precision);
+            }
+        }
 
         const newSelection = new Map(selection);
         newSelection.set(voucherId, newAmountStr);
@@ -284,7 +308,9 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 const parsed = parseFloat(amount);
                 if (!isNaN(parsed)) total += parsed;
             });
-            setTargetAmountStr(total > 0 ? total.toString() : "");
+            const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId) || selectedStandardId;
+            const precision = uuidToPrecisionMap.get(selectedStandardUuid) ?? 4;
+            setTargetAmountStr(total > 0 ? total.toFixed(precision) : "");
         }
     };
 
@@ -353,8 +379,13 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
     const handleManualVoucherSelect = (voucher: VoucherSummary) => {
         const newSelection = new Map(selection);
-        if (newSelection.has(voucher.local_instance_id)) newSelection.delete(voucher.local_instance_id);
-        else newSelection.set(voucher.local_instance_id, voucher.current_amount);
+        if (newSelection.has(voucher.local_instance_id)) {
+            newSelection.delete(voucher.local_instance_id);
+        } else {
+            const precision = uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 4;
+            const amount = parseFloat(voucher.current_amount);
+            newSelection.set(voucher.local_instance_id, isNaN(amount) ? voucher.current_amount : amount.toFixed(precision));
+        }
         setSelection(newSelection);
 
         if (selectedStandardId) {
@@ -363,7 +394,9 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 const parsed = parseFloat(amount);
                 if (!isNaN(parsed)) total += parsed;
             });
-            setTargetAmountStr(total > 0 ? total.toString() : "");
+            const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId) || selectedStandardId;
+            const precision = uuidToPrecisionMap.get(selectedStandardUuid) ?? 4;
+            setTargetAmountStr(total > 0 ? total.toFixed(precision) : "");
         } else {
             setTargetAmountStr("");
         }
@@ -437,7 +470,10 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             
             const summableAmounts: Record<string, string> = {};
             Object.entries(checkoutSummary.summableTotals).forEach(([unit, total]) => {
-                summableAmounts[unit] = total.toFixed(2);
+                // Find precision for this unit
+                const voucher = availableVouchers.find(v => v.display_currency === unit);
+                const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 2) : 2;
+                summableAmounts[unit] = total.toFixed(precision);
             });
             const countableItems: Record<string, number> = checkoutSummary.countableTotals;
 
@@ -461,7 +497,11 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                  await invoke("save_transaction_record", { record: record as TransactionRecord, password });
             });
 
-            const summableStrings = Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => `${formatAmount(total.toString())} ${unit}`);
+            const summableStrings = Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => {
+                const voucher = availableVouchers.find(v => v.display_currency === unit);
+                const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 2) : 2;
+                return `${formatAmount(total.toString(), precision)} ${unit}`;
+            });
             const countableStrings = Object.entries(checkoutSummary.countableTotals).map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`);
             const summaryString = [...summableStrings, ...countableStrings].join(', ');
 
@@ -676,7 +716,10 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                                         <div>
                                                             <div className="flex items-baseline gap-2">
                                                                 <span className="text-xl font-black text-theme-secondary tracking-tight">
-                                                                    {isSelected && selectedAmount !== v.current_amount ? formatAmount(selectedAmount) : formatAmount(v.current_amount)}
+                                                                    {(() => {
+                                                                        const precision = uuidToPrecisionMap.get(v.voucher_standard_uuid) ?? 2;
+                                                                        return isSelected && selectedAmount !== v.current_amount ? formatAmount(selectedAmount, precision) : formatAmount(v.current_amount, precision);
+                                                                    })()}
                                                                 </span>
                                                                 <span className="text-[10px] font-black text-theme-primary uppercase tracking-widest">{v.display_currency}</span>
                                                             </div>
@@ -741,12 +784,16 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                             <h3 className="text-2xl font-black tracking-tighter">
                                                 {checkoutSummary.count > 0 ? (
                                                     <div className="flex flex-wrap gap-x-4 gap-y-1">
-                                                        {Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => (
-                                                            <span key={unit} className="flex items-baseline gap-1.5">
-                                                                {formatAmount(total.toString())}
-                                                                <span className="text-sm font-bold uppercase tracking-widest opacity-70">{unit}</span>
-                                                            </span>
-                                                        ))}
+                                                        {Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => {
+                                                            const voucher = availableVouchers.find(v => v.display_currency === unit);
+                                                            const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 2) : 2;
+                                                            return (
+                                                                <span key={unit} className="flex items-baseline gap-1.5">
+                                                                    {formatAmount(total.toString(), precision)}
+                                                                    <span className="text-sm font-bold uppercase tracking-widest opacity-70">{unit}</span>
+                                                                </span>
+                                                            );
+                                                        })}
                                                         {Object.entries(checkoutSummary.countableTotals).map(([unit, total]) => (
                                                             <span key={unit} className="flex items-baseline gap-1.5">
                                                                 {total}
@@ -790,9 +837,13 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                         <div className="p-6 bg-theme-primary/5 rounded-[32px] border border-theme-primary/20 text-center space-y-2">
                             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">Net Disbursement</p>
                             <div className="flex flex-col items-center">
-                                {Object.entries(checkoutSummary.summableTotals).map(([u, t]) => (
-                                    <p key={u} className="text-3xl font-black text-theme-primary tracking-tighter">{t.toFixed(2)} {u}</p>
-                                ))}
+                                {Object.entries(checkoutSummary.summableTotals).map(([u, t]) => {
+                                    const voucher = availableVouchers.find(v => v.display_currency === u);
+                                    const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucher_standard_uuid) ?? 2) : 2;
+                                    return (
+                                        <p key={u} className="text-3xl font-black text-theme-primary tracking-tighter">{t.toFixed(precision)} {u}</p>
+                                    );
+                                })}
                                 {Object.entries(checkoutSummary.countableTotals).map(([u, t]) => (
                                     <p key={u} className="text-3xl font-black text-theme-primary tracking-tighter">{t} {u}</p>
                                 ))}

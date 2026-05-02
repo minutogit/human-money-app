@@ -1,0 +1,52 @@
+[immutable.identity]
+uuid = "a1b2c3d4-e5f6-4789-8012-3456789abcde"
+name = "FreeTaler"
+abbreviation = "Taler"
+
+[immutable.blueprint]
+unit = "Taler"
+primary_redemption_type = "goods_or_services"
+collateral_type = "personal_guarantee"
+
+[immutable.features]
+allow_partial_transfers = true
+balances_are_summable = true
+amount_decimal_places = 4
+privacy_mode = "flexible"
+allowed_t_types = ["init", "transfer", "split"]
+
+[immutable.issuance]
+validity_duration_range = ["P1Y", "P10Y"]
+issuance_minimum_validity_duration = "P1M"
+additional_signatures_range = [0, 3]
+allowed_signature_roles = ["guarantor"]
+
+[immutable.custom_rules]
+
+[mutable.metadata]
+issuer_name = "Human Money Project"
+homepage_url = "https://human-money.org"
+keywords = ["free", "taler", "example", "community", "mvp"]
+
+[mutable.app_config]
+default_validity_duration = "P1Y"
+server_history_retention = "P3M"
+
+[mutable.i18n.descriptions]
+en = "A universal, divisible voucher for the exchange of goods and services. The FreeTaler serves as a generic example for self-issued clearing units."
+de = "Ein universeller, teilbarer Gutschein für den Tausch von Waren und Dienstleistungen. Der FreeTaler dient als generisches Beispiel für selbstgeschöpfte Verrechnungseinheiten."
+
+[mutable.i18n.footnotes]
+de = "WICHTIGER HINWEIS: Dieser Gutschein-Standard ('FreeTaler') ist ein reines Architektur-Beispiel der human_money_core Bibliothek und stellt keinen inhärenten finanziellen, gesetzlichen oder durch das System garantierten Wert dar. Dieser Standard dient als Vorlage für beliebige Währungen oder Einheiten. Die Einlösbarkeit und der Gegenwert basieren ausschließlich auf dem sozialen Vertrauen in den Ersteller dieses spezifischen Gutscheins."
+en = "IMPORTANT NOTE: This voucher standard ('FreeTaler') is a pure architectural example of the human_money_core library and represents no inherent financial, legal, or system-guaranteed value. This standard serves as a template for any currencies or units. Redeemability and value are based solely on social trust in the creator of this specific voucher."
+
+[mutable.i18n.collateral_descriptions]
+en = "This voucher is technically usable immediately after signature by the issuer. Further signatures (e.g., by guarantors or institutions) are possible and recommended in the Web of Trust to increase social acceptance, but are not mandatory for this MVP."
+de = "Dieser Gutschein ist sofort nach der Signatur durch den Aussteller technisch nutzbar. Weitere Signaturen (z. B. durch Bürgen oder Institutionen) sind möglich und im Web of Trust empfohlen, um die soziale Akzeptanz zu erhöhen, für dieses MVP aber nicht zwingend erforderlich."
+
+[signature]
+# Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.
+issuer_id = "0:riw@did:key:z6Mki8QqVMb66hjtTwcceVXbZuSHTk61jqiprRvEhuotZmSA"
+
+# Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).
+signature = "2UxaJ9Hu7aKM8heNuD4UQeB2bp13NHnM84QrxDxdmYEXzdT4Zoe3hX87sSwKr11zaEdc4EbCS93TsukdtphAq7Do"

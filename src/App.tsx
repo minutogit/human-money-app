@@ -293,7 +293,7 @@ function AppContent() {
                         </header>
                     )}
 
-                    <main className="w-full flex-grow p-4 md:p-6 lg:p-8">
+                    <main className={`w-full flex-grow ${INTERNAL_VIEWS.includes(appState.view) ? 'p-4 md:p-6 lg:p-8' : ''}`}>
                         {renderContent()}
                     </main>
                 </div>

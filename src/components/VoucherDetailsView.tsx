@@ -355,6 +355,35 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                 </Card>
                             )}
 
+                            {/* Policy & Conditions */}
+                            {(voucher.voucher_standard.template.description || voucher.voucher_standard.template.footnote) && (
+                                <Card className="border-none shadow-premium" header={
+                                    <div className="flex items-center gap-2">
+                                        <Info size={18} className="text-theme-primary" />
+                                        <span className="font-black text-xs uppercase tracking-widest">Policy & Conditions</span>
+                                    </div>
+                                }>
+                                    <div className="space-y-6 p-2">
+                                        {voucher.voucher_standard.template.description && (
+                                            <div className="space-y-2">
+                                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest opacity-60">Description</p>
+                                                <p className="text-sm text-theme-secondary leading-relaxed italic">
+                                                    "{voucher.voucher_standard.template.description}"
+                                                </p>
+                                            </div>
+                                        )}
+                                        {voucher.voucher_standard.template.footnote && (
+                                            <div className="space-y-2 pt-4 border-t border-theme-subtle/30">
+                                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest opacity-60">Footnote</p>
+                                                <p className="text-xs text-theme-light leading-relaxed">
+                                                    {voucher.voucher_standard.template.footnote}
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </Card>
+                            )}
+
                             {/* Signatures Timeline */}
                             <Card className="border-none shadow-premium" header={
                                 <div className="flex items-center gap-2">

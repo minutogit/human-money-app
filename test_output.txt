@@ -1,0 +1,148 @@
+
+> human_money_app@0.1.0-beta.4 test
+> vitest --run
+
+
+ RUN  v2.1.9 /home/basti/Dokumente/Coding/human-money-app
+
+ ✓ src/components/__tests__/SignRequestView.test.tsx (1 test) 123ms
+ ✓ src/components/__tests__/ReceiveView.test.tsx (2 tests) 274ms
+ ✓ src/components/__tests__/AddressBook.test.tsx (3 tests) 229ms
+stderr | src/components/__tests__/SendView.test.tsx > SendView Component (Silber Standard) > renders form fields for sending
+TypeError: Cannot read properties of undefined (reading 'map')
+    at SendView (/home/basti/Dokumente/Coding/human-money-app/src/components/SendView.tsx:635:57)
+    at Object.react_stack_bottom_frame (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:23863:20)
+    at renderWithHooks (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:5529:22)
+    at updateFunctionComponent (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:8897:19)
+    at beginWork (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:10522:18)
+    at runWithFiberInDEV (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:1522:13)
+    at performUnitOfWork (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:15140:22)
+    at workLoopSync (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14956:41)
+    at renderRootSync (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14936:11)
+    at performWorkOnRoot (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14462:44) {
+  stackStr: "TypeError: Cannot read properties of undefined (reading 'map')\n" +
+    '    at SendView (/home/basti/Dokumente/Coding/human-money-app/src/components/SendView.tsx:635:57)\n' +
+    '    at Object.react_stack_bottom_frame (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:23863:20)\n' +
+    '    at renderWithHooks (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:5529:22)\n' +
+    '    at updateFunctionComponent (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:8897:19)\n' +
+    '    at beginWork (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:10522:18)\n' +
+    '    at runWithFiberInDEV (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:1522:13)\n' +
+    '    at performUnitOfWork (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:15140:22)\n' +
+    '    at workLoopSync (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14956:41)\n' +
+    '    at renderRootSync (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14936:11)\n' +
+    '    at performWorkOnRoot (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14462:44)',
+  nameStr: 'TypeError',
+  expected: 'undefined',
+  actual: 'undefined'
+}
+An error occurred in the <SendView> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+stderr | src/components/__tests__/SendView.test.tsx > SendView Component (Silber Standard) > loads vouchers and contacts on mount
+TypeError: Cannot read properties of undefined (reading 'map')
+    at SendView (/home/basti/Dokumente/Coding/human-money-app/src/components/SendView.tsx:635:57)
+    at Object.react_stack_bottom_frame (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:23863:20)
+    at renderWithHooks (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:5529:22)
+    at updateFunctionComponent (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:8897:19)
+    at beginWork (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:10522:18)
+    at runWithFiberInDEV (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:1522:13)
+    at performUnitOfWork (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:15140:22)
+    at workLoopSync (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14956:41)
+    at renderRootSync (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14936:11)
+    at performWorkOnRoot (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14462:44) {
+  stackStr: "TypeError: Cannot read properties of undefined (reading 'map')\n" +
+    '    at SendView (/home/basti/Dokumente/Coding/human-money-app/src/components/SendView.tsx:635:57)\n' +
+    '    at Object.react_stack_bottom_frame (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:23863:20)\n' +
+    '    at renderWithHooks (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:5529:22)\n' +
+    '    at updateFunctionComponent (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:8897:19)\n' +
+    '    at beginWork (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:10522:18)\n' +
+    '    at runWithFiberInDEV (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:1522:13)\n' +
+    '    at performUnitOfWork (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:15140:22)\n' +
+    '    at workLoopSync (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14956:41)\n' +
+    '    at renderRootSync (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14936:11)\n' +
+    '    at performWorkOnRoot (/home/basti/Dokumente/Coding/human-money-app/node_modules/react-dom/cjs/react-dom-client.development.js:14462:44)',
+  nameStr: 'TypeError',
+  expected: 'undefined',
+  actual: 'undefined'
+}
+An error occurred in the <SendView> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+ ✓ src/components/__tests__/SendView.test.tsx (2 tests) 324ms
+ ✓ src/components/__tests__/CreateVoucher.test.tsx (3 tests) 540ms
+ ✓ src/components/__tests__/Login.test.tsx (4 tests) 577ms
+ ✓ src/components/__tests__/CreateNewProfile.test.tsx (16 tests) 1921ms
+   ✓ CreateNewProfile Component > Step 2: Seed Confirmation (Standard Mode) > proceeds to step 3 when confirmation words are correct 1063ms
+ ✓ src/components/__tests__/WalletRecovery.test.tsx (30 tests) 1964ms
+ ✓ src/components/__tests__/RecreateProfile.test.tsx (28 tests) 6087ms
+   ✓ RecreateProfile Component > Step 1: Seed Input (Words Mode) > validates mnemonic live and shows success message 421ms
+   ✓ RecreateProfile Component > Step 1: Seed Input (Words Mode) > validates mnemonic live and shows error message 368ms
+   ✓ RecreateProfile Component > Step 1: Seed Input (Words Mode) > enables Next button only when mnemonic is valid 365ms
+   ✓ RecreateProfile Component > Step 1: Seed Input (Phrase Mode) > validates phrase input live 336ms
+   ✓ RecreateProfile Component > Step 1 -> 2 Navigation > navigates to step 2 when mnemonic is valid and Next is clicked 364ms
+   ✓ RecreateProfile Component > Step 2: Profile Details > shows profile name, password, and user prefix fields 381ms
+   ✓ RecreateProfile Component > Step 2: Profile Details > shows error when passwords do not match 377ms
+   ✓ RecreateProfile Component > Step 2: Profile Details > shows error when password is too short 361ms
+   ✓ RecreateProfile Component > Step 2: Profile Details > shows error when passphrases do not match 357ms
+   ✓ RecreateProfile Component > Step 2: Profile Details > focuses password input on validation error 352ms
+   ✓ RecreateProfile Component > Step 2: Profile Details > clears error message when focusing on password field 358ms
+   ✓ RecreateProfile Component > Step 2: Profile Details > successfully creates profile with all fields and calls callback 508ms
+   ✓ RecreateProfile Component > Step 2: Profile Details > handles backend error during profile creation 507ms
+   ✓ RecreateProfile Component > Navigation > shows back button in step 2 and returns to step 1 354ms
+
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 2 unhandled errors during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'map')
+ ❯ SendView src/components/SendView.tsx:635:57
+
+ ❯ Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:23863:20
+ ❯ renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:5529:22
+ ❯ updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:8897:19
+ ❯ beginWork node_modules/react-dom/cjs/react-dom-client.development.js:10522:18
+ ❯ runWithFiberInDEV node_modules/react-dom/cjs/react-dom-client.development.js:1522:13
+ ❯ performUnitOfWork node_modules/react-dom/cjs/react-dom-client.development.js:15140:22
+ ❯ workLoopSync node_modules/react-dom/cjs/react-dom-client.development.js:14956:41
+ ❯ renderRootSync node_modules/react-dom/cjs/react-dom-client.development.js:14936:11
+ ❯ performWorkOnRoot node_modules/react-dom/cjs/react-dom-client.development.js:14462:44
+
+This error originated in "src/components/__tests__/SendView.test.tsx" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "renders form fields for sending". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'map')
+ ❯ SendView src/components/SendView.tsx:635:57
+
+ ❯ Object.react_stack_bottom_frame node_modules/react-dom/cjs/react-dom-client.development.js:23863:20
+ ❯ renderWithHooks node_modules/react-dom/cjs/react-dom-client.development.js:5529:22
+ ❯ updateFunctionComponent node_modules/react-dom/cjs/react-dom-client.development.js:8897:19
+ ❯ beginWork node_modules/react-dom/cjs/react-dom-client.development.js:10522:18
+ ❯ runWithFiberInDEV node_modules/react-dom/cjs/react-dom-client.development.js:1522:13
+ ❯ performUnitOfWork node_modules/react-dom/cjs/react-dom-client.development.js:15140:22
+ ❯ workLoopSync node_modules/react-dom/cjs/react-dom-client.development.js:14956:41
+ ❯ renderRootSync node_modules/react-dom/cjs/react-dom-client.development.js:14936:11
+ ❯ performWorkOnRoot node_modules/react-dom/cjs/react-dom-client.development.js:14462:44
+
+This error originated in "src/components/__tests__/SendView.test.tsx" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "loads vouchers and contacts on mount". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+ Test Files  9 passed (9)
+      Tests  89 passed (89)
+     Errors  2 errors
+   Start at  12:48:39
+   Duration  8.16s (transform 1.42s, setup 2.28s, collect 4.15s, tests 12.04s, environment 6.51s, prepare 1.35s)
+
