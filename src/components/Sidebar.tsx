@@ -3,6 +3,7 @@ import React from 'react';
 import Avatar from "boring-avatars";
 import logo from '../assets/logo.png';
 import { AppState } from '../App';
+import { useSession } from '../context/SessionContext';
 import { 
   LayoutDashboard, 
   Wallet, 
@@ -55,6 +56,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpen,
   setIsOpen
 }) => {
+  const { isSessionActive } = useSession();
   const currentView = appState.view;
 
   // Only show sidebar for internal views
@@ -134,12 +136,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
             </div>
             <div className="flex flex-col min-w-0">
-              <h2 className="text-sm font-bold text-theme-secondary truncate">
-                {profileName || "Not Logged In"}
+              <h2 className="text-sm font-bold text-theme-secondary truncate flex items-center gap-1.5">
+                {profileName || (isSessionActive ? "Logged In" : "Session Locked")}
+                {!isSessionActive && profileName && (
+                  <svg className="w-3.5 h-3.5 text-theme-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                )}
               </h2>
               <span className="text-[10px] font-medium text-theme-light uppercase tracking-widest flex items-center gap-1">
-                <span className="w-1.5 h-1.5 bg-theme-success rounded-full animate-pulse"></span>
-                Active Wallet
+                <span className={`w-1.5 h-1.5 rounded-full ${isSessionActive ? "bg-theme-success animate-pulse" : "bg-theme-warning"}`}></span>
+                {isSessionActive ? "Active Wallet" : "Session Locked"}
               </span>
             </div>
           </div>

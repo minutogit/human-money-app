@@ -125,7 +125,7 @@ pub fn run() {
             profile_exists, list_profiles, create_profile, login, recover_wallet_and_set_new_password, logout,
             delete_profile, verify_profile_password,
             handover_to_this_device,
-            unlock_session, lock_session, refresh_session_activity, // <--- NEU
+            unlock_session, lock_session, refresh_session_activity, is_session_active, // <--- NEU
             generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic, get_local_instance_id,
             get_user_id, get_user_profile, get_total_balance_by_currency, get_voucher_summaries, get_voucher_details,
             get_active_asset_classes,

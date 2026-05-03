@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const SETTINGS_KEY: &str = "app_settings";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct AppSettings {
     pub bundle_retention_days: u64,
     // NEU: 0 = Immer fragen, >0 = Session Dauer in Sekunden

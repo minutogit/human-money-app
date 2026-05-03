@@ -362,6 +362,13 @@ pub fn lock_session(state: tauri::State<AppState>) {
 }
 
 #[tauri::command]
+pub fn is_session_active(state: tauri::State<AppState>) -> bool {
+    // Loggt nicht, um Spam zu vermeiden
+    let service = state.service.lock().unwrap();
+    service.is_session_active()
+}
+
+#[tauri::command]
 pub fn refresh_session_activity(state: tauri::State<AppState>) {
     // Loggt nicht, um Spam zu vermeiden
     let mut service = state.service.lock().unwrap();

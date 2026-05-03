@@ -80,6 +80,19 @@ function AppContent() {
 
         async function checkProfile() {
             try {
+                // First, check if we are already logged in (session active)
+                try {
+                    const profile = await invoke<ProfileInfo>("get_user_profile");
+                    logger.info(`Auto-login successful for profile: ${profile.profileName}`);
+                    setProfileName(profile.profileName);
+                    notifyLogin();
+                    setAppState({ view: "logged_in" });
+                    return; // Exit early if auto-login worked
+                } catch (e) {
+                    // Not logged in or session locked, proceed with normal flow
+                    logger.info("No active session found, checking available profiles.");
+                }
+
                 const profiles = await invoke<ProfileInfo[]>("list_profiles");
                 setAppState({ view: profiles.length > 0 ? "needs_login" : "needs_profile" });
             } catch (e) {

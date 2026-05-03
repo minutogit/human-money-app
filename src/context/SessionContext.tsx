@@ -75,6 +75,28 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         };
     }, []); // Empty dependency array -> Event Listeners only attached once
 
+    // Polling für Session-Status (erkennt Timeout im Hintergrund)
+    useEffect(() => {
+        const checkStatus = async () => {
+            // Nur prüfen, wenn wir glauben, die Session sei aktiv
+            if (isSessionActiveRef.current) {
+                try {
+                    const active = await invoke<boolean>("is_session_active");
+                    if (!active) {
+                        logger.info("Session background check: Session expired.");
+                        setIsSessionActive(false);
+                        isSessionActiveRef.current = false;
+                    }
+                } catch (e) {
+                    logger.error(`Session check failed: ${e}`);
+                }
+            }
+        };
+
+        const interval = setInterval(checkStatus, 10000); // Alle 10s prüfen
+        return () => clearInterval(interval);
+    }, []);
+
     // Hilfsfunktion zum Aktivieren der Session
     // Setzt Status auf True und resettet den Heartbeat-Timer
     const activateSession = useCallback(() => {

@@ -149,7 +149,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                         <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Timeout Interval (Minutes)</label>
                                         <Input
                                             type="number"
-                                            value={settings ? Math.floor(settings.sessionTimeoutSeconds / 60) : 10}
+                                            value={settings ? Math.floor((settings.sessionTimeoutSeconds || 0) / 60) : 10}
                                             onChange={(e) => {
                                                 const minutes = parseInt(e.target.value, 10);
                                                 setSettings(s => s ? { ...s, sessionTimeoutSeconds: isNaN(minutes) ? 0 : minutes * 60 } : null);
