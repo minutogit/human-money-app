@@ -343,10 +343,13 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         selectedStandards.forEach(uuid => {
             const standard = voucherStandards.find(s => standardIdToUuidMap.get(s.id) === uuid);
             if (standard) {
-                const match = standard.content.match(/privacyMode\s*=\s*"([^"]+)"/);
-                const mode = match ? match[1] : "Public";
-                if (mode === "Public" || mode === "public") hasPublic = true;
-                if (mode === "Stealth" || mode === "stealth" || mode === "Private" || mode === "private") hasPrivate = true;
+                const match = standard.content.match(/(?:privacy_mode|privacyMode)\s*=\s*"([^"]+)"/i);
+                const mode = match ? match[1].toLowerCase() : "public";
+                logger.info(`Detected privacy mode for standard ${uuid}: ${mode}`);
+                
+                if (mode === "public") hasPublic = true;
+                if (mode === "stealth" || mode === "private") hasPrivate = true;
+                // 'flexible' mode stays both false, allowing user choice
             }
         });
         if (hasPublic && hasPrivate) return { mode: 'Incompatible', forced: false };
