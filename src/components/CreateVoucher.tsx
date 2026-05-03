@@ -41,7 +41,7 @@ function parseStandardInfo(tomlContent: string) {
     const unit = unitMatch ? unitMatch[1] : null;
     const abbreviationMatch = tomlContent.match(/abbreviation\s*=\s*"([^"]+)"/);
     const abbreviation = abbreviationMatch ? abbreviationMatch[1] : null;
-    const durationMatch = tomlContent.match(/default_validityDuration\s*=\s*"P(\d+)([YMD])"/);
+    const durationMatch = tomlContent.match(/default_validity_duration\s*=\s*"P(\d+)([YMD])"/);
     let validity = null;
     if (durationMatch) {
         validity = { value: parseInt(durationMatch[1], 10), unit: durationMatch[2] as "Y" | "M" | "D" };

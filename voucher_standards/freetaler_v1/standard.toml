@@ -11,7 +11,7 @@ collateral_type = "personal_guarantee"
 [immutable.features]
 allow_partial_transfers = true
 balances_are_summable = true
-amount_decimal_places = 4
+amount_decimal_places = 2
 privacy_mode = "flexible"
 allowed_t_types = ["init", "transfer", "split"]
 
@@ -49,4 +49,4 @@ de = "Dieser Gutschein ist sofort nach der Signatur durch den Aussteller technis
 issuer_id = "0:riw@did:key:z6Mki8QqVMb66hjtTwcceVXbZuSHTk61jqiprRvEhuotZmSA"
 
 # Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).
-signature = "2UxaJ9Hu7aKM8heNuD4UQeB2bp13NHnM84QrxDxdmYEXzdT4Zoe3hX87sSwKr11zaEdc4EbCS93TsukdtphAq7Do"
+signature = "2s2TV9N8ex812gtcTHETNVsGku5sz4cH3v8h149yE7vEwyCZ39vCwpdfSG5AHV2QDvVvJMgmKQm7dGcJCqiDFads"

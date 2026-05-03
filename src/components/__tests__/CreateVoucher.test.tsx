@@ -39,7 +39,7 @@ describe('CreateVoucher Component', () => {
 issuer_name = "Human Money Project"
 unit = "Taler"
 abbreviation = "Taler"
-default_validityDuration = "P1Y"
+default_validity_duration = "P1Y"
 amount_decimal_places = 4`,
     },
   ];
@@ -140,5 +140,26 @@ amount_decimal_places = 4`,
 
     // scrollIntoView should have been called
     expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('updates validity duration when standard is selected', async () => {
+    render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    // Wait for standards to load
+    const select = await screen.findByLabelText(/Voucher Type/i) as HTMLSelectElement;
+    
+    // Initial validity is 3 years
+    const validityInput = screen.getByDisplayValue('3') as HTMLInputElement;
+    expect(validityInput).toBeInTheDocument();
+
+    // Select the standard
+    await userEvent.selectOptions(select, 'freetaler_v1');
+
+    // It should update to 1 year (from the mock content)
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('1')).toBeInTheDocument();
+    });
   });
 });
