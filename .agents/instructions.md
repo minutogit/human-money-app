@@ -28,6 +28,7 @@ Load these skills for deep context when needed:
 
 - **`app-context`**: Full architecture, component overview, implemented features, Tauri commands
 - **`core-api-reference`**: The `human_money_core` AppService API as used from Tauri commands
+- **`project-plan`**: Current MVP roadmap and completion status
 
 ## Core API Reference
 
@@ -65,15 +66,15 @@ To keep the architecture clean and avoid polluting `human_money_core` with front
 
 ```
 src/                    ← React frontend
-├── components/         ← 13 UI components
-├── context/            ← React context
-├── utils/              ← Logging utilities
-├── types.ts            ← TypeScript interfaces
+├── components/         ← UI components (Dashboard, Wallet, Send, Receive, etc.)
+├── context/            ← React context (Session, State)
+├── utils/              ← Utilities (format, log, userIdHelper)
+├── types.ts            ← TypeScript interfaces (matching camelCase DTOs)
 └── App.tsx             ← Main app with routing
 
 src-tauri/src/          ← Rust backend bridge
-├── commands/           ← Tauri commands (actions, auth, queries, utils)
-├── models.rs           ← Frontend ↔ Backend data types
+├── commands/           ← Tauri commands (auth, actions, queries, contacts, integrity)
+├── models/             ← Modular Frontend ↔ Backend DTOs
 ├── settings.rs         ← App configuration
 └── lib.rs              ← Tauri setup and command registration
 ```

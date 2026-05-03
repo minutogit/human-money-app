@@ -5,250 +5,116 @@ description: Reference documentation for the human_money_core AppService API as 
 
 # AppService: Public API Facade
 
-This directory contains the `AppService`, which is the primary public-facing API for the `human_money_core`. It is designed as a high-level **facade** to simplify all interactions for client applications (e.g., Tauri, mobile apps).
+Dies ist die Kontextdatei für die `human_money_core`-Bibliothek, die für die Entwicklung von Client-Anwendungen (Tauri, Mobile) aufbereitet wurde. Sie bietet eine präzise Referenz für die `AppService`-Fassade.
 
-**Key Responsibilities:**
-* Manages the wallet state (`Locked` vs. `Unlocked`).
-* Abstracts all complex cryptographic operations.
-* Handles all persistent storage (encryption and saving) automatically.
-* Provides a simple, transactional interface for all wallet operations.
+### 1. Architektur & Konzepte
 
-## Core Concept: State Management
+*   **AppService-Fassade:** Einzige Schnittstelle zur Kernlogik. Verwaltet Zustand (`Locked`/`Unlocked`), Persistenz und Kryptografie.
+*   **Zustandsverwaltung:** Nach `login` oder `create_profile` ist der Service `Unlocked`. `logout` sperrt ihn wieder.
+*   **Pessimistic Locking:** Verhindert gleichzeitigen Zugriff mehrerer Prozesse auf dasselbe Wallet (`.wallet.lock`).
+*   **Wallet Seal & Integrity:** Schützt vor Rollback-Angriffen und Manipulationen an den verschlüsselten Dateien. Bindet das Wallet an eine `local_instance_id` (Device-Binding).
+*   **Argon2id:** Wird für das Key-Stretching des anonymen Ordnernamens und der Verschlüsselungsschlüssel verwendet.
 
-The `AppService` operates as a state machine with two states:
-* `AppState::Locked`: The initial state. No wallet data is in memory. Only profile listing and login/creation operations are available.
-* `AppState::Unlocked`: After a successful `login`, `create_profile`, or `recover_wallet`. All wallet operations (querying, transferring) are now possible.
-* `logout()`: Securely transitions the service back to the `Locked` state, clearing all sensitive data from memory.
-
-## Thread Safety and Locking
-
-The `AppService` implements a pessimistic locking mechanism to prevent concurrent modifications of the same wallet by multiple processes, closing a potential "stale state" double-spending vulnerability. All state-changing operations automatically acquire an exclusive lock on the wallet directory during execution and release it upon completion. This ensures thread-safety and data consistency in multi-process environments.
-
-
-
-## Authentication Model
-
-Write operations (any function that modifies wallet state) require authentication. This is handled by the `password: Option<&str>` parameter.
-
-* **Mode A (Always Ask):** Call the function with `password: Some("users-password")`. The password is used for this single operation.
-* **Mode B (Session):** Call `unlock_session("users-password", 900)` once. You can then call write operations with `password: None` for the specified duration (e.g., 900 seconds).
-
----
-
-## API Reference
-
-All methods return a `Result<T, String>`, where `String` is a user-friendly error message.
-
-### 1. Lifecycle & Authentication
-
-These methods manage the application state and user profiles.
+### 2. Lebenszyklus & Authentifizierung
 
 #### `pub fn new(base_storage_path: &Path) -> Result<Self, String>`
-* **Description:** Initializes a new `AppService` in the `Locked` state.
-* **Parameters:**
-    * `base_storage_path`: The root directory where all user profile sub-directories will be stored.
-* **Usage:** This is the first function you must call.
+Initialisiert den Service im `Locked`-Zustand.
 
 #### `pub fn list_profiles(&self) -> Result<Vec<ProfileInfo>, String>`
-* **Description:** Lists all available user profiles found in the `base_storage_path`.
-* **Usage:** Call this in the `Locked` state to populate a login screen.
+Listet alle Profile im Basisverzeichnis auf (liest `profiles.json`).
+`ProfileInfo` enthält `profile_name` und `folder_name`.
 
 #### `pub fn create_profile(...) -> Result<(), String>`
-* **Description:** Creates a new user profile, encrypts the wallet, and logs in.
-* **State:** Transitions from `Locked` -> `Unlocked`.
+Erstellt ein Profil.
+*   **Parameter:** `profile_name`, `mnemonic`, `passphrase`, `user_prefix`, `password`, `language: MnemonicLanguage`, `local_instance_id`.
 
 #### `pub fn login(...) -> Result<(), String>`
-* **Description:** Unlocks an existing wallet using its `folder_name` and `password`.
-* **State:** Transitions from `Locked` -> `Unlocked`.
-
-#### `pub fn recover_wallet_and_set_new_password(...) -> Result<(), String>`
-* **Description:** Recovers an existing wallet using its mnemonic phrase and sets a new password.
-* **State:** Transitions from `Locked` -> `Unlocked`.
+Entsperrt ein Wallet.
+*   **Parameter:** `folder_name`, `password`, `cleanup_on_login`, `local_instance_id`.
 
 #### `pub fn logout(&mut self)`
-* **Description:** Locks the wallet and clears all sensitive data (like private keys and session keys) from memory.
-* **State:** Transitions from `Unlocked` -> `Locked`.
+Sperrt das Wallet und löscht alle Keys aus dem RAM.
 
----
-
-### 2. Session Management (Optional Auth)
-
-These methods control the "Remember Password" feature (Mode B).
+#### `pub fn is_session_active(&self) -> bool`
+Prüft, ob eine "Passwort merken"-Sitzung (Session) aktuell aktiv ist.
 
 #### `pub fn unlock_session(&mut self, password: &str, duration_seconds: u64) -> Result<(), String>`
-* **Description:** Verifies the password and caches a derived encryption key in memory for `duration_seconds`.
-* **Usage:** After calling this, write-operations can be called with `password: None`.
+Aktiviert den Session-Cache für schreibende Operationen (Modus B).
 
 #### `pub fn lock_session(&mut self)`
-* **Description:** Immediately clears the cached session key from memory, forcing Mode A for the next operation.
+Löscht den Session-Cache sofort.
 
-#### `pub fn refresh_session_activity(&mut self)`
-* **Description:** Resets the inactivity timer of the "Remember Password" session.
-* **Usage:** Call this on UI activity (clicks, mouse movements) to keep the session alive while the user is active.
+#### `pub fn refresh_session_activity(&mut self) -> Result<(), String>`
+Verlängert die aktive Session bei Benutzerinteraktion.
 
----
-
-### 3. Core Wallet Operations (Commands)
-
-These methods modify the wallet state and require authentication.
+### 3. Kern-Operationen (Commands)
 
 #### `pub fn create_new_voucher(standard_toml_content: &str, lang_preference: &str, data: NewVoucherData, password: Option<&str>) -> Result<Voucher, String>`
-* **Description:** Creates a new voucher (e.g., "Minuto") based on a standard definition.
-* **Status Behavior:** If the standard requires additional signatures (e.g., guarantors, notaries) that are not yet present, the voucher is created with `VoucherStatus::Incomplete`. If all required signatures are present (rare during initial creation), it becomes `VoucherStatus::Active`.
-* **Auth:** Requires `password: Option<&str>`.
+Erstellt einen neuen Gutschein. Benötigt Auth (Passwort oder Session).
 
-#### `pub fn create_transfer_bundle(...) -> Result<CreateBundleResult, String>`
-* **Description:** The primary function for **sending** value. It bundles one or more voucher `sources` into an encrypted `SecureContainer` (returned as `bundle_bytes: Vec<u8>`) for the recipient.
-* **Auth:** Requires `password: Option<&str>`.
+#### `pub fn create_transfer_bundle(request: MultiTransferRequest, standards: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: Option<&str>) -> Result<CreateBundleResult, String>`
+Kernfunktion zum Senden von Werten. Erstellt verschlüsselten `SecureContainer`.
 
-#### `pub fn receive_bundle(...) -> Result<ProcessBundleResult, String>`
-* **Description:** The primary function for **receiving** value. It processes a `bundle_data` blob. It validates the transaction, checks for double-spending, and adds the new value to the wallet.
-* **Auth:** Requires `password: Option<&str>`.
+#### `pub fn receive_bundle(bundle_data: &[u8], standards: &HashMap<String, String>, archive: Option<&dyn VoucherArchive>, password: Option<&str>) -> Result<ProcessBundleResult, String>`
+Kernfunktion zum Empfangen. Validiert Transaktion und Double-Spending.
 
-#### `pub fn update_public_profile(&mut self, profile: PublicProfile, password: Option<&str>) -> Result<(), String>`
-* **Description:** Updates the public profile metadata (first name, last name, address, gender, etc.) of the wallet owner and persists changes.
-* **Auth:** Requires `password: Option<&str>`.
-
----
-
-### 4. Signature Workflows
-
-Methods for handling multi-role signatures (e.g., guarantors, notaries).
-
-#### `pub fn create_signing_request_bundle(local_instance_id: &str, config: ContainerConfig) -> Result<Vec<u8>, String>`
-* **Description:** Creates an encrypted bundle to send a voucher to another user (e.g., a guarantor) requesting their signature.
-* **Parameters:**
-    * `local_instance_id`: The local ID of the voucher to be signed.
-    * `config`: The encryption configuration. Use `ContainerConfig::TargetDid(did)` for a specific recipient, `TargetDids(vec)` for multiple, `Password(pass)` for symmetric encryption, or `Cleartext` for unencrypted transmission.
-* **Auth:** Read-only (if wallet is unlocked), no password needed.
-
-#### `pub fn open_voucher_signing_request(container_bytes: &[u8], password: Option<&str>) -> Result<Voucher, String>`
-* **Description:** (Called by the signer). Opens a received signature request bundle and returns the voucher part so the user can preview what they are signing.
-* **Parameters:**
-    * `container_bytes`: The received encrypted bundle.
-    * `password`: Optional password if the container was symmetrically encrypted.
-* **Auth:** Read-only, no password needed.
-
-#### `pub fn create_detached_signature_response_bundle(voucher_to_sign: &Voucher, role: &str, include_details: bool, config: ContainerConfig, password: Option<&str>) -> Result<Vec<u8>, String>`
-* **Description:** (Called by the signer). Creates an encrypted response bundle containing only the detached signature. Additionally, stores the endorsed voucher in the signer's wallet with status `Endorsed` as a legal record.
-* **Parameters:**
-    * `voucher_to_sign`: The voucher object received in the signing request.
-    * `role`: The semantic role of the signer (e.g., `"guarantor"`, `"notary"`).
-    * `include_details`: If `true`, the signer's public profile is embedded.
-    * `config`: Encryption configuration for the response (usually returning to the requester).
-    * `password`: The password for authentication (Wallet Password).
-* **Auth:** Requires `password: Option<&str>`.
-
-#### `pub fn process_and_attach_signature(container_bytes: &[u8], standard_toml_content: &str, container_password: Option<&str>, wallet_password: Option<&str>) -> Result<String, String>`
-* **Description:** Receives a signature response bundle, validates it, and attaches it locally.
-* **Parameters:**
-    * `container_bytes`: The received encrypted signature bundle.
-    * `standard_toml_content`: The voucher's standard definition (TOML).
-    * `container_password`: Optional password to decrypt the response bundle.
-    * `wallet_password`: Optional password to unlock the local wallet for saving.
-* **Returns:** The updated voucher instance ID (String).
-* **Status Behavior:** If this signature fulfills the last missing requirement, status transitions to `Active`.
-* **Auth:** Requires `wallet_password: Option<&str>`.
-
-#### `pub fn remove_voucher_signature(local_instance_id: &str, signature_id: &str, wallet_password: Option<&str>) -> Result<(), String>`
-* **Description:** Removes an additional signature (e.g., from a guarantor or witness) from a voucher.
-* **Constraints:** 
-    * Can only be performed by the voucher's creator.
-    * Can only be performed if the voucher is not yet in circulation (exactly one transaction of type `init`).
-    * Cannot remove the primary creator signature.
-* **Parameters:**
-    * `local_instance_id`: The local ID of the voucher.
-    * `signature_id`: The ID of the signature to be removed.
-    * `wallet_password`: Optional password to unlock the local wallet for saving.
-* **Status Behavior:** If the removal of a signature causes the voucher to no longer meet the minimum requirements of its standard, the status reverts to `Incomplete`.
-* **Auth:** Requires `wallet_password: Option<&str>`.
-
----
-
-### 5. Data Queries (Read-Only)
-
-These methods read data from the `Unlocked` wallet and do not require authentication.
+### 4. Datenabfragen (Queries) - Read-Only
 
 #### `pub fn get_user_id(&self) -> Result<String, String>`
-* **Description:** Returns the unique user ID (e.g., `did:key:...`) of the unlocked profile.
+Gibt die `did:key`-ID des Nutzers zurück.
 
-#### `pub fn get_public_profile(&self) -> Result<PublicProfile, String>`
-* **Description:** Extracts the public profile metadata (names, gender, address, etc.) from the internal wallet profile.
-* **Auth:** Read-only (if wallet is unlocked), no password needed.
-
-#### `pub fn get_voucher_summaries(...) -> Result<Vec<VoucherSummary>, String>`
-* **Description:** Returns a list of all vouchers in the wallet, with optional filters for status or standard UUID.
-* **Usage:** Ideal for displaying the main wallet dashboard or voucher list.
+#### `pub fn get_voucher_summaries(standard_filter: Option<&[String]>, status_filter: Option<&[VoucherStatus]>, test_filter: Option<bool>) -> Result<Vec<VoucherSummary>, String>`
+Gibt eine Liste von Gutscheinen zurück. `VoucherSummary` enthält:
+*   `local_instance_id`, `status`, `valid_until`, `creator_id`, `description`, `current_amount`, `unit`, `voucher_standard_name`, `voucher_standard_uuid`, `transaction_count`, `has_collateral`, `is_test_voucher`, etc.
 
 #### `pub fn get_total_balance_by_currency(&self) -> Result<Vec<AggregatedBalance>, String>`
-* **Description:** Returns the sum of all `Active` vouchers, grouped by currency (e.g., "Minuto", "EUR").
+Aggregiertes Guthaben pro Währung.
 
 #### `pub fn get_voucher_details(&self, local_id: &str) -> Result<VoucherDetails, String>`
-* **Description:** Gets all details for a single voucher, including its full transaction history.
+Vollständige Details inkl. Transaktionshistorie.
+
+#### `pub fn get_public_profile(&self) -> Result<PublicProfile, String>`
+Gibt das Metadaten-Profil des Nutzers zurück.
+
+#### `pub fn get_event_history(offset: usize, limit: usize, password: Option<&str>) -> Result<Vec<WalletEvent>, String>`
+Abfrage der Event-Sourcing-Historie.
+
+#### `pub fn get_active_asset_classes(&self) -> Result<Vec<AssetClassSummary>, String>`
+Ermittelt alle im Wallet aktiven Asset-Klassen (Gutschein-Standard + Test-Status).
+
+#### `pub fn parse_voucher_standard(&self, standard_toml_content: &str) -> Result<VoucherStandardDefinition, String>`
+Parst und verifiziert einen Gutschein-Standard (TOML). Verifiziert auch die kryptografische Signatur.
+
+#### `pub fn get_allowed_signature_roles_from_standard(&self, standard_toml_content: &str) -> Result<Vec<String>, String>`
+Extrahiert die Liste der erlaubten Signatur-Rollen (z.B. "guarantor") aus einem Standard.
+
+### 5. Management & Sicherheit
+
+#### `pub fn update_public_profile(profile: PublicProfile, password: Option<&str>) -> Result<(), String>`
+Aktualisiert den Namen, Adresse, etc.
+
+#### `pub fn remove_voucher_signature(local_id: &str, sig_id: &str, password: Option<&str>) -> Result<(), String>`
+Entfernt Bürgen-Signaturen (nur vor Umlauf möglich).
 
 #### `pub fn check_reputation(&self, offender_id: &str) -> Result<TrustStatus, String>`
-* **Description:** Checks the reputation of a User ID based on locally stored conflict proofs.
-* **Returns:** `TrustStatus` (Clean, KnownOffender, or Resolved).
-* **Auth:** Read-only (if wallet is unlocked), no password needed.
+Prüft den Ruf einer User-ID basierend auf lokalen Beweisen.
 
-#### `pub fn get_allowed_signature_roles_from_standard(toml: &str) -> Result<Vec<String>, String>`
-* **Description:** Helper to extract allowed roles (like `"guarantor"`) from a standard definition.
+#### `pub fn get_voucher_source_sender(&self, local_instance_id: &str) -> Result<Option<String>, String>`
+Ermittelt die Identität des Absenders eines Gutscheins (ggf. durch Entschlüsselung).
 
----
+#### `pub fn run_storage_cleanup(&mut self) -> Result<CleanupReport, VoucherCoreError>`
+Manuelle Bereinigung alter Transaktionsdaten.
 
-### 6. Conflict Management
+#### `pub fn check_for_forks(&mut self) -> Result<IntegrityReport, String>`
+Prüft auf Double-Spending-Versuche durch Abgleich mit dem Server-Seal.
 
-Methods for handling double-spend conflicts.
+### 6. Wichtige Rückgabestrukturen
 
-#### `pub fn list_conflicts(&self) -> Result<Vec<ProofOfDoubleSpendSummary>, String>`
-* **Description:** Lists summaries of all known double-spend conflicts in the wallet.
-* **Auth:** Read-only, no password needed.
+*   **`ProcessBundleResult`**: Enthält `DoubleSpendCheckResult`, `TransferSummary` und IDs der neuen Gutscheine.
+*   **`IntegrityReport`**: Meldet `Valid`, `ForkDetected`, `RollbackDetected` oder `MissingSeal`.
 
-#### `pub fn get_proof_of_double_spend(&self, proof_id: &str) -> Result<ProofOfDoubleSpend, String>`
-* **Description:** Retrieves the full details of a specific double-spend proof by its ID.
-* **Auth:** Read-only, no password needed.
+### 7. Sicherheitsregeln für Apps
 
-#### `pub fn create_resolution_endorsement(...) -> Result<ResolutionEndorsement, String>`
-* **Description:** Creates a signed resolution endorsement for a conflict, indicating that the conflict is resolved from the wallet owner's perspective (as a victim).
-* **Auth:** Read-only, no password needed.
-
-#### `pub fn set_conflict_local_override(&mut self, proof_id: &str, value: bool) -> Result<(), String>`
-* **Description:** Manually overrides the trust status of a specific conflict proof.
-* **Auth:** Requires `password: Option<&str>`.
-
-#### `pub fn import_proof_from_json(&mut self, json_base64: &str) -> Result<(), String>`
-* **Description:** Imports a `ProofOfDoubleSpend` from a Base64-encoded JSON string (Cleartext Export).
-* **Immunity Rule:** Local decisions (Overrides) are never overwritten by imports.
-* **Auth:** Requires `password: Option<&str>`.
-
-#### `pub fn import_proof_from_container(&mut self, container_bytes: &[u8]) -> Result<(), String>`
-* **Description:** Imports a `ProofOfDoubleSpend` from a `SecureContainer` (Private exchange).
-* **Auth:** Requires `password: Option<&str>`.
-
----
-
-### 7. Encrypted Data Storage
-
-Securely save and load arbitrary application data (like contact lists or settings) using the wallet's encryption.
-
-#### `pub fn save_encrypted_data(...) -> Result<(), String>`
-* **Description:** Encrypts and saves a byte slice under a specific name.
-* **Auth:** Requires `password: Option<&str>`.
-
-#### `pub fn load_encrypted_data(...) -> Result<Vec<u8>, String>`
-* **Description:** Loads and decrypts a previously saved byte slice.
-* **Auth:** Requires `password: Option<&str>`.
-
----
-
-### 8. Static Utility Functions
-
-These helper functions can be called at any time, even when the service is `Locked`.
-
-#### `pub fn generate_mnemonic(word_count: u32) -> Result<String, String>`
-* **Description:** Generates a new, cryptographically secure BIP-39 mnemonic phrase.
-* **Usage:** Used during new profile creation.
-
-#### `pub fn validate_mnemonic(mnemonic: &str) -> Result<(), String>`
-* **Description:** Validates a given mnemonic phrase for correctness.
-* **Usage:** Used for input validation in recovery or creation forms.
+1.  **`local_instance_id`**: Muss stabil für ein Gerät sein, darf aber **NIE** im Wallet-Ordner gespeichert werden (Gefahr der Klonung). Empfohlen: OS Keyring.
+2.  **Passwort-Sicherheit**: Sensible Operationen erfordern Passwort oder eine aktive Session.
+3.  **Fehlerbehandlung**: UI sollte Sperrfehler (`Wallet locked by PID 1234`) verständlich anzeigen.
