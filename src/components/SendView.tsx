@@ -1,5 +1,4 @@
-// src/components/SendView.tsx
-import { useState, useEffect, useMemo, FormEvent, ChangeEvent } from "react";
+import { useState, useEffect, useMemo, useCallback, FormEvent, ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logger } from "../utils/log";
 import { 
@@ -21,6 +20,8 @@ import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { ContactBadge } from "./ui/ContactBadge";
 import Avatar from "boring-avatars";
 import { PageLayout } from "./ui/PageLayout";
+import { VoucherCard } from "./ui/VoucherCard";
+import { formatAmount } from "../utils/format";
 import { 
     User, 
     Send, 
@@ -46,25 +47,9 @@ interface SendViewProps {
     profileName: string | null;
 }
 
-function formatDate(isoString: string): string {
-    if (!isoString) return 'N/A';
-    return new Date(isoString).toLocaleDateString(undefined, {
-        year: 'numeric', month: 'short', day: 'numeric'
-    });
-}
-
 function getPrecision(content: string): number {
     const match = content.match(/amount_decimal_places\s*=\s*(\d+)/i);
     return match && match[1] ? parseInt(match[1], 10) : 4;
-}
-
-function formatAmount(amountStr: string, precision: number = 2): string {
-    const num = parseFloat(amountStr);
-    if (isNaN(num)) return amountStr;
-    return num.toLocaleString(undefined, { 
-        minimumFractionDigits: precision, 
-        maximumFractionDigits: precision 
-    });
 }
 
 export function SendView({ onBack, onTransferPrepared, profileName }: SendViewProps) {
@@ -137,7 +122,6 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
     useEffect(() => {
         async function fetchData() {
-            logger.info("SendView component displayed. Fetching initial data...");
             try {
                 const allFetchedVouchers = await invoke<VoucherSummary[]>("get_voucher_summaries");
                 const activeVouchers = allFetchedVouchers.filter(v => {
@@ -279,7 +263,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
         setFeedbackMsg("");
     };
 
-    const handleVoucherAmountChange = (voucherId: string, newAmountStr: string, maxAmount: string) => {
+    const handleVoucherAmountChange = useCallback((voucherId: string, newAmountStr: string, maxAmount: string) => {
         let val = parseFloat(newAmountStr);
         const max = parseFloat(maxAmount);
         
@@ -298,21 +282,26 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             }
         }
 
-        const newSelection = new Map(selection);
-        newSelection.set(voucherId, newAmountStr);
-        setSelection(newSelection);
+        setSelection(prev => {
+            const next = new Map(prev);
+            next.set(voucherId, newAmountStr);
+            return next;
+        });
 
         if (selectedStandardId) {
-            let total = 0;
-            newSelection.forEach(amount => {
-                const parsed = parseFloat(amount);
-                if (!isNaN(parsed)) total += parsed;
+            setSelection(prev => {
+                let total = 0;
+                prev.forEach(amount => {
+                    const parsed = parseFloat(amount);
+                    if (!isNaN(parsed)) total += parsed;
+                });
+                const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId) || selectedStandardId;
+                const precision = uuidToPrecisionMap.get(selectedStandardUuid) ?? 4;
+                setTargetAmountStr(total > 0 ? total.toFixed(precision) : "");
+                return prev;
             });
-            const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId) || selectedStandardId;
-            const precision = uuidToPrecisionMap.get(selectedStandardUuid) ?? 4;
-            setTargetAmountStr(total > 0 ? total.toFixed(precision) : "");
         }
-    };
+    }, [availableVouchers, uuidToPrecisionMap, selectedStandardId, standardIdToUuidMap]);
 
     const handleRecipientChange = (e: ChangeEvent<HTMLInputElement>) => {
         const value = e.target.value;
@@ -377,30 +366,33 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     }, [privacyRules, privacyMode, appSettings]);
 
 
-    const handleManualVoucherSelect = (voucher: VoucherSummary) => {
-        const newSelection = new Map(selection);
-        if (newSelection.has(voucher.localInstanceId)) {
-            newSelection.delete(voucher.localInstanceId);
-        } else {
-            const precision = uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4;
-            const amount = parseFloat(voucher.currentAmount);
-            newSelection.set(voucher.localInstanceId, isNaN(amount) ? voucher.currentAmount : amount.toFixed(precision));
-        }
-        setSelection(newSelection);
-
-        if (selectedStandardId) {
-            let total = 0;
-            newSelection.forEach(amount => {
-                const parsed = parseFloat(amount);
-                if (!isNaN(parsed)) total += parsed;
-            });
-            const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId) || selectedStandardId;
-            const precision = uuidToPrecisionMap.get(selectedStandardUuid) ?? 4;
-            setTargetAmountStr(total > 0 ? total.toFixed(precision) : "");
-        } else {
-            setTargetAmountStr("");
-        }
-    };
+    const handleManualVoucherSelect = useCallback((voucher: VoucherSummary) => {
+        setSelection(prev => {
+            const next = new Map(prev);
+            if (next.has(voucher.localInstanceId)) {
+                next.delete(voucher.localInstanceId);
+            } else {
+                const precision = uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4;
+                const amount = parseFloat(voucher.currentAmount);
+                next.set(voucher.localInstanceId, isNaN(amount) ? voucher.currentAmount : amount.toFixed(precision));
+            }
+            
+            if (selectedStandardId) {
+                let total = 0;
+                next.forEach(amount => {
+                    const parsed = parseFloat(amount);
+                    if (!isNaN(parsed)) total += parsed;
+                });
+                const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId) || selectedStandardId;
+                const precision = uuidToPrecisionMap.get(selectedStandardUuid) ?? 4;
+                setTargetAmountStr(total > 0 ? total.toFixed(precision) : "");
+            } else {
+                setTargetAmountStr("");
+            }
+            
+            return next;
+        });
+    }, [uuidToPrecisionMap, selectedStandardId, standardIdToUuidMap]);
 
     const checkoutSummary = useMemo(() => {
         let count = 0;
@@ -710,58 +702,20 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                         {filteredVouchers.length > 0 ? filteredVouchers.map(v => {
                                             const selectedAmount = selection.get(v.localInstanceId);
                                             const isSelected = selectedAmount !== undefined;
+                                            const precision = uuidToPrecisionMap.get(v.voucherStandardUuid) ?? 2;
+                                            
                                             return (
-                                                <div key={v.localInstanceId} className={`p-4 rounded-[32px] border-2 transition-all duration-300 relative overflow-hidden group shadow-sm ${isSelected ? 'bg-theme-primary/5 border-theme-primary ring-4 ring-theme-primary/10' : 'bg-white border-slate-100 hover:border-slate-200'}`}>
-                                                    <div className="flex justify-between items-start cursor-pointer" onClick={() => handleManualVoucherSelect(v)}>
-                                                        <div>
-                                                            <div className="flex items-baseline gap-2">
-                                                                <span className="text-xl font-black text-theme-secondary tracking-tight">
-                                                                    {(() => {
-                                                                        const precision = uuidToPrecisionMap.get(v.voucherStandardUuid) ?? 2;
-                                                                        return isSelected && selectedAmount !== v.currentAmount ? formatAmount(selectedAmount, precision) : formatAmount(v.currentAmount, precision);
-                                                                    })()}
-                                                                </span>
-                                                                <span className="text-[10px] font-black text-theme-primary uppercase tracking-widest">{v.displayCurrency}</span>
-                                                            </div>
-                                                            <div className="flex items-center gap-1.5 mt-1">
-                                                                <Avatar size={14} name={v.localInstanceId} variant="pixel" />
-                                                                <span className="text-[9px] font-bold text-theme-light uppercase tracking-widest truncate max-w-[120px]">{v.creatorFirstName} {v.creatorLastName}</span>
-                                                            </div>
-                                                        </div>
-                                                        <div className="text-right">
-                                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest">{v.displayStandardName}</p>
-                                                            {v.isTestVoucher && (
-                                                                <span className="text-[9px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">
-                                                                    Test Mode
-                                                                </span>
-                                                            )}
-                                                            <p className="text-[9px] font-bold text-slate-400 mt-0.5">{formatDate(v.validUntil)}</p>
-                                                        </div>
-                                                    </div>
-                                                    {isSelected && v.divisible && (
-                                                        <div className="mt-4 pt-4 border-t border-theme-primary/10 animate-in fade-in slide-in-from-top-2">
-                                                            <div className="flex items-center justify-between">
-                                                                <span className="text-[9px] font-black text-theme-primary uppercase tracking-widest">Partial Send</span>
-                                                                <div className="flex items-center gap-2">
-                                                                    <Input 
-                                                                        type="number" 
-                                                                        value={selectedAmount} 
-                                                                        onChange={(e) => handleVoucherAmountChange(v.localInstanceId, e.target.value, v.currentAmount)}
-                                                                        className="w-24 py-1.5 px-3 text-right font-black text-xs rounded-xl border-theme-primary/30"
-                                                                        max={v.currentAmount}
-                                                                        min="0"
-                                                                        step="any"
-                                                                    />
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                    {isSelected && (
-                                                        <div className="absolute top-3 right-3 opacity-20 group-hover:opacity-40 transition-opacity">
-                                                            <CheckCircle2 className="text-theme-primary" size={16} />
-                                                        </div>
-                                                    )}
-                                                </div>
+                                                <VoucherCard
+                                                    key={v.localInstanceId}
+                                                    voucher={v}
+                                                    mode="adjustable"
+                                                    isSelected={isSelected}
+                                                    selectedAmount={selectedAmount}
+                                                    onToggleSelect={handleManualVoucherSelect}
+                                                    onAmountChange={handleVoucherAmountChange}
+                                                    precision={precision}
+                                                    showStatus={false}
+                                                />
                                             );
                                         }) : (
                                             <div className="text-center py-10 bg-slate-50 rounded-[32px] border-2 border-dashed border-slate-200">
@@ -775,7 +729,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                         </Card>
 
                         {/* Summary Sticky Card */}
-                        <div className="sticky bottom-8 z-20">
+                        <div className="sticky bottom-8 z-30 transform-gpu will-change-transform">
                             <Card variant="none" className="shadow-premium-xl border-theme-primary/20 bg-theme-primary text-white overflow-hidden p-0 rounded-[40px]">
                                 <div className="p-8 space-y-6">
                                     <div className="flex justify-between items-center">
@@ -812,7 +766,9 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                                     <div className="flex items-center justify-between pt-4 border-t border-white/20">
                                         <div className="flex items-center gap-2">
                                             <div className="w-2 h-2 rounded-full bg-white animate-pulse"></div>
-                                            <span className="text-[9px] font-black uppercase tracking-widest">{checkoutSummary.count} Vouchers Selected</span>
+                                            <span key={selection.size} className="text-[9px] font-black uppercase tracking-widest animate-in fade-in duration-300">
+                                                {selection.size} Vouchers Selected
+                                            </span>
                                         </div>
                                         <Button 
                                             onClick={handlePrepareTransferClick} 

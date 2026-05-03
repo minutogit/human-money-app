@@ -190,6 +190,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Stabilized core test suite after standard migration (127 tests passing)
 - [x] Refined transactionality and state management for FreeTaler precision (4 decimals)
 - [x] IPC Stabilization & DTO Pattern Implementation (Strict snake_case core vs camelCase frontend) (APP-020)
+- [x] Fixed voucher selection counter in SendView (Synchronized UI state with selection Map)
 
 
 

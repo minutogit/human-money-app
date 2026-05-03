@@ -7,6 +7,7 @@ import { writeFile } from '@tauri-apps/plugin-fs';
 import { Button } from './ui/Button';
 import { TransactionRecord } from '../types';
 import { PageLayout } from './ui/PageLayout';
+import { formatDateTime, formatSummary } from '../utils/format';
 import { 
     ArrowUpRight, 
     ArrowDownLeft, 
@@ -26,26 +27,6 @@ interface TransactionHistoryViewProps {
     onBack: () => void;
 }
 
-function formatTimestamp(isoString: string): string {
-    return new Date(isoString).toLocaleString(undefined, {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-    });
-}
-
-function truncateId(id: string): string {
-    return truncateUserId(id);
-}
-
-function formatSummary(
-    summable: Record<string, string> | undefined,
-    countable: Record<string, number> | undefined
-): string {
-    const s = Object.entries(summable || {}).map(([unit, amount]) => `${amount} ${unit}`);
-    const c = Object.entries(countable || {}).map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`);
-    const all = [...s, ...c];
-    return all.length > 0 ? all.join(', ') : '0.00';
-}
 
 export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) {
     const [history, setHistory] = useState<TransactionRecord[]>([]);
@@ -172,7 +153,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                         </span>
                                                         <span className="text-[10px] text-theme-light/60 font-medium flex items-center gap-1">
                                                             <Calendar size={10} />
-                                                            {formatTimestamp(record.timestamp)}
+                                                            {formatDateTime(record.timestamp)}
                                                         </span>
                                                     </div>
                                                     <div className="flex flex-col">
@@ -276,7 +257,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                                         <tr key={idx} className="hover:bg-theme-subtle/5 transition-colors">
                                                                             <td className="px-4 py-2.5 font-bold text-theme-secondary">{detail.standardName}</td>
                                                                             <td className="px-4 py-2.5 font-black text-theme-primary text-right">{detail.amount} {detail.displayCurrency}</td>
-                                                                            <td className="px-4 py-2.5 font-mono text-theme-light opacity-60">{truncateId(detail.localInstanceId)}</td>
+                                                                            <td className="px-4 py-2.5 font-mono text-theme-light opacity-60">{truncateUserId(detail.localInstanceId)}</td>
                                                                         </tr>
                                                                     ))}
                                                                 </tbody>

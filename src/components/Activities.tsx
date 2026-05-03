@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { logger } from '../utils/log';
 import { WalletEvent } from '../types';
 import { PageLayout } from './ui/PageLayout';
+import { formatDateTime } from '../utils/format';
 import { 
     PlusCircle, 
     ArrowUpRight, 
@@ -23,12 +24,6 @@ interface ActivitiesProps {
     onNavigateToHistory: () => void;
 }
 
-function formatTimestamp(isoString: string): string {
-    return new Date(isoString).toLocaleString(undefined, {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-    });
-}
 
 function getEventDetails(event: WalletEvent): { label: string; icon: any; color: string; bgColor: string } {
     const type = event.eventType;
@@ -148,7 +143,7 @@ export function Activities({ onBack, onNavigateToVoucherDetail, onNavigateToHist
                                                     Date
                                                 </p>
                                                 <p className="text-xs font-bold text-theme-secondary">
-                                                    {formatTimestamp(event.timestamp)}
+                                                    {formatDateTime(event.timestamp)}
                                                 </p>
                                             </div>
                                             <ChevronRight size={18} className="text-theme-light/30 group-hover:text-theme-primary group-hover:translate-x-1 transition-all" />
