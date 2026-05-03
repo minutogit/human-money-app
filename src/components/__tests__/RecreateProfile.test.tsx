@@ -510,7 +510,7 @@ describe('RecreateProfile Component', () => {
       await waitFor(() => {
         expect(screen.getByLabelText(/Profile Name/i)).toBeInTheDocument();
         expect(screen.getByPlaceholderText('Minimum 8 characters')).toBeInTheDocument();
-        expect(screen.getByLabelText(/User Prefix \(CRITICAL\)/i)).toBeInTheDocument();
+        expect(screen.getByLabelText(/Geräte-Präfix/i)).toBeInTheDocument();
       });
     });
 
@@ -543,7 +543,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g., 'my_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -588,7 +588,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g., 'my_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -633,7 +633,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g., 'my_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -686,7 +686,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g., 'my_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -732,7 +732,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g., 'my_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -785,7 +785,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g., 'my_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -859,7 +859,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g., 'my_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');

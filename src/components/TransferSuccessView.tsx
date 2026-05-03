@@ -15,6 +15,7 @@ import {
     User,
     ArrowUpRight
 } from 'lucide-react';
+import { suggestFilename } from '../utils/userIdHelper';
 
 interface TransferSuccessViewProps {
     bundleData: number[];
@@ -46,8 +47,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
         setFeedback('');
 
         try {
-            const recipientNameMatch = recipientId.match(/(.+)@/);
-            const recipientName = recipientNameMatch ? recipientNameMatch[1] : 'transfer';
+            const recipientName = suggestFilename(recipientId);
             const now = new Date();
             const dateTimePart = now.toISOString().substring(0, 16).replace(/-/g, '').replace('T', '_').replace(/:/g, '');
             const suggestedFilename = `${recipientName}_${dateTimePart}.transfer`;

@@ -20,6 +20,7 @@ import {
     Info,
     Search
 } from 'lucide-react';
+import { extractDisplayName, truncateUserId, suggestFilename } from '../utils/userIdHelper';
 
 interface TransactionHistoryViewProps {
     onBack: () => void;
@@ -33,15 +34,7 @@ function formatTimestamp(isoString: string): string {
 }
 
 function truncateId(id: string): string {
-    const prefix = "did:key:";
-    let key = id;
-    if (id.startsWith(prefix)) {
-        key = id.substring(prefix.length);
-    }
-    if (key.length > 15) {
-        return `${key.substring(0, 10)}...${key.substring(key.length - 5)}`;
-    }
-    return key;
+    return truncateUserId(id);
 }
 
 function formatSummary(
@@ -89,8 +82,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
 
         setIsSaving(record.id);
         try {
-            const recipientNameMatch = record.recipientId?.match(/(.+)@/);
-            const recipientName = recipientNameMatch ? recipientNameMatch[1] : 'transfer';
+            const recipientName = suggestFilename(record.recipientId ?? '');
             const txDate = new Date(record.timestamp);
             const dateTimePart = txDate.toISOString().substring(0, 16).replace(/-/g, '').replace('T', '_').replace(/:/g, '');
             const suggestedFilename = `${recipientName}_${dateTimePart}.transfer`;
@@ -186,9 +178,9 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                     <div className="flex flex-col">
                                                         <p className="text-sm font-bold text-theme-secondary truncate">
                                                             {isSent ? (
-                                                                <>To: <span className="text-theme-primary">{record.recipientId?.split('@')[0] || truncateId(record.recipientId || '')}</span></>
+                                                                <>To: <span className="text-theme-primary">{extractDisplayName(record.recipientId || '')}</span></>
                                                             ) : (
-                                                                <>From: <span className="text-theme-primary">{record.senderProfileName || truncateId(record.senderId || '')}</span></>
+                                                                <>From: <span className="text-theme-primary">{record.senderProfileName || extractDisplayName(record.senderId || '')}</span></>
                                                             )}
                                                         </p>
                                                         {record.notes && (

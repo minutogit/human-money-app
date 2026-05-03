@@ -250,10 +250,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
             passwordInputRef.current?.focus();
             return;
         }
-        if (!userPrefix || userPrefix.trim().length === 0) {
-            setFeedbackMsg("Error: A unique User Prefix is required for this profile.");
-            return;
-        }
+        // Prefix is now optional for Root-Accounts
 
         setIsLoading(true);
         setFeedbackMsg(""); // Clear any previous errors
@@ -267,7 +264,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                     profileName,
                     mnemonic: mnemonicWords.join(' '), // Use the imported mnemonic
                     passphrase: passphrase || undefined,
-                    userPrefix: userPrefix,
+                    userPrefix: userPrefix || undefined,
                     password,
                     localInstanceId,
                     language: selectedLanguage,
@@ -463,9 +460,9 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                 <p className="text-xs text-theme-light mt-1">Warning: If you use this, you must enter the *exact same* passphrase for this seed on all devices.</p>
                             </div>
                             <div>
-                                <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary mb-1">User Prefix (CRITICAL)</label>
-                                <Input id="userPrefix" data-testid="user-prefix-input" type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g., 'my_laptop' (must be unique)" required />
-                                <p className="text-xs text-theme-error font-semibold mt-1">WARNING: This prefix MUST be *unique* for each device (e.g., laptop, phone). Reusing the same prefix on multiple devices will lead to critical errors and unresolvable conflicts.</p>
+                                <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary mb-1">Geräte-Präfix (optional)</label>
+                                <Input id="userPrefix" data-testid="user-prefix-input" type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="z.B. 'mein_laptop' (muss eindeutig sein)" />
+                                <p className="text-xs text-theme-light mt-1">Optional: Leer lassen für einen Root-Account (nur eine Identität). Mehrere Geräte benötigen je ein eindeutiges Präfix.</p>
                             </div>
                         </div>
 

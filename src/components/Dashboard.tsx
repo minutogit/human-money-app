@@ -20,6 +20,7 @@ import {
     Clock,
     AlertCircle
 } from "lucide-react";
+import { truncateUserId } from "../utils/userIdHelper";
 
 interface DashboardProps {
     onNavigateToCreateVoucher: () => void;
@@ -148,7 +149,7 @@ export function Dashboard(props: DashboardProps) {
         }
         return { label: 'Unknown Event', icon: AlertCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
     }
-    const truncatedUserId = userId ? `${userId.substring(0, 12)}...${userId.substring(userId.length - 6)}` : "Lade...";
+    const truncatedUserId = userId ? truncateUserId(userId) : "Lade...";
 
     return (
         <PageLayout 
