@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { integrityService } from "../services/integrityService";
 import { useState } from "react";
 import { IntegrityReport } from "../types";
 import { useSession } from "../context/SessionContext";
@@ -19,7 +19,7 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
         setError(null);
         try {
             await protectAction(async (password) => {
-                await invoke("repair_wallet_integrity", { password });
+                await integrityService.repairWalletIntegrity(password || undefined);
             });
             logger.info("Wallet integrity repaired successfully.");
             await checkIntegrity();

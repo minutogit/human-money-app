@@ -2,7 +2,8 @@
 import { useState, useEffect, useRef } from "react";
 import logo from "../assets/logo.png";
 
-import { invoke } from "@tauri-apps/api/core";
+import { authService } from "../services/authService";
+import { utilityService } from "../services/voucherService";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -59,7 +60,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     async function refreshProfiles() {
         setIsLoading(true);
         try {
-            const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
+            const availableProfiles = await authService.listProfiles();
             setProfiles(availableProfiles);
             if (availableProfiles.length > 0 && !selectedProfile) {
                 setSelectedProfile(availableProfiles[0].folderName);
@@ -82,8 +83,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
 
         setTimeout(async () => {
             try {
-                const localInstanceId = await invoke<string>("get_local_instance_id");
-                await invoke("login", {
+                const localInstanceId = await authService.getLocalInstanceId();
+                await authService.login({
                     folderName: selectedProfile,
                     password,
                     cleanupOnLogin: true,
@@ -111,14 +112,14 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
         setIsLoggingIn(true);
         setFeedbackMsg("Linking profile to this device...");
         try {
-            const localInstanceId = await invoke<string>("get_local_instance_id");
-            await invoke("handover_to_this_device", {
+            const localInstanceId = await authService.getLocalInstanceId();
+            await authService.handoverToThisDevice({
                 folderName: selectedProfile,
                 password,
                 localInstanceId,
             });
             
-            const userId = await invoke<string>("get_user_id");
+            const userId = await utilityService.getUserId();
             setHandoverUserId(userId);
             setShowPostHandoverWarning(true);
             setIsLoggingIn(false);
@@ -132,7 +133,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
         setIsVerifyingDelete(true);
         setFeedbackMsg("");
         try {
-            const userId = await invoke<string>("verify_profile_password", {
+            const userId = await authService.verifyProfilePassword({
                 folderName: selectedProfile,
                 password: deletePassword,
             });
@@ -150,7 +151,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
         setIsDeleting(true);
         setFeedbackMsg("Deleting profile...");
         try {
-            await invoke("delete_profile", {
+            await authService.deleteProfile({
                 folderName: selectedProfile,
                 password: deletePassword,
             });
@@ -159,7 +160,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             setShowDeleteConfirm(false);
             setDeletePassword("");
             await refreshProfiles();
-            const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
+            const availableProfiles = await authService.listProfiles();
             if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folderName);
             else onSwitchToCreate();
         } catch (e) {

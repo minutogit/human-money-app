@@ -1,9 +1,11 @@
 // src/components/SignRequestView.tsx
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { voucherService } from '../services/voucherService';
+import { settingsService } from '../services/settingsService';
+import { standardsService } from '../services/standardsService';
 import { save } from '@tauri-apps/plugin-dialog';
 import { logger } from '../utils/log';
-import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact, VoucherStandardDefinition } from '../types';
+import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
@@ -47,8 +49,8 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
             try {
                 logger.info("SignRequestView opened, fetching standards and roles.");
                 const [standards, currentSettings] = await Promise.all([
-                    invoke<VoucherStandardInfo[]>("get_voucher_standards"),
-                    invoke<AppSettings>('get_app_settings').catch(() => null)
+                    standardsService.getStandards(),
+                    settingsService.getSettings().catch(() => null)
                 ]);
                 setSettings(currentSettings);
 
@@ -60,7 +62,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 if (matchingStandard) {
                     setStandardContent(matchingStandard.content);
                     try {
-                        const parsed = await invoke<VoucherStandardDefinition>("parse_standard_toml", { tomlContent: matchingStandard.content });
+                        const parsed = await standardsService.parseStandard(matchingStandard.content);
                         
                         // Extract roles from signatureRules keys
                         const roles = Object.keys(parsed.immutable.signatureRules);
@@ -86,7 +88,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
         async function fetchImpact() {
             setIsImpactLoading(true);
             try {
-                const impactResult = await invoke<SignatureImpact>("evaluate_signature_suitability", {
+                const impactResult = await standardsService.evaluateSignatureSuitability({
                     voucher: voucherData.voucher,
                     role: selectedRole,
                     standardTomlContent: standardContent
@@ -112,12 +114,12 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
         setFeedbackMsg('');
         try {
             const bundleBytes = await protectAction(async (password) => {
-                return await invoke<number[]>("create_detached_signature_response_bundle", {
+                return await voucherService.createDetachedSignatureResponseBundle({
                     voucher: voucherData.voucher,
                     role: selectedRole,
                     includeDetails: includeDetails,
                     config: { type: "TargetDid", value: [voucherData.voucher.creator.id!, "TrialDecryption"] },
-                    password
+                    password: password || undefined
                 });
             });
 
@@ -140,7 +142,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 
                 if (settings) {
                     updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
-                        invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
+                        settingsService.getSettings().then(setSettings).catch(() => {});
                     });
                 }
 

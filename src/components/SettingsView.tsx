@@ -1,6 +1,6 @@
 // src/components/SettingsView.tsx
 import { useState, useEffect, FormEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { settingsService } from '../services/settingsService';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
@@ -40,7 +40,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         async function fetchSettings() {
             try {
                 logger.info("SettingsView: Fetching current settings.");
-                const currentSettings = await invoke<AppSettings>('get_app_settings');
+                const currentSettings = await settingsService.getSettings();
                 setSettings(currentSettings);
             } catch (e) {
                 const msg = `Failed to load settings: ${e}`;
@@ -66,7 +66,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
         try {
             logger.info("Attempting to save settings...");
-            await protectAction(async (password) => { await invoke('save_app_settings', { settings, password }); });
+            await protectAction(async (password) => { await settingsService.saveSettings(settings, password || undefined); });
             setSuccess("Configuration synchronized!");
             logger.info("Settings saved successfully.");
             setTimeout(() => setSuccess(''), 3000);

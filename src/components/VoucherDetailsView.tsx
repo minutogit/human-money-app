@@ -1,13 +1,17 @@
 // src/components/VoucherDetailsView.tsx
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { voucherService, utilityService } from "../services/voucherService";
+import { settingsService } from "../services/settingsService";
+import { profileService } from "../services/profileService";
+import { standardsService } from "../services/standardsService";
+import { contactService } from "../services/contactService";
 import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { useSession } from "../context/SessionContext";
-import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardInfo, VoucherStandardDefinition } from "../types";
+import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardDefinition } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import ContactDialog from "./ContactDialog";
@@ -84,7 +88,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
 
     useEffect(() => {
         if (voucher?.creator.id) {
-            invoke<TrustStatus>("check_reputation", { offenderId: voucher.creator.id })
+            voucherService.checkReputation(voucher.creator.id)
                 .then(setTrustStatus)
                 .catch(e => logger.error(`Reputation check error: ${e}`));
         }
@@ -97,12 +101,12 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             setErrorMsg("");
             try {
                 const [result, currentSettings, _userId, profile, standards, _sourceId] = await Promise.all([
-                    invoke<VoucherDetails>("get_voucher_details", { localId: voucherId }),
-                    invoke<AppSettings>('get_app_settings').catch(() => null),
-                    invoke<string>("get_user_id").catch(() => null),
-                    invoke<PublicProfile>("get_user_profile").catch(() => null),
-                    invoke<VoucherStandardInfo[]>("get_voucher_standards").catch(() => []),
-                    invoke<string | null>("get_voucher_source_sender", { localId: voucherId }).catch(() => null)
+                    voucherService.getDetails(voucherId),
+                    settingsService.getSettings().catch(() => null),
+                    utilityService.getUserId().catch(() => null),
+                    profileService.getProfile().catch(() => null),
+                    standardsService.getStandards().catch(() => []),
+                    voucherService.getSourceSender(voucherId).catch(() => null)
                 ]);
                 setDetails(result);
                 setSettings(currentSettings);
@@ -112,7 +116,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                 const parsed: Record<string, VoucherStandardDefinition> = {};
                 for (const s of standards) {
                     try {
-                        parsed[s.id] = await invoke<VoucherStandardDefinition>("parse_standard_toml", { tomlContent: s.content });
+                        parsed[s.id] = await standardsService.parseStandard(s.content);
                     } catch (e) {
                         logger.error(`Failed to parse standard ${s.id}: ${e}`);
                     }
@@ -132,7 +136,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     useEffect(() => {
         async function fetchContacts() {
             try {
-                const result = await invoke<Contact[]>('get_contacts');
+                const result = await contactService.getContacts();
                 setContacts(result);
             } catch (e) {
                 logger.error(`Failed to fetch contacts: ${e}`);
@@ -146,7 +150,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             const fetchProofId = async () => {
                 setIsFetchingProofId(true);
                 try {
-                    const id = await invoke<string | null>("get_proofId_for_voucher", { localId: voucherId });
+                    const id = await voucherService.getProofId(voucherId);
                     setProofId(id);
                 } catch (e) {
                     logger.error(`Failed to fetch proof ID for voucher ${voucherId}: ${e}`);
@@ -160,7 +164,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
 
     const refreshDetails = async () => {
         try {
-            const result = await invoke<VoucherDetails>("get_voucher_details", { localId: voucherId });
+            const result = await voucherService.getDetails(voucherId);
             setDetails(result);
         } catch (e) {
             logger.error(`Failed to refresh voucher details: ${e}`);
@@ -592,8 +596,8 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                 }}
                 onSave={async (contact: Contact) => {
                     await protectAction(async (pwd) => {
-                        await invoke('save_contact', { contact, password: pwd });
-                        await invoke<Contact[]>('get_contacts').then(setContacts);
+                        await contactService.saveContact(contact, pwd || undefined);
+                        await contactService.getContacts().then(setContacts);
                     });
                 }}
                 existingContact={existingContact}
@@ -619,11 +623,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
         setIsRemovingSignature(true);
         try {
             await protectAction(async (pwd) => {
-                await invoke("remove_voucher_signature", {
-                    localInstanceId: voucherId,
-                    signatureId: showRemoveSignatureModal,
-                    password: pwd
-                });
+                await voucherService.removeSignature(voucherId, showRemoveSignatureModal, pwd || undefined);
             });
             logger.info(`Signature ${showRemoveSignatureModal} removed from voucher ${voucherId}`);
             setShowRemoveSignatureModal(null);
@@ -665,10 +665,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                 config = { type: "Cleartext" };
             }
 
-            const bundleBytes = await invoke<number[]>("create_signing_request_bundle", {
-                localInstanceId: voucherId,
-                config: config
-            });
+            const bundleBytes = await voucherService.createSigningRequest(voucherId, config);
 
             const filePath = await save({
                 defaultPath: settings?.lastUsedDirectory 
@@ -684,7 +681,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                 
                 if (settings) {
                     updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
-                        invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
+                        settingsService.getSettings().then(setSettings).catch(() => {});
                     });
                 }
                 setShowExportModal(false);

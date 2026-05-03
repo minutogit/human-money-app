@@ -19,7 +19,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{actions::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*};
+use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*};
 use crate::models::TransactionRecord;
 use crate::settings::AppSettings;
 

@@ -1,6 +1,7 @@
-import { invoke } from '@tauri-apps/api/core';
+import { settingsService } from '../services/settingsService';
 import { logger } from './log';
-import { SealUploadData } from '../types';
+// SealUploadData import removed as unused
+
 
 let syncInterval: number | null = null;
 
@@ -33,12 +34,12 @@ export function stopSealSyncLoop() {
 
 async function performSync() {
     try {
-        const status = await invoke<string>("get_seal_sync_status");
+        const status = await settingsService.getSealSyncStatus();
         
         if (status === "PendingUpload") {
             logger.info("Pending seal upload detected. Starting sync process...");
             
-            const uploadData = await invoke<SealUploadData | null>("get_seal_for_upload");
+            const uploadData = await settingsService.getSealForUpload();
             
             if (uploadData) {
                 // MOCK UPLOAD PROCESS
@@ -49,10 +50,7 @@ async function performSync() {
                 await new Promise(resolve => setTimeout(resolve, 1000));
                 
                 // After successful "upload", acknowledge it in the core
-                await invoke("acknowledge_seal_sync", {
-                    uploadedSealHash: uploadData.sealHash,
-                    password: null // Use session key if available (handled in backend)
-                });
+                await settingsService.acknowledgeSealSync(uploadData.sealHash);
                 
                 logger.info("WalletSeal successfully synchronized and acknowledged.");
             }

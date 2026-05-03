@@ -1,6 +1,6 @@
 // src/components/ConflictListView.tsx
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { integrityService } from "../services/integrityService";
 import { logger } from "../utils/log";
 import { ProofOfDoubleSpendSummary } from "../types";
 import { Button } from "./ui/Button";
@@ -21,7 +21,7 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
             setIsLoading(true);
             setErrorMsg("");
             try {
-                const result = await invoke<ProofOfDoubleSpendSummary[]>("get_double_spend_conflicts");
+                const result = await integrityService.getDoubleSpendConflicts();
                 setConflicts(result);
             } catch (e) {
                 const msg = `Failed to fetch conflicts: ${e}`;

@@ -1,6 +1,6 @@
 // src/components/TransactionHistoryView.tsx
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { transferService } from '../services/transferService';
 import { logger } from '../utils/log';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
@@ -41,7 +41,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
         async function fetchHistory() {
             logger.info("TransactionHistoryView: Loading history.");
             try {
-                const records = await invoke<TransactionRecord[]>("get_transaction_history");
+                const records = await transferService.getHistory();
                 records.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
                 setHistory(records);
             } catch (e) {

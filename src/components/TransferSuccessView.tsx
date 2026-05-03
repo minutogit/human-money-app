@@ -7,7 +7,7 @@ import { Button } from './ui/Button';
 import { AppSettings } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
-import { invoke } from '@tauri-apps/api/core';
+import { settingsService } from '../services/settingsService';
 import { 
     Download, 
     Share2, 
@@ -33,7 +33,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
     useEffect(() => {
         async function fetchSettings() {
             try {
-                const currentSettings = await invoke<AppSettings>('get_app_settings').catch(() => null);
+                const currentSettings = await settingsService.getSettings().catch(() => null);
                 setSettings(currentSettings);
             } catch (e) {
                 console.error("Failed to load settings in TransferSuccessView:", e);
@@ -70,7 +70,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                 
                 if (settings) {
                     updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
-                        invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
+                        settingsService.getSettings().then(setSettings).catch(() => {});
                     });
                 }
                 setFeedback(`Wallet synchronized and file saved.`);

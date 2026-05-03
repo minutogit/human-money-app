@@ -1,6 +1,7 @@
 // src/components/RecreateProfile.tsx
 import { useState, useEffect, useRef, FormEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { profileService } from "../services/profileService";
+import { authService } from "../services/authService";
 import { info, error } from "@tauri-apps/plugin-log";
 import { logger } from "../utils/log";
 import { MnemonicLanguage } from "../types";
@@ -92,7 +93,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     useEffect(() => {
         async function fetchWordlist() {
             try {
-                const list = await invoke<string[]>("get_bip39_wordlist", { language: selectedLanguage });
+                const list = await profileService.getWordlist(selectedLanguage);
                 setBip39Wordlist(list);
                 info(`Successfully fetched BIP-39 wordlist for ${selectedLanguage} for import.`);
             } catch (e) {
@@ -165,7 +166,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
             if (nonEmptyWords.length === wordCount) {
                 const fullMnemonic = mnemonicWords.join(" ");
                 try {
-                    await invoke("validate_mnemonic", { mnemonic: fullMnemonic, language: selectedLanguage });
+                    await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
                     setIsValidMnemonic(true);
                     setFeedbackMsg("Seed phrase is valid.");
                 } catch (e) {
@@ -259,8 +260,8 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
         // and the browser has had a chance to paint the loading state
         setTimeout(async () => {
             try {
-                const localInstanceId = await invoke<string>("get_local_instance_id");
-                await invoke("create_profile", {
+                const localInstanceId = await authService.getLocalInstanceId();
+                await profileService.createProfile({
                     profileName,
                     mnemonic: mnemonicWords.join(' '), // Use the imported mnemonic
                     passphrase: passphrase || undefined,

@@ -1,6 +1,7 @@
 // src/components/CreateNewProfile.tsx
 import { useState, useEffect, useRef, FormEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { profileService } from "../services/profileService";
+import { authService } from "../services/authService";
 import { logger } from "../utils/log";
 import { MnemonicLanguage } from "../types";
 import { Button } from "./ui/Button";
@@ -75,7 +76,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
         async function generateNewSeed() {
             setIsLoading(true);
             try {
-                const newSeed: string = await invoke("generate_mnemonic", { wordCount, language: selectedLanguage });
+                const newSeed: string = await profileService.generateMnemonic(wordCount, selectedLanguage);
                 setGeneratedSeed(newSeed.split(' '));
             } catch (e) {
                 setFeedbackMsg(`Error: ${e}`);
@@ -137,8 +138,8 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
         setFeedbackMsg("Creating profile, please wait...");
         setTimeout(async () => {
             try {
-                const localInstanceId = await invoke<string>("get_local_instance_id");
-                await invoke("create_profile", {
+                const localInstanceId = await authService.getLocalInstanceId();
+                await profileService.createProfile({
                     profileName,
                     mnemonic: generatedSeed.join(' '),
                     passphrase: passphrase || undefined,

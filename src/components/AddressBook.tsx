@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { PageLayout } from './ui/PageLayout';
 import { Button } from './ui/Button';
-import { invoke } from '@tauri-apps/api/core';
+import { contactService } from '../services/contactService';
 import { Contact } from '../types';
 import Avatar from 'boring-avatars';
 import ContactDialog from './ContactDialog';
@@ -49,7 +49,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const loadContacts = async () => {
         setIsLoading(true);
         try {
-            const result: Contact[] = await invoke('get_contacts');
+            const result: Contact[] = await contactService.getContacts();
             setContacts(result);
         } catch (err) {
             logger.error("Failed to load contacts: " + err);
@@ -61,7 +61,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const handleSaveContact = async (contact: Contact) => {
         try {
             await protectAction(async (pwd) => {
-                await invoke('save_contact', { contact, password: pwd });
+                await contactService.saveContact(contact, pwd || undefined);
             });
             await loadContacts();
             logger.info("Contact saved successfully");
@@ -76,7 +76,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         
         try {
             await protectAction(async (pwd) => {
-                await invoke('delete_contact', { did: deleteRequest, password: pwd });
+                await contactService.deleteContact(deleteRequest, pwd || undefined);
             });
             await loadContacts();
             logger.info("Contact deleted");

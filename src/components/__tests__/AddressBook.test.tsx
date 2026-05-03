@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 vi.mock('../../context/SessionContext', () => ({
   useSession: () => ({
-    protectAction: vi.fn((action) => action(null)),
+    protectAction: vi.fn((action) => action(undefined)),
   }),
 }));
 
@@ -118,7 +118,7 @@ describe('AddressBook Component', () => {
     
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('save_contact', expect.objectContaining({
-        password: null,
+        password: undefined,
         contact: expect.objectContaining({ did: 'did:key:z789' })
       }));
     });
@@ -145,7 +145,7 @@ describe('AddressBook Component', () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('delete_contact', expect.objectContaining({
         did: 'did:key:z123',
-        password: null
+        password: undefined
       }));
     });
   });

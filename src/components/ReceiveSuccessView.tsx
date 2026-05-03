@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { ReceiveSuccessPayload, TrustStatus } from "../types";
 import { Button } from "./ui/Button";
 import { logger } from '../utils/log';
-import { invoke } from "@tauri-apps/api/core";
+import { profileService } from "../services/profileService";
 import { 
     CheckCircle2, 
     ShieldAlert, 
@@ -41,7 +41,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
     useEffect(() => {
         logger.info(`Receive success screen: ${summaryString}`);
         if (payload.senderId) {
-            invoke<TrustStatus>("check_reputation", { offenderId: payload.senderId })
+            profileService.checkReputation(payload.senderId)
                 .then(setTrustStatus)
                 .catch(e => logger.error(`Reputation check error: ${e}`));
         }

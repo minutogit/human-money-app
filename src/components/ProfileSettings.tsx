@@ -1,6 +1,6 @@
 // src/components/ProfileSettings.tsx
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { profileService } from '../services/profileService';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
@@ -34,7 +34,7 @@ export function ProfileSettings() {
         async function fetchProfile() {
             try {
                 logger.info("ProfileSettings: Fetching current profile.");
-                const currentProfile = await invoke<PublicProfile>('get_user_profile');
+                const currentProfile = await profileService.getProfile();
                 setProfile(currentProfile);
             } catch (e) {
                 const msg = `Failed to load profile: ${e}`;
@@ -69,7 +69,7 @@ export function ProfileSettings() {
         try {
             logger.info("Attempting to save profile...");
             await protectAction(async (password) => {
-                await invoke('update_user_profile', { profile, password });
+                await profileService.saveProfile(profile, password || undefined);
             });
             setSuccess("Profile updated!");
             logger.info("Profile updated successfully.");

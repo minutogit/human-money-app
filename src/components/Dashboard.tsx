@@ -1,11 +1,14 @@
 // src/components/Dashboard.tsx
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { voucherService, utilityService } from "../services/voucherService";
+import { transferService } from "../services/transferService";
+import { profileService } from "../services/profileService";
+import { contactService } from "../services/contactService";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
-import { AggregatedBalance, TransactionRecord, VoucherSummary, Contact } from "../types";
+import { AggregatedBalance, VoucherSummary } from "../types";
 import { useSession } from "../context/SessionContext";
 import { IntegrityReportModal } from "./IntegrityReportModal";
 import { PageLayout } from "./ui/PageLayout";
@@ -55,26 +58,26 @@ export function Dashboard(props: DashboardProps) {
         async function fetchData() {
             try {
                 const [id, balanceList, _history, voucherSummaries, userProfile, _contactsList, eventHistory] = await Promise.all([
-                    invoke<string>("get_user_id"),
-                    invoke<AggregatedBalance[]>("get_total_balance_by_currency"),
-                    invoke<TransactionRecord[]>("get_transaction_history").catch(() => []),
-                    invoke<VoucherSummary[]>("get_voucher_summaries").catch(() => []),
-                    invoke<any>("get_user_profile").catch(() => null),
-                    invoke<Contact[]>("get_contacts").catch(() => []),
-                    invoke<any[]>("get_event_history", { offset: 0, limit: 5 }).catch(() => [])
+                    utilityService.getUserId(),
+                    voucherService.getTotalBalanceByCurrency(),
+                    transferService.getHistory().catch(() => []),
+                    voucherService.getSummaries().catch(() => []),
+                    profileService.getProfile().catch(() => null),
+                    contactService.getContacts().catch(() => []),
+                    transferService.getEventHistory(0, 5).catch(() => [])
                 ]);
                 setUserId(id);
                 setBalances(balanceList || []);
                 setRecentEvents(eventHistory || []);
                 
-                const activeCount = (voucherSummaries || []).filter(v => v.status === "active").length;
-                const incompleteCount = (voucherSummaries || []).filter(v => v.status === "incomplete").length;
-                const quarantinedCount = (voucherSummaries || []).filter(v => v.status === "quarantined").length;
+                const activeCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "active").length;
+                const incompleteCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "incomplete").length;
+                const quarantinedCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "quarantined").length;
 
                 const countsByStandard: Record<string, number> = {};
                 (voucherSummaries || [])
-                    .filter(v => v.status === "active")
-                    .forEach(v => {
+                    .filter((v: VoucherSummary) => v.status === "active")
+                    .forEach((v: VoucherSummary) => {
                         const standardUuid = v.voucherStandardUuid;
                         if (standardUuid) {
                             countsByStandard[standardUuid] = (countsByStandard[standardUuid] || 0) + 1;

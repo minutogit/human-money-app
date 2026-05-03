@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { integrityService } from "../services/integrityService";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { FullProofDetails } from "../types";
@@ -25,7 +25,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
             setIsLoading(true);
             try {
                 logger.info(`Fetching double-spend proof details: ${proofId}`);
-                const result = await invoke<FullProofDetails>("get_proof_of_double_spend", { proofId });
+                const result = await integrityService.getProofOfDoubleSpend(proofId);
                 setDetails(result);
             } catch (e) {
                 const msg = `Failed to fetch double-spend proof: ${e}`;
@@ -42,14 +42,14 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
         setIsOverriding(true);
         setOverrideError("");
         try {
-            await invoke("set_conflict_local_override", { 
+            await integrityService.setConflictLocalOverride({ 
                 proofId, 
                 value: true, 
                 note: localNote || null,
                 password: password || null 
             });
             // Refresh details
-            const updated = await invoke<FullProofDetails>("get_proof_of_double_spend", { proofId });
+            const updated = await integrityService.getProofOfDoubleSpend(proofId);
             setDetails(updated);
             setShowPasswordModal(false);
             setPassword("");

@@ -1,6 +1,6 @@
 // src/components/Activities.tsx
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { transferService } from '../services/transferService';
 import { logger } from '../utils/log';
 import { WalletEvent } from '../types';
 import { PageLayout } from './ui/PageLayout';
@@ -69,7 +69,7 @@ export function Activities({ onBack, onNavigateToVoucherDetail, onNavigateToHist
     useEffect(() => {
         async function fetchEvents() {
             try {
-                const data = await invoke<WalletEvent[]>("get_event_history", { offset: 0, limit: 50 });
+                const data = await transferService.getEventHistory(0, 50);
                 setEvents(data);
             } catch (e) {
                 logger.error(`Failed to fetch activities: ${e}`);

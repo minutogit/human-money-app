@@ -1,0 +1,241 @@
+// src-tauri/src/commands/transfers.rs
+use crate::{models::{FrontendTransactionRecord, TransactionRecord}, AppState};
+use crate::commands::auth::update_events_cache;
+use chrono::Utc;
+use log::{info, error};
+use uuid::Uuid;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use human_money_core::{
+    archive::VoucherArchive,
+    app_service::AppService,
+    wallet::{MultiTransferRequest, SourceTransfer},
+};
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendSourceTransfer {
+    local_instance_id: String,
+    amount_to_send: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiveSuccessPayload {
+    pub sender_id: String,
+    pub sender_profile_name: Option<String>,
+    pub notes: Option<String>,
+    pub transfer_summary: crate::models::FrontendTransferSummary,
+    pub involved_vouchers: Vec<String>,
+    pub involved_vouchers_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
+    pub verifiable_conflicts: HashMap<String, Vec<human_money_core::models::conflict::TransactionFingerprint>>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBundleResult {
+    pub bundle_data: Vec<u8>,
+    pub bundle_id: String,
+    pub involved_sources_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
+}
+
+#[tauri::command]
+pub fn create_transfer_bundle(
+    recipient_id: String,
+    sources: Vec<FrontendSourceTransfer>,
+    notes: Option<String>,
+    sender_profile_name: Option<String>,
+    standard_definitions_toml: HashMap<String, String>,
+    use_privacy_mode: Option<bool>,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<CreateBundleResult, String> {
+    info!(
+        "Attempting to create a transfer bundle for recipient: {}",
+        recipient_id
+    );
+    let mut service = state.service.lock().unwrap();
+
+    let source_transfers = sources
+        .into_iter()
+        .map(|s| SourceTransfer {
+            local_instance_id: s.local_instance_id,
+            amount_to_send: s.amount_to_send,
+        })
+        .collect();
+
+    let request = MultiTransferRequest {
+        recipient_id,
+        sources: source_transfers,
+        notes,
+        sender_profile_name,
+        use_privacy_mode,
+    };
+
+    let archive: Option<&dyn VoucherArchive> = None;
+
+    match service.create_transfer_bundle(request, &standard_definitions_toml, archive, password.as_deref()) {
+        Ok(result) => {
+            if let Err(e) = update_events_cache(&mut service, &state, password.as_deref()) {
+                error!("Failed to refresh events cache after create_transfer_bundle: {}", e);
+            }
+
+            Ok(CreateBundleResult {
+                bundle_data: result.bundle_bytes,
+                bundle_id: result.bundle_id,
+                involved_sources_details: result.involved_sources_details.into_iter().map(|s| s.into()).collect(),
+            })
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[tauri::command]
+pub fn receive_bundle(
+    bundle_data: Vec<u8>,
+    standard_definitions_toml: HashMap<String, String>,
+    password: Option<String>,
+    force_accept_tolerance_bundle: bool,
+    state: tauri::State<AppState>,
+) -> Result<ReceiveSuccessPayload, String> {
+    info!("Attempting to receive and process a transfer bundle...");
+    let mut service = state.service.lock().unwrap();
+    let archive: Option<&dyn VoucherArchive> = None;
+
+    match service.receive_bundle(&bundle_data, &standard_definitions_toml, archive, password.as_deref(), force_accept_tolerance_bundle) {
+        Ok(result) => {
+            info!("Bundle processed successfully. Creating transaction record.");
+
+            let conflict_count = result.check_result.verifiable_conflicts.len();
+            let warning_count = result.check_result.unverifiable_warnings.len();
+
+            if conflict_count > 0 || warning_count > 0 {
+                info!(
+                    "FRAUD DETECTION: Processed bundle from {} | Confirmed Conflicts: {} | Gossip Warnings: {}",
+                    result.header.sender_id, conflict_count, warning_count
+                );
+            }
+
+            let transfer_summary = result.transfer_summary.clone();
+            let involved_vouchers_details = result.involved_vouchers_details.clone();
+            let involved_vouchers_ids: Vec<String> = involved_vouchers_details.iter().map(|d| d.local_instance_id.clone()).collect();
+            let notes = result.header.notes.clone();
+            let sender_profile_name = result.header.sender_profile_name.clone();
+            let bundle_id = result.header.bundle_id.clone();
+
+            let record = TransactionRecord {
+                id: Uuid::new_v4().to_string(),
+                direction: "received".to_string(),
+                recipient_id: service.get_user_id()?,
+                sender_id: result.header.sender_id.clone(),
+                timestamp: Utc::now().to_rfc3339(),
+                summable_amounts: transfer_summary.summable_amounts.clone(),
+                countable_items: transfer_summary.countable_items.clone(),
+                involved_vouchers: involved_vouchers_ids.clone(),
+                involved_sources_details: Some(involved_vouchers_details.clone()),
+                bundle_data: Vec::new(),
+                bundle_id,
+                notes: notes.clone(),
+                sender_profile_name: sender_profile_name.clone(),
+            };
+
+            let mut history = load_history_from_disk(&mut service, password.as_deref())?;
+            let new_record = record.clone();
+            history.push(record);
+            let history_bytes = serde_json::to_vec(&history).map_err(|e| e.to_string())?;
+            service.save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, password.as_deref())?;
+
+            let mut history_cache = state.history.lock().unwrap();
+            if let Some(cache) = history_cache.as_mut() {
+                cache.push(new_record);
+            } else {
+                *history_cache = Some(history);
+            }
+
+            if let Err(e) = update_events_cache(&mut service, &state, password.as_deref()) {
+                error!("Failed to refresh events cache after receive_bundle: {}", e);
+            }
+
+            Ok(ReceiveSuccessPayload {
+                sender_id: result.header.sender_id,
+                sender_profile_name,
+                notes,
+                transfer_summary: result.transfer_summary.into(),
+                involved_vouchers: involved_vouchers_ids,
+                involved_vouchers_details: involved_vouchers_details.into_iter().map(|d| d.into()).collect(),
+                verifiable_conflicts: result.check_result.verifiable_conflicts,
+            })
+        }
+        Err(e) => {
+            error!("Failed to process bundle: {}", e);
+            Err(e)
+        }
+    }
+}
+
+pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
+
+#[tauri::command]
+pub fn save_transaction_record(
+    record: FrontendTransactionRecord,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let record: TransactionRecord = record.into();
+    info!("Saving new transaction record with id: {}", record.id);
+    let mut service = state.service.lock().unwrap();
+
+    let mut history = load_history_from_disk(&mut service, password.as_deref())?;
+    let new_record = record.clone();
+    history.push(record);
+
+    let history_bytes = serde_json::to_vec(&history).map_err(|e| e.to_string())?;
+    service.save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, password.as_deref())?;
+
+    let mut history_cache = state.history.lock().unwrap();
+    if let Some(cache) = history_cache.as_mut() {
+        cache.push(new_record);
+    } else {
+        *history_cache = Some(history);
+    }
+    Ok(())
+}
+
+pub fn load_history_from_disk(
+    service: &mut AppService,
+    password: Option<&str>,
+) -> Result<Vec<TransactionRecord>, String> {
+    match service.load_encrypted_data(TRANSACTION_HISTORY_KEY, password) {
+        Ok(data) => {
+            let records: Result<Vec<TransactionRecord>, _> = serde_json::from_slice(&data);
+            match records {
+                 Ok(parsed_records) => Ok(parsed_records),
+                Err(e) => {
+                     let msg = format!("Failed to parse transaction history: {}", e);
+                     error!("{}", msg);
+                     Err(msg)
+                }
+            }
+        },
+        Err(_) => {
+            info!("Keine Transaktionshistorie auf Festplatte gefunden. Erstelle neue.");
+            Ok(Vec::new())
+        }
+    }
+}
+
+#[tauri::command]
+pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<FrontendTransactionRecord>, String> {
+    info!("Loading transaction history...");
+    
+    let mut history_cache = state.history.lock().unwrap();
+    if history_cache.is_none() {
+        info!("History cache empty, loading from disk...");
+        let mut service = state.service.lock().unwrap();
+        let history = load_history_from_disk(&mut service, None)?;
+        *history_cache = Some(history);
+    }
+    
+    let history = history_cache.as_ref().unwrap();
+    Ok(history.iter().map(|r| r.into()).collect())
+}

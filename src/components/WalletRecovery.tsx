@@ -1,6 +1,7 @@
 // src/components/WalletRecovery.tsx
 import { useState, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { profileService } from "../services/profileService";
+import { authService } from "../services/authService";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -68,7 +69,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
         async function fetchProfiles() {
             setIsLoading(true);
             try {
-                const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
+                const availableProfiles = await authService.listProfiles();
                 setProfiles(availableProfiles);
                 if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folderName);
                 else setFeedbackMsg("Error: No profiles found to recover");
@@ -90,7 +91,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     useEffect(() => {
         async function fetchWordlist() {
             try {
-                const list = await invoke<string[]>("get_bip39_wordlist", { language: selectedLanguage });
+                const list = await profileService.getWordlist(selectedLanguage);
                 setBip39Wordlist(list);
             } catch (e) {
                 logger.error(`Failed to fetch BIP-39 wordlist: ${e}`);
@@ -142,7 +143,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
             if (nonEmptyWords.length > 0 && mnemonicWords.every(word => word && word.length > 1)) {
                 const fullMnemonic = mnemonicWords.join(" ");
                 try {
-                    await invoke("validate_mnemonic", { mnemonic: fullMnemonic, language: selectedLanguage });
+                    await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
                     setIsValidMnemonic(true);
                     setFeedbackMsg("Seed phrase is valid.");
                 } catch (e) {
@@ -187,8 +188,8 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
         setIsLoading(true);
         setFeedbackMsg("Recovering wallet, please wait...");
         try {
-            const localInstanceId = await invoke<string>("get_local_instance_id");
-            await invoke("recover_wallet_and_set_new_password", {
+            const localInstanceId = await authService.getLocalInstanceId();
+            await profileService.recoverWallet({
                 folderName: selectedProfile,
                 mnemonic: mnemonicWords.join(" "),
                 passphrase: passphrase || undefined,

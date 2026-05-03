@@ -1,5 +1,10 @@
 import { useState, useEffect, useMemo, useCallback, FormEvent, ChangeEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { voucherService, utilityService } from "../services/voucherService";
+import { transferService } from "../services/transferService";
+import { settingsService } from "../services/settingsService";
+import { profileService } from "../services/profileService";
+import { standardsService } from "../services/standardsService";
+import { contactService } from "../services/contactService";
 import { logger } from "../utils/log";
 import { 
     VoucherSummary, 
@@ -110,7 +115,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
 
         const timer = setTimeout(async () => {
             try {
-                const status = await invoke<TrustStatus>("check_reputation", { offenderId: recipientId });
+                const status = await voucherService.checkReputation(recipientId);
                 setTrustStatus(status);
             } catch (e) {
                 logger.error(`Reputation check failed: ${e}`);
@@ -123,16 +128,16 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     useEffect(() => {
         async function fetchData() {
             try {
-                const allFetchedVouchers = await invoke<VoucherSummary[]>("get_voucher_summaries");
+                const allFetchedVouchers = await voucherService.getSummaries();
                 const activeVouchers = allFetchedVouchers.filter(v => {
                     const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
                     return statusName.toLowerCase() === 'active';
                 });
 
-                const userId = await invoke<string>("get_user_id");
+                const userId = await utilityService.getUserId();
                 
                 try {
-                    const userProfile = await invoke<any>("get_user_profile");
+                    const userProfile = await profileService.getProfile();
                     let defaultName = "";
                     if (userProfile.organization) {
                         defaultName = userProfile.organization;
@@ -146,8 +151,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                     setCustomSenderName(profileName || "");
                 }
 
-                const standards = await invoke<VoucherStandardInfo[]>("get_voucher_standards");
-                const settings = await invoke<AppSettings>("get_app_settings");
+                const standards = await standardsService.getStandards();
+                const settings = await settingsService.getSettings();
                 const newIdMap = new Map<string, string>();
                 const newPrecisionMap = new Map<string, number>();
                 standards.forEach(s => {
@@ -168,10 +173,10 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 setOwnUserId(userId);
                 setAppSettings(settings);
                 
-                const fetchedContacts = await invoke<Contact[]>("get_contacts");
+                const fetchedContacts = await contactService.getContacts();
                 setContacts(fetchedContacts);
 
-                const activeClasses = await invoke<AssetClassSummary[]>("get_active_asset_classes");
+                const activeClasses = await transferService.getActiveAssetClasses();
                 setActiveAssetClasses(activeClasses);
             } catch (e) {
                 logger.error(`Failed to fetch data for SendView: ${e}`);
@@ -451,7 +456,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             });
 
             const bundleResult = await protectAction(async (password) => {
-                return await invoke<any>("create_transfer_bundle", {
+                return await transferService.createBundle({
                     recipientId,
                     sources,
                     notes: notesToSend,
@@ -489,7 +494,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             };
 
             await protectAction(async (password) => {
-                 await invoke("save_transaction_record", { record: record as TransactionRecord, password });
+                 await transferService.saveTransactionRecord(record as TransactionRecord, password || undefined);
             });
 
             const summableStrings = Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => {

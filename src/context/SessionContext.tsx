@@ -1,9 +1,12 @@
 // src/context/SessionContext.tsx
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { authService } from '../services/authService';
+import { settingsService } from '../services/settingsService';
+import { integrityService } from '../services/integrityService';
 import { logger } from '../utils/log';
 import { AuthModal } from '../components/ui/AuthModal';
-import { AppSettings } from '../types';
+// AppSettings import removed as unused
+
 import { startSealSyncLoop, stopSealSyncLoop } from '../utils/sealSync';
 
 interface SessionContextType {
@@ -59,7 +62,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 if (now - lastHeartbeatRef.current > 2000) {
                     lastHeartbeatRef.current = now;
                     // Fire and forget refresh
-                    invoke("refresh_session_activity").catch((e) => logger.warn(`Heartbeat failed: ${e}`));
+                    authService.refreshSessionActivity().catch((e) => logger.warn(`Heartbeat failed: ${e}`));
                 }
             }
         };
@@ -81,7 +84,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             // Nur prüfen, wenn wir glauben, die Session sei aktiv
             if (isSessionActiveRef.current) {
                 try {
-                    const active = await invoke<boolean>("is_session_active");
+                    const active = await authService.isSessionActive();
                     if (!active) {
                         logger.info("Session background check: Session expired.");
                         setIsSessionActive(false);
@@ -147,7 +150,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         };
 
         try {
-            const settings = await invoke<AppSettings>('get_app_settings');
+            const settings = await settingsService.getSettings();
             const timeout = settings.sessionTimeoutSeconds;
 
             // MODUS A: Immer Passwort fragen (Timeout = 0)
@@ -189,12 +192,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (!pendingAction) return;
 
         try {
-            const settings = await invoke<AppSettings>('get_app_settings');
+            const settings = await settingsService.getSettings();
             const timeout = settings.sessionTimeoutSeconds;
 
             if (timeout > 0) {
                 // Session im Backend starten
-                await invoke("unlock_session", { password, durationSeconds: timeout });
+                await authService.unlockSession(password, timeout);
 
                 // Frontend Status synchronisieren (via Helper)
                 activateSession();
@@ -226,7 +229,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     const checkIntegrity = useCallback(async () => {
         try {
-            const report = await invoke<import('../types').IntegrityReport>("check_wallet_integrity");
+            const report = await integrityService.checkIntegrity();
             setIntegrityReport(report);
             if (report.type !== 'valid') {
                 logger.warn(`Integrity issue detected: ${report.type}`);

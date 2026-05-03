@@ -1,12 +1,15 @@
 // src/components/WalletView.tsx
 import { useState, useEffect, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { voucherService } from "../services/voucherService";
+import { settingsService } from "../services/settingsService";
+import { profileService } from "../services/profileService";
+import { standardsService } from "../services/standardsService";
 import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
-import { VoucherSummary, AppSettings, PublicProfile, VoucherStandardInfo, VoucherStandardDefinition } from "../types";
+import { VoucherSummary, AppSettings, PublicProfile, VoucherStandardDefinition } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import { useSession } from "../context/SessionContext";
@@ -63,10 +66,10 @@ export function WalletView(props: WalletViewProps) {
         async function fetchData() {
             try {
                 const [voucherList, currentSettings, profile, standards] = await Promise.all([
-                    invoke<VoucherSummary[]>("get_voucher_summaries"),
-                    invoke<AppSettings>('get_app_settings').catch(() => null),
-                    invoke<PublicProfile>("get_user_profile").catch(() => null),
-                    invoke<VoucherStandardInfo[]>("get_voucher_standards").catch(() => [])
+                    voucherService.getSummaries(),
+                    settingsService.getSettings().catch(() => null),
+                    profileService.getProfile().catch(() => null),
+                    standardsService.getStandards().catch(() => [])
                 ]);
                 setVouchers(voucherList || []);
                 setSettings(currentSettings);
@@ -76,7 +79,7 @@ export function WalletView(props: WalletViewProps) {
                 const parsed: Record<string, VoucherStandardDefinition> = {};
                 for (const s of standards) {
                     try {
-                        parsed[s.id] = await invoke<VoucherStandardDefinition>("parse_standard_toml", { tomlContent: s.content });
+                        parsed[s.id] = await standardsService.parseStandard(s.content);
                     } catch (e) {
                         logger.error(`Failed to parse standard ${s.id}: ${e}`);
                     }
@@ -146,10 +149,7 @@ export function WalletView(props: WalletViewProps) {
                 config = { type: "Cleartext" };
             }
 
-            const bundleBytes = await invoke<number[]>("create_signing_request_bundle", {
-                localInstanceId: exportId,
-                config: config
-            });
+            const bundleBytes = await voucherService.createSigningRequest(exportId, config);
 
             const filePath = await save({
                 defaultPath: settings?.lastUsedDirectory 
@@ -168,7 +168,7 @@ export function WalletView(props: WalletViewProps) {
                 
                 if (settings) {
                     updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
-                        invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
+                        settingsService.getSettings().then(setSettings).catch(() => {});
                     });
                 }
 

@@ -1,7 +1,7 @@
 use crate::models::{ProfileInfo, MnemonicLanguage};
 use crate::settings::{AppSettings, SETTINGS_KEY};
 use crate::{
-    commands::actions::{load_history_from_disk, TRANSACTION_HISTORY_KEY},
+    commands::transfers::{load_history_from_disk, TRANSACTION_HISTORY_KEY},
     AppState,
 };
 use chrono::{DateTime, Duration, Utc};

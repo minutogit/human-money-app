@@ -1,6 +1,9 @@
 // src/components/ReceiveView.tsx
 import { useState, useEffect, FormEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { transferService } from '../services/transferService';
+import { settingsService } from '../services/settingsService';
+import { voucherService } from '../services/voucherService';
+import { standardsService } from '../services/standardsService';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../utils/log';
@@ -10,12 +13,8 @@ import { ConfirmationModal } from './ui/ConfirmationModal';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
 import { 
-    AppSettings, 
-    VoucherStandardInfo, 
-    ReceiveSuccessPayload,
-    ReceiveBundleArgs,
-    OpenVoucherSigningRequestArgs,
-    ProcessAndAttachSignatureArgs
+    VoucherStandardInfo,
+    AppSettings
 } from '../types';
 import { PageLayout } from './ui/PageLayout';
 import { 
@@ -33,7 +32,7 @@ import {
 
 interface ReceiveViewProps {
     onBack: () => void;
-    onReceiveSuccess: (payload: ReceiveSuccessPayload) => void;
+    onReceiveSuccess: (payload: any) => void;
 }
 
 export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
@@ -65,8 +64,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             try {
                 logger.info("ReceiveView opened, fetching initial data.");
                 const [standards, currentSettings] = await Promise.all([
-                    invoke<VoucherStandardInfo[]>("get_voucher_standards"),
-                    invoke<AppSettings>('get_app_settings').catch(e => {
+                    standardsService.getStandards(),
+                    settingsService.getSettings().catch(e => {
                         logger.warn(`Failed to fetch app settings: ${e}`);
                         return null;
                     })
@@ -103,7 +102,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 
                 if (settings) {
                     updateLastUsedDirectory(selectedPath, settings, protectAction).then(() => {
-                        invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
+                        settingsService.getSettings().then(setSettings).catch(() => {});
                     });
                 }
 
@@ -225,22 +224,18 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 });
 
                 const payload = await protectAction(async (password) => {
-                    const args: ReceiveBundleArgs = {
+                    const args = {
                         bundleData: fileData,
                         standardDefinitionsToml,
                         password,
                         forceAcceptToleranceBundle: false
                     };
-                    return await invoke<ReceiveSuccessPayload>("receive_bundle", args as any);
+                    return await transferService.receiveBundle(args as any);
                 });
 
                 if (payload) onReceiveSuccess(payload);
             } else if (fileType === 'ask') {
-                const args: OpenVoucherSigningRequestArgs = {
-                    containerBytes: fileData,
-                    password: bundlePassword || null
-                };
-                const openedVoucher = await invoke<any>("open_voucher_signing_request", args as any);
+                const openedVoucher = await voucherService.openSigningRequest(fileData, bundlePassword || undefined);
                 onReceiveSuccess(openedVoucher);
             } else if (fileType === 'sig') {
                 const standardDefinitionsToml: Record<string, string> = {};
@@ -251,13 +246,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 
                 const standardTomlContent = Object.values(standardDefinitionsToml)[0];
                 const updatedInstanceId = await protectAction(async (password) => {
-                    const args: ProcessAndAttachSignatureArgs = {
-                        containerBytes: fileData,
-                        standardTomlContent,
-                        containerPassword: bundlePassword || null,
-                        walletPassword: password
-                    };
-                    return await invoke<string>("process_and_attach_signature", args as any);
+                    return await voucherService.processAndAttachSignature(fileData, standardTomlContent, bundlePassword || undefined, password || undefined);
                 });
                 
                 if (updatedInstanceId) {
@@ -319,13 +308,13 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             });
 
             const payload = await protectAction(async (password) => {
-                const args: ReceiveBundleArgs = {
+                const args = {
                     bundleData: fileData,
                     standardDefinitionsToml,
                     password,
                     forceAcceptToleranceBundle: true
                 };
-                return await invoke<ReceiveSuccessPayload>("receive_bundle", args as any);
+                return await transferService.receiveBundle(args as any);
             });
 
             if (payload) onReceiveSuccess(payload);

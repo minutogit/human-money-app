@@ -1,6 +1,7 @@
 // src/App.tsx
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { profileService } from "./services/profileService";
+import { authService } from "./services/authService";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { error } from "@tauri-apps/plugin-log";
@@ -28,7 +29,8 @@ import { ConflictDetailsView } from './components/ConflictDetailsView';
 import { ConflictListView } from './components/ConflictListView';
 import { ForkLockOverlay } from './components/ForkLockOverlay';
 import { Button } from './components/ui/Button';
-import { ProfileInfo, ReceiveSuccessPayload } from './types';
+import { ReceiveSuccessPayload } from './types';
+
 // WICHTIG: Der Import für den Provider
 import { SessionProvider, useSession } from './context/SessionContext';
 import { Sidebar, INTERNAL_VIEWS } from './components/Sidebar';
@@ -82,9 +84,10 @@ function AppContent() {
             try {
                 // First, check if we are already logged in (session active)
                 try {
-                    const profile = await invoke<ProfileInfo>("get_user_profile");
-                    logger.info(`Auto-login successful for profile: ${profile.profileName}`);
-                    setProfileName(profile.profileName);
+                    const profile = await profileService.getProfile();
+                    const displayName = profile.firstName || profile.id;
+                    logger.info(`Auto-login successful for profile: ${displayName}`);
+                    setProfileName(displayName);
                     notifyLogin();
                     setAppState({ view: "logged_in" });
                     return; // Exit early if auto-login worked
@@ -93,7 +96,7 @@ function AppContent() {
                     logger.info("No active session found, checking available profiles.");
                 }
 
-                const profiles = await invoke<ProfileInfo[]>("list_profiles");
+                const profiles = await authService.listProfiles();
                 setAppState({ view: profiles.length > 0 ? "needs_login" : "needs_profile" });
             } catch (e) {
                 error(`Failed to check if profile exists: ${e}`);
@@ -118,7 +121,7 @@ function AppContent() {
     }, [profileName]);
 
     function handleLogout() {
-        invoke("logout").catch(e => error(`Logout failed: ${e}`));
+        profileService.logout().catch(e => error(`Logout failed: ${e}`));
         setSidebarOpen(false);
         // Reset the profile name on logout
         setProfileName("");

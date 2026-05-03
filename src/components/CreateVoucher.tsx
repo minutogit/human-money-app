@@ -1,11 +1,13 @@
 // src/components/CreateVoucher.tsx
 import { useState, useEffect, FormEvent, ChangeEvent, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { voucherService } from "../services/voucherService";
+import { profileService } from "../services/profileService";
+import { standardsService } from "../services/standardsService";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { Input } from "./ui/Input";
-import { NewVoucherData, VoucherStandardInfo, PublicProfile, VoucherStandardDefinition } from "../types";
+import { NewVoucherData, VoucherStandardInfo, VoucherStandardDefinition } from "../types";
 import { useSession } from "../context/SessionContext";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { normalizeCoordinates } from "../utils/geoUtils";
@@ -82,7 +84,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     useEffect(() => {
         async function fetchStandards() {
             try {
-                const fetchedStandards = await invoke<VoucherStandardInfo[]>("get_voucher_standards");
+                const fetchedStandards = await standardsService.getStandards();
                 setStandards(fetchedStandards);
             } catch (e) {
                 setFeedback({ type: 'error', msg: `Failed to fetch standards: ${e}` });
@@ -101,7 +103,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         const selectedStd = standards.find(s => s.id === newId);
         if (selectedStd) {
             try {
-                const parsed = await invoke<VoucherStandardDefinition>("parse_standard_toml", { tomlContent: selectedStd.content });
+                const parsed = await standardsService.parseStandard(selectedStd.content);
                 setParsedStandard(parsed);
                 
                 // Set default validity from appConfig
@@ -156,7 +158,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
 
     const handleLoadProfile = async () => {
         try {
-            const profile = await invoke<PublicProfile>('get_user_profile');
+            const profile = await profileService.getProfile();
             if (profile.firstName) setFirstName(profile.firstName);
             if (profile.lastName) setLastName(profile.lastName);
             if (profile.organization) setOrganization(profile.organization);
@@ -224,7 +226,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         };
         try {
             await protectAction(async (password) => {
-                await invoke("create_new_voucher", { standardTomlContent: selectedStandard.content, data: voucherData, password });
+                await voucherService.create(selectedStandard.content, voucherData, password || undefined);
             });
             setFeedback({type: 'success', msg: "Voucher created! Synchronizing ledger..."});
             setTimeout(onVoucherCreated, 2000);

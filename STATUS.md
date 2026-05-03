@@ -1,6 +1,6 @@
 ---
 project: human-money-app
-version: "0.1.0-beta.7"
+version: "0.1.0-beta.8"
 phase: "beta"
 health: "green"
 last_updated: "2026-05-03"
@@ -193,6 +193,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Fixed voucher selection counter in SendView (Synchronized UI state with selection Map)
 - [x] Centralized Voucher Standard Parsing (Moved TOML parsing from Frontend to Core AppService)
 - [x] Refactored signature hints and role extraction to use type-safe backend-driven DTOs
+- [x] Modularized Frontend Service Layer (Decoupled UI from direct Tauri invoke calls via type-safe services)
+
 
 
 
