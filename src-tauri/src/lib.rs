@@ -59,6 +59,8 @@ fn setup_log_rotation(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>>
 pub struct AppState {
     pub service: Mutex<AppService>,
     pub history: Mutex<Option<Vec<TransactionRecord>>>,
+    pub events: Mutex<Option<Vec<human_money_core::models::wallet_event::WalletEvent>>>,
+    pub contacts: Mutex<Option<crate::models::FrontendAddressBook>>,
     pub settings: Mutex<Option<AppSettings>>,
 }
 
@@ -88,6 +90,8 @@ pub fn run() {
             app.manage(AppState {
                 service: Mutex::new(service),
                 history: Mutex::new(None),
+                events: Mutex::new(None),
+                contacts: Mutex::new(None),
                 settings: Mutex::new(None),
             });
 

@@ -1,5 +1,6 @@
 // src-tauri/src/commands/actions.rs
 use crate::{models::{FrontendNewVoucherData, FrontendUserProfile, FrontendTransactionRecord, TransactionRecord}, AppState, settings::{AppSettings, SETTINGS_KEY}};
+use crate::commands::auth::update_events_cache;
 use chrono::Utc;
 use log::{info, error}; // <--- 'debug' wieder entfernt, wir nutzen info!
 use uuid::Uuid;
@@ -84,6 +85,11 @@ pub fn create_transfer_bundle(
     // RUF DIE BIBLIOTHEK AUF UND VERARBEITE DIE CreateBundleResult ANTWORT
     match service.create_transfer_bundle(request, &standard_definitions_toml, archive, password.as_deref()) {
         Ok(result) => {
+            // NEU: Events-Cache aktualisieren
+            if let Err(e) = update_events_cache(&mut service, &state, password.as_deref()) {
+                error!("Failed to refresh events cache after create_transfer_bundle: {}", e);
+            }
+
             // 'result' ist die neue CreateBundleResult aus der human_money_core
             Ok(CreateBundleResult {
                 bundle_data: result.bundle_bytes, // Feld 'bundle_bytes' verwenden
@@ -168,6 +174,11 @@ pub fn receive_bundle(
                 cache.push(new_record);
             } else {
                 *history_cache = Some(history);
+            }
+
+            // NEU: Events-Cache aktualisieren
+            if let Err(e) = update_events_cache(&mut service, &state, password.as_deref()) {
+                error!("Failed to refresh events cache after receive_bundle: {}", e);
             }
 
             info!("Transaction record for received bundle saved successfully.");
@@ -355,6 +366,12 @@ pub fn create_new_voucher(
     };
 
     let voucher = service.create_new_voucher(&standard_toml_content, lang_preference, voucher_data, password.as_deref())?;
+    
+    // NEU: Events-Cache aktualisieren
+    if let Err(e) = update_events_cache(&mut service, &state, password.as_deref()) {
+        error!("Failed to refresh events cache after create_new_voucher: {}", e);
+    }
+
     Ok(voucher.into())
 }
 

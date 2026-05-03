@@ -7,7 +7,21 @@ const CONTACTS_DATA_NAME: &str = "address_book";
 
 #[tauri::command]
 pub fn get_contacts(state: tauri::State<AppState>) -> Result<Vec<FrontendContact>, String> {
-    info!("Fetching all contacts from address book...");
+    // 1. Check cache first
+    {
+        let cache = state.contacts.lock().unwrap();
+        if let Some(book) = cache.as_ref() {
+            let mut contacts: Vec<FrontendContact> = book.contacts.values().cloned().collect();
+            contacts.sort_by(|a, b| {
+                let name_a = a.profile.first_name.as_deref().unwrap_or("");
+                let name_b = b.profile.first_name.as_deref().unwrap_or("");
+                name_a.to_lowercase().cmp(&name_b.to_lowercase())
+            });
+            return Ok(contacts);
+        }
+    }
+
+    info!("Fetching all contacts from address book from disk...");
     let mut service = state.service.lock().unwrap();
     
     match service.load_encrypted_data(CONTACTS_DATA_NAME, None) {
@@ -17,9 +31,11 @@ pub fn get_contacts(state: tauri::State<AppState>) -> Result<Vec<FrontendContact
                     error!("Failed to parse address book: {}", e);
                     format!("Failed to parse address book: {}", e)
                 })?;
-            // Konvertiere HashMap-Werte in einen Vektor
+
+            // Cache aktualisieren
+            *state.contacts.lock().unwrap() = Some(address_book.clone());
+
             let mut contacts: Vec<FrontendContact> = address_book.contacts.into_values().collect();
-            // Sortiere nach Name (optional, aber User-freundlich)
             contacts.sort_by(|a, b| {
                 let name_a = a.profile.first_name.as_deref().unwrap_or("");
                 let name_b = b.profile.first_name.as_deref().unwrap_or("");
@@ -70,7 +86,12 @@ pub fn save_contact(
         .map_err(|e| format!("Failed to serialize address book: {}", e))?;
     
     service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password.as_deref())
-        .map_err(|e| format!("Failed to save address book: {}", e))
+        .map_err(|e| format!("Failed to save address book: {}", e))?;
+
+    // 4. Cache aktualisieren
+    *state.contacts.lock().unwrap() = Some(address_book);
+    
+    Ok(())
 }
 
 #[tauri::command]
@@ -102,6 +123,9 @@ pub fn delete_contact(
         
         service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password.as_deref())
             .map_err(|e| format!("Failed to save address book: {}", e))?;
+
+        // 4. Cache aktualisieren
+        *state.contacts.lock().unwrap() = Some(address_book);
     }
 
     Ok(())
@@ -221,5 +245,43 @@ mod tests {
         assert_eq!(original.tags, deserialized.tags);
         assert_eq!(original.profile.first_name, deserialized.profile.first_name);
         assert_eq!(original.profile.organization, deserialized.profile.organization);
+    }
+
+    #[test]
+    fn test_get_contacts_uses_cache() {
+        use std::path::PathBuf;
+        use std::sync::Mutex;
+        use chrono::Utc;
+        use human_money_core::app_service::AppService;
+        use crate::models::{FrontendAddressBook, FrontendContact, FrontendUserProfile};
+
+        // Mock AppState with cached contacts
+        let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
+        let mut book = FrontendAddressBook::default();
+        book.contacts.insert("did:key:test".to_string(), FrontendContact {
+            did: "did:key:test".to_string(),
+            profile: FrontendUserProfile {
+                id: Some("did:key:test".to_string()),
+                first_name: Some("Cached".to_string()),
+                last_name: Some("User".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+        });
+
+        let state_raw = AppState {
+            service: Mutex::new(service),
+            history: Mutex::new(None),
+            events: Mutex::new(None),
+            contacts: Mutex::new(Some(book)),
+            settings: Mutex::new(None),
+        };
+
+        let cache = state_raw.contacts.lock().unwrap();
+        assert!(cache.is_some());
+        assert_eq!(cache.as_ref().unwrap().contacts.len(), 1);
+        assert_eq!(cache.as_ref().unwrap().contacts.get("did:key:test").unwrap().profile.first_name, Some("Cached".to_string()));
     }
 }

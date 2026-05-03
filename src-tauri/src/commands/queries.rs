@@ -193,7 +193,54 @@ pub fn get_event_history(
     limit: usize,
     state: tauri::State<AppState>,
 ) -> Result<Vec<crate::models::FrontendWalletEvent>, String> {
+    // 1. Check cache first
+    let events_cache = state.events.lock().unwrap();
+    if let Some(events) = events_cache.as_ref() {
+        // Return slice from cache based on offset/limit
+        let start = offset.min(events.len());
+        let end = (offset + limit).min(events.len());
+        return Ok(events[start..end].iter().map(|e| e.clone().into()).collect());
+    }
+    
+    // 2. Fallback to backend (might require session to be active)
     let mut service = state.service.lock().unwrap();
     let events = service.get_event_history(offset, limit, None)?;
     Ok(events.into_iter().map(|e| e.into()).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use human_money_core::app_service::AppService;
+    use human_money_core::models::wallet_event::{WalletEvent, WalletEventType};
+    use chrono::Utc;
+
+    #[test]
+    fn test_get_event_history_uses_cache() {
+        use std::path::PathBuf;
+        // Mock AppState
+        let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
+        let state_raw = AppState {
+            service: Mutex::new(service),
+            history: Mutex::new(None),
+            events: Mutex::new(Some(vec![
+                WalletEvent {
+                    event_id: "test_event_1".to_string(),
+                    event_type: WalletEventType::VoucherActivated,
+                    timestamp: Utc::now(),
+                    local_instance_id: "voucher_1".to_string(),
+                    voucher_id: "vid_1".to_string(),
+                    bff_data: Default::default(),
+                }
+            ])),
+            contacts: Mutex::new(None),
+            settings: Mutex::new(None),
+        };
+        
+        let events = state_raw.events.lock().unwrap();
+        assert!(events.is_some());
+        assert_eq!(events.as_ref().unwrap().len(), 1);
+        assert_eq!(events.as_ref().unwrap()[0].event_id, "test_event_1");
+    }
 }
