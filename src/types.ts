@@ -143,6 +143,93 @@ export interface VoucherStandardData {
     template: VoucherTemplateData;
 }
 
+export interface DynamicRule {
+    expression: string;
+    message: string;
+}
+
+export interface SignatureRule {
+    roleDescription: string;
+    weight: number;
+    validationRules: Record<string, DynamicRule>;
+}
+
+export interface ImmutableIdentity {
+    uuid: string;
+    name: string;
+    abbreviation: string;
+}
+
+export type PrimaryRedemptionType = "goodsOrServices" | "time" | "physicalAsset";
+export type CollateralType = "personalGuarantee" | "fiatBacked" | "cryptoBacked" | "physicalAsset";
+export type PrivacyMode = "public" | "stealth" | "flexible";
+
+export interface ImmutableBlueprint {
+    unit: string;
+    primaryRedemptionType: PrimaryRedemptionType;
+    collateralType: CollateralType;
+}
+
+export interface ImmutableFeatures {
+    allowPartialTransfers: boolean;
+    balancesAreSummable: boolean;
+    amountDecimalPlaces: number;
+    privacyMode: PrivacyMode;
+    allowedTTypes: string[];
+}
+
+export interface ImmutableIssuance {
+    validityDurationRange: string[];
+    issuanceMinimumValidityDuration: string;
+    additionalSignaturesRange: number[];
+    allowedSignatureRoles: string[];
+}
+
+export interface ImmutableZone {
+    identity: ImmutableIdentity;
+    blueprint: ImmutableBlueprint;
+    features: ImmutableFeatures;
+    issuance: ImmutableIssuance;
+    customRules: Record<string, DynamicRule>;
+    signatureRules: Record<string, SignatureRule>;
+}
+
+export interface MutableMetadata {
+    issuerName: string;
+    homepageUrl?: string;
+    documentationUrl?: string;
+    keywords: string[];
+}
+
+export interface MutableAppConfig {
+    defaultValidityDuration?: string;
+    roundUpValidityTo?: string;
+    serverHistoryRetention?: string;
+}
+
+export interface MutableI18n {
+    descriptions: Record<string, string>;
+    footnotes: Record<string, string>;
+    collateralDescriptions: Record<string, string>;
+}
+
+export interface MutableZone {
+    metadata: MutableMetadata;
+    appConfig: MutableAppConfig;
+    i18n: MutableI18n;
+}
+
+export interface SignatureBlock {
+    issuerId: string;
+    signature: string;
+}
+
+export interface VoucherStandardDefinition {
+    immutable: ImmutableZone;
+    mutable: MutableZone;
+    signature?: SignatureBlock;
+}
+
 export interface NominalValueData {
     unit: string;
     amount: string;

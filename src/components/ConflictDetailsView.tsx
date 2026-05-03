@@ -174,7 +174,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
 
                 <div className="bg-bg-card rounded-lg border border-theme-subtle shadow-sm p-6">
                     <h2 className="text-lg font-bold text-theme-primary mb-4 border-b border-theme-subtle pb-2">Evidence</h2>
-                    <p className="text-xs text-theme-light mb-4">Cryptographic proof of conflicting transactions:</p>
+                    <p className="text-xs text-theme-light mb-4">Secure proof of conflicting transactions:</p>
                     
                     <div className="space-y-4">
                         {proof.conflictingTransactions.map((tx, idx) => (
@@ -232,7 +232,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                         {proof.resolutions.map(res => (
                             <div key={res.endorsementId} className="bg-white p-3 rounded border border-green-100 shadow-sm text-sm">
                                 <div className="flex justify-between mb-1">
-                                    <p className="font-bold">Compensation Endorsement</p>
+                                    <p className="font-bold">Compensation Signature</p>
                                     <p className="text-xs text-gray-400">{formatDateTime(res.resolutionTimestamp)}</p>
                                 </div>
                                 <p className="text-gray-600 text-xs">The victim ({res.victimId.slice(0, 15)}...) confirmed solution.</p>

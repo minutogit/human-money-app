@@ -192,6 +192,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] IPC Stabilization & DTO Pattern Implementation (Strict snake_case core vs camelCase frontend) (APP-020)
 - [x] Fixed voucher selection counter in SendView (Synchronized UI state with selection Map)
 - [x] Centralized Voucher Standard Parsing (Moved TOML parsing from Frontend to Core AppService)
+- [x] Refactored signature hints and role extraction to use type-safe backend-driven DTOs
 
 
 

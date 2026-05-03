@@ -69,9 +69,9 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
             const suggestedFilename = `${recipientName}_${dateTimePart}.transfer`;
 
             const filePath = await save({
-                title: 'Save Transfer Bundle Again',
+                title: 'Save Transfer File',
                 defaultPath: suggestedFilename,
-                filters: [{ name: 'Transfer Bundle', extensions: ['transfer'] }]
+                filters: [{ name: 'Transfer File', extensions: ['transfer'] }]
             });
 
             if (filePath) {
@@ -99,7 +99,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
     return (
         <PageLayout 
             title="Activity Audit" 
-            description="Complete ledger of all cryptographic transfers." 
+            description="Complete record of all secure transfers." 
             onBack={onBack}
         >
             <div className="max-w-4xl mx-auto space-y-6">
@@ -119,7 +119,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
 
                 {isLoading && (
                     <div className="text-center py-20 text-theme-light animate-pulse font-black uppercase tracking-[0.2em]">
-                        Retrieving Ledger...
+                        Loading history...
                     </div>
                 )}
                 
@@ -189,7 +189,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                     <div className="space-y-4">
                                                         <div>
                                                             <p className="text-[9px] font-black text-theme-light uppercase tracking-[0.2em] mb-2 flex items-center gap-1.5">
-                                                                <Hash size={10} /> Bundle Identifier
+                                                                <Hash size={10} /> Transaction ID
                                                             </p>
                                                             <p className="text-xs font-mono text-theme-secondary break-all bg-theme-subtle/10 p-3 rounded-xl border border-theme-subtle/20">
                                                                 {record.bundleId}
@@ -210,7 +210,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                             <p className="text-[9px] font-black text-theme-primary uppercase tracking-[0.2em] mb-2">Transaction Status</p>
                                                             <div className="flex items-center gap-2 text-theme-secondary">
                                                                 <CheckCircle2 size={16} className="text-emerald-500" />
-                                                                <span className="text-sm font-bold">Cryptographically Verified</span>
+                                                                <span className="text-sm font-bold">Securely Verified</span>
                                                             </div>
                                                         </div>
                                                         
@@ -249,7 +249,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
                                                                     <tr>
                                                                         <th className="px-4 py-2 font-black text-theme-light uppercase tracking-widest">Asset Standard</th>
                                                                         <th className="px-4 py-2 font-black text-theme-light uppercase tracking-widest text-right">Value</th>
-                                                                        <th className="px-4 py-2 font-black text-theme-light uppercase tracking-widest">Local Identifier</th>
+                                                                        <th className="px-4 py-2 font-black text-theme-light uppercase tracking-widest">Local ID</th>
                                                                     </tr>
                                                                 </thead>
                                                                 <tbody className="divide-y divide-theme-subtle/50">

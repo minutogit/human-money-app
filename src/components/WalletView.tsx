@@ -6,7 +6,7 @@ import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
-import { VoucherSummary, AppSettings, PublicProfile, VoucherStandardInfo } from "../types";
+import { VoucherSummary, AppSettings, PublicProfile, VoucherStandardInfo, VoucherStandardDefinition } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import { useSession } from "../context/SessionContext";
@@ -36,7 +36,7 @@ export function WalletView(props: WalletViewProps) {
     const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
-    const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
+    const [parsedStandards, setParsedStandards] = useState<Record<string, VoucherStandardDefinition>>({});
 
     // Export state for Wallet
     const [showExportModal, setShowExportModal] = useState(false);
@@ -71,7 +71,17 @@ export function WalletView(props: WalletViewProps) {
                 setVouchers(voucherList || []);
                 setSettings(currentSettings);
                 setUserProfile(profile);
-                setVoucherStandards(standards);
+
+                // Parse standards for hints
+                const parsed: Record<string, VoucherStandardDefinition> = {};
+                for (const s of standards) {
+                    try {
+                        parsed[s.id] = await invoke<VoucherStandardDefinition>("parse_standard_toml", { tomlContent: s.content });
+                    } catch (e) {
+                        logger.error(`Failed to parse standard ${s.id}: ${e}`);
+                    }
+                }
+                setParsedStandards(parsed);
             } catch (e) {
                 const msg = `Failed to fetch wallet data: ${e}`;
                 console.error(msg);
@@ -89,14 +99,17 @@ export function WalletView(props: WalletViewProps) {
     }, []);
 
     const getSignatureHintForVoucher = (voucher: VoucherSummary): string | null => {
-        if (!userProfile || voucherStandards.length === 0) return null;
-        const standard = voucherStandards.find(s => {
-            if (s.id === voucher.voucherStandardUuid) return true;
-            const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
-            return uuidMatch && uuidMatch[1] === voucher.voucherStandardUuid;
-        });
+        if (!userProfile) return null;
+        // Try to find by UUID first (new way)
+        let standard: VoucherStandardDefinition | undefined = parsedStandards[voucher.voucherStandardUuid];
+        
+        // Fallback for cases where UUID might not match the ID in the list
+        if (!standard) {
+            standard = Object.values(parsedStandards).find(s => s.immutable.identity.uuid === voucher.voucherStandardUuid);
+        }
+
         if (!standard) return null;
-        return getMissingProfileHint(standard.content, userProfile);
+        return getMissingProfileHint(standard, userProfile);
     };
 
     async function handleExportSigningRequest() {

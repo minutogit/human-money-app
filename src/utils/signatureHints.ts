@@ -1,5 +1,4 @@
-// src/utils/signatureHints.ts
-import { PublicProfile } from "../types";
+import { PublicProfile, VoucherStandardDefinition } from "../types";
 
 /**
  * Mapping of CEL field references to human-readable display names
@@ -77,80 +76,29 @@ function extractFieldReferences(expression: string): string[] {
 }
 
 /**
- * Parses TOML content to extract custom_rules expressions.
- * This is a simple string-based parser that finds [immutable.custom_rules.*] sections.
- */
-function extractCustomRules(tomlContent: string): Array<{ name: string; expression: string }> {
-    const rules: Array<{ name: string; expression: string }> = [];
-    const lines = tomlContent.split('\n');
-    let currentRule: { name: string; expression?: string } | null = null;
-    
-    for (const line of lines) {
-        // Check for rule section header: [immutable.custom_rules.rule_name] or [mutable.custom_rules.rule_name]
-        const sectionMatch = line.match(/^\[(?:immutable|mutable)\.custom_rules\.([^\]]+)\]/);
-        if (sectionMatch) {
-            // Save previous rule if it has an expression
-            if (currentRule && currentRule.expression) {
-                rules.push({ name: currentRule.name, expression: currentRule.expression });
-            }
-            currentRule = { name: sectionMatch[1] };
-            continue;
-        }
-        
-        // Check for expression line within a rule section
-        if (currentRule && line.trim().startsWith('expression')) {
-            // Find the first and last quote on the line to be more robust
-            const firstQuoteIdx = line.indexOf('"');
-            const lastQuoteIdx = line.lastIndexOf('"');
-            
-            if (firstQuoteIdx !== -1 && lastQuoteIdx !== -1 && firstQuoteIdx !== lastQuoteIdx) {
-                currentRule.expression = line.substring(firstQuoteIdx + 1, lastQuoteIdx);
-            } else {
-                // Try single quotes if double quotes failed
-                const firstSQuoteIdx = line.indexOf("'");
-                const lastSQuoteIdx = line.lastIndexOf("'");
-                if (firstSQuoteIdx !== -1 && lastSQuoteIdx !== -1 && firstSQuoteIdx !== lastSQuoteIdx) {
-                    currentRule.expression = line.substring(firstSQuoteIdx + 1, lastSQuoteIdx);
-                }
-            }
-        }
-    }
-    
-    // Save the last rule
-    if (currentRule && currentRule.expression) {
-        rules.push({ name: currentRule.name, expression: currentRule.expression });
-    }
-    
-    return rules;
-}
-
-/**
  * Main function to generate a profile hint based on voucher standard content.
  * 
- * @param standardContent - The TOML content of the voucher standard
+ * @param standard - The parsed voucher standard definition
  * @param currentProfile - The user's current PublicProfile
  * @returns A compact hint string describing missing profile fields, or null if no hints
  */
 export function getMissingProfileHint(
-    standardContent: string,
+    standard: VoucherStandardDefinition,
     currentProfile: PublicProfile | null
 ): string | null {
     if (!currentProfile) {
         return null; // Return null instead of a message to avoid noise when no profile is loaded
     }
     
-    // Extract custom rules from the standard
-    const customRules = extractCustomRules(standardContent);
-    
-    if (customRules.length === 0) {
-        return null; // No custom rules, no hints needed
-    }
-    
     // Collect all field references from all rules
     const allFields = new Set<string>();
-    for (const rule of customRules) {
-        const fields = extractFieldReferences(rule.expression);
-        fields.forEach(f => allFields.add(f));
+    
+    // Check custom rules in immutable zone
+    if (standard.immutable.customRules) {
+        for (const rule of Object.values(standard.immutable.customRules)) {
+            const fields = extractFieldReferences(rule.expression);
+            fields.forEach(f => allFields.add(f));
+        }
     }
     
     // Check which fields are missing or empty in the profile

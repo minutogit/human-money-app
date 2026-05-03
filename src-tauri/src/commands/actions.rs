@@ -474,29 +474,6 @@ pub fn process_and_attach_signature(
 }
 
 #[tauri::command]
-pub fn get_allowed_signature_roles_from_standard(
-    toml_content: String,
-    state: tauri::State<AppState>,
-) -> Result<Vec<String>, String> {
-    info!("Getting allowed signature roles from standard...");
-    let service = state.service.lock().unwrap();
-    service.get_allowed_signature_roles_from_standard(&toml_content)
-}
-
-#[tauri::command]
-pub fn evaluate_signature_suitability(
-    voucher: Voucher,
-    role: String,
-    standard_toml_content: String,
-    state: tauri::State<AppState>,
-) -> Result<crate::models::FrontendSignatureImpact, String> {
-    info!("Evaluating signature suitability for role: {}", role);
-    let service = state.service.lock().unwrap();
-    let impact = service.evaluate_signature_suitability(&voucher, &role, &standard_toml_content)?;
-    Ok(impact.into())
-}
-
-#[tauri::command]
 pub fn remove_voucher_signature(
     local_instance_id: String,
     signature_id: String,

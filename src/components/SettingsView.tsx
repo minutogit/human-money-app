@@ -122,7 +122,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                             }>
                                 <div className="space-y-6">
                                     <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Bundle Retention (Days)</label>
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">History Storage (Days)</label>
                                         <Input
                                             type="number"
                                             value={settings?.bundleRetentionDays ?? 30}
@@ -131,7 +131,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                             className="font-bold"
                                         />
                                         <p className="text-[10px] text-theme-light/60 font-medium leading-relaxed">
-                                            Sets the archival threshold for cryptographic transfer bundles.
+                                            Sets the storage threshold for transaction history and transfer files.
                                         </p>
                                     </div>
                                 </div>
@@ -141,7 +141,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                             <Card header={
                                 <div className="flex items-center gap-2">
                                     <Clock size={18} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">Vault Session</span>
+                                    <span className="font-black text-xs uppercase tracking-widest">Active Session</span>
                                 </div>
                             }>
                                 <div className="space-y-6">

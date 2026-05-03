@@ -7,7 +7,7 @@ import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { useSession } from "../context/SessionContext";
-import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardInfo } from "../types";
+import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardInfo, VoucherStandardDefinition } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import ContactDialog from "./ContactDialog";
@@ -76,7 +76,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     const [isFetchingProofId, setIsFetchingProofId] = useState(false);
     const [trustStatus, setTrustStatus] = useState<TrustStatus>("clean");
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
-    const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
+    const [parsedStandards, setParsedStandards] = useState<Record<string, VoucherStandardDefinition>>({});
     const [contacts, setContacts] = useState<Contact[]>([]);
 
     const voucher = details?.voucher;
@@ -107,7 +107,17 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                 setDetails(result);
                 setSettings(currentSettings);
                 setUserProfile(profile);
-                setVoucherStandards(standards);
+
+                // Parse standards for hints
+                const parsed: Record<string, VoucherStandardDefinition> = {};
+                for (const s of standards) {
+                    try {
+                        parsed[s.id] = await invoke<VoucherStandardDefinition>("parse_standard_toml", { tomlContent: s.content });
+                    } catch (e) {
+                        logger.error(`Failed to parse standard ${s.id}: ${e}`);
+                    }
+                }
+                setParsedStandards(parsed);
             } catch (e) {
                 const msg = `Failed to fetch voucher details: ${e}`;
                 logger.error(msg);
@@ -177,11 +187,14 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     if (errorMsg || !details || !voucher) return <div className="p-10 text-center text-rose-500 font-bold">{errorMsg || "Voucher not found"}</div>;
 
     const creator = voucher.creator;
-    const signatureHint = statusInfo?.name === 'Incomplete' && userProfile && voucherStandards.length > 0
+    const signatureHint = statusInfo?.name === 'Incomplete' && userProfile
         ? (() => {
             const targetUuid = voucher.voucherStandard.uuid;
-            const standard = voucherStandards.find(s => s.id === targetUuid || s.content.includes(targetUuid));
-            return standard ? getMissingProfileHint(standard.content, userProfile) : null;
+            let standard: VoucherStandardDefinition | undefined = parsedStandards[targetUuid];
+            if (!standard) {
+                standard = Object.values(parsedStandards).find(s => s.immutable.identity.uuid === targetUuid);
+            }
+            return standard ? getMissingProfileHint(standard, userProfile) : null;
         })() : null;
 
     return (
@@ -306,7 +319,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 p-2">
                                     <div className="space-y-6">
                                         <InfoRow label="Legal Name" icon={User}>{creator.firstName} {creator.lastName}</InfoRow>
-                                        <InfoRow label="DID / Identifier" icon={Shield} isMono>{creator.id}</InfoRow>
+                                        <InfoRow label="Account ID" icon={Shield} isMono>{creator.id}</InfoRow>
                                         <InfoRow label="Postal Address" icon={MapPin}>
                                             {creator.address?.street} {creator.address?.houseNumber}<br/>
                                             {creator.address?.zipCode} {creator.address?.city}

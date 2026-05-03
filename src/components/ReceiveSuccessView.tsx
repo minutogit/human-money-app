@@ -91,7 +91,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                 <div className="bg-white border border-theme-subtle rounded-[40px] p-8 shadow-premium space-y-8">
                     {/* Amount Hero */}
                     <div className="text-center space-y-2">
-                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">Net Acquisition</span>
+                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">Total Received</span>
                         <div className="text-4xl font-black text-theme-primary tracking-tighter">
                             {summaryString}
                         </div>

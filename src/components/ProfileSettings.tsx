@@ -102,7 +102,7 @@ export function ProfileSettings() {
                     <Lock size={24} />
                 </div>
                 <div>
-                    <h3 className="text-sm font-black text-emerald-900 uppercase tracking-widest mb-1">Vault Security</h3>
+                    <h3 className="text-sm font-black text-emerald-900 uppercase tracking-widest mb-1">Wallet Security</h3>
                     <p className="text-xs text-emerald-800/80 font-medium leading-relaxed">
                         Your identity is stored encrypted on your local device. It is only shared with counterparties when you explicitly sign a voucher.
                     </p>

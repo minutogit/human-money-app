@@ -53,12 +53,12 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
             const suggestedFilename = `${recipientName}_${dateTimePart}.transfer`;
 
             const filePath = await save({
-                title: 'Export Transfer Bundle',
+                title: 'Save Transfer File',
                 defaultPath: settings?.lastUsedDirectory 
                     ? `${settings.lastUsedDirectory}/${suggestedFilename}`
                     : suggestedFilename,
                 filters: [{
-                    name: 'Transfer Bundle',
+                    name: 'Transfer File',
                     extensions: ['transfer']
                 }]
             });
@@ -73,7 +73,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                         invoke<AppSettings>('get_app_settings').then(setSettings).catch(() => {});
                     });
                 }
-                setFeedback(`Vault synchronization successful.`);
+                setFeedback(`Wallet synchronized and file saved.`);
             }
         } catch (e) {
             setFeedback(`Error: ${e}`);
@@ -96,8 +96,8 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                         </div>
                     </div>
                     <div className="space-y-1">
-                        <h1 className="text-3xl font-black text-theme-primary tracking-tight">Transfer Manifest Created</h1>
-                        <p className="text-theme-light font-medium">The cryptographic payload is ready for distribution.</p>
+                        <h1 className="text-3xl font-black text-theme-primary tracking-tight">Transfer Ready to Send</h1>
+                        <p className="text-theme-light font-medium">Your funds are securely packaged and ready for delivery.</p>
                     </div>
                 </div>
 
@@ -105,7 +105,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                 <div className="bg-white border border-theme-subtle rounded-[40px] p-8 shadow-premium space-y-8">
                     {/* Amount Hero */}
                     <div className="text-center space-y-2">
-                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">Net Outbound Value</span>
+                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">Total Amount</span>
                         <div className="text-4xl font-black text-theme-primary tracking-tighter">
                             {summary}
                         </div>
@@ -114,7 +114,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                     <div className="space-y-4">
                         <div className="space-y-2">
                             <span className="text-[9px] font-black uppercase tracking-widest text-theme-light flex items-center gap-1.5 px-1">
-                                <User size={10} /> Recipient Identifier
+                                <User size={10} /> Recipient ID
                             </span>
                             <div className="p-4 bg-theme-subtle/10 rounded-2xl border border-theme-subtle/20">
                                 <p className="text-sm font-mono font-bold text-theme-secondary break-all">
@@ -128,9 +128,9 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                                 <Share2 size={20} />
                             </div>
                             <div className="space-y-1">
-                                <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest">Next Phase</h4>
+                                <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest">Next Step</h4>
                                 <p className="text-xs text-blue-800/80 font-medium leading-relaxed">
-                                    Export the bundle file and deliver it to the recipient via your preferred secure channel.
+                                    Save the transfer file and send it to your contact (e.g. via Signal, WhatsApp, or Email).
                                 </p>
                             </div>
                         </div>
@@ -146,14 +146,14 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                         className="w-full max-w-sm py-4 rounded-3xl shadow-premium-lg text-lg gap-2"
                     >
                         {isSaving ? <Download className="animate-bounce" size={20} /> : <Download size={20} />}
-                        {isSaving ? 'Synchronizing File...' : 'Export Transfer Bundle'}
+                        {isSaving ? 'Saving File...' : 'Save Transfer File'}
                     </Button>
                     <Button 
                         variant="secondary" 
                         onClick={onDone} 
                         className="w-full max-w-sm py-3 rounded-2xl text-sm font-black uppercase tracking-widest"
                     >
-                        Complete Session
+                        Finish & Back to Wallet
                     </Button>
                     
                     {feedback && (

@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { save } from '@tauri-apps/plugin-dialog';
 import { logger } from '../utils/log';
-import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact } from '../types';
+import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact, VoucherStandardDefinition } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
@@ -59,11 +59,16 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
 
                 if (matchingStandard) {
                     setStandardContent(matchingStandard.content);
-                    const roles = await invoke<string[]>("get_allowed_signature_roles_from_standard", {
-                        tomlContent: matchingStandard.content
-                    });
-                    setAllowedRoles(roles);
-                    if (roles.length === 1) setSelectedRole(roles[0]);
+                    try {
+                        const parsed = await invoke<VoucherStandardDefinition>("parse_standard_toml", { tomlContent: matchingStandard.content });
+                        
+                        // Extract roles from signatureRules keys
+                        const roles = Object.keys(parsed.immutable.signatureRules);
+                        setAllowedRoles(roles);
+                        if (roles.length === 1) setSelectedRole(roles[0]);
+                    } catch (e) {
+                        setFeedbackMsg(`Failed to parse standard: ${e}`);
+                    }
                 }
             } catch (e) {
                 setFeedbackMsg(`Initialization Error: ${e}`);
@@ -139,7 +144,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     });
                 }
 
-                setFeedbackMsg("Cryptographic signature generated successfully!");
+                setFeedbackMsg("Signature generated successfully!");
                 setTimeout(() => onBack(), 2000);
             }
         } catch (e) {
@@ -205,7 +210,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     <Card header={
                         <div className="flex items-center gap-2">
                             <UserCheck size={18} className="text-theme-primary" />
-                            <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Endorsement Role</span>
+                            <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Signature Role</span>
                         </div>
                     }>
                         <div className="space-y-6">
@@ -262,7 +267,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                 <div className="w-10 h-10 bg-theme-subtle/20 rounded-full border border-theme-subtle/30 flex items-center justify-center">
                                     <ArrowRight className="text-theme-light animate-bounce" size={20} />
                                 </div>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">Analyzing Cryptographic Suitability...</p>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">Checking signature validity...</p>
                             </div>
                         ) : impact ? (
                             <div className="space-y-4">
@@ -319,7 +324,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                 {impact.isAllowedRole && impact.fatalConflicts.length === 0 && impact.resolvedRules.length === 0 && impact.gentleHints.length === 0 && (
                                     <div className="p-4 bg-gray-50 border border-gray-100 rounded-2xl flex items-start gap-3">
                                         <Info size={20} className="text-gray-400 shrink-0" />
-                                        <p className="text-sm font-bold text-gray-600">This signature is valid but does not resolve any outstanding cryptographic rules.</p>
+                                        <p className="text-sm font-bold text-gray-600">This signature is valid and ready for use.</p>
                                     </div>
                                 )}
                             </div>
@@ -343,7 +348,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                         className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3 disabled:opacity-30 disabled:grayscale transition-all"
                     >
                         {isSigning ? <ShieldCheck className="animate-pulse" size={24} /> : <PenTool size={24} />}
-                        {isSigning ? 'Authorizing Signature...' : 'Finalize Endorsement'}
+                        {isSigning ? 'Signing...' : 'Sign Now'}
                     </Button>
                     <p className="text-[10px] font-bold text-theme-light text-center flex items-center justify-center gap-2">
                         <Lock size={12} />

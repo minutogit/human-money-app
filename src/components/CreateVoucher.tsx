@@ -5,7 +5,7 @@ import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { Input } from "./ui/Input";
-import { NewVoucherData, VoucherStandardInfo, PublicProfile } from "../types";
+import { NewVoucherData, VoucherStandardInfo, PublicProfile, VoucherStandardDefinition } from "../types";
 import { useSession } from "../context/SessionContext";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { normalizeCoordinates } from "../utils/geoUtils";
@@ -32,27 +32,11 @@ interface CreateVoucherProps {
     onCancel: () => void;
 }
 
-function parseStandardInfo(tomlContent: string) {
-    const nameMatch = tomlContent.match(/\bname\s*=\s*"([^"]+)"/);
-    const name = nameMatch ? nameMatch[1] : null;
-    const issuerMatch = tomlContent.match(/issuer_name\s*=\s*"([^"]+)"/);
-    const issuer = issuerMatch ? issuerMatch[1] : null;
-    const unitMatch = tomlContent.match(/unit\s*=\s*"([^"]+)"/);
-    const unit = unitMatch ? unitMatch[1] : null;
-    const abbreviationMatch = tomlContent.match(/abbreviation\s*=\s*"([^"]+)"/);
-    const abbreviation = abbreviationMatch ? abbreviationMatch[1] : null;
-    const durationMatch = tomlContent.match(/default_validity_duration\s*=\s*"P(\d+)([YMD])"/);
-    let validity = null;
-    if (durationMatch) {
-        validity = { value: parseInt(durationMatch[1], 10), unit: durationMatch[2] as "Y" | "M" | "D" };
-    }
-    return { name, issuer, unit, abbreviation, validity };
-}
-
 export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps) {
     const { protectAction } = useSession();
     const [standards, setStandards] = useState<VoucherStandardInfo[]>([]);
     const [selectedStandardId, setSelectedStandardId] = useState<string>("");
+    const [parsedStandard, setParsedStandard] = useState<VoucherStandardDefinition | null>(null);
     const [amount, setAmount] = useState("");
     const [validityValue, setValidityValue] = useState<number>(3);
     const [validityUnit, setValidityUnit] = useState<"Y" | "M" | "D">("Y");
@@ -109,17 +93,32 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         fetchStandards();
     }, []);
 
-    const handleStandardChange = (e: ChangeEvent<HTMLSelectElement>) => {
+    const handleStandardChange = async (e: ChangeEvent<HTMLSelectElement>) => {
         const newId = e.target.value;
         setSelectedStandardId(newId);
         setErrors(prev => ({ ...prev, standard: false }));
+        
         const selectedStd = standards.find(s => s.id === newId);
         if (selectedStd) {
-            const { validity } = parseStandardInfo(selectedStd.content);
-            if (validity) {
-                setValidityValue(validity.value);
-                setValidityUnit(validity.unit);
+            try {
+                const parsed = await invoke<VoucherStandardDefinition>("parse_standard_toml", { tomlContent: selectedStd.content });
+                setParsedStandard(parsed);
+                
+                // Set default validity from appConfig
+                if (parsed.mutable.appConfig.defaultValidityDuration) {
+                    const duration = parsed.mutable.appConfig.defaultValidityDuration;
+                    const match = duration.match(/P(\d+)([YMD])/);
+                    if (match) {
+                        setValidityValue(parseInt(match[1], 10));
+                        setValidityUnit(match[2] as "Y" | "M" | "D");
+                    }
+                }
+            } catch (e) {
+                setFeedback({ type: 'error', msg: `Failed to parse standard: ${e}` });
+                setParsedStandard(null);
             }
+        } else {
+            setParsedStandard(null);
         }
     };
 
@@ -200,13 +199,12 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     async function executeCreation() {
         setIsLoading(true);
         const selectedStandard = standards.find(s => s.id === selectedStandardId)!;
-        const { unit: standardUnit } = parseStandardInfo(selectedStandard.content);
         const validityDuration = validityValue > 0 ? `P${validityValue}${validityUnit}` : null;
         const fullAddress = `${street} ${houseNumber}, ${zipCode} ${city}, ${country}`.trim();
         const voucherData: NewVoucherData = {
             validityDuration: validityDuration,
             nonRedeemableTestVoucher: nonRedeemable,
-            nominalValue: { amount, unit: standardUnit || "Units" },
+            nominalValue: { amount, unit: parsedStandard?.immutable.blueprint.unit || "Units" },
             collateral: { amount: collateralAmount, unit: collateralUnit, abbreviation: collateralAbbreviation },
             creator: {
                 firstName: firstName,
@@ -272,10 +270,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                                         className={`w-full bg-white border rounded-2xl px-4 py-3.5 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all ${errors.standard ? 'border-rose-500' : 'border-theme-subtle'}`}
                                     >
                                         <option value="">Select Voucher Type...</option>
-                                        {standards.map(s => {
-                                            const { name, issuer } = parseStandardInfo(s.content);
-                                            return <option key={s.id} value={s.id}>{name || s.id} {issuer ? `(${issuer})` : ''}</option>;
-                                        })}
+                                        {standards.map(s => (
+                                            <option key={s.id} value={s.id}>{s.id}</option>
+                                        ))}
                                     </select>
                                 </div>
                                 <div className="grid grid-cols-2 gap-4">
@@ -515,9 +512,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light mb-2">New Voucher</p>
                             <p className="text-3xl font-black text-theme-primary tracking-tighter">
                                 {(() => {
-                                    const selected = standards.find(s => s.id === selectedStandardId);
-                                    if (!selected) return amount;
-                                    const { abbreviation, unit } = parseStandardInfo(selected.content);
+                                    if (!parsedStandard) return amount;
+                                    const abbreviation = parsedStandard.immutable.identity.abbreviation;
+                                    const unit = parsedStandard.immutable.blueprint.unit;
                                     let displayUnit = abbreviation || unit || 'Units';
                                     if (nonRedeemable && !displayUnit.startsWith("TEST-")) displayUnit = `TEST-${displayUnit}`;
                                     return `${amount} ${displayUnit}`;

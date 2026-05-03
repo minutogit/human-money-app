@@ -203,7 +203,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                 <h3 className="text-xs font-black uppercase tracking-widest">Restoration Advisory</h3>
                             </div>
                             <p className="text-sm font-medium text-rose-900 leading-relaxed">
-                                If you haven't moved this vault (Handover), <span className="font-black text-rose-500">EVERYTHING WILL BE LOST PERMANENTLY</span>. Only proceed if you have a verified backup on another device or your master key sequence.
+                                If you haven't moved this wallet (Handover), <span className="font-black text-rose-500">EVERYTHING WILL BE LOST PERMANENTLY</span>. Only proceed if you have a verified backup on another device or your master key sequence.
                             </p>
                         </div>
 
@@ -232,7 +232,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                         
                         <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleVerifyDeletePassword(); }}>
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Vault Password</label>
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Wallet Password</label>
                                 <Input type="password" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} placeholder="Required" autoFocus />
                             </div>
 
@@ -271,7 +271,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                 <h3 className="text-xs font-black uppercase tracking-widest">Double-Spend Prevention</h3>
                             </div>
                             <p className="text-sm font-medium text-amber-900 leading-relaxed">
-                                This vault is now bound to this instance. <span className="font-black">DO NOT</span> use this profile on the old device. Simultaneous use will cause permanent reputation damage and asset locking.
+                                This wallet is now bound to this instance. <span className="font-black">DO NOT</span> use this profile on the old device. Simultaneous use will cause permanent reputation damage and asset locking.
                             </p>
                         </div>
 

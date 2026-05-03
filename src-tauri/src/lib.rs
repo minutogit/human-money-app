@@ -19,7 +19,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{actions::*, auth::*, queries::*, utils::*, contacts::*, integrity::*};
+use crate::commands::{actions::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*};
 use crate::models::TransactionRecord;
 use crate::settings::AppSettings;
 
@@ -146,6 +146,7 @@ pub fn run() {
             get_voucher_source_sender,
             check_reputation, set_conflict_local_override,
             get_event_history,
+            parse_standard_toml,
             // Address Book
             get_contacts, save_contact, delete_contact,
             // WalletSeal / Sync

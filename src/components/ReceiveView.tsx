@@ -90,7 +90,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 defaultPath: settings?.lastUsedDirectory,
                 filters: [
                     { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'humocoreq', 'humocosig'] },
-                    { name: 'Transfer Bundle (.transfer)', extensions: ['transfer'] },
+                    { name: 'Transfer File (.transfer)', extensions: ['transfer'] },
                     { name: 'Signature Request (.ask)', extensions: ['ask', 'humocoreq'] },
                     { name: 'Signature Response (.sig)', extensions: ['sig', 'humocosig'] },
                     { name: 'All Files', extensions: ['*'] }
@@ -275,7 +275,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             if (errorStr.includes("ToleranceZone")) {
                 setToleranceModal({
                     type: errorStr.includes("Extended") ? 'Critical' : 'Soft',
-                    message: "DANGER: This bundle predates your last wallet recovery. Re-importing may lead to double-spend conflicts."
+                    message: "DANGER: This file predates your last wallet recovery. Re-importing may lead to double-spend conflicts."
                 });
                 return;
             }

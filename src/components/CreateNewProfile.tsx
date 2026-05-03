@@ -296,7 +296,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                                 <div className="space-y-4">
                                     <div className="space-y-2">
                                         <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><User size={10}/> Profile Label</label>
-                                        <Input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="e.g. My Secure Vault" required />
+                                        <Input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="e.g. My Secure Wallet" required />
                                     </div>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                         <div className="space-y-2">

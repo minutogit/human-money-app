@@ -49,7 +49,7 @@ amount_decimal_places = 4`,
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as Mock).mockImplementation((cmd: string) => {
+    (invoke as Mock).mockImplementation((cmd: string, _args?: any) => {
       if (cmd === 'get_voucher_standards') {
         return Promise.resolve(mockStandards);
       }
@@ -75,6 +75,24 @@ amount_decimal_places = 4`,
           },
         });
       }
+      if (cmd === 'parse_standard_toml') {
+        // Return a mocked VoucherStandardDefinition based on the tomlContent
+        return Promise.resolve({
+          immutable: {
+            identity: { uuid: 'freetaler-uuid', name: 'FreeTaler', abbreviation: 'Taler' },
+            blueprint: { unit: 'Taler', primaryRedemptionType: 'goodsOrServices', collateralType: 'personalGuarantee' },
+            features: { allowPartialTransfers: true, balancesAreSummable: true, amountDecimalPlaces: 4, privacyMode: 'public', allowedTTypes: [] },
+            issuance: { validityDurationRange: [], issuanceMinimumValidityDuration: 'P1Y', additionalSignaturesRange: [], allowedSignatureRoles: [] },
+            customRules: {},
+            signatureRules: {},
+          },
+          mutable: {
+            metadata: { issuerName: 'Human Money Project', keywords: [] },
+            appConfig: { defaultValidityDuration: 'P1Y' },
+            i18n: { descriptions: {}, footnotes: {}, collateralDescriptions: {} },
+          }
+        });
+      }
       return Promise.resolve(undefined);
     });
   });
@@ -95,7 +113,8 @@ amount_decimal_places = 4`,
       <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
     );
 
-    expect(await screen.findByText(/FreeTaler/i)).toBeInTheDocument();
+    // After refactor, it shows s.id in the dropdown
+    expect(await screen.findByText(/freetaler_v1/i)).toBeInTheDocument();
   });
 
   it('validates required fields when form is submitted without data', async () => {
@@ -157,7 +176,7 @@ amount_decimal_places = 4`,
     // Select the standard
     await userEvent.selectOptions(select, 'freetaler_v1');
 
-    // It should update to 1 year (from the mock content)
+    // It should update to 1 year (from the mock parsed standard)
     await waitFor(() => {
       expect(screen.getByDisplayValue('1')).toBeInTheDocument();
     });

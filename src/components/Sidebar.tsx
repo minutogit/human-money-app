@@ -84,7 +84,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Records & Network',
       items: [
         { id: 'activities', label: 'Activity Log', icon: ClipboardList, view: { view: 'activities' } },
-        { id: 'transaction_history', label: 'Bundle History', icon: History, view: { view: 'transaction_history' } },
+        { id: 'transaction_history', label: 'Transaction History', icon: History, view: { view: 'transaction_history' } },
         { id: 'address_book', label: 'Address Book', icon: Contact, view: { view: 'address_book' } },
       ]
     },
