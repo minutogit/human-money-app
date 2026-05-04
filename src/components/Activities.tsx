@@ -25,7 +25,7 @@ interface ActivitiesProps {
 }
 
 
-function getEventDetails(event: WalletEvent): { label: string; icon: any; color: string; bgColor: string } {
+function getEventDetails(event: WalletEvent): { label: string; icon: React.ElementType; color: string; bgColor: string } {
     const type = event.eventType;
     const bff = event.bffData;
 

@@ -1,6 +1,6 @@
 // src/components/VoucherDetailsView.tsx
 import { useState, useEffect } from "react";
-import { voucherService } from "../services/voucherService";
+import { voucherService, SigningRequestConfig } from "../services/voucherService";
 import { settingsService } from "../services/settingsService";
 import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
@@ -128,7 +128,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             };
             fetchProofId();
         }
-    }, [details, proofId, voucherId]);
+    }, [isQuarantined, proofId, isFetchingProofId, voucherId]);
 
     const refreshDetails = async () => {
         try {
@@ -164,7 +164,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             return standard ? getMissingProfileHint(standard, userProfile) : null;
         })() : null;
 
-    const handleExport = async (config: any) => {
+    const handleExport = async (config: SigningRequestConfig) => {
         setIsExporting(true);
         setExportError("");
         try {

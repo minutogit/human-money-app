@@ -34,7 +34,7 @@ describe('WalletRecovery Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as Mock).mockImplementation((cmd: string, args?: any) => {
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'list_profiles') {
         return Promise.resolve(mockProfiles);
       }
@@ -114,7 +114,7 @@ describe('WalletRecovery Component', () => {
     });
 
     it('shows error message when no profiles are available', async () => {
-      (invoke as Mock).mockImplementation((cmd: string, args?: any) => {
+      (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
         if (cmd === 'list_profiles') {
           return Promise.resolve([]);
         }
@@ -620,7 +620,7 @@ describe('WalletRecovery Component', () => {
     });
 
     it('shows error when no profile is selected', async () => {
-      (invoke as Mock).mockImplementation((cmd: string, args?: any) => {
+      (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
         if (cmd === 'list_profiles') {
           return Promise.resolve(mockProfiles);
         }
@@ -812,8 +812,8 @@ describe('WalletRecovery Component', () => {
     });
 
     it('shows loading state during recovery', async () => {
-      let resolveRecovery: (value: any) => void = () => {};
-      (invoke as Mock).mockImplementation((cmd: string, args?: any) => {
+      let resolveRecovery: (value: unknown) => void = () => {};
+      (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
         if (cmd === 'list_profiles') {
           return Promise.resolve(mockProfiles);
         }
@@ -879,7 +879,7 @@ describe('WalletRecovery Component', () => {
     });
 
     it('handles backend error during recovery', async () => {
-      (invoke as Mock).mockImplementation((cmd: string, args?: any) => {
+      (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
         if (cmd === 'list_profiles') {
           return Promise.resolve(mockProfiles);
         }

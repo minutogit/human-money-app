@@ -1,17 +1,29 @@
 import { invoke } from "@tauri-apps/api/core";
-import { FullProofDetails, ProofOfDoubleSpendSummary } from "../types";
+import { FullProofDetails, ProofOfDoubleSpendSummary, IntegrityReport } from "../types";
+
+export interface ConflictOverrideArgs {
+    proofId: string;
+    isOverridden: boolean;
+    resolutionNote?: string;
+    password?: string;
+}
 
 export const integrityService = {
     getProofOfDoubleSpend: async (proofId: string) => {
         return await invoke<FullProofDetails>("get_proof_of_double_spend", { proofId });
     },
 
-    setConflictLocalOverride: async (args: any) => {
-        return await invoke<void>("set_conflict_local_override", args);
+    setConflictLocalOverride: async (args: ConflictOverrideArgs) => {
+        return await invoke<void>("set_conflict_local_override", {
+            proof_id: args.proofId,
+            is_overridden: args.isOverridden,
+            resolution_note: args.resolutionNote,
+            password: args.password
+        });
     },
 
     checkIntegrity: async () => {
-        return await invoke<any>("get_integrity_report");
+        return await invoke<IntegrityReport>("get_integrity_report");
     },
 
     getDoubleSpendConflicts: async () => {

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { TransactionRecord, AssetClassSummary, ReceiveSuccessPayload } from "../types";
+import { TransactionRecord, AssetClassSummary, ReceiveSuccessPayload, WalletEvent, SourceTransfer } from "../types";
 
 interface ReceiveBundleArgs {
     bundleData: number[];
@@ -8,13 +8,40 @@ interface ReceiveBundleArgs {
     forceAcceptToleranceBundle: boolean;
 }
 
+export interface CreateBundleArgs {
+    recipientId: string;
+    sources: SourceTransfer[];
+    notes?: string | null;
+    senderProfileName: string;
+    standardDefinitionsToml: Record<string, string>;
+    usePrivacyMode: boolean;
+    password?: string | null;
+}
+
+export interface CreateBundleResult {
+    bundleData: number[];
+    bundleId: string;
+    involvedSourcesDetails: unknown[];
+}
+
 export const transferService = {
     getHistory: async () => {
         return await invoke<TransactionRecord[]>("get_transaction_history");
     },
 
-    createBundle: async (args: any) => {
-        return await invoke<any>("create_transfer_bundle", args);
+    createBundle: async (args: CreateBundleArgs) => {
+        return await invoke<CreateBundleResult>("create_transfer_bundle", {
+            recipientId: args.recipientId,
+            sources: args.sources.map(s => ({
+                localInstanceId: s.localInstanceId,
+                amountToSend: s.amountToSend
+            })),
+            notes: args.notes,
+            senderProfileName: args.senderProfileName,
+            standardDefinitionsToml: args.standardDefinitionsToml,
+            usePrivacyMode: args.usePrivacyMode,
+            password: args.password
+        });
     },
 
     saveTransactionRecord: async (record: TransactionRecord, password?: string) => {
@@ -26,10 +53,15 @@ export const transferService = {
     },
 
     receiveBundle: async (args: ReceiveBundleArgs) => {
-        return await invoke<ReceiveSuccessPayload>("receive_bundle", args as any);
+        return await invoke<ReceiveSuccessPayload>("receive_bundle", {
+            bundleData: args.bundleData,
+            standardDefinitionsToml: args.standardDefinitionsToml,
+            password: args.password,
+            forceAcceptToleranceBundle: args.forceAcceptToleranceBundle
+        });
     },
 
     getEventHistory: async (offset: number, limit: number) => {
-        return await invoke<any[]>("get_event_history", { offset, limit });
+        return await invoke<WalletEvent[]>("get_event_history", { offset, limit });
     }
 };

@@ -8,7 +8,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
-import { AggregatedBalance, VoucherSummary } from "../types";
+import { AggregatedBalance, VoucherSummary, WalletEvent } from "../types";
 import { useSession } from "../context/SessionContext";
 import { IntegrityReportModal } from "./IntegrityReportModal";
 import { PageLayout } from "./ui/PageLayout";
@@ -41,7 +41,7 @@ interface DashboardProps {
 export function Dashboard(props: DashboardProps) {
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<AggregatedBalance[]>([]);
-    const [recentEvents, setRecentEvents] = useState<any[]>([]);
+    const [recentEvents, setRecentEvents] = useState<WalletEvent[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [copied, setCopied] = useState(false);
     const [activeVouchersCount, setActiveVouchersCount] = useState(0);
@@ -57,7 +57,7 @@ export function Dashboard(props: DashboardProps) {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, _history, voucherSummaries, userProfile, _contactsList, eventHistory] = await Promise.all([
+                const [id, balanceList, , voucherSummaries, userProfile, , eventHistory] = await Promise.all([
                     utilityService.getUserId(),
                     voucherService.getTotalBalanceByCurrency(),
                     transferService.getHistory().catch(() => []),
@@ -128,7 +128,7 @@ export function Dashboard(props: DashboardProps) {
         });
     }
 
-    function getEventDetails(event: any): { label: string; icon: any; color: string; bgColor: string } {
+    function getEventDetails(event: WalletEvent): { label: string; icon: React.ElementType; color: string; bgColor: string } {
         const type = event.eventType;
         const bff = event.bffData;
 

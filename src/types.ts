@@ -92,7 +92,7 @@ export type VoucherStatus =
     | "quarantined"
     | "endorsed"
     | "expired"
-    | { [key: string]: any };
+    | { [key: string]: unknown };
 
 export interface ValidationFailureReason {
     BusinessRule?: { message: string };
@@ -429,7 +429,7 @@ export interface ProofOfDoubleSpend {
     reportTimestamp: string;
     reporterSignature: string;
     resolutions?: ResolutionEndorsement[];
-    layer2Verdict?: any;
+    layer2Verdict?: unknown;
     affectedVoucherName?: string;
     voucherStandardUuid?: string;
     isResolved?: boolean;

@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { AppSettings } from "../types";
 
+export interface SealForUpload {
+    sealHash: string;
+    sealBytes: number[];
+}
+
 export const settingsService = {
     getSettings: async () => {
         return await invoke<AppSettings>("get_app_settings");
@@ -15,7 +20,7 @@ export const settingsService = {
     },
 
     getSealForUpload: async () => {
-        return await invoke<any>("get_seal_for_upload");
+        return await invoke<SealForUpload>("get_seal_for_upload");
     },
 
     acknowledgeSealSync: async (uploadedSealHash: string, password?: string) => {

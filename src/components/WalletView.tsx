@@ -1,6 +1,6 @@
 // src/components/WalletView.tsx
 import { useState, useEffect, useCallback } from "react";
-import { voucherService } from "../services/voucherService";
+import { voucherService, SigningRequestConfig } from "../services/voucherService";
 import { settingsService } from "../services/settingsService";
 import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
@@ -149,7 +149,7 @@ export function WalletView(props: WalletViewProps) {
                 config = { type: "Cleartext" };
             }
 
-            const bundleBytes = await voucherService.createSigningRequest(exportId, config);
+            const bundleBytes = await voucherService.createSigningRequest(exportId, config as SigningRequestConfig);
 
             const filePath = await save({
                 defaultPath: settings?.lastUsedDirectory 
@@ -266,7 +266,7 @@ export function WalletView(props: WalletViewProps) {
                                     {availableStatuses.map(status => {
                                         const isActive = statusFilters.includes(status);
                                         // Mock object for simple filter icons
-                                        const iconMap: Record<string, any> = { active: History, incomplete: History, archived: History, quarantined: History };
+                                        const iconMap: Record<string, React.ElementType> = { active: History, incomplete: History, archived: History, quarantined: History };
                                         const Icon = iconMap[status] || History;
                                         return (
                                             <button

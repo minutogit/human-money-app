@@ -226,13 +226,12 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 });
 
                 const payload = await protectAction(async (password) => {
-                    const args = {
+                    return await transferService.receiveBundle({
                         bundleData: fileData,
                         standardDefinitionsToml,
-                        password,
+                        password: password || undefined,
                         forceAcceptToleranceBundle: false
-                    };
-                    return await transferService.receiveBundle(args as any);
+                    });
                 });
 
                 if (payload) onReceiveSuccess(payload);
@@ -310,13 +309,12 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             });
 
             const payload = await protectAction(async (password) => {
-                const args = {
+                return await transferService.receiveBundle({
                     bundleData: fileData,
                     standardDefinitionsToml,
-                    password,
+                    password: password || undefined,
                     forceAcceptToleranceBundle: true
-                };
-                return await transferService.receiveBundle(args as any);
+                });
             });
 
             if (payload) onReceiveSuccess(payload);

@@ -91,7 +91,7 @@ function AppContent() {
                     notifyLogin();
                     setAppState({ view: "logged_in" });
                     return; // Exit early if auto-login worked
-                } catch (e) {
+                } catch {
                     // Not logged in or session locked, proceed with normal flow
                     logger.info("No active session found, checking available profiles.");
                 }
@@ -105,7 +105,7 @@ function AppContent() {
             }
         }
         checkProfile();
-    }, []);
+    }, [notifyLogin]);
 
     useEffect(() => {
         async function updateTitle() {

@@ -4,7 +4,7 @@ interface InfoRowProps {
   label: string;
   children: React.ReactNode;
   isMono?: boolean;
-  icon?: any;
+  icon?: React.ElementType;
 }
 
 export const InfoRow: React.FC<InfoRowProps> = ({ label, children, isMono = false, icon: Icon }) => {

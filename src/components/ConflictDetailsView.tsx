@@ -44,9 +44,9 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
         try {
             await integrityService.setConflictLocalOverride({ 
                 proofId, 
-                value: true, 
-                note: localNote || null,
-                password: password || null 
+                isOverridden: true, 
+                resolutionNote: localNote || undefined,
+                password: password || undefined 
             });
             // Refresh details
             const updated = await integrityService.getProofOfDoubleSpend(proofId);

@@ -57,7 +57,7 @@ export function CreatorSection({
               {creator.gender === "1" ? "Male" : creator.gender === "2" ? "Female" : creator.gender === "0" ? "Other / Not Declared" : creator.gender === "9" ? "Not Applicable" : "Unknown"}
             </InfoRow>
             <InfoRow label="Reputation Status">
-              {typeof trustStatus === 'object' && 'knownOffender' in (trustStatus as any) ? (
+              {typeof trustStatus === 'object' && trustStatus !== null && 'knownOffender' in trustStatus ? (
                 <span className="text-rose-500 font-black uppercase text-[10px] tracking-widest flex items-center gap-2">
                   <ShieldAlert size={14} /> High Risk Account
                 </span>

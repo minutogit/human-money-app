@@ -47,9 +47,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, [isSessionActive]);
 
     const [pendingAction, setPendingAction] = useState<{
-        resolve: (value: any) => void;
-        reject: (reason: any) => void;
-        action: (password: string | null) => Promise<any>;
+        resolve: (value: unknown) => void;
+        reject: (reason: unknown) => void;
+        action: (password: string | null) => Promise<unknown>;
     } | null>(null);
 
     // Globaler Activity Listener
@@ -140,7 +140,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const executeWithSessionCheck = async (pwd: string | null): Promise<T> => {
             try {
                 return await action(pwd);
-            } catch (error: any) {
+            } catch (error) {
                 const errMsg = String(error);
                 // Prüfen auf typische Backend-Fehler bei abgelaufener Session
                 if (errMsg.includes("Password required") || errMsg.includes("Session timed out") || errMsg.includes("Wallet is locked")) {
@@ -168,7 +168,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             // MODUS A: Immer Passwort fragen (Timeout = 0)
             if (timeout === 0) {
                 return new Promise<T>((resolve, reject) => {
-                    setPendingAction({ resolve, reject, action });
+                    setPendingAction({ 
+                        resolve: resolve as (value: unknown) => void, 
+                        reject, 
+                        action: action as (password: string | null) => Promise<unknown> 
+                    });
                     setIsModalOpen(true);
                 });
             }
@@ -177,11 +181,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             if (isSessionActiveRef.current) {
                 try {
                     return await executeWithSessionCheck(null);
-                } catch (e: any) {
-                    if (e.message === "SESSION_EXPIRED_RETRY") {
+                } catch (e) {
+                    if (e instanceof Error && e.message === "SESSION_EXPIRED_RETRY") {
                         // Session war im Backend abgelaufen -> Modal öffnen
                         return new Promise<T>((resolve, reject) => {
-                            setPendingAction({ resolve, reject, action });
+                            setPendingAction({ 
+                                resolve: resolve as (value: unknown) => void, 
+                                reject, 
+                                action: action as (password: string | null) => Promise<unknown> 
+                            });
                             setIsModalOpen(true);
                         });
                     }
@@ -190,7 +198,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             } else {
                 // Session noch nicht aktiv -> Modal öffnen
                 return new Promise<T>((resolve, reject) => {
-                    setPendingAction({ resolve, reject, action });
+                    setPendingAction({ 
+                        resolve: resolve as (value: unknown) => void, 
+                        reject, 
+                        action: action as (password: string | null) => Promise<unknown> 
+                    });
                     setIsModalOpen(true);
                 });
             }

@@ -83,9 +83,10 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     }, []);
 
     useEffect(() => {
-        const currentWords = mnemonicWords.join(" ").split(" ").filter(Boolean);
-        const newMnemonicArray = Array(wordCount).fill("").map((_, i) => currentWords[i] || "");
-        setMnemonicWords(newMnemonicArray);
+        setMnemonicWords(prev => {
+            const currentWords = prev.join(" ").split(" ").filter(Boolean);
+            return Array(wordCount).fill("").map((_, i) => currentWords[i] || "");
+        });
     }, [wordCount]);
 
     useEffect(() => {
@@ -146,7 +147,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                     await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
                     setIsValidMnemonic(true);
                     setFeedbackMsg("Seed phrase is valid.");
-                } catch (e) {
+                } catch {
                     setIsValidMnemonic(false);
                     setFeedbackMsg("Error: Seed phrase is not valid");
                 }
@@ -156,7 +157,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
             }
         };
         validate();
-    }, [mnemonicWords, selectedLanguage]);
+    }, [mnemonicWords, selectedLanguage, wordCount]);
 
     const handleWordChange = (index: number, value: string) => {
         const cleanedText = value.replace(/[0-9]+\.\s*/g, '');

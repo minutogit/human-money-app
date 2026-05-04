@@ -78,9 +78,10 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             };
             await onSave(contact);
             onClose();
-        } catch (e: any) {
-            console.error("Failed to save contact:", e);
-            setError(e.message || String(e));
+        } catch (e: unknown) {
+            const err = e as Error;
+            console.error("Failed to save contact:", err);
+            setError(err.message || String(e));
         } finally {
             setIsSaving(false);
         }

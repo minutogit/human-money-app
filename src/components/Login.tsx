@@ -1,5 +1,5 @@
 // src/components/Login.tsx
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import logo from "../assets/logo.png";
 
 import { authService } from "../services/authService";
@@ -52,12 +52,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     
     const passwordInputRef = useRef<HTMLInputElement>(null);
 
-    useEffect(() => {
-        logger.info("Login component displayed");
-        refreshProfiles();
-    }, []);
-
-    async function refreshProfiles() {
+    const refreshProfiles = useCallback(async () => {
         setIsLoading(true);
         try {
             const availableProfiles = await authService.listProfiles();
@@ -70,7 +65,12 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
         } finally {
             setIsLoading(false);
         }
-    }
+    }, [selectedProfile]);
+
+    useEffect(() => {
+        logger.info("Login component displayed");
+        refreshProfiles();
+    }, [refreshProfiles]);
 
     async function handleLogin() {
         if (!selectedProfile || !password) {
@@ -93,7 +93,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 
                 const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
                 if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName);
-            } catch (e: any) {
+            } catch (e) {
                 const msg = String(e);
                 if (msg.includes("Device Mismatch") || msg.includes("different device")) {
                     setFeedbackMsg("Security Protocol: Device Mismatch Detected.");
@@ -116,7 +116,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             await authService.handoverToThisDevice({
                 folderName: selectedProfile,
                 password,
-                localInstanceId,
+                targetInstanceId: localInstanceId,
             });
             
             const userId = await utilityService.getUserId();

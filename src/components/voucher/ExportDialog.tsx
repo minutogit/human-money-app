@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
 
+import { SigningRequestConfig } from '../../services/voucherService';
+
 interface ExportDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onExport: (config: any) => void;
+  onExport: (config: SigningRequestConfig) => void;
   isProcessing: boolean;
   error: string;
 }
@@ -31,7 +33,7 @@ export function ExportDialog({
         setLocalError("Please enter a recipient DID.");
         return;
       }
-      config = { type: "TargetDid", value: [recipientId.trim(), "TrialDecryption"] };
+      config = { type: "TargetDid" as const, value: [recipientId.trim(), "TrialDecryption"] as [string, string] };
     } else if (protectWithPassword) {
       if (!exportPassword) {
         setLocalError("Please enter a password.");
@@ -41,9 +43,9 @@ export function ExportDialog({
         setLocalError("Passwords do not match.");
         return;
       }
-      config = { type: "Password", value: exportPassword };
+      config = { type: "Password" as const, value: exportPassword };
     } else {
-      config = { type: "Cleartext" };
+      config = { type: "Cleartext" as const };
     }
     onExport(config);
   };

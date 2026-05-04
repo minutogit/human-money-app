@@ -110,7 +110,7 @@ export function RecipientSelector({
             )}
           </div>
           
-          {typeof trustStatus === 'object' && 'knownOffender' in (trustStatus as any) && (
+          {typeof trustStatus === 'object' && trustStatus !== null && 'knownOffender' in trustStatus && (
             <div className="p-5 bg-rose-50 border border-rose-100 rounded-[32px] flex items-start gap-4 animate-in shake duration-500 shadow-sm">
               <AlertTriangle className="text-rose-500 shrink-0 mt-1" size={24} />
               <div>

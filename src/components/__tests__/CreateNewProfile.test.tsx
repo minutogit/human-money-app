@@ -29,7 +29,7 @@ describe('CreateNewProfile Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as Mock).mockImplementation((cmd: string, args?: any) => {
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'generate_mnemonic') {
         if (args?.wordCount === 24) {
           return Promise.resolve(mockSeed24);

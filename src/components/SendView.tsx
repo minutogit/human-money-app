@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, FormEvent, useReducer } from "react";
 import { voucherService, utilityService } from "../services/voucherService";
-import { transferService } from "../services/transferService";
+import { transferService, CreateBundleResult } from "../services/transferService";
 import { settingsService } from "../services/settingsService";
 import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
@@ -12,7 +12,8 @@ import {
     SourceTransfer, 
     TransactionRecord, 
     Contact, 
-    TrustStatus, 
+    TrustStatus,
+    InvolvedVoucherInfo,
     AppSettings,
     AssetClassSummary,
     VoucherStandardDefinition
@@ -189,7 +190,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             }
         }
         fetchData();
-    }, []);
+    }, [profileName]);
 
     useEffect(() => {
         if (detectedPrivacy === 'stealth') dispatch({ type: 'SET_PRIVACY', mode: 'stealth' });
@@ -198,7 +199,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
             const defaultMode = appSettings.privacyDefault === 'stealth' ? 'stealth' : (appSettings.privacyDefault === 'public' ? 'public' : null);
             dispatch({ type: 'SET_PRIVACY', mode: defaultMode });
         }
-    }, [detectedPrivacy, appSettings]);
+    }, [detectedPrivacy, appSettings, state.privacyMode]);
 
     useEffect(() => {
         if (state.recipientId.length < 10) {
@@ -278,12 +279,12 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                     recipientId: state.recipientId,
                     sources,
                     notes: state.notes || null,
-                    senderProfileName: senderName,
+                    senderProfileName: senderName || "Anonymous",
                     standardDefinitionsToml,
                     usePrivacyMode: state.privacyMode === 'stealth',
                     password
                 });
-            });
+            }) as CreateBundleResult;
 
             if (!bundleResult) { dispatch({ type: 'SET_PROCESSING', value: false }); return; }
 
@@ -304,8 +305,8 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 timestamp: new Date().toISOString(),
                 summableAmounts,
                 countableItems,
-                involvedVouchers: bundleResult.involvedSourcesDetails.map((d: any) => d.localInstanceId),
-                involvedSourcesDetails: bundleResult.involvedSourcesDetails,
+                involvedVouchers: (bundleResult.involvedSourcesDetails as InvolvedVoucherInfo[]).map((d: InvolvedVoucherInfo) => d.localInstanceId),
+                involvedSourcesDetails: bundleResult.involvedSourcesDetails as InvolvedVoucherInfo[],
                 bundleData: bundleResult.bundleData,
                 bundleId: bundleResult.bundleId,
                 notes: state.notes || undefined,

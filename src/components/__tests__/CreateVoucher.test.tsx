@@ -49,7 +49,7 @@ amount_decimal_places = 4`,
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as Mock).mockImplementation((cmd: string, _args?: any) => {
+    (invoke as Mock).mockImplementation((cmd: string, _args?: Record<string, unknown>) => {
       if (cmd === 'get_voucher_standards') {
         return Promise.resolve(mockStandards);
       }

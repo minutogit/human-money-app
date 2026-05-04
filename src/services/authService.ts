@@ -1,29 +1,57 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ProfileInfo } from "../types";
 
+export interface LoginArgs {
+    folderName: string;
+    password?: string;
+    cleanupOnLogin?: boolean;
+    localInstanceId?: string;
+}
+
+export interface HandoverArgs {
+    folderName: string;
+    password?: string;
+    targetInstanceId: string;
+}
+
 export const authService = {
     listProfiles: async () => {
         return await invoke<ProfileInfo[]>("list_profiles");
     },
 
-    login: async (args: any) => {
-        return await invoke<void>("login", args);
+    login: async (args: LoginArgs) => {
+        return await invoke<void>("login", {
+            folderName: args.folderName,
+            password: args.password,
+            cleanupOnLogin: args.cleanupOnLogin,
+            localInstanceId: args.localInstanceId
+        });
     },
 
     getLocalInstanceId: async () => {
         return await invoke<string>("get_local_instance_id");
     },
 
-    handoverToThisDevice: async (args: any) => {
-        return await invoke<void>("handover_to_this_device", args);
+    handoverToThisDevice: async (args: HandoverArgs) => {
+        return await invoke<void>("handover_to_this_device", {
+            folderName: args.folderName,
+            password: args.password,
+            localInstanceId: args.targetInstanceId
+        });
     },
 
-    verifyProfilePassword: async (args: any) => {
-        return await invoke<string>("verify_profile_password", args);
+    verifyProfilePassword: async (args: { folderName: string; password?: string }) => {
+        return await invoke<string>("verify_profile_password", {
+            folderName: args.folderName,
+            password: args.password
+        });
     },
 
-    deleteProfile: async (args: any) => {
-        return await invoke<void>("delete_profile", args);
+    deleteProfile: async (args: { folderName: string; password?: string }) => {
+        return await invoke<void>("delete_profile", {
+            folderName: args.folderName,
+            password: args.password
+        });
     },
 
     refreshSessionActivity: async () => {

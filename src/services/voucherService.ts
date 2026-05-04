@@ -1,6 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { VoucherSummary, VoucherDetails, NewVoucherData, Voucher, TrustStatus, AggregatedBalance } from "../types";
 
+export type SigningRequestConfig = 
+    | { type: "Cleartext" }
+    | { type: "Password"; value: string }
+    | { type: "TargetDid"; value: [string, string] };
+
+export interface DetachedSignatureResponseArgs {
+    voucher: unknown;
+    role: string;
+    includeDetails: boolean;
+    config: SigningRequestConfig;
+    password?: string | null;
+}
+
 export const voucherService = {
     getSummaries: async () => {
         return await invoke<VoucherSummary[]>("get_voucher_summaries");
@@ -18,16 +31,25 @@ export const voucherService = {
         return await invoke<void>("remove_voucher_signature", { localInstanceId, signatureId, password });
     },
 
-    createSigningRequest: async (localInstanceId: string, config: any) => {
-        return await invoke<number[]>("create_signing_request_bundle", { localInstanceId, config });
+    createSigningRequest: async (localInstanceId: string, config: SigningRequestConfig) => {
+        return await invoke<number[]>("create_signing_request_bundle", { 
+            local_instance_id: localInstanceId, 
+            config 
+        });
     },
 
     openSigningRequest: async (containerBytes: number[], password?: string) => {
         return await invoke<VoucherDetails>("open_voucher_signing_request", { containerBytes, password });
     },
 
-    createDetachedSignatureResponseBundle: async (args: any) => {
-        return await invoke<number[]>("create_detached_signature_response_bundle", args);
+    createDetachedSignatureResponseBundle: async (args: DetachedSignatureResponseArgs) => {
+        return await invoke<number[]>("create_detached_signature_response_bundle", {
+            voucher: args.voucher,
+            role: args.role,
+            include_details: args.includeDetails,
+            config: args.config,
+            password: args.password
+        });
     },
 
 

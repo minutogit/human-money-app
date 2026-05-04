@@ -84,9 +84,10 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
 
     // Effect 1: Adjust mnemonicWords array size when wordCount changes
     useEffect(() => {
-        const currentWords = mnemonicWords.join(" ").split(" ").filter(Boolean);
-        const newMnemonicArray = Array(wordCount).fill("").map((_, i) => currentWords[i] || "");
-        setMnemonicWords(newMnemonicArray);
+        setMnemonicWords(prev => {
+            const currentWords = prev.join(" ").split(" ").filter(Boolean);
+            return Array(wordCount).fill("").map((_, i) => currentWords[i] || "");
+        });
     }, [wordCount]);
 
     // Effect 2: Fetch BIP-39 wordlist on component mount
@@ -169,7 +170,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                     await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
                     setIsValidMnemonic(true);
                     setFeedbackMsg("Seed phrase is valid.");
-                } catch (e) {
+                } catch {
                     setIsValidMnemonic(false);
                     setFeedbackMsg("Error: Seed phrase is not valid.");
                 }
@@ -184,7 +185,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
         };
         const timer = setTimeout(validate, 300); // Debounce validation
         return () => clearTimeout(timer);
-    }, [mnemonicWords, selectedLanguage]);
+    }, [mnemonicWords, selectedLanguage, wordCount]);
 
 
     // --- Event Handlers ---

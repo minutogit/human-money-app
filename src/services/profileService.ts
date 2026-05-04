@@ -1,6 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
 import { PublicProfile, TrustStatus } from "../types";
 
+export interface CreateProfileArgs {
+    profileName: string;
+    mnemonic: string;
+    passphrase?: string;
+    userPrefix?: string;
+    password: string;
+    localInstanceId: string;
+    language: string;
+}
+
+export interface RecoverWalletArgs {
+    folderName: string;
+    mnemonic: string;
+    passphrase?: string;
+    newPassword: string;
+    localInstanceId: string;
+    language: string;
+}
+
 export const profileService = {
     getProfile: async () => {
         return await invoke<PublicProfile>("get_user_profile");
@@ -18,8 +37,16 @@ export const profileService = {
         return await invoke<string>("generate_mnemonic", { wordCount, language });
     },
 
-    createProfile: async (args: any) => {
-        return await invoke<void>("create_profile", args);
+    createProfile: async (args: CreateProfileArgs) => {
+        return await invoke<void>("create_profile", {
+            profileName: args.profileName,
+            mnemonic: args.mnemonic,
+            passphrase: args.passphrase,
+            userPrefix: args.userPrefix,
+            password: args.password,
+            localInstanceId: args.localInstanceId,
+            language: args.language
+        });
     },
 
     getWordlist: async (language: string) => {
@@ -30,8 +57,15 @@ export const profileService = {
         return await invoke<void>("validate_mnemonic", { mnemonic, language });
     },
 
-    recoverWallet: async (args: any) => {
-        return await invoke<void>("recover_wallet_and_set_new_password", args);
+    recoverWallet: async (args: RecoverWalletArgs) => {
+        return await invoke<void>("recover_wallet_and_set_new_password", {
+            folderName: args.folderName,
+            mnemonic: args.mnemonic,
+            passphrase: args.passphrase,
+            newPassword: args.newPassword,
+            localInstanceId: args.localInstanceId,
+            language: args.language
+        });
     },
 
     checkReputation: async (offenderId: string) => {

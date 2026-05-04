@@ -29,7 +29,7 @@ describe('RecreateProfile Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as Mock).mockImplementation((cmd: string, args?: any) => {
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'get_bip39_wordlist') {
         return Promise.resolve(mockWordlist);
       }
@@ -470,7 +470,7 @@ describe('RecreateProfile Component', () => {
   describe('Step 2: Profile Details', () => {
     beforeEach(() => {
       vi.clearAllMocks();
-      (invoke as Mock).mockImplementation((cmd: string, args?: any) => {
+      (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
         if (cmd === 'get_bip39_wordlist') return Promise.resolve(mockWordlist);
         if (cmd === 'validate_mnemonic') {
           const mnemonic = args?.mnemonic || '';
@@ -817,7 +817,7 @@ describe('RecreateProfile Component', () => {
 
 
     it('handles backend error during profile creation', async () => {
-      (invoke as Mock).mockImplementation((cmd: string, args?: any) => {
+      (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
         if (cmd === 'get_bip39_wordlist') return Promise.resolve(mockWordlist);
         if (cmd === 'validate_mnemonic') {
           const mnemonic = args?.mnemonic || '';

@@ -23,7 +23,7 @@ vi.mock('../../utils/log', () => ({
 }));
 
 vi.mock('../ContactDialog', () => ({
-  default: ({ isOpen, onClose, onSave }: any) => {
+  default: ({ isOpen, onClose, onSave }: { isOpen: boolean, onClose: () => void, onSave: (c: Contact) => void }) => {
     if (!isOpen) return null;
     return (
       <div data-testid="contact-dialog">

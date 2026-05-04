@@ -26,7 +26,7 @@ interface VoucherCardProps {
     children?: React.ReactNode;
 }
 
-function getVoucherStatus(status: VoucherStatus | string): { name: string; color: string; bgColor: string; icon: any } {
+function getVoucherStatus(status: VoucherStatus | string): { name: string; color: string; bgColor: string; icon: React.ElementType } {
     if (!status) {
         return { name: 'unknown', color: 'text-gray-600', bgColor: 'bg-gray-100', icon: Clock };
     }

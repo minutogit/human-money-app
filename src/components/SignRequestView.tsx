@@ -91,7 +91,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 const impactResult = await standardsService.evaluateSignatureSuitability({
                     voucher: voucherData.voucher,
                     role: selectedRole,
-                    standardTomlContent: standardContent
+                    standardTomlContent: standardContent as string
                 });
                 setImpact(impactResult);
             } catch (e) {
