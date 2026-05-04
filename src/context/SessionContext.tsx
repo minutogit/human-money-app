@@ -111,12 +111,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         lastHeartbeatRef.current = Date.now();
     }, []);
 
+    const checkIntegrity = useCallback(async () => {
+        try {
+            const report = await integrityService.checkIntegrity();
+            setIntegrityReport(report);
+            if (report.type !== 'valid') {
+                logger.warn(`Integrity issue detected: ${report.type}`);
+            }
+        } catch (e) {
+            logger.error(`Failed to check integrity: ${e}`);
+        }
+    }, []);
+
     // Wird von App.tsx nach Login aufgerufen
     const notifyLogin = useCallback(() => {
         activateSession();
         startSealSyncLoop();
         checkIntegrity();
-    }, [activateSession]);
+    }, [activateSession, checkIntegrity]);
 
     const notifyLogout = useCallback(() => {
         setIsSessionActive(false);
@@ -226,18 +238,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setIsModalOpen(false);
         setPendingAction(null);
     };
-
-    const checkIntegrity = useCallback(async () => {
-        try {
-            const report = await integrityService.checkIntegrity();
-            setIntegrityReport(report);
-            if (report.type !== 'valid') {
-                logger.warn(`Integrity issue detected: ${report.type}`);
-            }
-        } catch (e) {
-            logger.error(`Failed to check integrity: ${e}`);
-        }
-    }, []);
 
     const clearLocks = useCallback(() => {
         setIsForkLocked(false);

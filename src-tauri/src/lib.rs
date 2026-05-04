@@ -41,7 +41,7 @@ fn setup_log_rotation(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>>
 
     // Now that we know the file exists, read it and rotate if not empty.
     let lines: Vec<String> =
-        BufReader::new(File::open(&log_file_path)?).lines().filter_map(Result::ok).collect();
+        BufReader::new(File::open(&log_file_path)?).lines().map_while(Result::ok).collect();
 
     if !lines.is_empty() {
         let total_lines = lines.len();
@@ -69,7 +69,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             // Setup log rotation. Panicking here is acceptable because logging is a critical feature.
-            if let Err(e) = setup_log_rotation(&app.handle()) {
+            if let Err(e) = setup_log_rotation(app.handle()) {
                 // We can't use the logger here yet, so we'll panic with a detailed error.
                 panic!("Failed to setup log rotation: {}", e);
             }

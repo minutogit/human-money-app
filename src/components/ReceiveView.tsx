@@ -1,5 +1,5 @@
 // src/components/ReceiveView.tsx
-import { useState, useEffect, FormEvent } from 'react';
+import React, { useState, useEffect, FormEvent } from 'react';
 import { transferService } from '../services/transferService';
 import { settingsService } from '../services/settingsService';
 import { voucherService } from '../services/voucherService';

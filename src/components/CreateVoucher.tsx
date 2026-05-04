@@ -1,5 +1,5 @@
 // src/components/CreateVoucher.tsx
-import { useState, useEffect, FormEvent, ChangeEvent, useRef } from "react";
+import React, { useState, useEffect, FormEvent, ChangeEvent, useRef } from "react";
 import { voucherService } from "../services/voucherService";
 import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";

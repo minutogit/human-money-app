@@ -40,6 +40,7 @@ pub struct CreateBundleResult {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn create_transfer_bundle(
     recipient_id: String,
     sources: Vec<FrontendSourceTransfer>,

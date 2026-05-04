@@ -1,10 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import { VoucherSummary } from '../types';
 
-export interface SelectionState {
-  // localInstanceId -> amount to spend
-  selectedMap: Map<string, string>;
-}
+
 
 export function useVoucherSelection(vouchers: VoucherSummary[]) {
   const [selectedMap, setSelectedMap] = useState<Map<string, string>>(new Map());

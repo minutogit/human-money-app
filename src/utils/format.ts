@@ -28,7 +28,7 @@ export function formatDate(isoString: string): string {
         return new Date(isoString).toLocaleDateString(undefined, {
             year: 'numeric', month: 'short', day: 'numeric'
         });
-    } catch (e) {
+    } catch {
         return 'Invalid Date';
     }
 }
@@ -45,7 +45,7 @@ export function formatDateTime(isoString: string): string {
             dateStyle: 'medium',
             timeStyle: 'short',
         });
-    } catch (e) {
+    } catch {
         return 'Invalid Date';
     }
 }

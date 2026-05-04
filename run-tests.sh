@@ -34,7 +34,18 @@ else
 fi
 
 
-# 2. Frontend Tests (Vitest)
+# 2. Lint Check (Frontend)
+echo "🔍 Prüfe Code-Qualität (ESLint)..."
+npm run lint
+if [ $? -ne 0 ]; then
+    echo "❌ Linting fehlgeschlagen!"
+    FAILED_TESTS+=("Linting (ESLint)")
+else
+    echo "✅ Linting erfolgreich."
+fi
+
+
+# 3. Frontend Tests (Vitest)
 echo "⚛️ Starte Frontend Komponententests (Vitest)..."
 # DEBUG_PRINT_LIMIT=0 unterdrückt den riesigen DOM-Dump bei Fehlern
 DEBUG_PRINT_LIMIT=0 npm test -- --run --reporter=verbose
@@ -46,10 +57,21 @@ else
 fi
 
 
-# 3. Backend Tests (Cargo)
+# 4. Backend Lint Check (Clippy)
+echo "🦀 Prüfe Rust Code-Qualität (Clippy)..."
+# In den src-tauri Ordner wechseln und clippy ausführen
+(cd src-tauri && cargo clippy -- -D warnings)
+if [ $? -ne 0 ]; then
+    echo "❌ Clippy Check fehlgeschlagen!"
+    FAILED_TESTS+=("Backend Linting (Clippy)")
+else
+    echo "✅ Clippy Check erfolgreich."
+fi
+
+
+# 5. Backend Tests (Cargo)
 echo "🦀 Starte Backend Integrationstests (Rust)..."
-cd src-tauri
-cargo test
+(cd src-tauri && cargo test)
 if [ $? -ne 0 ]; then
     echo "❌ Backend Tests fehlgeschlagen!"
     FAILED_TESTS+=("Backend Integrationstests (Rust)")
@@ -70,4 +92,3 @@ else
     echo "--------------------------------------------------"
     exit 1
 fi
-

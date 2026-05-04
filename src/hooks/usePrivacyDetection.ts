@@ -19,7 +19,7 @@ export function usePrivacyDetection(
 
     selectedVouchers.forEach(v => {
       const standard = standards[v.voucherStandardUuid];
-      if (standard?.immutable?.features?.privacyMode) {
+      if (standard?.immutable.features.privacyMode) {
         requiredModes.add(standard.immutable.features.privacyMode);
       }
     });

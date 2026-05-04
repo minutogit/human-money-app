@@ -91,7 +91,8 @@ export type VoucherStatus =
     | "incomplete"
     | "quarantined"
     | "endorsed"
-    | "expired";
+    | "expired"
+    | { [key: string]: any };
 
 export interface ValidationFailureReason {
     BusinessRule?: { message: string };

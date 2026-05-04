@@ -79,24 +79,22 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
     let mut standards = Vec::new();
     match fs::read_dir(&standards_dir_in_data) {
         Ok(entries) => {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    info!("[Debug] Found entry in standards directory: {}", path.display());
-                    if path.is_dir() {
-                        let standard_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                        info!("[Debug] Found potential standard directory with ID: '{}'", standard_id);
-                        let toml_path = path.join("standard.toml");
-                        info!("[Debug] Checking for standard file at: {}", toml_path.display());
-                        if toml_path.exists() {
-                             let content = fs::read_to_string(&toml_path)
-                                .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
-                            info!("[Debug] Successfully read '{}', adding to list.", toml_path.display());
-                            standards.push(VoucherStandardInfo {
-                                id: standard_id,
-                                content,
-                            });
-                        }
+            for entry in entries.flatten() {
+                let path = entry.path();
+                info!("[Debug] Found entry in standards directory: {}", path.display());
+                if path.is_dir() {
+                    let standard_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    info!("[Debug] Found potential standard directory with ID: '{}'", standard_id);
+                    let toml_path = path.join("standard.toml");
+                    info!("[Debug] Checking for standard file at: {}", toml_path.display());
+                    if toml_path.exists() {
+                         let content = fs::read_to_string(&toml_path)
+                            .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
+                        info!("[Debug] Successfully read '{}', adding to list.", toml_path.display());
+                        standards.push(VoucherStandardInfo {
+                            id: standard_id,
+                            content,
+                        });
                     }
                 }
             }

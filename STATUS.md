@@ -194,6 +194,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Centralized Voucher Standard Parsing (Moved TOML parsing from Frontend to Core AppService)
 - [x] Refactored signature hints and role extraction to use type-safe backend-driven DTOs
 - [x] Modularized Frontend Service Layer (Decoupled UI from direct Tauri invoke calls via type-safe services)
+- [x] Code Quality & Automated Hardening (Integrated ESLint, Clippy, and static analysis into `run-tests.sh` quality gate)
 
 
 

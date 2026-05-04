@@ -131,6 +131,7 @@ pub fn list_profiles(state: tauri::State<AppState>, app: tauri::AppHandle) -> Re
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn create_profile(
     profile_name: String,
     mnemonic: String,

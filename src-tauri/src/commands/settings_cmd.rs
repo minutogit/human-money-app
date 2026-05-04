@@ -61,7 +61,6 @@ pub fn update_user_profile(
         service_offer: profile.service_offer,
         needs: profile.needs,
         picture_url: profile.picture_url,
-        ..Default::default()
     };
     
     service.update_public_profile(core_profile, password.as_deref())

@@ -1,5 +1,5 @@
 // src/components/AddressBook.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { PageLayout } from './ui/PageLayout';
 import { Button } from './ui/Button';
 import { contactService } from '../services/contactService';
@@ -36,17 +36,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const [isLoading, setIsLoading] = useState(true);
     const [deleteRequest, setDeleteRequest] = useState<string | null>(null);
 
-    useEffect(() => {
-        loadContacts();
-    }, []);
-
-    useEffect(() => {
-        if (initialSearchQuery) {
-            setSearchQuery(initialSearchQuery);
-        }
-    }, [initialSearchQuery]);
-
-    const loadContacts = async () => {
+    const loadContacts = useCallback(async () => {
         setIsLoading(true);
         try {
             const result: Contact[] = await contactService.getContacts();
@@ -56,7 +46,18 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         } finally {
             setIsLoading(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        loadContacts();
+    }, [loadContacts]);
+
+    useEffect(() => {
+        if (initialSearchQuery) {
+            setSearchQuery(initialSearchQuery);
+        }
+    }, [initialSearchQuery]);
+
 
     const handleSaveContact = async (contact: Contact) => {
         try {
