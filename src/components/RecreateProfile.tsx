@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, FormEvent } from "react";
 import { profileService } from "../services/profileService";
 import { authService } from "../services/authService";
+import { AuthLayout } from "./AuthLayout";
 import { info, error } from "@tauri-apps/plugin-log";
 import { logger } from "../utils/log";
 import { MnemonicLanguage } from "../types";
@@ -490,17 +491,15 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     };
 
     return (
-        <div className="w-full h-full flex flex-col items-center justify-center">
-            <div className="w-full max-w-4xl min-w-[420px] bg-bg-card shadow-2xl rounded-2xl p-8 border border-theme-subtle">
-                <div className="text-center mb-6">
-                    <h1 className="text-4xl font-extrabold text-theme-primary">Human Money App</h1>
-                    <p className="text-lg text-theme-light mt-1">Recreate Profile from Seed</p>
-                </div>
-
-                {renderContent()}
-
-                {feedbackMsg && !isLoading && <p className={`text-center text-sm font-medium mt-4 ${feedbackClass}`}>{feedbackMsg}</p>}
+        <AuthLayout maxWidth="max-w-2xl">
+            <div className="text-center mb-6">
+                <h1 className="text-4xl font-extrabold text-theme-primary">Human Money App</h1>
+                <p className="text-lg text-theme-light mt-1">Recreate Profile from Seed</p>
             </div>
-        </div>
+
+            {renderContent()}
+
+            {feedbackMsg && !isLoading && <p className={`text-center text-sm font-medium mt-4 ${feedbackClass}`}>{feedbackMsg}</p>}
+        </AuthLayout>
     );
 }

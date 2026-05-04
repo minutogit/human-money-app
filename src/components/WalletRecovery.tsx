@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { profileService } from "../services/profileService";
 import { authService } from "../services/authService";
+import { AuthLayout } from "./AuthLayout";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -207,11 +208,8 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     }
 
     return (
-        <div className="w-full min-h-screen flex items-start sm:items-center justify-center py-4 sm:py-20 px-4 animate-in fade-in duration-700">
-            <div className="w-full max-w-3xl bg-white/80 backdrop-blur-xl border border-theme-subtle rounded-[48px] p-6 sm:p-12 shadow-premium-lg space-y-6 sm:space-y-10 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-theme-primary/20 to-transparent"></div>
-
-                <div className="text-center space-y-2 sm:space-y-4">
+        <AuthLayout maxWidth="max-w-3xl">
+            <div className="text-center space-y-2 sm:space-y-4">
                     <div className="mx-auto w-16 h-16 sm:w-20 sm:h-20 bg-theme-primary text-white rounded-[24px] sm:rounded-[32px] flex items-center justify-center shadow-premium-lg transform rotate-3 group-hover:rotate-0 transition-transform duration-500">
                         <RotateCcw size={32} className="sm:hidden" />
                         <RotateCcw size={40} className="hidden sm:block" />
@@ -354,7 +352,6 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                         </div>
                     )}
                 </form>
-            </div>
-        </div>
+        </AuthLayout>
     );
 }
