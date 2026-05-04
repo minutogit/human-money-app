@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import { TransactionRecord, AssetClassSummary } from "../types";
+import { TransactionRecord, AssetClassSummary, ReceiveSuccessPayload } from "../types";
+
+interface ReceiveBundleArgs {
+    bundleData: number[];
+    standardDefinitionsToml: Record<string, string>;
+    password?: string;
+    forceAcceptToleranceBundle: boolean;
+}
 
 export const transferService = {
     getHistory: async () => {
@@ -26,14 +33,3 @@ export const transferService = {
         return await invoke<any[]>("get_event_history", { offset, limit });
     }
 };
-
-
-interface ReceiveBundleArgs {
-    bundleData: number[];
-    standardDefinitionsToml: Record<string, string>;
-    password?: string;
-    forceAcceptToleranceBundle: boolean;
-}
-
-import { ReceiveSuccessPayload } from "../types";
-

@@ -14,7 +14,9 @@ import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
 import { 
     VoucherStandardInfo,
-    AppSettings
+    AppSettings,
+    ReceiveSuccessPayload,
+    VoucherDetails
 } from '../types';
 import { PageLayout } from './ui/PageLayout';
 import { 
@@ -32,7 +34,7 @@ import {
 
 interface ReceiveViewProps {
     onBack: () => void;
-    onReceiveSuccess: (payload: any) => void;
+    onReceiveSuccess: (payload: ReceiveSuccessPayload | VoucherDetails) => void;
 }
 
 export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {

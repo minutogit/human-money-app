@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
-import { VoucherSummary, VoucherStandardDefinition, PrivacyMode } from '../types';
+import { VoucherSummary, VoucherStandardDefinition } from '../types';
+
+export type PrivacyMode = 'stealth' | 'public' | 'flexible';
 
 export function usePrivacyDetection(
   selectedIds: string[],

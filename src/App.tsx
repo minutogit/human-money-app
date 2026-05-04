@@ -29,7 +29,7 @@ import { ConflictDetailsView } from './components/ConflictDetailsView';
 import { ConflictListView } from './components/ConflictListView';
 import { ForkLockOverlay } from './components/ForkLockOverlay';
 import { Button } from './components/ui/Button';
-import { ReceiveSuccessPayload } from './types';
+import { ReceiveSuccessPayload, VoucherDetails } from './types';
 
 // WICHTIG: Der Import für den Provider
 import { SessionProvider, useSession } from './context/SessionContext';
@@ -50,9 +50,9 @@ export type AppState =
     | { view: "transaction_history" }
     | { view: "activities" }
     | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string }
-    | { view: "receive_success"; payload: ReceiveSuccessPayload & { voucherData?: any } }
+    | { view: "receive_success"; payload: ReceiveSuccessPayload }
     | { view: "address_book"; initialSearchQuery?: string; previousView?: AppState }
-    | { view: "sign_request"; voucherData: any }
+    | { view: "sign_request"; voucherData: VoucherDetails }
     | { view: "conflict_details"; proofId: string; previousView?: AppState }
     | { view: "conflict_list" }
     | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string };
@@ -215,14 +215,14 @@ function AppContent() {
                 return <ReceiveView
                     onBack={() => setAppState({ view: "logged_in" })}
                     onReceiveSuccess={(payload) => {
-                        // Check if this is a signature attached feedback
-                        if (payload.isSignatureAttached && payload.voucherId) {
+                        if ('localInstanceId' in payload) {
+                            // This is a VoucherDetails (Signature Request)
+                            setAppState({ view: "sign_request", voucherData: payload });
+                        } else if (payload.isSignatureAttached && payload.voucherId) {
+                            // This was a signature attachment success
                             setAppState({ view: "voucher_details", voucherId: payload.voucherId });
-                        }
-                        // Check if this is a signature request (contains voucherData)
-                        else if ((payload as any).voucherData) {
-                            setAppState({ view: "sign_request", voucherData: (payload as any).voucherData });
                         } else {
+                            // Normal transfer received
                             setAppState({ view: "receive_success", payload });
                         }
                     }}

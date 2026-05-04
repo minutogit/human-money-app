@@ -23,7 +23,10 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
 
   const selectAmount = useCallback((targetAmount: number, unit: string) => {
     const relevantVouchers = vouchers
-      .filter(v => v.unit === unit && v.status === 'active')
+      .filter(v => {
+        const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
+        return v.unit === unit && statusName.toLowerCase() === 'active';
+      })
       .sort((a, b) => parseFloat(b.currentAmount) - parseFloat(a.currentAmount));
 
     let accumulated = 0;
