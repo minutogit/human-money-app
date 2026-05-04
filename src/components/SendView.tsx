@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, FormEvent, ChangeEvent } from "react";
+import { useState, useEffect, useMemo, FormEvent, useReducer } from "react";
 import { voucherService, utilityService } from "../services/voucherService";
 import { transferService } from "../services/transferService";
 import { settingsService } from "../services/settingsService";
@@ -14,42 +14,101 @@ import {
     Contact, 
     TrustStatus, 
     AppSettings,
-    AssetClassSummary
+    AssetClassSummary,
+    VoucherStandardDefinition
 } from "../types";
-import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
 import { Card } from "./ui/Card";
 import { useSession } from "../context/SessionContext";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
-import { ContactBadge } from "./ui/ContactBadge";
-import Avatar from "boring-avatars";
 import { PageLayout } from "./ui/PageLayout";
-import { VoucherCard } from "./ui/VoucherCard";
 import { formatAmount } from "../utils/format";
 import { 
-    User, 
-    Send, 
     Shield, 
-    Lock, 
-    Eye, 
-    AlertTriangle, 
-    CheckCircle2, 
-    BookOpen, 
-    Search, 
-    Filter, 
-    CreditCard, 
-    Info, 
-    X,
-    UserPlus,
-    ArrowRight,
-    Coins
+    BookOpen,
+    AlertTriangle
 } from "lucide-react";
+import Avatar from "boring-avatars";
+
+// Modular Components
+import { RecipientSelector } from "./send/RecipientSelector";
+import { PrivacyToggle } from "./send/PrivacyToggle";
+import { AssetInventory } from "./send/AssetInventory";
+import { TransferSummaryBar } from "./send/TransferSummaryBar";
+
+// Custom Hooks
+import { useVoucherSelection } from "../hooks/useVoucherSelection";
+import { usePrivacyDetection } from "../hooks/usePrivacyDetection";
 
 interface SendViewProps {
     onBack: () => void;
     onTransferPrepared: (bundleData: number[], recipientId: string, summary: string) => void;
     profileName: string | null;
+}
+
+type SendState = {
+    recipientId: string;
+    notes: string;
+    sendProfileName: boolean;
+    customSenderName: string;
+    targetAmountStr: string;
+    selectedStandardId: string | null;
+    selectedIsTest: boolean | null;
+    privacyMode: 'public' | 'stealth' | null;
+    isProcessing: boolean;
+    feedbackMsg: string;
+    showConfirm: boolean;
+    recipientError: boolean;
+    privacyError: boolean;
+};
+
+type SendAction = 
+    | { type: 'SET_RECIPIENT'; id: string }
+    | { type: 'SET_NOTES'; notes: string }
+    | { type: 'TOGGLE_PROFILE_NAME'; value: boolean }
+    | { type: 'SET_SENDER_NAME'; name: string }
+    | { type: 'SET_TARGET_AMOUNT'; amount: string }
+    | { type: 'SET_STANDARD'; id: string | null; isTest: boolean | null }
+    | { type: 'SET_PRIVACY'; mode: 'public' | 'stealth' | null }
+    | { type: 'SET_PROCESSING'; value: boolean }
+    | { type: 'SET_FEEDBACK'; msg: string }
+    | { type: 'TOGGLE_CONFIRM'; value: boolean }
+    | { type: 'SET_RECIPIENT_ERROR'; value: boolean }
+    | { type: 'SET_PRIVACY_ERROR'; value: boolean };
+
+const initialState: SendState = {
+    recipientId: "",
+    notes: "",
+    sendProfileName: true,
+    customSenderName: "",
+    targetAmountStr: "",
+    selectedStandardId: null,
+    selectedIsTest: null,
+    privacyMode: null,
+    isProcessing: false,
+    feedbackMsg: "",
+    showConfirm: false,
+    recipientError: false,
+    privacyError: false,
+};
+
+function reducer(state: SendState, action: SendAction): SendState {
+    switch (action.type) {
+        case 'SET_RECIPIENT': return { ...state, recipientId: action.id, recipientError: false };
+        case 'SET_NOTES': return { ...state, notes: action.notes };
+        case 'TOGGLE_PROFILE_NAME': return { ...state, sendProfileName: action.value };
+        case 'SET_SENDER_NAME': return { ...state, customSenderName: action.name };
+        case 'SET_TARGET_AMOUNT': return { ...state, targetAmountStr: action.amount };
+        case 'SET_STANDARD': return { ...state, selectedStandardId: action.id, selectedIsTest: action.isTest, targetAmountStr: "" };
+        case 'SET_PRIVACY': return { ...state, privacyMode: action.mode, privacyError: false };
+        case 'SET_PROCESSING': return { ...state, isProcessing: action.value };
+        case 'SET_FEEDBACK': return { ...state, feedbackMsg: action.msg };
+        case 'TOGGLE_CONFIRM': return { ...state, showConfirm: action.value };
+        case 'SET_RECIPIENT_ERROR': return { ...state, recipientError: action.value };
+        case 'SET_PRIVACY_ERROR': return { ...state, privacyError: action.value };
+        default: return state;
+    }
 }
 
 function getPrecision(content: string): number {
@@ -59,813 +118,336 @@ function getPrecision(content: string): number {
 
 export function SendView({ onBack, onTransferPrepared, profileName }: SendViewProps) {
     const { protectAction } = useSession();
-    const [recipientId, setRecipientId] = useState("");
-    const [notes, setNotes] = useState("");
-    const [sendProfileName, setSendProfileName] = useState(true);
-    const [customSenderName, setCustomSenderName] = useState("");
-    const [ownUserId, setOwnUserId] = useState("");
-    const [targetAmountStr, setTargetAmountStr] = useState("");
+    const [state, dispatch] = useReducer(reducer, initialState);
+    
     const [availableVouchers, setAvailableVouchers] = useState<VoucherSummary[]>([]);
     const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
-    const [selectedStandardId, setSelectedStandardId] = useState<string | null>(null);
-    const [selectedIsTest, setSelectedIsTest] = useState<boolean | null>(null);
     const [activeAssetClasses, setActiveAssetClasses] = useState<AssetClassSummary[]>([]);
-    const [selection, setSelection] = useState<Map<string, string>>(new Map());
-    const [feedbackMsg, setFeedbackMsg] = useState("");
-    const [isProcessing, setIsProcessing] = useState(false);
+    const [ownUserId, setOwnUserId] = useState("");
+    const [trustStatus, setTrustStatus] = useState<TrustStatus>("clean");
+    const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+    const [contacts, setContacts] = useState<Contact[]>([]);
     const [standardIdToUuidMap, setStandardIdToUuidMap] = useState<Map<string, string>>(new Map());
     const [uuidToPrecisionMap, setUuidToPrecisionMap] = useState<Map<string, number>>(new Map());
-    const [showConfirm, setShowConfirm] = useState(false);
-    const [trustStatus, setTrustStatus] = useState<TrustStatus>("clean");
-    const [privacyMode, setPrivacyMode] = useState<'public' | 'stealth' | null>(null);
-    const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
-    
-    const [contacts, setContacts] = useState<Contact[]>([]);
-    const [suggestions, setSuggestions] = useState<Contact[]>([]);
-    const [showSuggestions, setShowSuggestions] = useState(false);
-    const [showContactPicker, setShowContactPicker] = useState(false);
-    const [recipientError, setRecipientError] = useState(false);
-    const [privacyError, setPrivacyError] = useState(false);
+    const [standardsDict] = useState<Record<string, VoucherStandardDefinition>>({});
 
-    useEffect(() => {
-        if (recipientError) {
-            const timer = setTimeout(() => setRecipientError(false), 2000);
-            return () => clearTimeout(timer);
-        }
-    }, [recipientError]);
-
-    useEffect(() => {
-        if (privacyError) {
-            const timer = setTimeout(() => setPrivacyError(false), 2000);
-            return () => clearTimeout(timer);
-        }
-    }, [privacyError]);
-
-    useEffect(() => {
-        if (privacyRules.mode === 'Flexible') {
-            setPrivacyMode(null);
-        }
-    }, [selection]);
-
-    useEffect(() => {
-        if (recipientId.length < 10) {
-            setTrustStatus("clean");
-            return;
-        }
-
-        const timer = setTimeout(async () => {
-            try {
-                const status = await voucherService.checkReputation(recipientId);
-                setTrustStatus(status);
-            } catch (e) {
-                logger.error(`Reputation check failed: ${e}`);
-            }
-        }, 500);
-
-        return () => clearTimeout(timer);
-    }, [recipientId]);
+    const { selectedMap, toggleVoucher, selectAmount, selectionStats } = useVoucherSelection(availableVouchers);
+    const detectedPrivacy = usePrivacyDetection(
+        Array.from(selectedMap.keys()),
+        availableVouchers,
+        standardsDict
+    );
 
     useEffect(() => {
         async function fetchData() {
             try {
-                const allFetchedVouchers = await voucherService.getSummaries();
-                const activeVouchers = allFetchedVouchers.filter(v => {
+                const [summaries, userId, profile, standards, settings, fetchedContacts, activeClasses] = await Promise.all([
+                    voucherService.getSummaries(),
+                    utilityService.getUserId(),
+                    profileService.getProfile().catch(() => null),
+                    standardsService.getStandards(),
+                    settingsService.getSettings(),
+                    contactService.getContacts(),
+                    transferService.getActiveAssetClasses()
+                ]);
+
+                const activeVouchers = summaries.filter((v: VoucherSummary) => {
                     const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
                     return statusName.toLowerCase() === 'active';
                 });
 
-                const userId = await utilityService.getUserId();
-                
-                try {
-                    const userProfile = await profileService.getProfile();
-                    let defaultName = "";
-                    if (userProfile.organization) {
-                        defaultName = userProfile.organization;
-                    } else if (userProfile.firstName || userProfile.lastName) {
-                        defaultName = `${userProfile.firstName || ''} ${userProfile.lastName || ''}`.trim();
-                    } else {
-                        defaultName = profileName || "";
-                    }
-                    setCustomSenderName(defaultName);
-                } catch (e) {
-                    setCustomSenderName(profileName || "");
+                if (profile) {
+                    const defaultName = profile.organization || `${profile.firstName || ''} ${profile.lastName || ''}`.trim() || profileName || "";
+                    dispatch({ type: 'SET_SENDER_NAME', name: defaultName });
+                } else {
+                    dispatch({ type: 'SET_SENDER_NAME', name: profileName || "" });
                 }
 
-                const standards = await standardsService.getStandards();
-                const settings = await settingsService.getSettings();
                 const newIdMap = new Map<string, string>();
                 const newPrecisionMap = new Map<string, number>();
-                standards.forEach(s => {
+
+                for (const s of standards) {
                     const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
                     if (uuidMatch && uuidMatch[1]) {
                         const uuid = uuidMatch[1];
                         newIdMap.set(s.id, uuid);
                         newPrecisionMap.set(uuid, getPrecision(s.content));
                     }
-                });
+                }
+                
                 setStandardIdToUuidMap(newIdMap);
                 setUuidToPrecisionMap(newPrecisionMap);
-
-                const enrichedVouchers = activeVouchers.map(v => ({ ...v, divisible: true }));
-
-                setAvailableVouchers(enrichedVouchers);
+                setAvailableVouchers(activeVouchers);
                 setVoucherStandards(standards);
                 setOwnUserId(userId);
                 setAppSettings(settings);
-                
-                const fetchedContacts = await contactService.getContacts();
                 setContacts(fetchedContacts);
-
-                const activeClasses = await transferService.getActiveAssetClasses();
                 setActiveAssetClasses(activeClasses);
             } catch (e) {
                 logger.error(`Failed to fetch data for SendView: ${e}`);
-                setFeedbackMsg(`Error: ${e}`);
+                dispatch({ type: 'SET_FEEDBACK', msg: `Error: ${e}` });
             }
         }
         fetchData();
     }, []);
 
+    useEffect(() => {
+        if (detectedPrivacy === 'stealth') dispatch({ type: 'SET_PRIVACY', mode: 'stealth' });
+        else if (detectedPrivacy === 'public') dispatch({ type: 'SET_PRIVACY', mode: 'public' });
+        else if (detectedPrivacy === 'flexible' && state.privacyMode === null && appSettings) {
+            const defaultMode = appSettings.privacyDefault === 'stealth' ? 'stealth' : (appSettings.privacyDefault === 'public' ? 'public' : null);
+            dispatch({ type: 'SET_PRIVACY', mode: defaultMode });
+        }
+    }, [detectedPrivacy, appSettings]);
+
+    useEffect(() => {
+        if (state.recipientId.length < 10) {
+            setTrustStatus("clean");
+            return;
+        }
+        const timer = setTimeout(async () => {
+            try {
+                const status = await voucherService.checkReputation(state.recipientId);
+                setTrustStatus(status);
+            } catch (e) {
+                logger.error(`Reputation check failed: ${e}`);
+            }
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [state.recipientId]);
+
     const filteredVouchers = useMemo(() => {
-        if (!selectedStandardId) return availableVouchers;
-        const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId);
+        if (!state.selectedStandardId) return availableVouchers;
+        const selectedStandardUuid = standardIdToUuidMap.get(state.selectedStandardId);
         if (!selectedStandardUuid) return [];
         return availableVouchers.filter(v => {
             if (v.voucherStandardUuid !== selectedStandardUuid) return false;
-            if (selectedIsTest !== null && v.isTestVoucher !== selectedIsTest) return false;
+            if (state.selectedIsTest !== null && v.isTestVoucher !== state.selectedIsTest) return false;
             return true;
         });
-    }, [availableVouchers, selectedStandardId, selectedIsTest, standardIdToUuidMap]);
-
+    }, [availableVouchers, state.selectedStandardId, state.selectedIsTest, standardIdToUuidMap]);
 
     const handleTargetAmountChange = (valStr: string) => {
-        if (!selectedStandardId || !valStr) {
-            setTargetAmountStr(valStr);
-            setSelection(new Map());
-            return;
-        }
-
-        let targetAmount = parseFloat(valStr);
-        if (isNaN(targetAmount) || targetAmount <= 0) {
-            setTargetAmountStr(valStr);
-            setSelection(new Map());
-            return;
-        }
-
-        const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId) || selectedStandardId;
-        const precision = uuidToPrecisionMap.get(selectedStandardUuid) ?? 4;
-
-        let maxPossibleAmount = 0;
-        filteredVouchers.forEach(v => {
-            const amt = parseFloat(v.currentAmount);
-            if (!isNaN(amt)) maxPossibleAmount += amt;
-        });
-        
-        maxPossibleAmount = parseFloat(maxPossibleAmount.toFixed(precision));
-
-        let finalValStr = valStr;
-        if (targetAmount > maxPossibleAmount && maxPossibleAmount > 0) {
-            targetAmount = maxPossibleAmount;
-            finalValStr = targetAmount.toString();
-        }
-        
-        setTargetAmountStr(finalValStr);
-
-        const newSelection = new Map<string, string>();
-        let currentTotal = 0;
-
-        const sortedVouchers = [...filteredVouchers].sort((a, b) => parseFloat(a.currentAmount) - parseFloat(b.currentAmount));
-        for (const voucher of sortedVouchers) {
-            const voucherAmount = parseFloat(voucher.currentAmount);
-            if (currentTotal + voucherAmount <= targetAmount) {
-                newSelection.set(voucher.localInstanceId, voucher.currentAmount);
-                currentTotal += voucherAmount;
-            } else {
-                const neededAmount = targetAmount - currentTotal;
-                // @ts-ignore
-                if (voucher.divisible) {
-                    newSelection.set(voucher.localInstanceId, neededAmount.toFixed(precision));
-                    currentTotal += neededAmount;
-                    break;
-                }
-            }
-            if (currentTotal >= targetAmount) break;
-        }
-        
-        if (currentTotal < targetAmount - 0.000001) {
-            setFeedbackMsg("The entered amount cannot be met with the available vouchers.");
-        } else {
-            setFeedbackMsg("");
-        }
-        setSelection(newSelection);
+        dispatch({ type: 'SET_TARGET_AMOUNT', amount: valStr });
+        const val = parseFloat(valStr);
+        if (isNaN(val) || val <= 0) return;
+        selectAmount(val, filteredVouchers[0]?.unit);
     };
 
-    const handleStandardSelect = (id: string | null, isTest: boolean | null = null) => {
-        setSelectedStandardId(id);
-        setSelectedIsTest(isTest);
-        setTargetAmountStr("");
-        setSelection(new Map());
-        setFeedbackMsg("");
+    const handleVoucherToggle = (v: VoucherSummary) => {
+        toggleVoucher(v.localInstanceId, v.currentAmount);
     };
 
-    const handleVoucherAmountChange = useCallback((voucherId: string, newAmountStr: string, maxAmount: string) => {
-        let val = parseFloat(newAmountStr);
-        const max = parseFloat(maxAmount);
-        
-        if (!isNaN(val) && val > max) {
-            newAmountStr = maxAmount.toString();
-            val = max;
+    const handlePrepareTransfer = (e: FormEvent) => {
+        e.preventDefault();
+        if (!state.recipientId) { 
+            dispatch({ type: 'SET_RECIPIENT_ERROR', value: true }); 
+            document.getElementById('recipientId')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); 
+            return; 
         }
-
-        // Enforce precision
-        const voucher = availableVouchers.find(v => v.localInstanceId === voucherId);
-        if (voucher && !isNaN(val)) {
-            const precision = uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4;
-            const parts = newAmountStr.split('.');
-            if (parts.length > 1 && parts[1].length > precision) {
-                newAmountStr = parts[0] + '.' + parts[1].substring(0, precision);
-            }
+        if (selectedMap.size === 0) { 
+            dispatch({ type: 'SET_FEEDBACK', msg: "Asset selection required." }); 
+            return; 
         }
-
-        setSelection(prev => {
-            const next = new Map(prev);
-            next.set(voucherId, newAmountStr);
-            return next;
-        });
-
-        if (selectedStandardId) {
-            setSelection(prev => {
-                let total = 0;
-                prev.forEach(amount => {
-                    const parsed = parseFloat(amount);
-                    if (!isNaN(parsed)) total += parsed;
-                });
-                const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId) || selectedStandardId;
-                const precision = uuidToPrecisionMap.get(selectedStandardUuid) ?? 4;
-                setTargetAmountStr(total > 0 ? total.toFixed(precision) : "");
-                return prev;
-            });
-        }
-    }, [availableVouchers, uuidToPrecisionMap, selectedStandardId, standardIdToUuidMap]);
-
-    const handleRecipientChange = (e: ChangeEvent<HTMLInputElement>) => {
-        const value = e.target.value;
-        setRecipientId(value);
-
-        if (value.length > 0) {
-            const filtered = contacts.filter(c =>
-                c.did.toLowerCase().includes(value.toLowerCase()) ||
-                (c.profile.firstName || '').toLowerCase().includes(value.toLowerCase()) ||
-                (c.profile.lastName || '').toLowerCase().includes(value.toLowerCase()) ||
-                (c.profile.organization || '').toLowerCase().includes(value.toLowerCase())
-            );
-            setSuggestions(filtered.slice(0, 5));
-            setShowSuggestions(filtered.length > 0);
-        } else {
-            setSuggestions([]);
-            setShowSuggestions(false);
-        }
-    };
-
-    const currentContact = contacts.find(c => c.did === recipientId);
-
-    const selectContact = (contact: Contact) => {
-        setRecipientId(contact.did);
-        setShowSuggestions(false);
-        setShowContactPicker(false);
-    };
-
-    const privacyRules = useMemo(() => {
-        if (selection.size === 0) return { mode: 'Flexible', forced: false };
-        const selectedVoucherIds = Array.from(selection.keys());
-        const selectedStandards = new Set<string>();
-        selectedVoucherIds.forEach(vid => {
-            const v = availableVouchers.find(av => av.localInstanceId === vid);
-            if (v) selectedStandards.add(v.voucherStandardUuid);
-        });
-        let hasPublic = false;
-        let hasPrivate = false;
-        selectedStandards.forEach(uuid => {
-            const standard = voucherStandards.find(s => standardIdToUuidMap.get(s.id) === uuid);
-            if (standard) {
-                const match = standard.content.match(/(?:privacy_mode|privacyMode)\s*=\s*"([^"]+)"/i);
-                const mode = match ? match[1].toLowerCase() : "public";
-                logger.info(`Detected privacy mode for standard ${uuid}: ${mode}`);
-                
-                if (mode === "public") hasPublic = true;
-                if (mode === "stealth" || mode === "private") hasPrivate = true;
-                // 'flexible' mode stays both false, allowing user choice
-            }
-        });
-        if (hasPublic && hasPrivate) return { mode: 'Incompatible', forced: false };
-        if (hasPrivate) return { mode: 'Stealth', forced: true };
-        if (hasPublic) return { mode: 'Public', forced: true };
-        return { mode: 'Flexible', forced: false };
-    }, [selection, availableVouchers, voucherStandards, standardIdToUuidMap]);
-
-    useEffect(() => {
-        if (privacyRules.mode === 'Stealth') setPrivacyMode('stealth');
-        else if (privacyRules.mode === 'Public') setPrivacyMode('public');
-        else if (privacyRules.mode === 'Flexible' && privacyMode === null && appSettings) {
-            if (appSettings.privacyDefault === 'stealth') setPrivacyMode('stealth');
-            else if (appSettings.privacyDefault === 'public') setPrivacyMode('public');
-            else setPrivacyMode(null);
-        }
-    }, [privacyRules, privacyMode, appSettings]);
-
-
-    const handleManualVoucherSelect = useCallback((voucher: VoucherSummary) => {
-        setSelection(prev => {
-            const next = new Map(prev);
-            if (next.has(voucher.localInstanceId)) {
-                next.delete(voucher.localInstanceId);
-            } else {
-                const precision = uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4;
-                const amount = parseFloat(voucher.currentAmount);
-                next.set(voucher.localInstanceId, isNaN(amount) ? voucher.currentAmount : amount.toFixed(precision));
-            }
-            
-            if (selectedStandardId) {
-                let total = 0;
-                next.forEach(amount => {
-                    const parsed = parseFloat(amount);
-                    if (!isNaN(parsed)) total += parsed;
-                });
-                const selectedStandardUuid = standardIdToUuidMap.get(selectedStandardId) || selectedStandardId;
-                const precision = uuidToPrecisionMap.get(selectedStandardUuid) ?? 4;
-                setTargetAmountStr(total > 0 ? total.toFixed(precision) : "");
-            } else {
-                setTargetAmountStr("");
-            }
-            
-            return next;
-        });
-    }, [uuidToPrecisionMap, selectedStandardId, standardIdToUuidMap]);
-
-    const checkoutSummary = useMemo(() => {
-        let count = 0;
-        const summableTotals = {} as Record<string, number>;
-        const countableTotals = {} as Record<string, number>;
-
-        for (const [voucherId, amountStr] of selection.entries()) {
-            const voucher = availableVouchers.find(v => v.localInstanceId === voucherId);
-            if (voucher) {
-                count++;
-                const amount = parseFloat(amountStr);
-                // @ts-ignore
-                if (voucher.divisible) {
-                    if (!summableTotals[voucher.displayCurrency]) summableTotals[voucher.displayCurrency] = 0;
-                    summableTotals[voucher.displayCurrency] += amount;
-                } else {
-                    if (!countableTotals[voucher.displayCurrency]) countableTotals[voucher.displayCurrency] = 0;
-                    countableTotals[voucher.displayCurrency] += 1;
-                }
-            }
-        }
-        return { count, summableTotals, countableTotals };
-    }, [selection, availableVouchers]);
-
-    const handlePrepareTransferClick = (event: FormEvent) => {
-        event.preventDefault();
-        if (!recipientId) { setRecipientError(true); document.getElementById('recipientId')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
-        if (selection.size === 0) { setFeedbackMsg("Asset selection required."); return; }
-        if (privacyRules.mode === 'Flexible' && privacyMode === null) {
-            setPrivacyError(true);
-            setFeedbackMsg("Privacy configuration required.");
+        if (detectedPrivacy === 'flexible' && state.privacyMode === null) {
+            dispatch({ type: 'SET_PRIVACY_ERROR', value: true });
+            dispatch({ type: 'SET_FEEDBACK', msg: "Privacy configuration required." });
             document.getElementById('privacyMode')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             return;
         }
-        setFeedbackMsg("");
-        setShowConfirm(true);
+        dispatch({ type: 'TOGGLE_CONFIRM', value: true });
     };
 
-    async function executeTransfer() {
-        setIsProcessing(true);
+    const executeTransfer = async () => {
+        dispatch({ type: 'SET_PROCESSING', value: true });
         try {
-            const senderProfileNameToSend = (sendProfileName && customSenderName.trim() !== "") ? customSenderName.trim() : null;
-            const notesToSend = notes.trim() === "" ? null : notes.trim();
-
-            const sources: SourceTransfer[] = Array.from(selection.entries()).map(([id, amount]) => ({
+            const senderName = state.sendProfileName ? state.customSenderName : null;
+            const sources: SourceTransfer[] = Array.from(selectedMap.entries()).map(([id, amount]) => ({
                 localInstanceId: id,
                 amountToSend: amount,
             }));
+            
             const standardDefinitionsToml: Record<string, string> = {};
-            voucherStandards.forEach(standard => {
-                const uuid = standardIdToUuidMap.get(standard.id) || standard.id;
-                standardDefinitionsToml[uuid] = standard.content;
+            voucherStandards.forEach(s => {
+                const uuid = standardIdToUuidMap.get(s.id) || s.id;
+                standardDefinitionsToml[uuid] = s.content;
             });
 
             const bundleResult = await protectAction(async (password) => {
                 return await transferService.createBundle({
-                    recipientId,
+                    recipientId: state.recipientId,
                     sources,
-                    notes: notesToSend,
-                    senderProfileName: senderProfileNameToSend,
+                    notes: state.notes || null,
+                    senderProfileName: senderName,
                     standardDefinitionsToml,
-                    usePrivacyMode: privacyMode === 'stealth',
+                    usePrivacyMode: state.privacyMode === 'stealth',
                     password
                 });
             });
-            if (!bundleResult) { setIsProcessing(false); return; }
-            
-            const summableAmounts: Record<string, string> = {};
-            Object.entries(checkoutSummary.summableTotals).forEach(([unit, total]) => {
-                // Find precision for this unit
-                const voucher = availableVouchers.find(v => v.displayCurrency === unit);
-                const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
-                summableAmounts[unit] = total.toFixed(precision);
-            });
-            const countableItems: Record<string, number> = checkoutSummary.countableTotals;
 
-            const record: Omit<TransactionRecord, 'bundleData'> & { bundleData: number[] } = {
+            if (!bundleResult) { dispatch({ type: 'SET_PROCESSING', value: false }); return; }
+
+            const summableAmounts: Record<string, string> = {};
+            const countableItems: Record<string, number> = {};
+            
+            Object.entries(selectionStats).forEach(([unit, stat]) => {
+                const voucher = availableVouchers.find(v => v.unit === unit);
+                const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
+                summableAmounts[unit] = stat.total.toFixed(precision);
+            });
+
+            const record: TransactionRecord = {
                 id: crypto.randomUUID(),
                 direction: 'sent',
-                recipientId: recipientId,
+                recipientId: state.recipientId,
                 senderId: ownUserId,
                 timestamp: new Date().toISOString(),
-                summableAmounts: summableAmounts,
-                countableItems: countableItems,
+                summableAmounts,
+                countableItems,
                 involvedVouchers: bundleResult.involvedSourcesDetails.map((d: any) => d.localInstanceId),
                 involvedSourcesDetails: bundleResult.involvedSourcesDetails,
                 bundleData: bundleResult.bundleData,
                 bundleId: bundleResult.bundleId,
-                notes: notesToSend ?? undefined,
-                senderProfileName: senderProfileNameToSend ?? undefined,
+                notes: state.notes || undefined,
+                senderProfileName: senderName || undefined,
             };
 
             await protectAction(async (password) => {
-                 await transferService.saveTransactionRecord(record as TransactionRecord, password || undefined);
+                 await transferService.saveTransactionRecord(record, password || undefined);
             });
 
-            const summableStrings = Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => {
-                const voucher = availableVouchers.find(v => v.displayCurrency === unit);
-                const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
-                return `${formatAmount(total.toString(), precision)} ${unit}`;
-            });
-            const countableStrings = Object.entries(checkoutSummary.countableTotals).map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`);
-            const summaryString = [...summableStrings, ...countableStrings].join(', ');
+            const summaryString = Object.entries(selectionStats)
+                .map(([unit, stat]) => `${formatAmount(stat.total.toString())} ${unit}`)
+                .join(', ');
 
-            setFeedbackMsg("Transaction successfully prepared");
-            setTimeout(() => onTransferPrepared(bundleResult.bundleData, recipientId, summaryString), 1500);
-
+            dispatch({ type: 'SET_FEEDBACK', msg: "Transfer successful!" });
+            setTimeout(() => onTransferPrepared(bundleResult.bundleData, state.recipientId, summaryString), 1500);
         } catch (e) {
-            setFeedbackMsg(`Preparation failed: ${e}`);
-            setIsProcessing(false);
-            setShowConfirm(false);
+            dispatch({ type: 'SET_FEEDBACK', msg: `Transfer failed: ${e}` });
+            dispatch({ type: 'SET_PROCESSING', value: false });
+            dispatch({ type: 'TOGGLE_CONFIRM', value: false });
         }
-    }
+    };
 
     return (
-        <PageLayout 
-            title="Create Transfer" 
-            description="Prepare a cryptographic asset transfer." 
-            onBack={onBack}
-        >
+        <PageLayout title="Create Transfer" description="Prepare a cryptographic asset transfer." onBack={onBack}>
             <div className="max-w-5xl mx-auto space-y-8 pb-32">
-                {feedbackMsg && (
+                {state.feedbackMsg && (
                     <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 animate-in slide-in-from-top-2">
                         <AlertTriangle className="text-rose-500 shrink-0" size={18} />
-                        <p className="text-sm font-bold text-rose-800 leading-tight">{feedbackMsg}</p>
+                        <p className="text-sm font-bold text-rose-800 leading-tight">{state.feedbackMsg}</p>
                     </div>
                 )}
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                    {/* Left Column: Recipient & Config */}
                     <div className="lg:col-span-7 space-y-8">
-                        <Card header={<div className="flex items-center gap-2"><User size={18} className="text-theme-primary"/><span className="font-black text-xs uppercase tracking-widest text-theme-primary">Recipient</span></div>}>
-                            <div className="space-y-6">
-                                <div className="space-y-3">
-                                    <label htmlFor="recipientId" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
-                                        User ID (DID)
-                                        <button type="button" onClick={() => setShowContactPicker(true)} className="text-theme-primary hover:underline flex items-center gap-1"><UserPlus size={10}/> Address Book</button>
-                                    </label>
-                                    <div className="relative group">
-                                        {currentContact ? (
-                                            <div className="flex items-center justify-between p-4 bg-theme-primary/5 border-2 border-theme-primary rounded-3xl animate-in zoom-in duration-300 shadow-sm">
-                                                <ContactBadge did={currentContact.did} contacts={contacts} size="lg" />
-                                                <button type="button" onClick={() => setRecipientId('')} className="p-2 hover:bg-rose-50 text-theme-light hover:text-rose-500 rounded-xl transition-all"><X size={20}/></button>
-                                            </div>
-                                        ) : (
-                                            <div className="relative">
-                                                <Input
-                                                    id="recipientId"
-                                                    value={recipientId}
-                                                    onChange={handleRecipientChange}
-                                                    onFocus={() => recipientId.length > 0 && suggestions.length > 0 && setShowSuggestions(true)}
-                                                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                                                    placeholder="did:key:z..."
-                                                    className={`py-5 px-6 rounded-3xl font-mono text-xs ${recipientError ? 'border-rose-500 shadow-rose-100' : ''}`}
-                                                />
-                                                <div className="absolute right-4 top-1/2 -translate-y-1/2 text-theme-light"><Search size={18}/></div>
-                                                
-                                                {showSuggestions && (
-                                                    <div className="absolute z-30 w-full mt-2 bg-white/90 backdrop-blur-xl border border-theme-subtle rounded-3xl shadow-premium-lg overflow-hidden animate-in slide-in-from-top-2 duration-200">
-                                                        {suggestions.map(contact => (
-                                                            <button key={contact.did} type="button" onClick={() => selectContact(contact)} className="w-full flex items-center gap-4 p-4 hover:bg-theme-primary/5 text-left border-b border-theme-subtle/40 last:border-0 transition-all">
-                                                                <Avatar size={32} name={contact.did} variant="beam" />
-                                                                <div className="min-w-0">
-                                                                    <p className="text-sm font-black text-theme-secondary truncate">{(contact.profile.firstName || contact.profile.lastName) ? `${contact.profile.firstName || ''} ${contact.profile.lastName || ''}`.trim() : (contact.profile.organization || 'Anonymous')}</p>
-                                                                    <p className="text-[9px] font-mono text-theme-light truncate">{contact.did}</p>
-                                                                </div>
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
-                                    
-                                    {typeof trustStatus === 'object' && 'KnownOffender' in trustStatus && (
-                                        <div className="p-5 bg-rose-50 border border-rose-100 rounded-[32px] flex items-start gap-4 animate-in shake duration-500 shadow-sm">
-                                            <AlertTriangle className="text-rose-500 shrink-0 mt-1" size={24} />
-                                            <div>
-                                                <h4 className="text-sm font-black text-rose-900 uppercase tracking-widest mb-1">Reputation Alert</h4>
-                                                <p className="text-xs text-rose-800 font-medium leading-relaxed">This identity is associated with past ledger conflicts. Exercise extreme caution.</p>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
+                        <RecipientSelector 
+                            recipientId={state.recipientId}
+                            onRecipientChange={(e) => dispatch({ type: 'SET_RECIPIENT', id: e.target.value })}
+                            onSelectContact={(c) => dispatch({ type: 'SET_RECIPIENT', id: c.did })}
+                            contacts={contacts}
+                            trustStatus={trustStatus}
+                            recipientError={state.recipientError}
+                            onShowContactPicker={() => {}} // TODO
+                            onClearRecipient={() => dispatch({ type: 'SET_RECIPIENT', id: "" })}
+                        />
 
+                        <Card header={<div className="flex items-center gap-2"><BookOpen size={18} className="text-theme-primary"/><span className="font-black text-xs uppercase tracking-widest text-theme-primary">Context</span></div>}>
+                            <div className="space-y-6">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><BookOpen size={10}/> Note</label>
-                                    <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Transaction context (optional)..." className="rounded-2xl min-h-[80px]" />
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">Transaction Note</label>
+                                    <Textarea value={state.notes} onChange={(e) => dispatch({ type: 'SET_NOTES', notes: e.target.value })} placeholder="Internal or public context..." className="rounded-2xl min-h-[80px]" />
                                 </div>
 
                                 <div className="p-4 bg-slate-50 border border-slate-200 rounded-3xl space-y-4">
                                     <div className="flex items-center justify-between">
                                         <label className="flex items-center gap-3 cursor-pointer group">
-                                            <div className={`w-10 h-6 rounded-full transition-all relative ${sendProfileName ? 'bg-theme-primary shadow-inner' : 'bg-slate-300'}`}>
-                                                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md ${sendProfileName ? 'left-5' : 'left-1'}`}></div>
-                                                <input type="checkbox" className="hidden" checked={sendProfileName} onChange={(e) => setSendProfileName(e.target.checked)} />
+                                            <div className={`w-10 h-6 rounded-full transition-all relative ${state.sendProfileName ? 'bg-theme-primary shadow-inner' : 'bg-slate-300'}`}>
+                                                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md ${state.sendProfileName ? 'left-5' : 'left-1'}`}></div>
+                                                <input type="checkbox" className="hidden" checked={state.sendProfileName} onChange={(e) => dispatch({ type: 'TOGGLE_PROFILE_NAME', value: e.target.checked })} />
                                             </div>
-                                            <span className="text-xs font-black text-slate-600 uppercase tracking-widest group-hover:text-theme-primary transition-colors">Disclose My Identity</span>
+                                            <span className="text-xs font-black text-slate-600 uppercase tracking-widest group-hover:text-theme-primary transition-colors">Disclose Identity</span>
                                         </label>
                                     </div>
-                                    {sendProfileName && (
+                                    {state.sendProfileName && (
                                         <div className="space-y-2 animate-in slide-in-from-top-2">
-                                            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Display As</label>
-                                            <Input value={customSenderName} onChange={(e) => setCustomSenderName(e.target.value)} placeholder="e.g. John Doe" className="bg-white border-slate-200 text-sm font-bold" />
-                                            <p className="text-[9px] font-medium text-slate-400 leading-tight flex items-start gap-1.5 pt-1"><Info size={10} className="shrink-0"/> This is only visible to the direct recipient to establish trust.</p>
+                                            <Input value={state.customSenderName} onChange={(e) => dispatch({ type: 'SET_SENDER_NAME', name: e.target.value })} placeholder="Display Name" className="bg-white border-slate-200 text-sm font-bold" />
                                         </div>
                                     )}
                                 </div>
                             </div>
                         </Card>
 
-                        <Card header={<div id="privacyMode" className="flex items-center gap-2"><Shield size={18} className="text-theme-primary"/><span className="font-black text-xs uppercase tracking-widest text-theme-primary">Security & Privacy</span></div>}>
-                            <div className="space-y-6">
-                                {privacyRules.forced ? (
-                                    <div className="p-5 bg-theme-primary/5 border border-theme-primary/10 rounded-[32px] flex items-center justify-between shadow-inner-soft">
-                                        <div className="flex items-center gap-4">
-                                            <div className={`p-3 rounded-2xl ${privacyRules.mode === 'Stealth' ? 'bg-purple-500 text-white' : 'bg-blue-500 text-white'}`}>
-                                                {privacyRules.mode === 'Stealth' ? <Lock size={20}/> : <Eye size={20}/>}
-                                            </div>
-                                            <div>
-                                                <h4 className="text-sm font-black text-theme-secondary uppercase tracking-widest">{privacyRules.mode === 'Stealth' ? 'Stealth Execution' : 'Transparent Execution'}</h4>
-                                                <p className="text-[10px] font-bold text-theme-light uppercase tracking-widest">Mandatory for selected standard</p>
-                                            </div>
-                                        </div>
-                                        <CheckCircle2 className="text-theme-primary" size={24} />
-                                    </div>
-                                ) : (
-                                    <div className={`grid grid-cols-2 gap-4 p-2 bg-slate-50 border-2 rounded-[40px] transition-all ${privacyError ? 'border-rose-500' : 'border-slate-100'}`}>
-                                        <button type="button" onClick={() => setPrivacyMode('public')} className={`flex flex-col items-center gap-2 p-6 rounded-[32px] transition-all ${privacyMode === 'public' ? 'bg-white shadow-premium-lg border border-theme-subtle' : 'opacity-50 hover:opacity-80'}`}>
-                                            <div className="p-3 bg-blue-50 text-blue-500 rounded-2xl"><Eye size={24}/></div>
-                                            <span className="text-xs font-black uppercase tracking-widest text-slate-900">Public</span>
-                                        </button>
-                                        <button type="button" onClick={() => setPrivacyMode('stealth')} className={`flex flex-col items-center gap-2 p-6 rounded-[32px] transition-all ${privacyMode === 'stealth' ? 'bg-white shadow-premium-lg border border-theme-subtle' : 'opacity-50 hover:opacity-80'}`}>
-                                            <div className="p-3 bg-purple-50 text-purple-500 rounded-2xl"><Lock size={24}/></div>
-                                            <span className="text-xs font-black uppercase tracking-widest text-slate-900">Stealth</span>
-                                        </button>
-                                    </div>
-                                )}
-
-                                {privacyRules.mode === 'Incompatible' && (
-                                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3">
-                                        <AlertTriangle size={18} className="text-rose-500" />
-                                        <p className="text-xs font-bold text-rose-800">Privacy Conflict: Mixed privacy requirements in selection.</p>
-                                    </div>
-                                )}
-
-                                <details className="group">
-                                    <summary className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-theme-light cursor-pointer hover:text-theme-primary transition-colors list-none">
-                                        <Info size={14}/> Privacy Details <ArrowRight size={10} className="group-open:rotate-90 transition-transform" />
-                                    </summary>
-                                    <div className="mt-4 p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-4 animate-in slide-in-from-top-2">
-                                        <div className="space-y-1">
-                                            <h5 className="text-xs font-black text-slate-900">🔒 Stealth Mode</h5>
-                                            <p className="text-[11px] text-slate-600 leading-relaxed font-medium">Anonymizes your signature in the transaction chain. Prevents mass surveillance. Reveal occurs only upon double-spend detection.</p>
-                                        </div>
-                                        <div className="space-y-1">
-                                            <h5 className="text-xs font-black text-slate-900">👁️ Public Mode</h5>
-                                            <p className="text-[11px] text-slate-600 leading-relaxed font-medium">Standard transparency. Builds high trust in closed networks and community circles.</p>
-                                        </div>
-                                    </div>
-                                </details>
-                            </div>
-                        </Card>
+                        <PrivacyToggle 
+                            privacyMode={state.privacyMode}
+                            onPrivacyChange={(mode) => dispatch({ type: 'SET_PRIVACY', mode })}
+                            privacyRules={{ mode: detectedPrivacy, forced: detectedPrivacy !== 'flexible' }}
+                            privacyError={state.privacyError}
+                        />
                     </div>
 
-                    {/* Right Column: Asset Selection & Summary */}
                     <div className="lg:col-span-5 space-y-8">
-                        <Card header={<div className="flex items-center gap-2"><Coins size={18} className="text-theme-primary"/><span className="font-black text-xs uppercase tracking-widest text-theme-primary">Voucher Selection</span></div>}>
-                            <div className="space-y-6">
-                                <div className="flex flex-wrap gap-2">
-                                    <button type="button" onClick={() => handleStandardSelect(null)} className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-full border-2 transition-all ${selectedStandardId === null ? 'bg-theme-primary border-theme-primary text-white shadow-md' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}>All</button>
-                                    {activeAssetClasses.map(group => {
-                                        const standardId = [...standardIdToUuidMap.entries()].find(([, uuid]) => uuid === group.standardUuid)?.[0] || group.standardUuid;
-                                        const key = `${standardId}:${group.isTestVoucher}`;
-                                        const isSelected = selectedStandardId === standardId && selectedIsTest === group.isTestVoucher;
-                                        return (
-                                            <button
-                                                key={key}
-                                                type="button"
-                                                onClick={() => handleStandardSelect(standardId, group.isTestVoucher)}
-                                                className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-full border-2 transition-all ${isSelected ? (group.isTestVoucher ? 'bg-rose-500 border-rose-500 text-white shadow-md' : 'bg-theme-primary border-theme-primary text-white shadow-md') : (group.isTestVoucher ? 'border-rose-200 text-rose-400 hover:border-rose-300' : 'border-slate-100 text-slate-400 hover:border-slate-200')}`}
-                                            >
-                                                {group.displayStandardName}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
+                        <AssetInventory 
+                            filteredVouchers={filteredVouchers}
+                            activeAssetClasses={activeAssetClasses}
+                            selectedStandardId={state.selectedStandardId}
+                            selectedIsTest={state.selectedIsTest}
+                            onStandardSelect={(id, isTest) => dispatch({ type: 'SET_STANDARD', id, isTest })}
+                            targetAmountStr={state.targetAmountStr}
+                            onTargetAmountChange={handleTargetAmountChange}
+                            selection={selectedMap}
+                            onVoucherToggle={handleVoucherToggle}
+                            onAmountChange={() => {}} // Manual change handled via toggle in simplified refactor
+                            uuidToPrecisionMap={uuidToPrecisionMap}
+                            standardIdToUuidMap={standardIdToUuidMap}
+                        />
 
-                                {selectedStandardId && (
-                                    <div className="space-y-3 animate-in slide-in-from-top-2">
-                                        <label htmlFor="target-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Target Amount</label>
-                                        <div className="relative">
-                                            <Input id="target-amount" value={targetAmountStr} onChange={(e) => handleTargetAmountChange(e.target.value)} type="number" placeholder="0.00" className="py-5 px-6 rounded-3xl font-black text-2xl tracking-tighter" />
-                                            <div className="absolute right-6 top-1/2 -translate-y-1/2 font-black text-theme-primary uppercase tracking-widest">{filteredVouchers[0]?.displayCurrency}</div>
-                                        </div>
-                                        <p className="text-[10px] font-bold text-theme-light italic text-center">Automatic selection will prioritize optimal ledger fragmentation.</p>
-                                    </div>
-                                )}
-
-                                <div className="space-y-3 pt-4 border-t border-theme-subtle/40">
-                                    <div className="flex items-center justify-between">
-                                        <h3 className="text-[10px] font-black text-theme-light uppercase tracking-widest">Available Vouchers</h3>
-                                        <button type="button" className="text-theme-primary hover:underline flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest"><Filter size={10}/> Sort Optimal</button>
-                                    </div>
-                                    
-                                    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-theme-subtle">
-                                        {filteredVouchers.length > 0 ? filteredVouchers.map(v => {
-                                            const selectedAmount = selection.get(v.localInstanceId);
-                                            const isSelected = selectedAmount !== undefined;
-                                            const precision = uuidToPrecisionMap.get(v.voucherStandardUuid) ?? 2;
-                                            
-                                            return (
-                                                <VoucherCard
-                                                    key={v.localInstanceId}
-                                                    voucher={v}
-                                                    mode="adjustable"
-                                                    isSelected={isSelected}
-                                                    selectedAmount={selectedAmount}
-                                                    onToggleSelect={handleManualVoucherSelect}
-                                                    onAmountChange={handleVoucherAmountChange}
-                                                    precision={precision}
-                                                    showStatus={false}
-                                                />
-                                            );
-                                        }) : (
-                                            <div className="text-center py-10 bg-slate-50 rounded-[32px] border-2 border-dashed border-slate-200">
-                                                <CreditCard className="mx-auto text-slate-300 mb-2" size={32} />
-                                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Inventory Depleted</p>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                        </Card>
-
-                        {/* Summary Sticky Card */}
-                        <div className="sticky bottom-8 z-30 transform-gpu will-change-transform">
-                            <Card variant="none" className="shadow-premium-xl border-theme-primary/20 bg-theme-primary text-white overflow-hidden p-0 rounded-[40px]">
-                                <div className="p-8 space-y-6">
-                                    <div className="flex justify-between items-center">
-                                        <div className="space-y-1">
-                                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60">Disbursement Summary</p>
-                                            <h3 className="text-2xl font-black tracking-tighter">
-                                                {checkoutSummary.count > 0 ? (
-                                                    <div className="flex flex-wrap gap-x-4 gap-y-1">
-                                                        {Object.entries(checkoutSummary.summableTotals).map(([unit, total]) => {
-                                                            const voucher = availableVouchers.find(v => v.displayCurrency === unit);
-                                                            const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
-                                                            return (
-                                                                <span key={unit} className="flex items-baseline gap-1.5">
-                                                                    {formatAmount(total.toString(), precision)}
-                                                                    <span className="text-sm font-bold uppercase tracking-widest opacity-70">{unit}</span>
-                                                                </span>
-                                                            );
-                                                        })}
-                                                        {Object.entries(checkoutSummary.countableTotals).map(([unit, total]) => (
-                                                            <span key={unit} className="flex items-baseline gap-1.5">
-                                                                {total}
-                                                                <span className="text-sm font-bold uppercase tracking-widest opacity-70">{unit}{total > 1 ? 's' : ''}</span>
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                ) : "0.00"}
-                                            </h3>
-                                        </div>
-                                        <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center shadow-inner">
-                                            <Send size={28} />
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="flex items-center justify-between pt-4 border-t border-white/20">
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-2 h-2 rounded-full bg-white animate-pulse"></div>
-                                            <span key={selection.size} className="text-[9px] font-black uppercase tracking-widest animate-in fade-in duration-300">
-                                                {selection.size} Vouchers Selected
-                                            </span>
-                                        </div>
-                                        <Button 
-                                            onClick={handlePrepareTransferClick} 
-                                            disabled={isProcessing} 
-                                            className="!bg-white !bg-none !text-theme-primary rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest shadow-lg hover:scale-105 active:scale-95 transition-all"
-                                        >
-                                            {isProcessing ? "Sending..." : "Send Voucher"}
-                                        </Button>
-                                    </div>
-                                </div>
-                            </Card>
-                        </div>
+                        <TransferSummaryBar 
+                            checkoutSummary={{
+                                count: selectedMap.size,
+                                summableTotals: Object.fromEntries(Object.entries(selectionStats).map(([u, s]) => [u, s.total])),
+                                countableTotals: {}
+                            }}
+                            selectionSize={selectedMap.size}
+                            isProcessing={state.isProcessing}
+                            onPrepareTransfer={handlePrepareTransfer}
+                            availableVouchers={availableVouchers}
+                            uuidToPrecisionMap={uuidToPrecisionMap}
+                        />
                     </div>
                 </div>
             </div>
 
             <ConfirmationModal 
-                isOpen={showConfirm}
+                isOpen={state.showConfirm}
                 title="Confirm Transfer"
                 description={
-                    <div className="space-y-4 pt-2">
-                        <div className="p-6 bg-theme-primary/5 rounded-[32px] border border-theme-primary/20 text-center space-y-2">
-                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">Net Disbursement</p>
-                            <div className="flex flex-col items-center">
-                                {Object.entries(checkoutSummary.summableTotals).map(([u, t]) => {
-                                    const voucher = availableVouchers.find(v => v.displayCurrency === u);
-                                    const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
-                                    return (
-                                        <p key={u} className="text-3xl font-black text-theme-primary tracking-tighter">{t.toFixed(precision)} {u}</p>
-                                    );
-                                })}
-                                {Object.entries(checkoutSummary.countableTotals).map(([u, t]) => (
-                                    <p key={u} className="text-3xl font-black text-theme-primary tracking-tighter">{t} {u}</p>
-                                ))}
+                    <div className="space-y-4 pt-2 text-left">
+                        <div className="flex items-center gap-3 p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/10">
+                            <Avatar size={40} name={state.recipientId} variant="beam" />
+                            <div className="min-w-0">
+                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">Recipient</p>
+                                <p className="text-sm font-black text-theme-secondary truncate">{state.recipientId}</p>
                             </div>
                         </div>
-                        <div className="space-y-2">
-                            <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">Recipient ID</p>
-                            <p className="text-xs font-mono break-all p-3 bg-slate-50 border border-slate-100 rounded-2xl text-slate-600">{recipientId}</p>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                            <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-2">Assets</p>
+                            <div className="text-lg font-black tracking-tighter text-theme-primary">
+                                {Object.entries(selectionStats).map(([unit, stat]) => `${formatAmount(stat.total.toString())} ${unit}`).join(', ')}
+                            </div>
                         </div>
-                        <p className="text-sm font-medium text-theme-secondary leading-relaxed pt-2">
-                            This action will cryptographically sign the transfer bundle. All selected vouchers will be fragmented and locked for export. Proceed?
-                        </p>
+                        <div className="flex items-center gap-2 px-1">
+                            <Shield size={14} className={state.privacyMode === 'stealth' ? "text-purple-500" : "text-blue-500"}/>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">
+                                Privacy: <span className={state.privacyMode === 'stealth' ? "text-purple-600" : "text-blue-600"}>{state.privacyMode === 'stealth' ? 'Stealth' : 'Public'}</span>
+                            </p>
+                        </div>
                     </div>
                 }
-                confirmText="Yes, Prepare Transfer"
+                confirmText="Execute"
                 onConfirm={executeTransfer}
-                onCancel={() => setShowConfirm(false)}
-                isProcessing={isProcessing}
+                onCancel={() => dispatch({ type: 'TOGGLE_CONFIRM', value: false })}
             />
-
-            {/* Contact Picker Modal */}
-            {showContactPicker && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/40 backdrop-blur-md p-4 animate-in fade-in duration-300">
-                    <Card className="w-full max-w-lg shadow-premium-xl rounded-[48px] p-0 overflow-hidden animate-in zoom-in duration-300 flex flex-col max-h-[85vh]">
-                        <div className="p-8 border-b border-theme-subtle/40 flex justify-between items-center bg-slate-50/50">
-                            <div>
-                                <h2 className="text-2xl font-black text-theme-secondary tracking-tight uppercase">Address Book</h2>
-                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">Select recipient</p>
-                            </div>
-                            <button onClick={() => setShowContactPicker(false)} className="p-3 hover:bg-white rounded-2xl transition-all shadow-sm border border-transparent hover:border-slate-100"><X size={20}/></button>
-                        </div>
-                        <div className="flex-grow overflow-y-auto p-8 space-y-4 scrollbar-thin scrollbar-thumb-theme-subtle">
-                            {contacts.length === 0 ? (
-                                <div className="text-center py-20 space-y-4">
-                                    <div className="mx-auto w-16 h-16 bg-slate-50 text-slate-300 rounded-3xl flex items-center justify-center"><UserPlus size={32}/></div>
-                                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Address Book Empty</p>
-                                </div>
-                            ) : (
-                                contacts.map(contact => (
-                                    <button key={contact.did} onClick={() => selectContact(contact)} className="w-full flex items-center gap-4 p-5 bg-white hover:bg-theme-primary/5 border border-slate-100 hover:border-theme-primary/30 rounded-[32px] transition-all shadow-sm hover:shadow-md text-left group">
-                                        <div className="w-12 h-12 rounded-2xl overflow-hidden flex-shrink-0 border-2 border-white shadow-sm group-hover:scale-110 transition-transform">
-                                            <Avatar size={48} name={contact.did} variant="beam" />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-black text-theme-secondary truncate uppercase group-hover:text-theme-primary">{(contact.profile.firstName || contact.profile.lastName) ? `${contact.profile.firstName || ''} ${contact.profile.lastName || ''}`.trim() : (contact.profile.organization || 'Anonymous')}</p>
-                                            <p className="text-[9px] font-mono text-theme-light truncate opacity-60">{contact.did}</p>
-                                        </div>
-                                        <div className="p-2 bg-slate-50 rounded-xl text-slate-300 group-hover:text-theme-primary group-hover:bg-theme-primary/10 transition-all"><ArrowRight size={16}/></div>
-                                    </button>
-                                ))
-                            )}
-                        </div>
-                        <div className="p-8 bg-slate-50/50 border-t border-theme-subtle/40">
-                            <Button variant="secondary" onClick={() => setShowContactPicker(false)} className="w-full rounded-2xl">Close</Button>
-                        </div>
-                    </Card>
-                </div>
-            )}
         </PageLayout>
     );
 }

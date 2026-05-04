@@ -1,6 +1,6 @@
 // src/components/VoucherDetailsView.tsx
 import { useState, useEffect } from "react";
-import { voucherService, utilityService } from "../services/voucherService";
+import { voucherService } from "../services/voucherService";
 import { settingsService } from "../services/settingsService";
 import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
@@ -16,8 +16,8 @@ import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import ContactDialog from "./ContactDialog";
 import { PageLayout } from "./ui/PageLayout";
+import { InfoRow } from "./ui/InfoRow";
 import { 
-    User, 
     Shield, 
     History, 
     FileSignature, 
@@ -26,35 +26,20 @@ import {
     Terminal as Json,
     CheckCircle2,
     Clock,
-    ShieldAlert,
-    MoreVertical,
-    Trash2,
-    UserPlus,
-    ExternalLink,
-    MapPin,
-    Building2,
-    Heart,
-    Briefcase
+    ShieldAlert
 } from "lucide-react";
+
+// Modular Components
+import { CreatorSection } from "./voucher/CreatorSection";
+import { PolicySection } from "./voucher/PolicySection";
+import { TimelineSection } from "./voucher/TimelineSection";
+import { ExportDialog } from "./voucher/ExportDialog";
 
 interface VoucherDetailsViewProps {
     voucherId: string;
     onBack: () => void;
     onViewConflict?: (proofId: string) => void;
 }
-
-const InfoRow: React.FC<{ label: string; children: React.ReactNode; isMono?: boolean; icon?: any }> = ({ label, children, isMono = false, icon: Icon }) => {
-    if (!children) return null;
-    return (
-        <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-1.5 opacity-60">
-                {Icon && <Icon size={12} className="text-theme-light" />}
-                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">{label}</p>
-            </div>
-            <p className={`${isMono ? 'font-mono text-xs' : 'text-sm font-bold'} text-theme-secondary break-words`}>{children}</p>
-        </div>
-    );
-};
 
 export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: VoucherDetailsViewProps) {
     const [details, setDetails] = useState<VoucherDetails | null>(null);
@@ -64,11 +49,6 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     const [errorMsg, setErrorMsg] = useState("");
     const [showJson, setShowJson] = useState(false);
     const [showExportModal, setShowExportModal] = useState(false);
-    const [recipientId, setRecipientId] = useState("");
-    const [encryptToDid, setEncryptToDid] = useState(true);
-    const [protectWithPassword, setProtectWithPassword] = useState(false);
-    const [exportPassword, setExportPassword] = useState("");
-    const [exportPasswordConfirm, setExportPasswordConfirm] = useState("");
     const [isExporting, setIsExporting] = useState(false);
     const [exportError, setExportError] = useState("");
     const [showContactDialog, setShowContactDialog] = useState(false);
@@ -95,24 +75,20 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     }, [voucher?.creator.id]);
 
     useEffect(() => {
-        logger.info(`VoucherDetailsView: Displayed for voucher ID: ${voucherId}`);
         async function fetchDetails() {
             setIsLoading(true);
             setErrorMsg("");
             try {
-                const [result, currentSettings, _userId, profile, standards, _sourceId] = await Promise.all([
+                const [result, currentSettings, profile, standards] = await Promise.all([
                     voucherService.getDetails(voucherId),
                     settingsService.getSettings().catch(() => null),
-                    utilityService.getUserId().catch(() => null),
                     profileService.getProfile().catch(() => null),
-                    standardsService.getStandards().catch(() => []),
-                    voucherService.getSourceSender(voucherId).catch(() => null)
+                    standardsService.getStandards().catch(() => [])
                 ]);
                 setDetails(result);
                 setSettings(currentSettings);
                 setUserProfile(profile);
 
-                // Parse standards for hints
                 const parsed: Record<string, VoucherStandardDefinition> = {};
                 for (const s of standards) {
                     try {
@@ -134,15 +110,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
     }, [voucherId]);
 
     useEffect(() => {
-        async function fetchContacts() {
-            try {
-                const result = await contactService.getContacts();
-                setContacts(result);
-            } catch (e) {
-                logger.error(`Failed to fetch contacts: ${e}`);
-            }
-        }
-        fetchContacts();
+        contactService.getContacts().then(setContacts).catch(e => logger.error(`Failed to fetch contacts: ${e}`));
     }, []);
 
     useEffect(() => {
@@ -171,35 +139,75 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
         }
     };
 
-    function getDerivedVoucherStatus(details: VoucherDetails): { name: string; color: string; bgColor: string; icon: any; tooltip: string } {
+    function getStatusInfo(details: VoucherDetails) {
         const { status } = details;
-        if (status === "active") return { name: 'Active', color: 'text-emerald-600', bgColor: 'bg-emerald-50', icon: CheckCircle2, tooltip: 'Fully signed and ready.' };
-        if (status === "archived") return { name: 'Archived', color: 'text-gray-600', bgColor: 'bg-gray-50', icon: History, tooltip: 'Fully spent.' };
-        if (status === "incomplete") return { name: 'Incomplete', color: 'text-amber-600', bgColor: 'bg-amber-50', icon: Clock, tooltip: 'Awaiting signatures.' };
-        if (status === "quarantined") return { name: 'Quarantined', color: 'text-rose-600', bgColor: 'bg-rose-50', icon: ShieldAlert, tooltip: 'Double-spend detected.' };
-        if (status === "endorsed") return { name: 'Endorsed', color: 'text-indigo-600', bgColor: 'bg-indigo-50', icon: FileSignature, tooltip: 'Signed by you.' };
-        if (status === "expired") return { name: 'Expired', color: 'text-orange-600', bgColor: 'bg-orange-50', icon: Clock, tooltip: 'Voucher expired.' };
-        
-        return { name: 'Unknown', color: 'text-gray-600', bgColor: 'bg-gray-50', icon: Info, tooltip: 'Status unknown.' };
+        if (status === "active") return { name: 'Active', color: 'text-emerald-600', bgColor: 'bg-emerald-50', icon: CheckCircle2 };
+        if (status === "archived") return { name: 'Archived', color: 'text-gray-600', bgColor: 'bg-gray-50', icon: History };
+        if (status === "incomplete") return { name: 'Incomplete', color: 'text-amber-600', bgColor: 'bg-amber-50', icon: Clock };
+        if (status === "quarantined") return { name: 'Quarantined', color: 'text-rose-600', bgColor: 'bg-rose-50', icon: ShieldAlert };
+        if (status === "endorsed") return { name: 'Endorsed', color: 'text-indigo-600', bgColor: 'bg-indigo-50', icon: FileSignature };
+        if (status === "expired") return { name: 'Expired', color: 'text-orange-600', bgColor: 'bg-orange-50', icon: Clock };
+        return { name: 'Unknown', color: 'text-gray-600', bgColor: 'bg-gray-50', icon: Info };
     }
 
     const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
-    const statusInfo = details ? getDerivedVoucherStatus(details) : null;
+    const statusInfo = details ? getStatusInfo(details) : null;
     const StatusIcon = statusInfo?.icon;
 
     if (isLoading) return <div className="text-center p-20 text-theme-light animate-pulse font-black uppercase tracking-[0.2em]">Loading Voucher Details...</div>;
     if (errorMsg || !details || !voucher) return <div className="p-10 text-center text-rose-500 font-bold">{errorMsg || "Voucher not found"}</div>;
 
-    const creator = voucher.creator;
     const signatureHint = statusInfo?.name === 'Incomplete' && userProfile
         ? (() => {
             const targetUuid = voucher.voucherStandard.uuid;
-            let standard: VoucherStandardDefinition | undefined = parsedStandards[targetUuid];
-            if (!standard) {
-                standard = Object.values(parsedStandards).find(s => s.immutable.identity.uuid === targetUuid);
-            }
+            const standard = parsedStandards[targetUuid] || Object.values(parsedStandards).find(s => s.immutable.identity.uuid === targetUuid);
             return standard ? getMissingProfileHint(standard, userProfile) : null;
         })() : null;
+
+    const handleExport = async (config: any) => {
+        setIsExporting(true);
+        setExportError("");
+        try {
+            const bundleBytes = await voucherService.createSigningRequest(voucherId, config);
+            const filePath = await save({
+                defaultPath: settings?.lastUsedDirectory 
+                    ? `${settings.lastUsedDirectory}/signature-request-${voucherId.slice(0, 8)}.ask`
+                    : `signature-request-${voucherId.slice(0, 8)}.ask`,
+                filters: [{ name: 'Signature Request (.ask)', extensions: ['ask'] }]
+            });
+
+            if (filePath) {
+                const { writeFile } = await import("@tauri-apps/plugin-fs");
+                await writeFile(filePath, new Uint8Array(bundleBytes));
+                if (settings) {
+                    await updateLastUsedDirectory(filePath, settings, protectAction);
+                    settingsService.getSettings().then(setSettings).catch(() => {});
+                }
+                setShowExportModal(false);
+            }
+        } catch (e) {
+            setExportError(`Export failed: ${e}`);
+        } finally {
+            setIsExporting(false);
+        }
+    };
+
+    const handleRemoveSignature = async () => {
+        if (!showRemoveSignatureModal) return;
+        setIsRemovingSignature(true);
+        try {
+            await protectAction(async (pwd) => {
+                await voucherService.removeSignature(voucherId, showRemoveSignatureModal, pwd || undefined);
+            });
+            setShowRemoveSignatureModal(null);
+            await refreshDetails();
+        } catch (e) {
+            logger.error(`Failed to remove signature: ${e}`);
+            alert(`Failed to remove signature: ${e}`);
+        } finally {
+            setIsRemovingSignature(false);
+        }
+    };
 
     return (
         <PageLayout 
@@ -209,20 +217,13 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             actions={
                 <div className="flex items-center gap-2">
                     {statusInfo?.name === 'Incomplete' && (
-                        <Button 
-                            variant="primary" 
-                            size="sm" 
-                            onClick={() => setShowExportModal(true)}
-                            className="gap-2"
-                        >
-                            <FileSignature size={16} />
-                            Sign
+                        <Button variant="primary" size="sm" onClick={() => setShowExportModal(true)} className="gap-2">
+                            <FileSignature size={16} /> Sign
                         </Button>
                     )}
                     <button 
                         onClick={() => setShowJson(!showJson)}
                         className={`p-2 rounded-xl transition-all ${showJson ? 'bg-theme-secondary text-white' : 'bg-white text-theme-light hover:bg-white/80 border border-theme-subtle/50 shadow-sm'}`}
-                        title="Toggle JSON View"
                     >
                         <Json size={18} />
                     </button>
@@ -230,7 +231,6 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             }
         >
             <div className="max-w-5xl mx-auto space-y-6">
-                {/* Status Hero Card */}
                 <Card variant={isQuarantined ? "danger" : (details.isTestVoucher ? "warning" : "glass")} className="border-none shadow-premium overflow-hidden">
                     <div className="p-8 flex flex-col md:flex-row items-center justify-between gap-8">
                         <div className="flex items-center gap-6">
@@ -239,35 +239,20 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                             </div>
                             <div>
                                 <div className="flex items-baseline gap-2">
-                                    <h1 className="text-5xl font-black text-theme-primary tracking-tighter">
-                                        {voucher.nominalValue.amount}
-                                    </h1>
+                                    <h1 className="text-5xl font-black text-theme-primary tracking-tighter">{voucher.nominalValue.amount}</h1>
                                     <span className="text-xl font-bold text-theme-light uppercase tracking-widest">{details.displayCurrency}</span>
                                 </div>
                                 <div className="flex items-center gap-2 mt-2">
-                                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${statusInfo?.bgColor} ${statusInfo?.color}`}>
-                                        {statusInfo?.name}
-                                    </span>
-                                    {details.isTestVoucher && (
-                                        <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-500 text-white shadow-lg shadow-rose-200">
-                                            Test Voucher
-                                        </span>
-                                    )}
+                                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${statusInfo?.bgColor} ${statusInfo?.color}`}>{statusInfo?.name}</span>
+                                    {details.isTestVoucher && <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-500 text-white shadow-lg shadow-rose-200">Test Voucher</span>}
                                 </div>
                             </div>
                         </div>
                         
                         <div className="flex flex-col gap-3 w-full md:w-auto">
                             {isQuarantined && (
-                                <Button 
-                                    variant="secondary" 
-                                    size="sm" 
-                                    className="bg-white/20 text-white hover:bg-white/30 border-white/30 backdrop-blur-md"
-                                    onClick={() => proofId && onViewConflict?.(proofId)}
-                                    disabled={!proofId}
-                                >
-                                    <ShieldAlert size={16} className="mr-2" />
-                                    View Proof
+                                <Button variant="secondary" size="sm" className="bg-white/20 text-white hover:bg-white/30 border-white/30 backdrop-blur-md" onClick={() => proofId && onViewConflict?.(proofId)} disabled={!proofId}>
+                                    <ShieldAlert size={16} className="mr-2" /> View Proof
                                 </Button>
                             )}
                             <div className="bg-white/20 backdrop-blur-md px-4 py-2 rounded-2xl border border-white/30">
@@ -296,159 +281,32 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                     </Card>
                 ) : (
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        {/* Main Content Area */}
                         <div className="lg:col-span-2 space-y-6">
-                            {/* Creator Information */}
-                            <Card className="border-none shadow-premium" header={
-                                <div className="flex items-center justify-between w-full">
-                                    <div className="flex items-center gap-2">
-                                        <User size={18} className="text-theme-primary" />
-                                        <span className="font-black text-xs uppercase tracking-widest">Creator</span>
-                                    </div>
-                                    <Button 
-                                        variant="outline" 
-                                        size="xs" 
-                                        className="h-8 rounded-lg"
-                                        onClick={() => {
-                                            const contact = contacts.find(c => c.did === creator.id);
-                                            setPendingContactDID(creator.id);
-                                            setExistingContact(contact || null);
-                                            setShowContactDialog(true);
-                                        }}
-                                    >
-                                        {contacts.some(c => c.did === creator.id) ? <MoreVertical size={14} /> : <UserPlus size={14} />}
-                                    </Button>
-                                </div>
-                            }>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 p-2">
-                                    <div className="space-y-6">
-                                        <InfoRow label="Legal Name" icon={User}>{creator.firstName} {creator.lastName}</InfoRow>
-                                        <InfoRow label="Account ID" icon={Shield} isMono>{creator.id}</InfoRow>
-                                        <InfoRow label="Postal Address" icon={MapPin}>
-                                            {creator.address?.street} {creator.address?.houseNumber}<br/>
-                                            {creator.address?.zipCode} {creator.address?.city}
-                                            {creator.address?.country && <><br/>{creator.address.country}</>}
-                                        </InfoRow>
-                                        <InfoRow label="Map Coordinates" icon={MapPin}>{creator.coordinates}</InfoRow>
-                                    </div>
-                                    <div className="space-y-6">
-                                        <InfoRow label="Organization / Community" icon={Building2}>{creator.organization || creator.community || "Independent"}</InfoRow>
-                                        <InfoRow label="Contact Channels" icon={ExternalLink}>
-                                            {creator.email && <div className="text-theme-accent">{creator.email}</div>}
-                                            {creator.phone && <div>{creator.phone}</div>}
-                                            {creator.url && <a href={creator.url} target="_blank" rel="noopener noreferrer" className="text-theme-primary hover:underline block">{creator.url}</a>}
-                                        </InfoRow>
-                                        <InfoRow label="Gender Orientation">
-                                            {creator.gender === "1" ? "Male" : creator.gender === "2" ? "Female" : creator.gender === "0" ? "Other / Not Declared" : creator.gender === "9" ? "Not Applicable" : "Unknown"}
-                                        </InfoRow>
-                                        <InfoRow label="Reputation Status">
-                                            {typeof trustStatus === 'object' && 'knownOffender' in trustStatus ? (
-                                                <span className="text-rose-500 font-black uppercase text-[10px] tracking-widest flex items-center gap-2">
-                                                    <ShieldAlert size={14} /> High Risk Account
-                                                </span>
-                                            ) : (
-                                                <span className="text-emerald-500 font-black uppercase text-[10px] tracking-widest flex items-center gap-2">
-                                                    <CheckCircle2 size={14} /> Clean Reputation
-                                                </span>
-                                            )}
-                                        </InfoRow>
-                                    </div>
-                                </div>
-                            </Card>
+                            <CreatorSection 
+                                creator={voucher.creator}
+                                trustStatus={trustStatus}
+                                isContact={contacts.some(c => c.did === voucher.creator.id)}
+                                onManageContact={() => {
+                                    setPendingContactDID(voucher.creator.id);
+                                    setExistingContact(contacts.find(c => c.did === voucher.creator.id) || null);
+                                    setShowContactDialog(true);
+                                }}
+                            />
 
-                            {/* Community Offerings */}
-                            {(creator.serviceOffer || creator.needs) && (
-                                <Card className="border-none shadow-premium" header={
-                                    <div className="flex items-center gap-2">
-                                        <Heart size={18} className="text-theme-primary" />
-                                        <span className="font-black text-xs uppercase tracking-widest">Community Offerings</span>
-                                    </div>
-                                }>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 p-2">
-                                        <InfoRow label="I can help with..." icon={Briefcase}>{creator.serviceOffer}</InfoRow>
-                                        <InfoRow label="I am looking for..." icon={Heart}>{creator.needs}</InfoRow>
-                                    </div>
-                                </Card>
-                            )}
+                            <PolicySection 
+                                description={voucher.voucherStandard.template.description}
+                                footnote={voucher.voucherStandard.template.footnote}
+                            />
 
-                            {/* Policy & Conditions */}
-                            {(voucher.voucherStandard.template.description || voucher.voucherStandard.template.footnote) && (
-                                <Card className="border-none shadow-premium" header={
-                                    <div className="flex items-center gap-2">
-                                        <Info size={18} className="text-theme-primary" />
-                                        <span className="font-black text-xs uppercase tracking-widest">Policy & Conditions</span>
-                                    </div>
-                                }>
-                                    <div className="space-y-6 p-2">
-                                        {voucher.voucherStandard.template.description && (
-                                            <div className="space-y-2">
-                                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest opacity-60">Description</p>
-                                                <p className="text-sm text-theme-secondary leading-relaxed italic">
-                                                    "{voucher.voucherStandard.template.description}"
-                                                </p>
-                                            </div>
-                                        )}
-                                        {voucher.voucherStandard.template.footnote && (
-                                            <div className="space-y-2 pt-4 border-t border-theme-subtle/30">
-                                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest opacity-60">Footnote</p>
-                                                <p className="text-xs text-theme-light leading-relaxed">
-                                                    {voucher.voucherStandard.template.footnote}
-                                                </p>
-                                            </div>
-                                        )}
-                                    </div>
-                                </Card>
-                            )}
-
-                            {/* Signatures Timeline */}
-                            <Card className="border-none shadow-premium" header={
-                                <div className="flex items-center gap-2">
-                                    <FileSignature size={18} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">Signatures</span>
-                                </div>
-                            }>
-                                <div className="space-y-4">
-                                    {voucher.signatures.map((sig) => {
-                                        const isCreator = sig.role === "creator" || sig.role === "issuer";
-                                        return (
-                                            <div key={sig.signatureId} className="relative pl-8 pb-4 last:pb-0">
-                                                {/* Timeline Line */}
-                                                <div className="absolute left-[11px] top-2 bottom-0 w-0.5 bg-theme-subtle/30"></div>
-                                                {/* Timeline Dot */}
-                                                <div className={`absolute left-0 top-1.5 w-[24px] h-[24px] rounded-full flex items-center justify-center border-4 border-bg-app z-10 ${isCreator ? 'bg-theme-primary text-white' : 'bg-theme-subtle text-theme-light'}`}>
-                                                    <CheckCircle2 size={10} />
-                                                </div>
-                                                
-                                                <div className="bg-white/40 border border-theme-subtle/30 rounded-2xl p-4 flex items-center justify-between group hover:border-theme-primary/30 transition-all shadow-sm">
-                                                    <div>
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            <span className="text-[10px] font-black uppercase tracking-widest text-theme-light">{sig.role}</span>
-                                                            <span className="text-xs font-bold text-theme-secondary">
-                                                                {sig.details?.firstName} {sig.details?.lastName}
-                                                            </span>
-                                                        </div>
-                                                        <p className="text-[10px] font-mono text-theme-light opacity-50 truncate max-w-[200px]">{sig.signerId}</p>
-                                                    </div>
-                                                    <div className="flex items-center gap-3">
-                                                        <span className="text-[10px] font-bold text-theme-light opacity-60">{formatDateTime(sig.signatureTime)}</span>
-                                                        <button 
-                                                            className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-rose-50 text-rose-500 transition-all"
-                                                            onClick={() => setShowRemoveSignatureModal(sig.signatureId)}
-                                                        >
-                                                            <Trash2 size={14} />
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </Card>
+                            <TimelineSection 
+                                signatures={voucher.signatures}
+                                transactions={voucher.transactions}
+                                displayCurrency={details.displayCurrency}
+                                onRemoveSignature={setShowRemoveSignatureModal}
+                            />
                         </div>
 
-                        {/* Sidebar Information */}
                         <div className="space-y-6">
-                            {/* Technical Specs */}
                             <Card className="border-none shadow-premium" header={
                                 <div className="flex items-center gap-2">
                                     <Info size={16} className="text-theme-primary" />
@@ -471,129 +329,22 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                                     </div>
                                 </div>
                             </Card>
-
-                            {/* Activity Log */}
-                            <Card className="border-none shadow-premium" header={
-                                <div className="flex items-center gap-2">
-                                    <History size={16} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">Transaction History</span>
-                                </div>
-                            }>
-                                <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                                    {voucher.transactions.slice().reverse().map((t) => (
-                                        <div key={t.tId} className="p-3 bg-white/40 border border-theme-subtle/30 rounded-xl relative">
-                                            <div className="flex justify-between items-start mb-2">
-                                                <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${t.tType === 'init' ? 'bg-emerald-500 text-white' : 'bg-theme-secondary text-white'}`}>
-                                                    {t.tType}
-                                                </span>
-                                                <span className="text-xs font-black text-theme-primary">
-                                                    {t.amount} {details.displayCurrency}
-                                                </span>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <p className="text-[9px] text-theme-light flex items-center justify-between">
-                                                    <span>By: {t.senderId ? t.senderId.slice(0, 12) + "..." : "SYSTEM"}</span>
-                                                    <span>{formatDateTime(t.tTime).split(',')[0]}</span>
-                                                </p>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </Card>
                         </div>
                     </div>
                 )}
             </div>
 
-            {/* Modals & Dialogs */}
-            <ConfirmationModal
+            <ExportDialog 
                 isOpen={showExportModal}
-                title="Send for Signature"
-                description={
-                    <div className="space-y-6 pt-2">
-                        <div className="p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/20 space-y-4">
-                            <div className="flex items-center gap-3">
-                                <input
-                                    type="checkbox"
-                                    id="encryptToDid"
-                                    checked={encryptToDid}
-                                    onChange={(e) => setEncryptToDid(e.target.checked)}
-                                    className="h-5 w-5 rounded-lg border-theme-subtle text-theme-primary focus:ring-theme-primary transition-all"
-                                />
-                                <label htmlFor="encryptToDid" className="text-sm font-bold text-theme-secondary cursor-pointer select-none">
-                                    Identity-Based Encryption
-                                </label>
-                            </div>
-                            {encryptToDid && (
-                                <div className="animate-in slide-in-from-top-2">
-                                    <input
-                                        type="text"
-                                        value={recipientId}
-                                        onChange={(e) => setRecipientId(e.target.value)}
-                                        placeholder="Enter Signer DID (did:key:...)"
-                                        className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-white text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-inner-soft text-sm"
-                                        autoFocus
-                                    />
-                                </div>
-                            )}
-                        </div>
-                        
-                        {!encryptToDid && (
-                            <div className="p-4 bg-theme-accent/5 rounded-2xl border border-theme-accent/20 space-y-4">
-                                <div className="flex items-center gap-3">
-                                    <input
-                                        type="checkbox"
-                                        id="protectWithPassword"
-                                        checked={protectWithPassword}
-                                        onChange={(e) => setProtectWithPassword(e.target.checked)}
-                                        className="h-5 w-5 rounded-lg border-theme-subtle text-theme-accent focus:ring-theme-accent transition-all"
-                                    />
-                                    <label htmlFor="protectWithPassword" className="text-sm font-bold text-theme-secondary cursor-pointer select-none">
-                                        Password Protection
-                                    </label>
-                                </div>
-                                {protectWithPassword && (
-                                    <div className="space-y-3 animate-in slide-in-from-top-2">
-                                        <input
-                                            type="password"
-                                            value={exportPassword}
-                                            onChange={(e) => setExportPassword(e.target.value)}
-                                            placeholder="Access Password"
-                                            className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-white text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-accent/20 shadow-inner-soft text-sm"
-                                        />
-                                        <input
-                                            type="password"
-                                            value={exportPasswordConfirm}
-                                            onChange={(e) => setExportPasswordConfirm(e.target.value)}
-                                            placeholder="Confirm Access Password"
-                                            className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-white text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-accent/20 shadow-inner-soft text-sm"
-                                        />
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                        {exportError && <p className="text-rose-500 text-xs font-bold px-2">{exportError}</p>}
-                    </div>
-                }
-                confirmText="Create Signature File"
-                onConfirm={handleExportSigningRequest}
-                onCancel={() => {
-                    setShowExportModal(false);
-                    setRecipientId("");
-                    setExportPassword("");
-                    setExportPasswordConfirm("");
-                    setExportError("");
-                }}
+                onClose={() => setShowExportModal(false)}
+                onExport={handleExport}
                 isProcessing={isExporting}
+                error={exportError}
             />
             
             <ContactDialog
                 isOpen={showContactDialog}
-                onClose={() => {
-                    setShowContactDialog(false);
-                    setPendingContactDID(null);
-                    setExistingContact(null);
-                }}
+                onClose={() => { setShowContactDialog(false); setPendingContactDID(null); setExistingContact(null); }}
                 onSave={async (contact: Contact) => {
                     await protectAction(async (pwd) => {
                         await contactService.saveContact(contact, pwd || undefined);
@@ -617,79 +368,4 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
             />
         </PageLayout>
     );
-
-    async function handleRemoveSignature() {
-        if (!showRemoveSignatureModal) return;
-        setIsRemovingSignature(true);
-        try {
-            await protectAction(async (pwd) => {
-                await voucherService.removeSignature(voucherId, showRemoveSignatureModal, pwd || undefined);
-            });
-            logger.info(`Signature ${showRemoveSignatureModal} removed from voucher ${voucherId}`);
-            setShowRemoveSignatureModal(null);
-            await refreshDetails();
-        } catch (e) {
-            const msg = `Failed to remove signature: ${e}`;
-            logger.error(msg);
-            alert(msg);
-        } finally {
-            setIsRemovingSignature(false);
-        }
-    }
-
-    async function handleExportSigningRequest() {
-        setIsExporting(true);
-        setExportError("");
-        try {
-            let config;
-            if (encryptToDid) {
-                if (!recipientId.trim()) {
-                    setExportError("Please enter a recipient DID.");
-                    setIsExporting(false);
-                    return;
-                }
-                config = { type: "TargetDid", value: [recipientId.trim(), "TrialDecryption"] };
-            } else if (protectWithPassword) {
-                if (!exportPassword) {
-                    setExportError("Please enter a password.");
-                    setIsExporting(false);
-                    return;
-                }
-                if (exportPassword !== exportPasswordConfirm) {
-                    setExportError("Passwords do not match.");
-                    setIsExporting(false);
-                    return;
-                }
-                config = { type: "Password", value: exportPassword };
-            } else {
-                config = { type: "Cleartext" };
-            }
-
-            const bundleBytes = await voucherService.createSigningRequest(voucherId, config);
-
-            const filePath = await save({
-                defaultPath: settings?.lastUsedDirectory 
-                    ? `${settings.lastUsedDirectory}/signature-request-${voucherId.slice(0, 8)}.ask`
-                    : `signature-request-${voucherId.slice(0, 8)}.ask`,
-                filters: [{ name: 'Signature Request (.ask)', extensions: ['ask'] }]
-            });
-
-            if (filePath) {
-                const uint8Array = new Uint8Array(bundleBytes);
-                const { writeFile } = await import("@tauri-apps/plugin-fs");
-                await writeFile(filePath, uint8Array);
-                
-                if (settings) {
-                    updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
-                        settingsService.getSettings().then(setSettings).catch(() => {});
-                    });
-                }
-                setShowExportModal(false);
-            }
-        } catch (e) {
-            setExportError(`Export failed: ${e}`);
-        } finally {
-            setIsExporting(false);
-        }
-    }
 }

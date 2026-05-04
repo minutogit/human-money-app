@@ -22,14 +22,40 @@ body {
   }
 
   .glass-panel {
-    @apply bg-white/70 backdrop-blur-md border border-white/40 shadow-premium;
+    @apply bg-white/70 backdrop-blur-xl border border-white/50 shadow-premium;
+  }
+
+  .glass-panel-dark {
+    @apply bg-slate-900/80 backdrop-blur-xl border border-slate-700/50 shadow-premium;
   }
 
   .card-premium {
-    @apply bg-white rounded-2xl shadow-premium border border-theme-subtle/50 transition-all duration-300;
+    @apply bg-white rounded-[32px] shadow-premium border border-theme-subtle/40 transition-all duration-500 ease-out;
   }
 
   .card-premium-hover {
-    @apply hover:shadow-premium-hover hover:-translate-y-0.5 active:scale-[0.99];
+    @apply hover:shadow-premium-hover hover:-translate-y-1 active:scale-[0.98];
+  }
+
+  /* Micro-animations */
+  .hover-glow {
+    @apply transition-all duration-300 hover:shadow-[0_0_20px_rgba(var(--color-primary),0.15)];
+  }
+
+  .tap-bounce {
+    @apply transition-transform active:scale-95;
+  }
+
+  /* Status-based gradients for background highlights */
+  .bg-gradient-success {
+    @apply bg-gradient-to-br from-emerald-50 to-teal-50;
+  }
+
+  .bg-gradient-danger {
+    @apply bg-gradient-to-br from-rose-50 to-orange-50;
+  }
+
+  .bg-gradient-info {
+    @apply bg-gradient-to-br from-blue-50 to-indigo-50;
   }
 }
