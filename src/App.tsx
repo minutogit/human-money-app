@@ -7,55 +7,15 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { error } from "@tauri-apps/plugin-log";
 import { logger } from "./utils/log";
 import logo from './assets/logo.png';
-import { CreateNewProfile } from './components/CreateNewProfile';
-import { Login } from "./components/Login";
-import { CreateVoucher } from "./components/CreateVoucher";
 import "./App.css";
-import { SendView } from "./components/SendView";
-import { SettingsView } from "./components/SettingsView";
-import { TransactionHistoryView } from "./components/TransactionHistoryView";
-import { TransferSuccessView } from "./components/TransferSuccessView";
-import { VoucherDetailsView } from './components/VoucherDetailsView';
-import { Activities } from './components/Activities';
-import { ReceiveView } from './components/ReceiveView';
-import { ReceiveSuccessView } from './components/ReceiveSuccessView';
-import { Dashboard } from './components/Dashboard';
-import { WalletView } from './components/WalletView';
-import { SignRequestView } from './components/SignRequestView';
-import { WalletRecovery } from './components/WalletRecovery';
-import { RecreateProfile } from './components/RecreateProfile';
-import AddressBook from './components/AddressBook';
-import { ConflictDetailsView } from './components/ConflictDetailsView';
-import { ConflictListView } from './components/ConflictListView';
 import { ForkLockOverlay } from './components/ForkLockOverlay';
 import { Button } from './components/ui/Button';
-import { ReceiveSuccessPayload, VoucherDetails } from './types';
+import { AppState } from './types';
 
 // WICHTIG: Der Import für den Provider
 import { SessionProvider, useSession } from './context/SessionContext';
 import { Sidebar, INTERNAL_VIEWS } from './components/Sidebar';
-
-export type AppState =
-    | { view: "loading" }
-    | { view: "needs_profile" }
-    | { view: "needs_login" }
-    | { view: "logged_in" }
-    | { view: "recreate_profile" }
-    | { view: "needs_recovery" }
-    | { view: "settings" }
-    | { view: "create_voucher"; previousView?: AppState }
-    | { view: "voucher_details"; voucherId: string; previousView?: AppState }
-    | { view: "send_vouchers" }
-    | { view: "receive_bundle" }
-    | { view: "transaction_history" }
-    | { view: "activities" }
-    | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string }
-    | { view: "receive_success"; payload: ReceiveSuccessPayload }
-    | { view: "address_book"; initialSearchQuery?: string; previousView?: AppState }
-    | { view: "sign_request"; voucherData: VoucherDetails }
-    | { view: "conflict_details"; proofId: string; previousView?: AppState }
-    | { view: "conflict_list" }
-    | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string };
+import { AppRouter } from "./components/AppRouter";
 
 function AppContent() {
     const [appState, setAppState] = useState<AppState>({ view: "loading" });
@@ -129,154 +89,6 @@ function AppContent() {
         notifyLogout();
     }
 
-    function renderContent() {
-        switch (appState.view) {
-            case "loading":
-                return (
-                    <div className="flex h-full w-full items-center justify-center">
-                        <p className="text-theme-light">Loading application...</p>
-                    </div>
-                );
-            case "needs_profile":
-                return <CreateNewProfile
-                    onProfileCreated={() => {
-                        // SessionContext informieren, dass wir eingeloggt sind
-                        notifyLogin();
-                        setAppState({ view: "logged_in" });
-                    }}
-                    onSwitchToRecreate={() => setAppState({ view: "recreate_profile" })}
-                    onSwitchToLogin={() => setAppState({ view: "needs_login" })}
-                />;
-            case "needs_login":
-                return <Login
-                    onLoginSuccess={(name) => {
-                        setProfileName(name);
-                        // NEU: SessionContext informieren, dass wir eingeloggt sind!
-                        notifyLogin();
-                        setAppState({ view: "logged_in" });
-                    }}
-                    onSwitchToRecreate={() => setAppState({ view: "recreate_profile" })}
-                    onSwitchToCreate={() => setAppState({ view: "needs_profile" })}
-                    onSwitchToReset={() => setAppState({ view: "needs_recovery" })}
-                />;
-            case "logged_in":
-                return <Dashboard
-                    profileName={profileName}
-                    onNavigateToCreateVoucher={() => setAppState({ view: "create_voucher" })}
-                    onNavigateToSend={() => setAppState({ view: "send_vouchers" })}
-                    onNavigateToReceive={() => setAppState({ view: "receive_bundle" })}
-                    onNavigateToHistory={() => setAppState({ view: "transaction_history" })}
-                    onNavigateToActivities={() => setAppState({ view: "activities" })}
-                    onNavigateToConflicts={() => setAppState({ view: "conflict_list" })}
-                    onNavigateToWallet={(filter) => setAppState({ view: "wallet", initialStatusFilter: filter?.status, initialStandardFilter: filter?.standard })}
-                    onNavigateToSettings={() => setAppState({ view: "settings" })}
-                    onNavigateToVoucherDetail={(voucherId) => setAppState({ view: "voucher_details", voucherId, previousView: appState })}
-                />;
-            case "recreate_profile":
-                return <RecreateProfile
-                    onProfileCreated={() => {
-                        notifyLogin();
-                        setAppState({ view: "logged_in" });
-                    }}
-                    onSwitchToLogin={() => setAppState({ view: "needs_login" })}
-                />;
-            case "settings":
-                return <SettingsView onBack={() => setAppState({ view: "logged_in" })} />;
-            case "needs_recovery":
-                return <WalletRecovery 
-                    onRecoverySuccess={() => {
-                        notifyLogin();
-                        setAppState({ view: "logged_in" });
-                    }} 
-                    onSwitchToLogin={() => setAppState({ view: "needs_login" })} 
-                />;
-            case "create_voucher":
-                return <CreateVoucher onVoucherCreated={() => setAppState(appState.previousView || { view: "logged_in" })} onCancel={() => setAppState(appState.previousView || { view: "logged_in" })} />;
-            case "voucher_details":
-                return <VoucherDetailsView
-                    voucherId={appState.voucherId}
-                    onBack={() => setAppState(appState.previousView || { view: "logged_in" })}
-                    onViewConflict={(proofId) => setAppState({ view: "conflict_details", proofId, previousView: appState })}
-                />;
-            case "address_book":
-                return <AddressBook 
-                    onBack={() => setAppState(appState.previousView || { view: "logged_in" })} 
-                    initialSearchQuery={appState.initialSearchQuery}
-                />;
-            case "send_vouchers":
-                return <SendView
-                    profileName={profileName}
-                    onBack={() => setAppState({ view: "logged_in" })}
-                    onTransferPrepared={(bundleData, recipientId, summary) =>
-                        setAppState({ view: "transfer_success", bundleData, recipientId, summary })
-                    }
-                />;
-            case "receive_bundle":
-                return <ReceiveView
-                    onBack={() => setAppState({ view: "logged_in" })}
-                    onReceiveSuccess={(payload) => {
-                        if ('localInstanceId' in payload) {
-                            // This is a VoucherDetails (Signature Request)
-                            setAppState({ view: "sign_request", voucherData: payload });
-                        } else if (payload.isSignatureAttached && payload.voucherId) {
-                            // This was a signature attachment success
-                            setAppState({ view: "voucher_details", voucherId: payload.voucherId });
-                        } else {
-                            // Normal transfer received
-                            setAppState({ view: "receive_success", payload });
-                        }
-                    }}
-                />;
-            case "transaction_history":
-                return <TransactionHistoryView onBack={() => setAppState({ view: "logged_in" })} />;
-            case "activities":
-                return <Activities 
-                    onBack={() => setAppState({ view: "logged_in" })} 
-                    onNavigateToVoucherDetail={(voucherId) => setAppState({ view: "voucher_details", voucherId, previousView: appState })}
-                    onNavigateToHistory={() => setAppState({ view: "transaction_history" })}
-                />;
-            case "transfer_success":
-                return <TransferSuccessView
-                    bundleData={appState.bundleData}
-                    recipientId={appState.recipientId}
-                    summary={appState.summary}
-                    onDone={() => setAppState({ view: "logged_in" })}
-                />;
-            case "receive_success":
-                return <ReceiveSuccessView payload={appState.payload} onDone={() => setAppState({ view: "logged_in" })} />;
-            case "sign_request":
-                return <SignRequestView
-                    voucherData={appState.voucherData}
-                    onBack={() => setAppState({ view: "logged_in" })}
-                />;
-            case "conflict_details":
-                return <ConflictDetailsView
-                    proofId={appState.proofId}
-                    onBack={() => setAppState(appState.previousView || { view: "logged_in" })}
-                />;
-            case "conflict_list":
-                return <ConflictListView
-                    onBack={() => setAppState({ view: "logged_in" })}
-                    onViewConflict={(proofId) => setAppState({ view: "conflict_details", proofId, previousView: { view: "conflict_list" } })}
-                />;
-            case "wallet":
-                return <WalletView
-                    profileName={profileName}
-                    onShowDetails={(voucherId: string) => setAppState({ view: "voucher_details", voucherId, previousView: appState })}
-                    onBack={() => setAppState({ view: "logged_in" })}
-                    onNavigateToCreateVoucher={() => setAppState({ view: "create_voucher", previousView: appState })}
-                    initialStatusFilter={appState.initialStatusFilter}
-                    initialStandardFilter={appState.initialStandardFilter}
-                />;
-            default:
-                return (
-                    <div className="flex h-full w-full items-center justify-center">
-                        <p className="text-theme-error">Error: Invalid application state.</p>
-                    </div>
-                );
-        }
-    }
-
     return (
         <div className="flex h-screen w-full bg-bg-app font-sans text-theme-secondary overflow-hidden">
                 <Sidebar 
@@ -310,7 +122,12 @@ function AppContent() {
                     )}
 
                     <main className={`w-full flex-grow ${INTERNAL_VIEWS.includes(appState.view) ? 'p-4 md:p-6 lg:p-8' : ''}`}>
-                        {renderContent()}
+                        <AppRouter 
+                            appState={appState} 
+                            setAppState={setAppState} 
+                            profileName={profileName} 
+                            setProfileName={setProfileName} 
+                        />
                     </main>
                 </div>
 

@@ -2,7 +2,7 @@
 import React from 'react';
 import Avatar from "boring-avatars";
 import logo from '../assets/logo.png';
-import { AppState } from '../App';
+import { AppState } from '../types';
 import { useSession } from '../context/SessionContext';
 import { 
   LayoutDashboard, 

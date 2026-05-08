@@ -511,3 +511,25 @@ export interface WalletEvent {
     eventType: WalletEventType;
     bffData: EventBffData;
 }
+
+export type AppState =
+    | { view: "loading" }
+    | { view: "needs_profile" }
+    | { view: "needs_login" }
+    | { view: "logged_in" }
+    | { view: "recreate_profile" }
+    | { view: "needs_recovery" }
+    | { view: "settings" }
+    | { view: "create_voucher"; previousView?: AppState }
+    | { view: "voucher_details"; voucherId: string; previousView?: AppState }
+    | { view: "send_vouchers" }
+    | { view: "receive_bundle" }
+    | { view: "transaction_history" }
+    | { view: "activities" }
+    | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string }
+    | { view: "receive_success"; payload: ReceiveSuccessPayload }
+    | { view: "address_book"; initialSearchQuery?: string; previousView?: AppState }
+    | { view: "sign_request"; voucherData: VoucherDetails }
+    | { view: "conflict_details"; proofId: string; previousView?: AppState }
+    | { view: "conflict_list" }
+    | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string };
