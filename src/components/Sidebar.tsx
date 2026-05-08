@@ -4,6 +4,9 @@ import Avatar from "boring-avatars";
 import logo from '../assets/logo.png';
 import { AppState } from '../types';
 import { useSession } from '../context/SessionContext';
+import { useNavigation } from '../context/NavigationContext';
+import { profileService } from '../services/profileService';
+import { error } from "@tauri-apps/plugin-log";
 import { 
   LayoutDashboard, 
   Wallet, 
@@ -18,16 +21,6 @@ import {
   LogOut,
   ChevronRight
 } from 'lucide-react';
-
-interface SidebarProps {
-  appState: AppState;
-  setAppState: (state: AppState) => void;
-  profileName: string;
-  appVersion: string;
-  onLogout: () => void;
-  isOpen: boolean;
-  setIsOpen: (open: boolean) => void;
-}
 
 export const INTERNAL_VIEWS = [
   'logged_in', 
@@ -47,22 +40,22 @@ export const INTERNAL_VIEWS = [
   'sign_request'
 ];
 
-export const Sidebar: React.FC<SidebarProps> = ({
-  appState,
-  setAppState,
-  profileName,
-  appVersion,
-  onLogout,
-  isOpen,
-  setIsOpen
-}) => {
-  const { isSessionActive } = useSession();
+export const Sidebar: React.FC = () => {
+  const { isSessionActive, profileName, notifyLogout } = useSession();
+  const { appState, navigate, appVersion, isSidebarOpen, setSidebarOpen } = useNavigation();
   const currentView = appState.view;
 
   // Only show sidebar for internal views
   if (!INTERNAL_VIEWS.includes(currentView)) {
     return null;
   }
+
+  const handleLogout = () => {
+    profileService.logout().catch(e => error(`Logout failed: ${e}`));
+    setSidebarOpen(false);
+    notifyLogout();
+    navigate({ view: "needs_login" });
+  };
 
   const navGroups = [
     {
@@ -104,16 +97,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <>
       {/* Sidebar Overlay for Mobile */}
-      {isOpen && (
+      {isSidebarOpen && (
         <div 
           className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm transition-opacity md:hidden"
-          onClick={() => setIsOpen(false)}
+          onClick={() => setSidebarOpen(false)}
         />
       )}
 
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-72 transform bg-white dark:bg-gray-900 shadow-2xl transition-all duration-300 ease-in-out will-change-transform md:relative md:translate-x-0 ${
-          isOpen ? "translate-x-0" : "-translate-x-full"
+          isSidebarOpen ? "translate-x-0" : "-translate-x-full"
         } flex flex-col border-r border-theme-subtle`}
       >
         {/* Brand Header */}
@@ -166,8 +159,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <button
                       key={item.id}
                       onClick={() => {
-                        setAppState(item.view as AppState);
-                        setIsOpen(false);
+                        navigate(item.view as AppState);
+                        setSidebarOpen(false);
                       }}
                       className={`w-full group flex items-center justify-between px-4 py-2.5 rounded-xl transition-all duration-200 ${
                         active 
@@ -197,8 +190,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="p-4 mt-auto border-t border-theme-subtle bg-bg-app/10 space-y-2">
           <button 
             onClick={() => {
-              setAppState({ view: 'settings' });
-              setIsOpen(false);
+              navigate({ view: 'settings' });
+              setSidebarOpen(false);
             }}
             className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 ${
               currentView === 'settings' 
@@ -211,7 +204,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
           
           <button 
-            onClick={onLogout}
+            onClick={handleLogout}
             className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-theme-light hover:bg-red-50 hover:text-theme-error transition-all duration-200"
           >
             <LogOut size={18} className="text-theme-placeholder group-hover:text-theme-error" />

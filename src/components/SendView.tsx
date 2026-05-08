@@ -42,11 +42,7 @@ import { TransferSummaryBar } from "./send/TransferSummaryBar";
 import { useVoucherSelection } from "../hooks/useVoucherSelection";
 import { usePrivacyDetection } from "../hooks/usePrivacyDetection";
 
-interface SendViewProps {
-    onBack: () => void;
-    onTransferPrepared: (bundleData: number[], recipientId: string, summary: string) => void;
-    profileName: string | null;
-}
+import { useNavigation } from "../context/NavigationContext";
 
 type SendState = {
     recipientId: string;
@@ -117,8 +113,9 @@ function getPrecision(content: string): number {
     return match && match[1] ? parseInt(match[1], 10) : 4;
 }
 
-export function SendView({ onBack, onTransferPrepared, profileName }: SendViewProps) {
-    const { protectAction } = useSession();
+export function SendView() {
+    const { protectAction, profileName } = useSession();
+    const { navigate, goBack } = useNavigation();
     const [state, dispatch] = useReducer(reducer, initialState);
     
     const [availableVouchers, setAvailableVouchers] = useState<VoucherSummary[]>([]);
@@ -322,7 +319,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
                 .join(', ');
 
             dispatch({ type: 'SET_FEEDBACK', msg: "Transfer successful!" });
-            setTimeout(() => onTransferPrepared(bundleResult.bundleData, state.recipientId, summaryString), 1500);
+            setTimeout(() => navigate({ view: 'transfer_success', bundleData: bundleResult.bundleData, recipientId: state.recipientId, summary: summaryString }), 1500);
         } catch (e) {
             dispatch({ type: 'SET_FEEDBACK', msg: `Transfer failed: ${e}` });
             dispatch({ type: 'SET_PROCESSING', value: false });
@@ -331,7 +328,7 @@ export function SendView({ onBack, onTransferPrepared, profileName }: SendViewPr
     };
 
     return (
-        <PageLayout title="Create Transfer" description="Prepare a cryptographic asset transfer." onBack={onBack}>
+        <PageLayout title="Create Transfer" description="Prepare a cryptographic asset transfer." onBack={goBack}>
             <div className="max-w-5xl mx-auto space-y-8 pb-32">
                 {state.feedbackMsg && (
                     <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 animate-in slide-in-from-top-2">

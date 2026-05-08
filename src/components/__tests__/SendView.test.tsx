@@ -19,6 +19,15 @@ vi.mock('../../utils/log', () => ({
 vi.mock('../../context/SessionContext', () => ({
   useSession: () => ({
     protectAction: vi.fn((callback) => callback('test-password')),
+    profileName: 'Test Profile',
+  }),
+}));
+
+vi.mock('../../context/NavigationContext', () => ({
+  useNavigation: () => ({
+    navigate: vi.fn(),
+    goBack: vi.fn(),
+    appState: { view: 'send_vouchers' },
   }),
 }));
 
@@ -70,8 +79,7 @@ describe('SendView Component (FreeTaler Standard)', () => {
     privacyDefault: 'public',
   };
 
-  const mockOnBack = vi.fn();
-  const mockOnTransferPrepared = vi.fn();
+
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -113,13 +121,7 @@ describe('SendView Component (FreeTaler Standard)', () => {
   });
 
   it('renders form fields for sending', async () => {
-    render(
-      <SendView
-        onBack={mockOnBack}
-        onTransferPrepared={mockOnTransferPrepared}
-        profileName="Test Profile"
-      />
-    );
+    render(<SendView />);
 
     await waitFor(() => {
       expect(screen.getByRole('textbox', { name: /User ID \(DID\)/i })).toBeInTheDocument();
@@ -128,13 +130,7 @@ describe('SendView Component (FreeTaler Standard)', () => {
   });
 
   it('loads vouchers and contacts on mount', async () => {
-    render(
-      <SendView
-        onBack={mockOnBack}
-        onTransferPrepared={mockOnTransferPrepared}
-        profileName="Test Profile"
-      />
-    );
+    render(<SendView />);
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalled();
@@ -170,13 +166,7 @@ describe('SendView Component (FreeTaler Standard)', () => {
       return Promise.resolve(undefined);
     });
 
-    render(
-      <SendView
-        onBack={mockOnBack}
-        onTransferPrepared={mockOnTransferPrepared}
-        profileName="Test Profile"
-      />
-    );
+    render(<SendView />);
 
     await waitFor(() => expect(screen.getAllByText(/PrecisionStd/i).length).toBeGreaterThan(0));
     expect(await screen.findByText(/100.12/)).toBeInTheDocument();

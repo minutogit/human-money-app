@@ -1,30 +1,21 @@
-// src/App.tsx
-import { useState, useEffect } from "react";
-import { profileService } from "./services/profileService";
-import { authService } from "./services/authService";
-import { getVersion } from "@tauri-apps/api/app";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { error } from "@tauri-apps/plugin-log";
-import { logger } from "./utils/log";
+import { useEffect } from "react";
 import logo from './assets/logo.png';
 import "./App.css";
 import { ForkLockOverlay } from './components/ForkLockOverlay';
 import { Button } from './components/ui/Button';
-import { AppState } from './types';
+import { logger } from "./utils/log";
 
-// WICHTIG: Der Import für den Provider
+// Contexts
 import { SessionProvider, useSession } from './context/SessionContext';
+import { NavigationProvider, useNavigation } from './context/NavigationContext';
+
+// Components
 import { Sidebar, INTERNAL_VIEWS } from './components/Sidebar';
 import { AppRouter } from "./components/AppRouter";
 
 function AppContent() {
-    const [appState, setAppState] = useState<AppState>({ view: "loading" });
-    const [profileName, setProfileName] = useState<string>("");
-    const [isSidebarOpen, setSidebarOpen] = useState(false);
-    const [appVersion, setAppVersion] = useState<string>("");
-    
-    // Zugriff auf SessionContext
-    const { notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, clearLocks } = useSession();
+    const { appState, navigate, setSidebarOpen } = useNavigation();
+    const { isForkLocked, isRecoveryRequired, clearLocks } = useSession();
 
     useEffect(() => {
         if (isForkLocked || isRecoveryRequired) {
@@ -32,74 +23,9 @@ function AppContent() {
         }
     }, [isForkLocked, isRecoveryRequired]);
 
-    useEffect(() => {
-        getVersion().then(setAppVersion);
-    }, []);
-
-    useEffect(() => {
-        // Log that the frontend application is starting
-        logger.info("Frontend application starting, initializing profile check...");
-
-        async function checkProfile() {
-            try {
-                // First, check if we are already logged in (session active)
-                try {
-                    const profile = await profileService.getProfile();
-                    const displayName = profile.firstName || profile.id;
-                    logger.info(`Auto-login successful for profile: ${displayName}`);
-                    setProfileName(displayName);
-                    notifyLogin();
-                    setAppState({ view: "logged_in" });
-                    return; // Exit early if auto-login worked
-                } catch {
-                    // Not logged in or session locked, proceed with normal flow
-                    logger.info("No active session found, checking available profiles.");
-                }
-
-                const profiles = await authService.listProfiles();
-                setAppState({ view: profiles.length > 0 ? "needs_login" : "needs_profile" });
-            } catch (e) {
-                error(`Failed to check if profile exists: ${e}`);
-                // Fallback to creation if there's an error, as it's the safest default
-                setAppState({ view: "needs_profile" });
-            }
-        }
-        checkProfile();
-    }, [notifyLogin]);
-
-    useEffect(() => {
-        async function updateTitle() {
-            const win = getCurrentWindow();
-            if (profileName) {
-                await win.setTitle(`Human Money App - ${profileName}`);
-            } else {
-                await win.setTitle('Human Money App');
-            }
-        }
-
-        updateTitle();
-    }, [profileName]);
-
-    function handleLogout() {
-        profileService.logout().catch(e => error(`Logout failed: ${e}`));
-        setSidebarOpen(false);
-        // Reset the profile name on logout
-        setProfileName("");
-        setAppState({ view: "needs_login" });
-        notifyLogout();
-    }
-
     return (
         <div className="flex h-screen w-full bg-bg-app font-sans text-theme-secondary overflow-hidden">
-                <Sidebar 
-                    appState={appState}
-                    setAppState={setAppState}
-                    profileName={profileName}
-                    appVersion={appVersion}
-                    onLogout={handleLogout}
-                    isOpen={isSidebarOpen}
-                    setIsOpen={setSidebarOpen}
-                />
+                <Sidebar />
 
                 <div className="flex flex-1 flex-col overflow-y-auto">
                     {INTERNAL_VIEWS.includes(appState.view) && (
@@ -122,12 +48,7 @@ function AppContent() {
                     )}
 
                     <main className={`w-full flex-grow ${INTERNAL_VIEWS.includes(appState.view) ? 'p-4 md:p-6 lg:p-8' : ''}`}>
-                        <AppRouter 
-                            appState={appState} 
-                            setAppState={setAppState} 
-                            profileName={profileName} 
-                            setProfileName={setProfileName} 
-                        />
+                        <AppRouter />
                     </main>
                 </div>
 
@@ -136,7 +57,7 @@ function AppContent() {
                     <ForkLockOverlay 
                         onStartRecovery={() => {
                             clearLocks();
-                            setAppState({ view: "needs_recovery" });
+                            navigate({ view: "needs_recovery" });
                         }} 
                     />
                 )}
@@ -151,7 +72,7 @@ function AppContent() {
                                 className="w-full"
                                 onClick={() => {
                                     clearLocks();
-                                    setAppState({ view: "needs_recovery" });
+                                    navigate({ view: "needs_recovery" });
                                 }}
                             >
                                 Start Recovery
@@ -163,12 +84,12 @@ function AppContent() {
     );
 }
 
-// Wir müssen AppContent in eine Wrapper-Komponente auslagern,
-// da useSession nur INNERHALB des SessionProviders funktioniert.
 function App() {
     return (
         <SessionProvider>
-            <AppContent />
+            <NavigationProvider>
+                <AppContent />
+            </NavigationProvider>
         </SessionProvider>
     );
 }

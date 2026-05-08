@@ -18,12 +18,7 @@ import {
     Calendar
 } from 'lucide-react';
 
-interface ActivitiesProps {
-    onBack: () => void;
-    onNavigateToVoucherDetail: (voucherId: string) => void;
-    onNavigateToHistory: () => void;
-}
-
+import { useNavigation } from '../context/NavigationContext';
 
 function getEventDetails(event: WalletEvent): { label: string; icon: React.ElementType; color: string; bgColor: string } {
     const type = event.eventType;
@@ -61,7 +56,8 @@ function getEventDetails(event: WalletEvent): { label: string; icon: React.Eleme
     return { label: 'Wallet Event', icon: Info, color: 'text-gray-600', bgColor: 'bg-gray-50' };
 }
 
-export function Activities({ onBack, onNavigateToVoucherDetail, onNavigateToHistory }: ActivitiesProps) {
+export function Activities() {
+    const { navigate, goBack } = useNavigation();
     const [events, setEvents] = useState<WalletEvent[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState('');
@@ -85,7 +81,7 @@ export function Activities({ onBack, onNavigateToVoucherDetail, onNavigateToHist
         <PageLayout 
             title="Activity Log" 
             description="A chronological record of your wallet events." 
-            onBack={onBack}
+            onBack={goBack}
         >
             <div className="max-w-4xl mx-auto space-y-6">
                 {isLoading && (
@@ -110,9 +106,9 @@ export function Activities({ onBack, onNavigateToVoucherDetail, onNavigateToHist
                                     onClick={() => {
                                         const type = event.eventType;
                                         if (type === 'transferSent' || type === 'transferReceived') {
-                                            onNavigateToHistory();
+                                            navigate({ view: 'transaction_history' });
                                         } else {
-                                            onNavigateToVoucherDetail(event.localInstanceId);
+                                            navigate({ view: 'voucher_details', voucherId: event.localInstanceId, previousView: { view: 'activities' } });
                                         }
                                     }}
                                     className="w-full text-left group"

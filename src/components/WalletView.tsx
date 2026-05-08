@@ -25,17 +25,15 @@ import {
     FileSignature
 } from "lucide-react";
 
-interface WalletViewProps {
-    onShowDetails: (voucherId: string) => void;
-    onBack: () => void;
-    onNavigateToCreateVoucher: () => void;
-    profileName: string;
-    initialStatusFilter?: string;
-    initialStandardFilter?: string;
-}
+import { useNavigation } from "../context/NavigationContext";
 
-export function WalletView(props: WalletViewProps) {
+export function WalletView() {
     const { protectAction } = useSession();
+    const { navigate, goBack, appState } = useNavigation();
+    
+    // Extract initial filters from appState if available
+    const initialStatusFilter = appState.view === 'wallet' ? appState.initialStatusFilter : undefined;
+    const initialStandardFilter = appState.view === 'wallet' ? appState.initialStandardFilter : undefined;
     const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
@@ -54,8 +52,8 @@ export function WalletView(props: WalletViewProps) {
     const [exportError, setExportError] = useState("");
 
     // Filter state
-    const [statusFilters, setStatusFilters] = useState<string[]>(props.initialStatusFilter ? [props.initialStatusFilter] : []);
-    const [standardFilters, setStandardFilters] = useState<string[]>(props.initialStandardFilter ? [props.initialStandardFilter] : []);
+    const [statusFilters, setStatusFilters] = useState<string[]>(initialStatusFilter ? [initialStatusFilter] : []);
+    const [standardFilters, setStandardFilters] = useState<string[]>(initialStandardFilter ? [initialStandardFilter] : []);
     const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
 
     // Expand/collapse state for vouchers
@@ -228,9 +226,9 @@ export function WalletView(props: WalletViewProps) {
         <PageLayout 
             title="Wallet" 
             description="Manage your digital assets." 
-            onBack={props.onBack}
+            onBack={goBack}
             actions={
-                <Button onClick={props.onNavigateToCreateVoucher} size="sm" className="gap-2 px-6">
+                <Button onClick={() => navigate({ view: 'create_voucher' })} size="sm" className="gap-2 px-6">
                     <Plus size={18} />
                     Create
                 </Button>
@@ -406,7 +404,7 @@ export function WalletView(props: WalletViewProps) {
                                     )}
                                     
                                     <div className="flex justify-end pt-4">
-                                        <Button variant="outline" size="sm" onClick={() => props.onShowDetails(v.localInstanceId)}>
+                                        <Button variant="outline" size="sm" onClick={() => navigate({ view: "voucher_details", voucherId: v.localInstanceId, previousView: appState })}>
                                             Full Details View
                                         </Button>
                                     </div>

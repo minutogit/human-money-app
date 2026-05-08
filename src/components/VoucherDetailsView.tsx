@@ -35,13 +35,14 @@ import { PolicySection } from "./voucher/PolicySection";
 import { TimelineSection } from "./voucher/TimelineSection";
 import { ExportDialog } from "./voucher/ExportDialog";
 
-interface VoucherDetailsViewProps {
-    voucherId: string;
-    onBack: () => void;
-    onViewConflict?: (proofId: string) => void;
-}
+import { useNavigation } from "../context/NavigationContext";
 
-export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: VoucherDetailsViewProps) {
+export function VoucherDetailsView() {
+    const { navigate, goBack, appState } = useNavigation();
+    
+    // Extract voucherId from appState
+    const voucherId = appState.view === 'voucher_details' ? appState.voucherId : "";
+    
     const [details, setDetails] = useState<VoucherDetails | null>(null);
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const { protectAction } = useSession();
@@ -213,7 +214,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
         <PageLayout 
             title="Voucher Details" 
             description={details.displayStandardName}
-            onBack={onBack}
+            onBack={goBack}
             actions={
                 <div className="flex items-center gap-2">
                     {statusInfo?.name === 'Incomplete' && (
@@ -251,7 +252,7 @@ export function VoucherDetailsView({ voucherId, onBack, onViewConflict }: Vouche
                         
                         <div className="flex flex-col gap-3 w-full md:w-auto">
                             {isQuarantined && (
-                                <Button variant="secondary" size="sm" className="bg-white/20 text-white hover:bg-white/30 border-white/30 backdrop-blur-md" onClick={() => proofId && onViewConflict?.(proofId)} disabled={!proofId}>
+                                <Button variant="secondary" size="sm" className="bg-white/20 text-white hover:bg-white/30 border-white/30 backdrop-blur-md" onClick={() => proofId && navigate({ view: 'conflict_details', proofId, previousView: appState })} disabled={!proofId}>
                                     <ShieldAlert size={16} className="mr-2" /> View Proof
                                 </Button>
                             )}

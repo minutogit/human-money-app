@@ -24,12 +24,10 @@ import {
 } from 'lucide-react';
 import { extractDisplayName, truncateUserId, suggestFilename } from '../utils/userIdHelper';
 
-interface TransactionHistoryViewProps {
-    onBack: () => void;
-}
+import { useNavigation } from '../context/NavigationContext';
 
-
-export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) {
+export function TransactionHistoryView() {
+    const { goBack } = useNavigation();
     const [history, setHistory] = useState<TransactionRecord[]>([]);
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(true);
@@ -101,7 +99,7 @@ export function TransactionHistoryView({ onBack }: TransactionHistoryViewProps) 
         <PageLayout 
             title="Activity Audit" 
             description="Complete record of all secure transfers." 
-            onBack={onBack}
+            onBack={goBack}
         >
             <div className="max-w-4xl mx-auto space-y-6">
                 {/* Search & Filter Bar */}

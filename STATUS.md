@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0-beta.8"
+version: "0.1.0-beta.9"
 phase: "beta"
 health: "green"
-last_updated: "2026-05-03"
+last_updated: "2026-05-08"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -13,6 +13,12 @@ priority_tasks:
     priority: "high"
     depends_on: ["CORE-001", "WOT-005"]
     description: "Address book component for managing known contacts with trust levels"
+  - id: "APP-021"
+    title: "Navigation & Session Context Refactoring"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Centralized application state and navigation logic into React Contexts. Eliminated prop-drilling across the core view hierarchy for improved maintainability."
   - id: "APP-002"
     title: "Trust level display for contacts"
     status: "open"
@@ -195,6 +201,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Refactored signature hints and role extraction to use type-safe backend-driven DTOs
 - [x] Modularized Frontend Service Layer (Decoupled UI from direct Tauri invoke calls via type-safe services)
 - [x] Code Quality & Automated Hardening (Integrated ESLint, Clippy, and static analysis into `run-tests.sh` quality gate)
+- [x] Navigation & Session Context Refactoring (Eliminated prop-drilling across core view hierarchy) (APP-021)
 
 
 

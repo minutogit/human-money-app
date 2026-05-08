@@ -9,10 +9,12 @@ import { AuthModal } from '../components/ui/AuthModal';
 
 import { startSealSyncLoop, stopSealSyncLoop } from '../utils/sealSync';
 
-interface SessionContextType {
+export interface SessionContextType {
     protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>;
     isSessionActive: boolean;
-    notifyLogin: () => void;
+    profileName: string;
+    setProfileName: (name: string) => void;
+    notifyLogin: (name?: string) => void;
     notifyLogout: () => void;
     isForkLocked: boolean;
     isRecoveryRequired: boolean;
@@ -32,6 +34,7 @@ export function useSession() {
 export function SessionProvider({ children }: { children: ReactNode }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSessionActive, setIsSessionActive] = useState(false);
+    const [profileName, setProfileName] = useState<string>("");
     const [isForkLocked, setIsForkLocked] = useState(false);
     const [isRecoveryRequired, setIsRecoveryRequired] = useState(false);
     const [integrityReport, setIntegrityReport] = useState<import('../types').IntegrityReport | null>(null);
@@ -45,6 +48,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         isSessionActiveRef.current = isSessionActive;
     }, [isSessionActive]);
+
+    // Update window title when profile name changes
+    useEffect(() => {
+        const updateTitle = async () => {
+            try {
+                const { getCurrentWindow } = await import("@tauri-apps/api/window");
+                const win = getCurrentWindow();
+                if (profileName) {
+                    await win.setTitle(`Human Money App - ${profileName}`);
+                } else {
+                    await win.setTitle('Human Money App');
+                }
+            } catch (e) {
+                logger.warn(`Failed to update window title: ${e}`);
+            }
+        };
+
+        updateTitle();
+    }, [profileName]);
 
     const [pendingAction, setPendingAction] = useState<{
         resolve: (value: unknown) => void;
@@ -89,6 +111,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                         logger.info("Session background check: Session expired.");
                         setIsSessionActive(false);
                         isSessionActiveRef.current = false;
+                        setProfileName("");
                     }
                 } catch (e) {
                     logger.error(`Session check failed: ${e}`);
@@ -124,7 +147,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, []);
 
     // Wird von App.tsx nach Login aufgerufen
-    const notifyLogin = useCallback(() => {
+    const notifyLogin = useCallback((name?: string) => {
+        if (name) setProfileName(name);
         activateSession();
         startSealSyncLoop();
         checkIntegrity();
@@ -133,6 +157,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const notifyLogout = useCallback(() => {
         setIsSessionActive(false);
         isSessionActiveRef.current = false;
+        setProfileName("");
         stopSealSyncLoop();
     }, []);
 
@@ -257,7 +282,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, []);
 
     return (
-        <SessionContext.Provider value={{ protectAction, isSessionActive, notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks }}>
+        <SessionContext.Provider value={{ protectAction, isSessionActive, profileName, setProfileName, notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks }}>
             {children}
             <AuthModal
                 isOpen={isModalOpen}

@@ -25,20 +25,12 @@ import {
 } from "lucide-react";
 import { truncateUserId } from "../utils/userIdHelper";
 
-interface DashboardProps {
-    onNavigateToCreateVoucher: () => void;
-    onNavigateToSend: () => void;
-    onNavigateToHistory: () => void;
-    onNavigateToActivities: () => void;
-    onNavigateToReceive: () => void;
-    onNavigateToConflicts?: () => void;
-    onNavigateToWallet: (filter?: { status?: string; standard?: string }) => void;
-    onNavigateToSettings?: () => void;
-    onNavigateToVoucherDetail: (voucherId: string) => void;
-    profileName: string;
-}
+import { useNavigation } from "../context/NavigationContext";
 
-export function Dashboard(props: DashboardProps) {
+export function Dashboard() {
+    const { navigate } = useNavigation();
+    const { profileName, integrityReport } = useSession();
+
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<AggregatedBalance[]>([]);
     const [recentEvents, setRecentEvents] = useState<WalletEvent[]>([]);
@@ -51,7 +43,6 @@ export function Dashboard(props: DashboardProps) {
     const [isProfileComplete, setIsProfileComplete] = useState(true);
     const [voucherCountsByStandard, setVoucherCountsByStandard] = useState<Record<string, number>>({});
     const [showIntegrityModal, setShowIntegrityModal] = useState(false);
-    const { integrityReport } = useSession();
 
     useEffect(() => {
         logger.info("Dashboard component displayed");
@@ -166,7 +157,7 @@ export function Dashboard(props: DashboardProps) {
                             </span>
                             <div className="flex items-center gap-1.5 px-2 py-1 bg-white/50 rounded-full border border-theme-subtle/30 shadow-inner-soft">
                                 <UserCircle size={12} className="text-theme-primary" />
-                                <span className="text-theme-secondary">{props.profileName}</span>
+                                <span className="text-theme-secondary">{profileName}</span>
                             </div>
                         </div>
                         
@@ -231,7 +222,7 @@ export function Dashboard(props: DashboardProps) {
                             variant="glass" 
                             className="py-2 px-4 flex items-center justify-between border-l-4 border-l-amber-500"
                             hover
-                            onClick={props.onNavigateToSettings}
+                            onClick={() => navigate({ view: 'settings' })}
                         >
                             <div className="flex items-center gap-4">
                                 <div className="p-2 rounded-xl bg-amber-500 text-white">
@@ -251,7 +242,7 @@ export function Dashboard(props: DashboardProps) {
                             variant="glass" 
                             className="py-2 px-4 flex items-center justify-between border-l-4 border-l-rose-500"
                             hover
-                            onClick={props.onNavigateToConflicts}
+                            onClick={() => navigate({ view: 'conflict_list' })}
                         >
                             <div className="flex items-center gap-4">
                                 <div className="p-2 rounded-xl bg-rose-500 text-white">
@@ -291,7 +282,7 @@ export function Dashboard(props: DashboardProps) {
                                             : 'bg-gradient-to-br from-theme-primary to-theme-accent'
                                         }`}
                                         hover
-                                        onClick={() => props.onNavigateToWallet({ standard: balance.displayStandardName, status: 'active' })}
+                                        onClick={() => navigate({ view: 'wallet', initialStandardFilter: balance.displayStandardName, initialStatusFilter: 'active' })}
                                     >
                                         {/* Decorative Circles */}
                                         <div className="absolute -right-8 -top-8 w-32 h-32 bg-white/10 rounded-full blur-2xl group-hover:bg-white/20 transition-all duration-500"></div>
@@ -332,7 +323,7 @@ export function Dashboard(props: DashboardProps) {
                                     variant="none" 
                                     className="border-2 border-dashed border-theme-subtle bg-transparent p-6 h-48 flex flex-col items-center justify-center text-theme-placeholder hover:border-theme-primary hover:text-theme-primary transition-all group"
                                     hover
-                                    onClick={props.onNavigateToCreateVoucher}
+                                    onClick={() => navigate({ view: 'create_voucher' })}
                                 >
                                     <Plus size={32} className="mb-2 opacity-50 group-hover:scale-110 transition-transform" />
                                     <span className="text-sm font-bold uppercase tracking-widest">Create New Voucher</span>
@@ -345,7 +336,7 @@ export function Dashboard(props: DashboardProps) {
                 {/* Zone 3: Quick Actions */}
                 <section className="flex flex-wrap justify-center gap-4">
                     <Button 
-                        onClick={props.onNavigateToSend} 
+                        onClick={() => navigate({ view: 'send_vouchers' })} 
                         className="min-w-[140px] gap-2 shadow-premium"
                         size="lg"
                         disabled={activeVouchersCount === 0}
@@ -354,7 +345,7 @@ export function Dashboard(props: DashboardProps) {
                         Send
                     </Button>
                     <Button 
-                        onClick={props.onNavigateToReceive} 
+                        onClick={() => navigate({ view: 'receive_bundle' })} 
                         className="min-w-[140px] gap-2 shadow-premium"
                         variant="secondary"
                         size="lg"
@@ -363,7 +354,7 @@ export function Dashboard(props: DashboardProps) {
                         Receive
                     </Button>
                     <Button 
-                        onClick={props.onNavigateToCreateVoucher}
+                        onClick={() => navigate({ view: 'create_voucher' })}
                         className="min-w-[140px] gap-2 shadow-premium"
                         variant="secondary"
                         size="lg"
@@ -380,7 +371,7 @@ export function Dashboard(props: DashboardProps) {
                             variant="accent" 
                             className="p-5 flex items-center justify-between border-l-4 border-l-theme-accent"
                             hover
-                            onClick={() => props.onNavigateToWallet({ status: 'incomplete' })}
+                            onClick={() => navigate({ view: 'wallet', initialStatusFilter: 'incomplete' })}
                         >
                             <div className="flex items-center gap-4">
                                 <div className="p-3 rounded-2xl bg-theme-accent text-white shadow-md">
@@ -401,7 +392,7 @@ export function Dashboard(props: DashboardProps) {
                     <div className="flex items-center justify-between mb-6 px-2">
                         <h2 className="text-xs font-black text-theme-light uppercase tracking-[0.2em]">Recent Activity</h2>
                         <button 
-                            onClick={props.onNavigateToActivities}
+                            onClick={() => navigate({ view: 'activities' })}
                             className="text-[10px] font-black text-theme-accent uppercase tracking-widest hover:underline"
                         >
                             History ➔
@@ -420,9 +411,9 @@ export function Dashboard(props: DashboardProps) {
                                     onClick={() => {
                                         const type = event.eventType;
                                         if (type === 'transferSent' || type === 'transferReceived') {
-                                            props.onNavigateToHistory();
+                                            navigate({ view: 'transaction_history' });
                                         } else {
-                                            props.onNavigateToVoucherDetail(event.localInstanceId);
+                                            navigate({ view: 'voucher_details', voucherId: event.localInstanceId, previousView: { view: 'logged_in' } });
                                         }
                                     }}
                                 >
