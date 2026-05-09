@@ -6,7 +6,6 @@ import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
-import { Card } from "./ui/Card";
 import { VoucherSummary, AppSettings, PublicProfile, VoucherStandardDefinition } from "../types";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import { useSession } from "../context/SessionContext";
@@ -15,14 +14,14 @@ import { VoucherCard } from "./ui/VoucherCard";
 import { formatDate } from "../utils/format";
 import { 
     Plus, 
-    History,
-    FileSignature
+    History
 } from "lucide-react";
 
 import { useNavigation } from "../context/NavigationContext";
 import { useVoucherFilters } from "../hooks/useVoucherFilters";
 import { VoucherFilterBar } from "./voucher/VoucherFilterBar";
 import { ExportSigningRequestModal } from "./voucher/ExportSigningRequestModal";
+import { SignatureRequestBanner } from "./voucher/SignatureRequestBanner";
 
 export function WalletView() {
     const { protectAction } = useSession();
@@ -100,6 +99,12 @@ export function WalletView() {
         );
     }, []);
 
+    const handleRequestSignature = useCallback((voucherId: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setExportId(voucherId);
+        setShowExportModal(true);
+    }, []);
+
     const getSignatureHintForVoucher = (voucher: VoucherSummary): string | null => {
         if (!userProfile) return null;
         let standard: VoucherStandardDefinition | undefined = parsedStandards[voucher.voucherStandardUuid];
@@ -153,6 +158,7 @@ export function WalletView() {
                                 isExpanded={isExpanded}
                                 onToggleExpand={toggleVoucherExpansion}
                                 mode="view"
+                                onRequestSignature={handleRequestSignature}
                             >
                                 <div className="space-y-6 pt-6 border-t border-theme-subtle/30">
                                     <div>
@@ -178,40 +184,13 @@ export function WalletView() {
                                     </div>
 
                                     {statusName === 'incomplete' && (
-                                        <div className="space-y-3">
-                                            <Card variant="accent" className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4 border-none shadow-premium">
-                                                <div className="flex items-center gap-4">
-                                                    <div className="p-3 bg-white/20 rounded-2xl text-white">
-                                                        <FileSignature size={24} />
-                                                    </div>
-                                                    <div className="text-white">
-                                                        <p className="text-[10px] font-black uppercase tracking-widest opacity-80">Action Required</p>
-                                                        <p className="text-base font-bold">Needs more signatures</p>
-                                                    </div>
-                                                </div>
-                                                <Button 
-                                                    size="sm" 
-                                                    variant="secondary" 
-                                                    className="bg-white text-theme-accent hover:bg-white/90 shadow-lg px-6"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setExportId(v.localInstanceId);
-                                                        setShowExportModal(true);
-                                                    }}
-                                                >
-                                                    Request Signatures
-                                                </Button>
-                                            </Card>
-                                            
-                                            {hint && (
-                                                <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 flex items-start gap-3">
-                                                    <span className="text-blue-500 text-sm mt-0.5">💡</span>
-                                                    <p className="text-xs text-blue-800 font-medium leading-normal">
-                                                        {hint}
-                                                    </p>
-                                                </div>
-                                            )}
-                                        </div>
+                                        <SignatureRequestBanner 
+                                            onAction={(e) => {
+                                                e.stopPropagation();
+                                                handleRequestSignature(v.localInstanceId, e);
+                                            }}
+                                            hint={hint}
+                                        />
                                     )}
                                     
                                     <div className="flex justify-end pt-4">

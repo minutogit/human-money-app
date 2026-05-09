@@ -34,6 +34,7 @@ import { CreatorSection } from "./voucher/CreatorSection";
 import { PolicySection } from "./voucher/PolicySection";
 import { TimelineSection } from "./voucher/TimelineSection";
 import { ExportDialog } from "./voucher/ExportDialog";
+import { SignatureRequestBanner } from "./voucher/SignatureRequestBanner";
 
 import { useNavigation } from "../context/NavigationContext";
 
@@ -273,6 +274,13 @@ export function VoucherDetailsView() {
                         </div>
                     )}
                 </Card>
+
+                {statusInfo?.name === 'Incomplete' && (
+                    <SignatureRequestBanner 
+                        onAction={() => setShowExportModal(true)}
+                        hint={signatureHint}
+                    />
+                )}
 
                 {showJson ? (
                     <Card variant="glass" className="bg-slate-900 border-none shadow-2xl p-0 overflow-hidden">

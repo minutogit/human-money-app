@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { VoucherSummary, VoucherStatus } from "../../types";
 import { Card } from "./Card";
+import { Button } from "./Button";
 import { formatAmount, formatDate } from "../../utils/format";
 import Avatar from "boring-avatars";
 
@@ -24,6 +25,7 @@ interface VoucherCardProps {
     showStatus?: boolean;
     precision?: number;
     children?: React.ReactNode;
+    onRequestSignature?: (voucherId: string, e: React.MouseEvent) => void;
 }
 
 function getVoucherStatus(status: VoucherStatus | string): { name: string; color: string; bgColor: string; icon: React.ElementType } {
@@ -57,7 +59,8 @@ export const VoucherCard = React.memo(({
     onToggleExpand,
     showStatus = true,
     precision = 2,
-    children
+    children,
+    onRequestSignature
 }: VoucherCardProps) => {
     const { name: statusName, color, bgColor, icon: StatusIcon } = getVoucherStatus(voucher.status);
     
@@ -153,6 +156,18 @@ export const VoucherCard = React.memo(({
                                         <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-1">Expires</p>
                                         <p className="text-xs font-bold text-theme-secondary">{formatDate(voucher.validUntil)}</p>
                                     </div>
+                                    {statusName === 'incomplete' && onRequestSignature && (
+                                        <Button 
+                                            size="xs" 
+                                            variant="primary"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onRequestSignature(voucher.localInstanceId, e);
+                                            }}
+                                        >
+                                            Request Signatures
+                                        </Button>
+                                    )}
                                     {mode === 'view' && (
                                         <ArrowUpRight size={20} className="text-theme-light opacity-30 group-hover:opacity-100 group-hover:translate-x-1 group-hover:-translate-y-1 transition-all" />
                                     )}
