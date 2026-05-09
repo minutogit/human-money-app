@@ -49,7 +49,7 @@ describe('SendView Component (FreeTaler Standard)', () => {
       isTestVoucher: false,
       displayCurrency: 'Taler',
       displayStandardName: 'FreeTaler',
-      divisible: true,
+      allowPartialTransfers: true,
     },
   ];
 

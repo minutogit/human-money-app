@@ -45,7 +45,7 @@ describe('SignRequestView Component (Minuto Standard)', () => {
         standardDefinitionHash: 'hash-123',
         template: {
           description: 'Minuto test voucher',
-          divisible: true,
+          allowPartialTransfers: true,
         },
       },
       voucherId: 'voucher-id-123',

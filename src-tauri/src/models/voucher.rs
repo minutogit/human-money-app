@@ -106,6 +106,7 @@ pub struct FrontendVoucherSummary {
     pub is_test_voucher: bool,
     pub display_currency: String,
     pub display_standard_name: String,
+    pub allow_partial_transfers: bool,
 }
 
 impl From<human_money_core::wallet::types::VoucherSummary> for FrontendVoucherSummary {
@@ -138,6 +139,7 @@ impl From<human_money_core::wallet::types::VoucherSummary> for FrontendVoucherSu
             is_test_voucher: s.is_test_voucher,
             display_currency: s.display_currency,
             display_standard_name: s.display_standard_name,
+            allow_partial_transfers: s.allow_partial_transfers,
         }
     }
 }

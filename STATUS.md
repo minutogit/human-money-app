@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0-beta.9"
+version: "0.1.0-beta.10"
 phase: "beta"
 health: "green"
-last_updated: "2026-05-08"
+last_updated: "2026-05-09"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -133,6 +133,12 @@ priority_tasks:
     priority: "high"
     depends_on: []
     description: "Strict separation of Core (snake_case) and Frontend (camelCase) using dedicated DTOs in the Tauri bridge. Ensures architectural integrity and cryptographic stability."
+  - id: "APP-022"
+    title: "Voucher Divisibility Bug Fix"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Resolved architectural break where the frontend expected 'divisible' but the backend sent 'allow_partial_transfers'. Updated DTOs and interfaces to ensure consistency across the stack."
 ---
 
 # Human Money App — Status
@@ -202,6 +208,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Modularized Frontend Service Layer (Decoupled UI from direct Tauri invoke calls via type-safe services)
 - [x] Code Quality & Automated Hardening (Integrated ESLint, Clippy, and static analysis into `run-tests.sh` quality gate)
 - [x] Navigation & Session Context Refactoring (Eliminated prop-drilling across core view hierarchy) (APP-021)
+- [x] Voucher Divisibility Bug Fix (Resolved architectural break and updated DTO/Frontend interface alignment) (APP-022)
 
 
 

@@ -328,7 +328,7 @@ export function VoucherDetailsView() {
                                     <div className="pt-4 border-t border-theme-subtle/30 grid grid-cols-2 gap-4">
                                         <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
                                             <p className="text-[9px] font-black uppercase text-theme-light mb-1">Divisible</p>
-                                            <p className="text-xs font-bold">{voucher.voucherStandard.template.divisible ? "YES" : "NO"}</p>
+                                            <p className="text-xs font-bold">{voucher.voucherStandard.template.allowPartialTransfers ? "YES" : "NO"}</p>
                                         </div>
                                         <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
                                             <p className="text-[9px] font-black uppercase text-theme-light mb-1">Collateral</p>

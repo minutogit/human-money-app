@@ -36,8 +36,7 @@ export interface VoucherSummary {
     isTestVoucher: boolean;
     displayCurrency: string;
     displayStandardName: string;
-    // Client-side enrichment
-    divisible?: boolean;
+    allowPartialTransfers: boolean;
 }
 
 export interface VoucherStandardInfo {
@@ -49,7 +48,7 @@ export interface VoucherStandardInfo {
 export interface VoucherTemplateData {
     description: string;
     primaryRedemptionType?: string;
-    divisible: boolean;
+    allowPartialTransfers: boolean;
     standardMinimumIssuanceValidity?: string;
     signatureRequirementsDescription?: string;
     footnote?: string;

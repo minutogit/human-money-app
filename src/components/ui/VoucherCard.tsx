@@ -176,7 +176,7 @@ export const VoucherCard = React.memo(({
                         </div>
 
                         {/* Adjustable Amount Section (SendView) */}
-                        {mode === 'adjustable' && isSelected && voucher.divisible && (
+                        {mode === 'adjustable' && isSelected && voucher.allowPartialTransfers && (
                             <div className="px-6 pb-6 animate-in fade-in slide-in-from-top-2" onClick={(e) => e.stopPropagation()}>
                                 <div className="pt-4 border-t border-theme-primary/10 flex items-center justify-between">
                                     <span className="text-[9px] font-black text-theme-primary uppercase tracking-widest">Partial Send</span>
