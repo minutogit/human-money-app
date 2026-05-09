@@ -154,8 +154,8 @@ amount_decimal_places = 4`,
     expect(firstNameInput).toHaveClass('border-rose-500');
     expect(lastNameInput).toHaveClass('border-rose-500');
 
-    // Both top feedback and bottom error message should be visible
-    const errorMessages = await screen.findAllByText(/Please fill in all required fields\./i);
+    // Both top feedback and bottom error message should be visible with specific field names
+    const errorMessages = await screen.findAllByText(/Please fill in all required fields:/i);
     expect(errorMessages.length).toBeGreaterThanOrEqual(1);
 
     // scrollIntoView should have been called

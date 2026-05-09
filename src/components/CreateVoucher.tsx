@@ -57,6 +57,22 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const [showConfirm, setShowConfirm] = useState(false);
     const [showTestVoucherWarning, setShowTestVoucherWarning] = useState(false);
 
+    // Mapping of error keys to human-readable labels
+    const fieldLabels: Record<string, string> = {
+        standard: "Voucher Type",
+        amount: "Amount",
+        firstName: "First Name",
+        lastName: "Last Name"
+    };
+
+    // Helper to generate missing field names string
+    const getMissingFieldNames = (errors: Record<string, boolean>): string => {
+        return Object.keys(errors)
+            .filter(key => errors[key])
+            .map(key => fieldLabels[key] || key)
+            .join(", ");
+    };
+
     // Refs für Fokus-Management
     const standardRef = useRef<HTMLSelectElement>(null);
     const amountRef = useRef<HTMLInputElement>(null);
@@ -83,8 +99,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                 lastNameRef.current?.focus();
                 lastNameRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
-            
-            setFeedback({ type: 'error', msg: "Please fill in all required fields." });
+
+            const missingFieldNames = getMissingFieldNames(currentErrors);
+            setFeedback({ type: 'error', msg: `Please fill in all required fields: ${missingFieldNames}` });
             return;
         }
 
@@ -177,7 +194,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         {Object.keys(errors).length > 0 && (
                             <div className="flex items-center gap-2 text-rose-600 bg-rose-50 px-4 py-2 rounded-xl border border-rose-100 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                 <AlertCircle size={16} />
-                                <span className="text-xs font-bold">Please fill in all required fields.</span>
+                                <span className="text-xs font-bold">Missing: {getMissingFieldNames(errors)}</span>
                             </div>
                         )}
                         <Button type="submit" disabled={isLoading} className="min-w-[320px] py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
