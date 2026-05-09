@@ -100,8 +100,6 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                 lastNameRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
 
-            const missingFieldNames = getMissingFieldNames(currentErrors);
-            setFeedback({ type: 'error', msg: `Please fill in all required fields: ${missingFieldNames}` });
             return;
         }
 

@@ -278,7 +278,6 @@ export function VoucherDetailsView() {
                 {statusInfo?.name === 'Incomplete' && (
                     <SignatureRequestBanner 
                         onAction={() => setShowExportModal(true)}
-                        hint={signatureHint}
                     />
                 )}
 
