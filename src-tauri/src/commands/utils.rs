@@ -90,9 +90,19 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
                     if toml_path.exists() {
                          let content = fs::read_to_string(&toml_path)
                             .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
-                        info!("[Debug] Successfully read '{}', adding to list.", toml_path.display());
+                        info!("[Debug] Successfully read '{}', parsing for display name.", toml_path.display());
+                        
+                        let display_name = match human_money_core::services::standard_manager::verify_and_parse_standard(&content) {
+                            Ok((def, _)) => def.immutable.identity.name.clone(),
+                            Err(e) => {
+                                warn!("Failed to parse standard TOML for {}: {}. Falling back to ID.", standard_id, e);
+                                standard_id.clone()
+                            }
+                        };
+
                         standards.push(VoucherStandardInfo {
                             id: standard_id,
+                            display_name,
                             content,
                         });
                     }

@@ -409,5 +409,6 @@ impl From<human_money_core::services::signature_manager::SignatureImpact> for Fr
 #[serde(rename_all = "camelCase")]
 pub struct VoucherStandardInfo {
     pub id: String,
+    pub display_name: String,
     pub content: String,
 }

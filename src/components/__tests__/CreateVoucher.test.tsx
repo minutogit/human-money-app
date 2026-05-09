@@ -35,6 +35,7 @@ describe('CreateVoucher Component', () => {
   const mockStandards: VoucherStandardInfo[] = [
     {
       id: 'freetaler_v1',
+      displayName: 'FreeTaler',
       content: `name = "FreeTaler"
 issuer_name = "Human Money Project"
 unit = "Taler"
@@ -113,8 +114,8 @@ amount_decimal_places = 4`,
       <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
     );
 
-    // After refactor, it shows s.id in the dropdown
-    expect(await screen.findByText(/freetaler_v1/i)).toBeInTheDocument();
+    // After refactor, it shows displayName in the dropdown
+    expect(await screen.findByText(/FreeTaler/i)).toBeInTheDocument();
   });
 
   it('validates required fields when form is submitted without data', async () => {

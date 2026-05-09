@@ -39,7 +39,13 @@ describe('ReceiveView Component (FreeTaler Standard)', () => {
   const mockStandards: VoucherStandardInfo[] = [
     {
       id: 'freetaler_v1',
-      content: `name = "FreeTaler"`,
+      displayName: 'FreeTaler',
+      content: `name = "FreeTaler"
+issuer_name = "Human Money Project"
+unit = "Taler"
+abbreviation = "Taler"
+default_validity_duration = "P1Y"
+amount_decimal_places = 4`,
     },
   ];
 

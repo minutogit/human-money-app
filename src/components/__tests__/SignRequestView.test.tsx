@@ -74,6 +74,7 @@ describe('SignRequestView Component (Minuto Standard)', () => {
   const mockStandards: VoucherStandardInfo[] = [
     {
       id: 'minuto_v1',
+      displayName: 'Minuto Standard',
       content: `name = "Minuto Standard"`,
     },
   ];

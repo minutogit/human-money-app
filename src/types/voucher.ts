@@ -42,6 +42,7 @@ export interface VoucherSummary {
 
 export interface VoucherStandardInfo {
     id: string;
+    displayName: string;
     content: string;
 }
 

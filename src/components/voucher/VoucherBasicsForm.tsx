@@ -61,7 +61,7 @@ export function VoucherBasicsForm({
                         >
                             <option value="">Select Voucher Type...</option>
                             {standards.map(s => (
-                                <option key={s.id} value={s.id}>{s.id}</option>
+                                <option key={s.id} value={s.id}>{s.displayName}</option>
                             ))}
                         </select>
                     </div>
