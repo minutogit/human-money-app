@@ -782,7 +782,7 @@ describe('WalletRecovery Component', () => {
       }, { timeout: 1000 });
 
       // Fill passphrase
-      const passphraseInput = screen.getByPlaceholderText('Enter if you used one during profile creation');
+      const passphraseInput = screen.getByPlaceholderText('Enter extra word if you used one during creation');
       fireEvent.change(passphraseInput, { target: { value: 'mysecret' } });
 
       // Fill password

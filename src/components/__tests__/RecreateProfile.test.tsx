@@ -510,7 +510,7 @@ describe('RecreateProfile Component', () => {
       await waitFor(() => {
         expect(screen.getByLabelText(/Profile Name/i)).toBeInTheDocument();
         expect(screen.getByPlaceholderText('Minimum 8 characters')).toBeInTheDocument();
-        expect(screen.getByLabelText(/Geräte-Präfix/i)).toBeInTheDocument();
+        expect(screen.getByLabelText(/Device Prefix/i)).toBeInTheDocument();
       });
     });
 
@@ -543,7 +543,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -588,7 +588,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -605,7 +605,7 @@ describe('RecreateProfile Component', () => {
       });
     });
 
-    it('shows error when passphrases do not match', async () => {
+    it('shows error when passphrases do not match in Step 1', async () => {
       render(
         <RecreateProfile
           onProfileCreated={mockOnProfileCreated}
@@ -613,7 +613,7 @@ describe('RecreateProfile Component', () => {
         />
       );
 
-      // Navigate to step 2
+      // Fill valid seed
       const words = mockSeed12.split(' ');
       const wordInputs = screen.getAllByTestId(/word-input-/);
       wordInputs.forEach((input, index) => {
@@ -621,35 +621,18 @@ describe('RecreateProfile Component', () => {
       });
 
       await waitFor(() => {
-        const nextButton = screen.getByText('Next');
-        expect(nextButton).not.toBeDisabled();
-        fireEvent.click(nextButton);
-      }, { timeout: 3000 });
+        expect(screen.getByText('Seed phrase is valid.')).toBeInTheDocument();
+      }, { timeout: 1000 });
 
-      await waitFor(() => {
-        expect(screen.getByText('Step 2: Secure Your Profile')).toBeInTheDocument();
-      }, { timeout: 3000 });
+      // Enter mismatched passphrases in Step 1
+      const passphraseInput = screen.getByPlaceholderText(/Enter extra security word/i);
+      fireEvent.change(passphraseInput, { target: { value: 'pass1' } });
+      
+      const confirmPassphraseInput = screen.getByPlaceholderText(/Verify your extra word/i);
+      fireEvent.change(confirmPassphraseInput, { target: { value: 'pass2' } });
 
-      const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
-      fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
-
-      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
-      fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
-
-      const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
-      fireEvent.change(passwordInput, { target: { value: 'password123' } });
-
-      const confirmPasswordInput = screen.getByPlaceholderText('Repeat your password');
-      fireEvent.change(confirmPasswordInput, { target: { value: 'password123' } });
-
-      const passphraseInput = screen.getByPlaceholderText('Adds extra security to your seed');
-      fireEvent.change(passphraseInput, { target: { value: 'passphrase123' } });
-
-      const confirmPassphraseInput = screen.getByPlaceholderText('Repeat your passphrase');
-      fireEvent.change(confirmPassphraseInput, { target: { value: 'passphrase456' } });
-
-      const createButton = screen.getByText('Create & Encrypt Profile');
-      fireEvent.click(createButton);
+      const nextButton = screen.getByText('Next');
+      fireEvent.click(nextButton);
 
       await waitFor(() => {
         expect(screen.getByText(/Error: The passphrases do not match/i)).toBeInTheDocument();
@@ -686,7 +669,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -732,7 +715,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -785,7 +768,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -859,7 +842,7 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/z.B. 'mein_laptop'/i);
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');

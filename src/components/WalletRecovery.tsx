@@ -1,5 +1,6 @@
 // src/components/WalletRecovery.tsx
 import { useState, useEffect, useRef } from "react";
+import logo from "../assets/logo.png";
 import { profileService } from "../services/profileService";
 import { authService } from "../services/authService";
 import { AuthLayout } from "./AuthLayout";
@@ -8,14 +9,13 @@ import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
 import { ProfileInfo, MnemonicLanguage } from "../types";
-import { 
-    RotateCcw, 
-    Key, 
-    Lock, 
-    Fingerprint, 
-    Languages, 
-    BookOpen, 
-    CheckCircle2, 
+import {
+    Key,
+    Lock,
+    Fingerprint,
+    Languages,
+    BookOpen,
+    CheckCircle2,
     ArrowLeft,
     RefreshCw,
     ShieldAlert,
@@ -209,18 +209,19 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
 
     return (
         <AuthLayout maxWidth="max-w-3xl">
-            <div className="text-center space-y-2 sm:space-y-4">
-                    <div className="mx-auto w-16 h-16 sm:w-20 sm:h-20 bg-theme-primary text-white rounded-[24px] sm:rounded-[32px] flex items-center justify-center shadow-premium-lg transform rotate-3 group-hover:rotate-0 transition-transform duration-500">
-                        <RotateCcw size={32} className="sm:hidden" />
-                        <RotateCcw size={40} className="hidden sm:block" />
-                    </div>
-                    <div className="space-y-0.5 sm:space-y-1">
-                        <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter uppercase">Recover Wallet</h1>
-                        <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.3em] text-theme-light">Restore from Backup</p>
-                    </div>
+            <div className="flex items-center justify-center gap-3 sm:gap-6">
+                <img
+                    src={logo}
+                    alt="Human Money Logo"
+                    className="w-12 h-12 sm:w-20 sm:h-20 object-contain drop-shadow-sm"
+                />
+                <div className="text-left space-y-0 sm:space-y-0.5">
+                    <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
+                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">Recover Wallet</p>
                 </div>
+            </div>
 
-                <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); handleRecovery(); }}>
+            <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); handleRecovery(); }}>
                     <Card header={<div className="flex items-center gap-2"><User size={14}/><label htmlFor="profile-select" className="font-black text-[10px] uppercase tracking-widest cursor-pointer">Select Profile</label></div>}>
                         <div className="space-y-4">
                             {profiles.length > 0 ? (
@@ -313,15 +314,16 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                                     <p className="text-[9px] font-bold text-theme-light italic flex items-center gap-1.5"><Info size={10}/> Numbers and punctuation are auto-cleaned.</p>
                                 </div>
                             )}
+
+                            <div className="space-y-2 pt-4 border-t border-theme-primary/10">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={10}/> 13th Word / Passphrase (If used)</label>
+                                <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Enter extra word if you used one during creation" />
+                            </div>
                         </div>
                     </Card>
 
                     <Card header={<div className="flex items-center gap-2"><Lock size={14}/><span className="font-black text-[10px] uppercase tracking-widest">Re-Encryption Credentials</span></div>}>
                         <div className="space-y-6">
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Recovery Passphrase (If used)</label>
-                                <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Enter if you used one during profile creation" />
-                            </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div className="space-y-2">
                                     <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">New Wallet Password</label>

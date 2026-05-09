@@ -1,5 +1,6 @@
 // src/components/CreateNewProfile.tsx
 import { useState, useEffect, useRef, FormEvent } from "react";
+import logo from "../assets/logo.png";
 import { profileService } from "../services/profileService";
 import { authService } from "../services/authService";
 import { AuthLayout } from "./AuthLayout";
@@ -8,21 +9,23 @@ import { MnemonicLanguage } from "../types";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
-import { 
-    ShieldCheck, 
-    Lock, 
-    Fingerprint, 
-    Languages, 
-    BookOpen, 
-    AlertTriangle, 
-    CheckCircle2, 
-    ArrowRight, 
+import {
+    ShieldCheck,
+    Lock,
+    Fingerprint,
+    Languages,
+    BookOpen,
+    AlertTriangle,
+    CheckCircle2,
+    ArrowRight,
     ArrowLeft,
     RefreshCw,
     ShieldAlert,
     Info,
-    User
+    User,
+    HelpCircle
 } from "lucide-react";
+import { PrefixInfoModal } from "./ui/PrefixInfoModal";
 
 type WizardStep = "display_seed" | "confirm_seed" | "set_password";
 
@@ -56,6 +59,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
     const [userPrefix, setUserPrefix] = useState("");
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
+    const [showPrefixInfo, setShowPrefixInfo] = useState(false);
     const passwordInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
@@ -112,6 +116,13 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
 
     const handleConfirmSeedSubmit = (e: FormEvent) => {
         e.preventDefault();
+        
+        // Passphrase confirmation
+        if (passphrase !== confirmPassphrase) {
+            setFeedbackMsg("Error: The passphrases do not match");
+            return;
+        }
+
         if (isBulkMode) {
             if (cleanSeedText(bulkSeedInput) !== generatedSeed.join(' ')) {
                 setFeedbackMsg("Error: The phrase does not match");
@@ -213,6 +224,23 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                             </div>
                         </div>
 
+                        <div className="space-y-4 pt-4 border-t border-theme-primary/10">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={10}/> 13th Word (Optional Passphrase)</label>
+                                <Input 
+                                    type="text" 
+                                    value={passphrase} 
+                                    onChange={(e) => setPassphrase(e.target.value)} 
+                                    placeholder="Enter extra security word..." 
+                                    className="rounded-2xl"
+                                />
+                                <p className="text-[9px] font-bold text-amber-600 bg-amber-50 p-3 rounded-xl border border-amber-100 flex items-start gap-2">
+                                    <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                                    Advanced: This word is part of your backup. You MUST save it along with the other {wordCount} words!
+                                </p>
+                            </div>
+                        </div>
+
                         <div className="flex flex-col items-center gap-4 pt-4">
                             <Button size="lg" onClick={prepareConfirmationStep} disabled={isLoading || generatedSeed.length === 0} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
                                 {isLoading ? <RefreshCw className="animate-spin" size={24} /> : <CheckCircle2 size={24} />}
@@ -273,6 +301,21 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                                 ))}
                             </div>
                         )}
+
+                        {passphrase && (
+                            <div className="space-y-2 pt-4 border-t border-theme-primary/10">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Confirm 13th Word (Passphrase)</label>
+                                <Input
+                                    type="text"
+                                    value={confirmPassphrase}
+                                    onChange={(e) => setConfirmPassphrase(e.target.value)}
+                                    required
+                                    className="font-mono font-bold py-4 text-center text-lg"
+                                    autoComplete="off"
+                                    placeholder="Enter your extra word again"
+                                />
+                            </div>
+                        )}
                         
                         <div className="flex gap-4 pt-4">
                             <Button type="button" variant="secondary" onClick={() => setWizardStep("display_seed")} className="flex-1 rounded-2xl gap-2">
@@ -313,28 +356,33 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                                 </div>
                             </Card>
 
-                            <Card header={<div className="flex items-center gap-2"><ShieldCheck size={14}/><span className="font-black text-[10px] uppercase tracking-widest">Optional Passphrase</span></div>}>
+                            <Card header={<div className="flex items-center gap-2"><ShieldCheck size={14}/><span className="font-black text-[10px] uppercase tracking-widest">Device Settings</span></div>}>
                                 <div className="space-y-4">
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Recovery Passphrase</label>
-                                            <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Optional 13th/25th word" />
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Confirm Passphrase</label>
-                                            <Input type="password" value={confirmPassphrase} onChange={(e) => setConfirmPassphrase(e.target.value)} placeholder="Verify passphrase" />
-                                        </div>
-                                    </div>
-                                    <p className="text-[9px] font-bold text-amber-600 bg-amber-50 p-3 rounded-xl border border-amber-100 flex items-start gap-2">
-                                        <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                                        Advanced: This passphrase creates a completely different wallet from the same mnemonic. If lost, the mnemonic alone CANNOT recover your assets.
-                                    </p>
                                     <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">DID Prefix</label>
-                                        <Input value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g. alice (leave blank for random)" />
+                                        <div className="flex items-center justify-between">
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">DID Prefix (Optional)</label>
+                                            <button 
+                                                type="button" 
+                                                onClick={() => setShowPrefixInfo(true)}
+                                                className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20"
+                                            >
+                                                <HelpCircle size={12} />
+                                                <span>Read Instructions</span>
+                                            </button>
+                                        </div>
+                                        <Input value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g. alice, 0, or pc" />
+                                        <p className="text-[9px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic">
+                                            <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                                            Critical: Every device MUST have a unique prefix to prevent irreversible reputation loss.
+                                        </p>
                                     </div>
                                 </div>
                             </Card>
+
+                            <PrefixInfoModal 
+                                isOpen={showPrefixInfo} 
+                                onClose={() => setShowPrefixInfo(false)} 
+                            />
                         </div>
 
                         <div className="flex flex-col items-center gap-4 pt-4">
@@ -362,18 +410,19 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
 
     return (
         <AuthLayout maxWidth="max-w-2xl">
-            <div className="text-center space-y-2 sm:space-y-4">
-                    <div className="mx-auto w-16 h-16 sm:w-20 sm:h-20 bg-theme-primary text-white rounded-[24px] sm:rounded-[32px] flex items-center justify-center shadow-premium-lg transform -rotate-6 group-hover:rotate-0 transition-transform duration-500">
-                        <ShieldCheck size={32} className="sm:hidden" />
-                        <ShieldCheck size={40} className="hidden sm:block" />
-                    </div>
-                    <div className="space-y-0.5 sm:space-y-1">
-                        <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter">HUMAN MONEY</h1>
-                        <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.3em] text-theme-light">Create a New Profile</p>
-                    </div>
+            <div className="flex items-center justify-center gap-3 sm:gap-6">
+                <img
+                    src={logo}
+                    alt="Human Money Logo"
+                    className="w-12 h-12 sm:w-20 sm:h-20 object-contain drop-shadow-sm"
+                />
+                <div className="text-left space-y-0 sm:space-y-0.5">
+                    <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
+                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">Create a New Profile</p>
                 </div>
+            </div>
 
-                {renderContent()}
+            {renderContent()}
 
                 {feedbackMsg && !isLoading && (
                     <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 animate-in shake duration-500">

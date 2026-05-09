@@ -1,5 +1,6 @@
 // src/components/RecreateProfile.tsx
 import { useState, useEffect, useRef, FormEvent } from "react";
+import logo from "../assets/logo.png";
 import { profileService } from "../services/profileService";
 import { authService } from "../services/authService";
 import { AuthLayout } from "./AuthLayout";
@@ -10,7 +11,8 @@ import { MnemonicLanguage } from "../types";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
-import { ArrowLeft, ArrowRight, RefreshCw, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, RefreshCw, CheckCircle2, HelpCircle, AlertTriangle } from "lucide-react";
+import { PrefixInfoModal } from "./ui/PrefixInfoModal";
 
 type WizardStep = "import_seed" | "set_details";
 type InputMode = "words" | "phrase";
@@ -48,6 +50,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     const [userPrefix, setUserPrefix] = useState("");
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
+    const [showPrefixInfo, setShowPrefixInfo] = useState(false);
 
 
     // --- Effects ---
@@ -226,12 +229,16 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
 
     // Handler for proceeding to step 2
     const handleGoToDetails = () => {
-        if (isValidMnemonic) {
-            setFeedbackMsg("");
-            setWizardStep("set_details");
-        } else {
+        if (!isValidMnemonic) {
             setFeedbackMsg("Error: Please enter a valid seed phrase to continue.");
+            return;
         }
+        if (passphrase !== confirmPassphrase) {
+            setFeedbackMsg("Error: The passphrases do not match.");
+            return;
+        }
+        setFeedbackMsg("");
+        setWizardStep("set_details");
     };
 
     // Handler for the final profile creation
@@ -368,6 +375,31 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                     </div>
                                 )}
                             </div>
+
+                            <div className="border-t border-theme-light-border pt-5 space-y-5">
+                                <div>
+                                    <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (13th Word)</label>
+                                    <Input 
+                                        id="passphrase"
+                                        type="password" 
+                                        value={passphrase} 
+                                        onChange={(e) => setPassphrase(e.target.value)} 
+                                        placeholder="Enter extra security word if used" 
+                                    />
+                                </div>
+                                {passphrase && (
+                                    <div>
+                                        <label htmlFor="confirmPassphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Optional Passphrase</label>
+                                        <Input 
+                                            id="confirmPassphrase"
+                                            type="password" 
+                                            value={confirmPassphrase} 
+                                            onChange={(e) => setConfirmPassphrase(e.target.value)} 
+                                            placeholder="Verify your extra word" 
+                                        />
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         <div className="flex gap-4 w-full pt-4">
@@ -432,42 +464,29 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
 
                         <div className="border-t border-theme-light-border pt-5 space-y-5">
                             <div>
-                                <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (Advanced)</label>
-                                <Input 
-                                    id="passphrase"
-                                    type="password" 
-                                    value={passphrase} 
-                                    onChange={(e) => setPassphrase(e.target.value)} 
-                                    onFocus={() => {
-                                        if (feedbackMsg.includes("Error")) {
-                                            setFeedbackMsg("");
-                                        }
-                                    }}
-                                    placeholder="Adds extra security to your seed" 
-                                />
-                            </div>
-                            <div>
-                                <label htmlFor="confirmPassphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Optional Passphrase</label>
-                                <Input 
-                                    id="confirmPassphrase"
-                                    type="password" 
-                                    value={confirmPassphrase} 
-                                    onChange={(e) => setConfirmPassphrase(e.target.value)} 
-                                    onFocus={() => {
-                                        if (feedbackMsg.includes("Error")) {
-                                            setFeedbackMsg("");
-                                        }
-                                    }}
-                                    placeholder="Repeat your passphrase" 
-                                />
-                                <p className="text-xs text-theme-light mt-1">Warning: If you use this, you must enter the *exact same* passphrase for this seed on all devices.</p>
-                            </div>
-                            <div>
-                                <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary mb-1">Geräte-Präfix (optional)</label>
-                                <Input id="userPrefix" data-testid="user-prefix-input" type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="z.B. 'mein_laptop' (muss eindeutig sein)" />
-                                <p className="text-xs text-theme-light mt-1">Optional: Leer lassen für einen Root-Account (nur eine Identität). Mehrere Geräte benötigen je ein eindeutiges Präfix.</p>
+                                <div className="flex items-center justify-between mb-1">
+                                    <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary">Device Prefix (Optional)</label>
+                                    <button 
+                                        type="button" 
+                                        onClick={() => setShowPrefixInfo(true)}
+                                        className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20"
+                                    >
+                                        <HelpCircle size={12} />
+                                        <span>Read Instructions</span>
+                                    </button>
+                                </div>
+                                <Input id="userPrefix" data-testid="user-prefix-input" type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g. 'my_laptop', '0', or 'pc'" />
+                                <p className="text-[10px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic mt-1.5">
+                                    <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                                    Critical: Every device MUST have a unique prefix to prevent irreversible reputation loss.
+                                </p>
                             </div>
                         </div>
+
+                        <PrefixInfoModal 
+                            isOpen={showPrefixInfo} 
+                            onClose={() => setShowPrefixInfo(false)} 
+                        />
 
                         <div className="flex flex-col items-center gap-4 pt-3">
                             {isLoading && (
@@ -492,9 +511,16 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
 
     return (
         <AuthLayout maxWidth="max-w-2xl">
-            <div className="text-center mb-6">
-                <h1 className="text-4xl font-extrabold text-theme-primary">Human Money App</h1>
-                <p className="text-lg text-theme-light mt-1">Recreate Profile from Seed</p>
+            <div className="flex items-center justify-center gap-3 sm:gap-6">
+                <img
+                    src={logo}
+                    alt="Human Money Logo"
+                    className="w-12 h-12 sm:w-20 sm:h-20 object-contain drop-shadow-sm"
+                />
+                <div className="text-left space-y-0 sm:space-y-0.5">
+                    <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
+                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">Recreate Profile from Seed</p>
+                </div>
             </div>
 
             {renderContent()}
