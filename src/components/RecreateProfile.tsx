@@ -378,7 +378,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
 
                             <div className="border-t border-theme-light-border pt-5 space-y-5">
                                 <div>
-                                    <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (13th Word)</label>
+                                    <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (13th/25th Word)</label>
                                     <Input 
                                         id="passphrase"
                                         type="password" 

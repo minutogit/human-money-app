@@ -316,7 +316,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                             )}
 
                             <div className="space-y-2 pt-4 border-t border-theme-primary/10">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={10}/> 13th Word / Passphrase (If used)</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={10}/> Passphrase (If used)</label>
                                 <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Enter extra word if you used one during creation" />
                             </div>
                         </div>

@@ -1,8 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { VoucherSummary } from '../types';
 
-
-
 export function useVoucherSelection(vouchers: VoucherSummary[]) {
   const [selectedMap, setSelectedMap] = useState<Map<string, string>>(new Map());
 
@@ -18,21 +16,21 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     });
   }, []);
 
-  const selectAmount = useCallback((targetAmount: number, unit: string) => {
+  const selectAmount = useCallback((targetAmount: number, displayCurrency: string) => {
     const relevantVouchers = vouchers
       .filter(v => {
         const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
-        return v.unit === unit && statusName.toLowerCase() === 'active';
+        return v.displayCurrency === displayCurrency && statusName.toLowerCase() === 'active';
       })
       .sort((a, b) => parseFloat(b.currentAmount) - parseFloat(a.currentAmount));
 
     let accumulated = 0;
     const newSelection = new Map(selectedMap);
 
-    // Clear existing selection for this unit to avoid duplicates/confusion during auto-select
+    // Clear existing selection for this asset type to avoid duplicates/confusion during auto-select
     for (const [id] of newSelection.entries()) {
       const v = vouchers.find(v => v.localInstanceId === id);
-      if (v && v.unit === unit) {
+      if (v && v.displayCurrency === displayCurrency) {
         newSelection.delete(id);
       }
     }
@@ -56,11 +54,12 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     selectedMap.forEach((amount, id) => {
       const v = vouchers.find(v => v.localInstanceId === id);
       if (v) {
-        if (!stats[v.unit]) {
-          stats[v.unit] = { total: 0, count: 0 };
+        const key = v.displayCurrency;
+        if (!stats[key]) {
+          stats[key] = { total: 0, count: 0 };
         }
-        stats[v.unit].total += parseFloat(amount);
-        stats[v.unit].count += 1;
+        stats[key].total += parseFloat(amount);
+        stats[key].count += 1;
       }
     });
 

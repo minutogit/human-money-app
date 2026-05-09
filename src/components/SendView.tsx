@@ -229,7 +229,7 @@ export function SendView() {
         dispatch({ type: 'SET_TARGET_AMOUNT', amount: valStr });
         const val = parseFloat(valStr);
         if (isNaN(val) || val <= 0) return;
-        selectAmount(val, filteredVouchers[0]?.unit);
+        selectAmount(val, filteredVouchers[0]?.displayCurrency);
     };
 
     const handleVoucherToggle = (v: VoucherSummary) => {
@@ -288,10 +288,10 @@ export function SendView() {
             const summableAmounts: Record<string, string> = {};
             const countableItems: Record<string, number> = {};
             
-            Object.entries(selectionStats).forEach(([unit, stat]) => {
-                const voucher = availableVouchers.find(v => v.unit === unit);
+            Object.entries(selectionStats).forEach(([displayCurrency, stat]) => {
+                const voucher = availableVouchers.find(v => v.displayCurrency === displayCurrency);
                 const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
-                summableAmounts[unit] = stat.total.toFixed(precision);
+                summableAmounts[displayCurrency] = stat.total.toFixed(precision);
             });
 
             const record: TransactionRecord = {
@@ -315,7 +315,7 @@ export function SendView() {
             });
 
             const summaryString = Object.entries(selectionStats)
-                .map(([unit, stat]) => `${formatAmount(stat.total.toString())} ${unit}`)
+                .map(([displayCurrency, stat]) => `${formatAmount(stat.total.toString())} ${displayCurrency}`)
                 .join(', ');
 
             dispatch({ type: 'SET_FEEDBACK', msg: "Transfer successful!" });
@@ -431,7 +431,7 @@ export function SendView() {
                         <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                             <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-2">Assets</p>
                             <div className="text-lg font-black tracking-tighter text-theme-primary">
-                                {Object.entries(selectionStats).map(([unit, stat]) => `${formatAmount(stat.total.toString())} ${unit}`).join(', ')}
+                                {Object.entries(selectionStats).map(([displayCurrency, stat]) => `${formatAmount(stat.total.toString())} ${displayCurrency}`).join(', ')}
                             </div>
                         </div>
                         <div className="flex items-center gap-2 px-1">

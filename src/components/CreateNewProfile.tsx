@@ -226,7 +226,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
 
                         <div className="space-y-4 pt-4 border-t border-theme-primary/10">
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={10}/> 13th Word (Optional Passphrase)</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={10}/> {wordCount === 12 ? '13th' : '25th'} Word (Optional Passphrase)</label>
                                 <Input 
                                     type="text" 
                                     value={passphrase} 
@@ -304,7 +304,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
 
                         {passphrase && (
                             <div className="space-y-2 pt-4 border-t border-theme-primary/10">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Confirm 13th Word (Passphrase)</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Confirm Passphrase</label>
                                 <Input
                                     type="text"
                                     value={confirmPassphrase}

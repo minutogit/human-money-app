@@ -173,7 +173,7 @@ export function TransactionHistoryView() {
                                             </div>
                                             <div className="text-right shrink-0">
                                                 <p className={`text-lg font-black tracking-tight ${isSent ? 'text-theme-primary' : 'text-emerald-600'}`}>
-                                                    {isSent ? '-' : '+'}{formatSummary(record.summableAmounts, record.countableItems)}
+                                                    {isSent ? '-' : '+'}{formatSummary(record.summableAmounts, record.countableItems, record.involvedSourcesDetails)}
                                                 </p>
                                                 <div className="flex items-center justify-end gap-1 mt-1 text-theme-light/50">
                                                     {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
