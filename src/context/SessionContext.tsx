@@ -2,12 +2,14 @@
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef } from 'react';
 import { authService } from '../services/authService';
 import { settingsService } from '../services/settingsService';
-import { integrityService } from '../services/integrityService';
 import { logger } from '../utils/log';
 import { AuthModal } from '../components/ui/AuthModal';
 // AppSettings import removed as unused
 
 import { startSealSyncLoop, stopSealSyncLoop } from '../utils/sealSync';
+import { useWindowTitleSync } from '../hooks/useWindowTitleSync';
+import { useIntegrityCheck } from '../hooks/useIntegrityCheck';
+import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
 
 export interface SessionContextType {
     protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>;
@@ -37,36 +39,28 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const [profileName, setProfileName] = useState<string>("");
     const [isForkLocked, setIsForkLocked] = useState(false);
     const [isRecoveryRequired, setIsRecoveryRequired] = useState(false);
-    const [integrityReport, setIntegrityReport] = useState<import('../types').IntegrityReport | null>(null);
 
-    // Ref für aktuellen Status (um Stale Closures zu vermeiden)
-    const isSessionActiveRef = useRef(false);
-    // Ref für Throttling der Heartbeats (Drosselung auf alle 2s)
+    // Refs für Throttling und Status
     const lastHeartbeatRef = useRef(0);
+    const isSessionActiveRef = useRef(false);
 
-    // Sync State -> Ref
+    // Hooks für Side-Effects
+    useWindowTitleSync(profileName);
+    
+    const onSessionExpired = useCallback(() => {
+        setIsSessionActive(false);
+        isSessionActiveRef.current = false;
+        setProfileName("");
+    }, []);
+
+    useSessionHeartbeat(isSessionActive, onSessionExpired, lastHeartbeatRef);
+
+    const { integrityReport, checkIntegrity } = useIntegrityCheck();
+
+    // Sync State -> Ref (needed for protectAction which uses the ref)
     useEffect(() => {
         isSessionActiveRef.current = isSessionActive;
     }, [isSessionActive]);
-
-    // Update window title when profile name changes
-    useEffect(() => {
-        const updateTitle = async () => {
-            try {
-                const { getCurrentWindow } = await import("@tauri-apps/api/window");
-                const win = getCurrentWindow();
-                if (profileName) {
-                    await win.setTitle(`Human Money App - ${profileName}`);
-                } else {
-                    await win.setTitle('Human Money App');
-                }
-            } catch (e) {
-                logger.warn(`Failed to update window title: ${e}`);
-            }
-        };
-
-        updateTitle();
-    }, [profileName]);
 
     const [pendingAction, setPendingAction] = useState<{
         resolve: (value: unknown) => void;
@@ -74,76 +68,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         action: (password: string | null) => Promise<unknown>;
     } | null>(null);
 
-    // Globaler Activity Listener
-    useEffect(() => {
-        const handleActivity = () => {
-            // Nur wenn Session aktiv ist
-            if (isSessionActiveRef.current) {
-                const now = Date.now();
-                // Throttling: Nur senden, wenn seit dem letzten Mal > 2000ms vergangen sind
-                if (now - lastHeartbeatRef.current > 2000) {
-                    lastHeartbeatRef.current = now;
-                    // Fire and forget refresh
-                    authService.refreshSessionActivity().catch((e) => logger.warn(`Heartbeat failed: ${e}`));
-                }
-            }
-        };
-
-        window.addEventListener('mousemove', handleActivity);
-        window.addEventListener('keydown', handleActivity);
-        window.addEventListener('click', handleActivity);
-
-        return () => {
-            window.removeEventListener('mousemove', handleActivity);
-            window.removeEventListener('keydown', handleActivity);
-            window.removeEventListener('click', handleActivity);
-        };
-    }, []); // Empty dependency array -> Event Listeners only attached once
-
-    // Polling für Session-Status (erkennt Timeout im Hintergrund)
-    useEffect(() => {
-        const checkStatus = async () => {
-            // Nur prüfen, wenn wir glauben, die Session sei aktiv
-            if (isSessionActiveRef.current) {
-                try {
-                    const active = await authService.isSessionActive();
-                    if (!active) {
-                        logger.info("Session background check: Session expired.");
-                        setIsSessionActive(false);
-                        isSessionActiveRef.current = false;
-                        setProfileName("");
-                    }
-                } catch (e) {
-                    logger.error(`Session check failed: ${e}`);
-                }
-            }
-        };
-
-        const interval = setInterval(checkStatus, 10000); // Alle 10s prüfen
-        return () => clearInterval(interval);
-    }, []);
-
     // Hilfsfunktion zum Aktivieren der Session
-    // Setzt Status auf True und resettet den Heartbeat-Timer
     const activateSession = useCallback(() => {
         setIsSessionActive(true);
         isSessionActiveRef.current = true;
-        // WICHTIG: Wir setzen den Heartbeat-Timer auf "Jetzt",
-        // damit nicht sofort beim ersten Mauswackler ein Request rausgeht.
-        // Das gibt dem Backend Zeit und verhindert Race Conditions.
         lastHeartbeatRef.current = Date.now();
-    }, []);
-
-    const checkIntegrity = useCallback(async () => {
-        try {
-            const report = await integrityService.checkIntegrity();
-            setIntegrityReport(report);
-            if (report.type !== 'valid') {
-                logger.warn(`Integrity issue detected: ${report.type}`);
-            }
-        } catch (e) {
-            logger.error(`Failed to check integrity: ${e}`);
-        }
     }, []);
 
     // Wird von App.tsx nach Login aufgerufen
