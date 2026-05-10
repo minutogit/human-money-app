@@ -85,7 +85,7 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                                     ? 'bg-red-600 text-white'
                                     : 'bg-gray-500 text-white'
                             }`}>
-                                {conflict.conflictRole === 'victim' ? 'URGENT: Affected Your Vouchers' : 'Network Observation'}
+                                {conflict.conflictRole === 'victim' ? 'ACTION REQUIRED: Your Assets Affected' : 'Security Insight: Fraud Elsewhere'}
                             </span>
                             {conflict.isResolved ? (
                                 <span className="px-3 py-1 text-xs font-bold rounded-full bg-green-100 text-green-800 border border-green-200">

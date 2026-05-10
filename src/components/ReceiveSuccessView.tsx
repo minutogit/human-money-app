@@ -13,7 +13,8 @@ import {
     ArrowRight,
     AlertTriangle,
     Layers,
-    UserX
+    UserX,
+    Info
 } from "lucide-react";
 
 interface ReceiveSuccessViewProps {
@@ -47,7 +48,13 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
         }
     }, [payload, summaryString]);
 
-    const hasConflicts = payload.verifiableConflicts && Object.keys(payload.verifiableConflicts).length > 0;
+    const isVictim = payload.conflictSummaries 
+        ? payload.conflictSummaries.some(c => c.conflictRole === 'victim' && !c.isResolved && !c.localOverride) 
+        : (payload.verifiableConflicts && Object.keys(payload.verifiableConflicts).length > 0);
+    
+    const isWitnessOnly = payload.conflictSummaries 
+        ? (payload.conflictSummaries.some(c => c.conflictRole === 'witness' && !c.isResolved && !c.localOverride) && !isVictim) 
+        : false;
 
     return (
         <div className="flex flex-col items-center justify-center min-h-[80vh] py-12 px-4 animate-in fade-in zoom-in-95 duration-500">
@@ -55,33 +62,47 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                 {/* Status Hero */}
                 <div className="text-center space-y-4">
                     <div className="relative inline-block">
-                        <div className={`p-6 rounded-[32px] ${hasConflicts ? 'bg-rose-500 text-white' : 'bg-emerald-500 text-white'} shadow-premium-lg animate-bounce-subtle`}>
-                            {hasConflicts ? <ShieldAlert size={64} /> : <CheckCircle2 size={64} />}
+                        <div className={`p-6 rounded-[32px] ${isVictim ? 'bg-rose-500 text-white' : isWitnessOnly ? 'bg-amber-500 text-white' : 'bg-emerald-500 text-white'} shadow-premium-lg animate-bounce-subtle`}>
+                            {isVictim ? <ShieldAlert size={64} /> : isWitnessOnly ? <AlertTriangle size={64} /> : <CheckCircle2 size={64} />}
                         </div>
                         <div className="absolute -bottom-2 -right-2 bg-white p-1.5 rounded-full shadow-md">
-                            <div className={`${hasConflicts ? 'bg-rose-500' : 'bg-emerald-500'} w-4 h-4 rounded-full border-2 border-white`}></div>
+                            <div className={`${isVictim ? 'bg-rose-500' : isWitnessOnly ? 'bg-amber-500' : 'bg-emerald-500'} w-4 h-4 rounded-full border-2 border-white`}></div>
                         </div>
                     </div>
                     <div className="space-y-1">
                         <h1 className="text-3xl font-black text-theme-primary tracking-tight">
-                            {hasConflicts ? 'Processing Conflict' : 'Transfer Complete'}
+                            {isVictim ? 'Security Warning' : 'Transfer Complete'}
                         </h1>
                         <p className="text-theme-light font-medium">
-                            {hasConflicts 
-                                ? 'Security protocols triggered during verification.' 
-                                : 'Assets have been added to your wallet.'}
+                            {isVictim 
+                                ? 'A security issue affects your new assets.' 
+                                : isWitnessOnly
+                                    ? 'Assets added. Your wallet also helped the network.'
+                                    : 'Assets have been added to your wallet.'}
                         </p>
                     </div>
                 </div>
 
                 {/* Conflict Alert (if any) */}
-                {hasConflicts && (
+                {isVictim && (
                     <div className="p-6 bg-rose-50 border-2 border-rose-100 rounded-[32px] flex items-start gap-4 shadow-sm animate-in shake duration-1000">
                         <AlertTriangle className="text-rose-500 shrink-0 mt-1" size={24} />
                         <div>
-                            <h3 className="text-sm font-black text-rose-900 uppercase tracking-widest mb-1">Double-Spend Detected</h3>
+                            <h3 className="text-sm font-black text-rose-900 uppercase tracking-widest mb-1">Security Warning: Problem with your Balance</h3>
                             <p className="text-xs text-rose-800 font-medium leading-relaxed">
-                                Fraudulent activity was detected during processing. Conflicting vouchers have been quarantined to protect your wallet integrity.
+                                Our security system has detected that someone tried to spend the same money twice. One of the vouchers you just received is affected and has been safely 'quarantined' for your protection.
+                            </p>
+                        </div>
+                    </div>
+                )}
+
+                {isWitnessOnly && (
+                    <div className="p-6 bg-amber-50 border-2 border-amber-100 rounded-[32px] flex items-start gap-4 shadow-sm animate-in fade-in duration-700">
+                        <Info className="text-amber-500 shrink-0 mt-1" size={24} />
+                        <div>
+                            <h3 className="text-sm font-black text-amber-900 uppercase tracking-widest mb-1">Security Insight: Fraud Detected Elsewhere</h3>
+                            <p className="text-xs text-amber-800 font-medium leading-relaxed">
+                                Your own balance is <strong>completely safe and unaffected</strong>. However, while processing this transfer, your wallet discovered a fraud attempt happening elsewhere in the network. This information helps keep the community safe.
                             </p>
                         </div>
                     </div>

@@ -27,7 +27,7 @@ export function CreatorIdentityForm({
     firstNameRef,
     lastNameRef
 }: CreatorIdentityFormProps) {
-    const handleChange = (field: string, value: any) => {
+    const handleChange = (field: string, value: string) => {
         onIdentityChange({ ...identity, [field]: value });
     };
 

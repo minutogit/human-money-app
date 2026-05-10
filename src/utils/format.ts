@@ -60,7 +60,7 @@ export function formatDateTime(isoString: string): string {
 export function formatSummary(
     summable: Record<string, string> | undefined,
     countable: Record<string, number> | undefined,
-    details?: any[]
+    details?: { unit: string; isTestVoucher: boolean }[]
 ): string {
     const s = Object.entries(summable || {}).map(([unit, amount]) => {
         let displayUnit = unit;

@@ -71,6 +71,7 @@ export interface ReceiveSuccessPayload {
     isSignatureAttached?: boolean;
     voucherId?: string;
     verifiableConflicts?: Record<string, TransactionFingerprint[]>;
+    conflictSummaries?: ProofOfDoubleSpendSummary[];
 }
 
 export interface TransactionFingerprint {

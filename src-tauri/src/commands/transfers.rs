@@ -29,6 +29,7 @@ pub struct ReceiveSuccessPayload {
     pub involved_vouchers: Vec<String>,
     pub involved_vouchers_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
     pub verifiable_conflicts: HashMap<String, Vec<human_money_core::models::conflict::TransactionFingerprint>>,
+    pub conflict_summaries: Vec<crate::models::FrontendProofOfDoubleSpendSummary>,
 }
 
 #[derive(Serialize, Clone)]
@@ -165,6 +166,7 @@ pub fn receive_bundle(
                 involved_vouchers: involved_vouchers_ids,
                 involved_vouchers_details: involved_vouchers_details.into_iter().map(|d| d.into()).collect(),
                 verifiable_conflicts: result.check_result.verifiable_conflicts,
+                conflict_summaries: service.list_conflicts()?.into_iter().map(|s| s.into()).collect(),
             })
         }
         Err(e) => {

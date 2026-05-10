@@ -129,7 +129,7 @@ export function SendView() {
     const [uuidToPrecisionMap, setUuidToPrecisionMap] = useState<Map<string, number>>(new Map());
     const [standardsDict] = useState<Record<string, VoucherStandardDefinition>>({});
 
-    const { selectedMap, toggleVoucher, selectAmount, selectionStats } = useVoucherSelection(availableVouchers);
+    const { selectedMap, toggleVoucher, setVoucherAmount, selectAmount, selectionStats } = useVoucherSelection(availableVouchers);
     const detectedPrivacy = usePrivacyDetection(
         Array.from(selectedMap.keys()),
         availableVouchers,
@@ -229,11 +229,18 @@ export function SendView() {
         dispatch({ type: 'SET_TARGET_AMOUNT', amount: valStr });
         const val = parseFloat(valStr);
         if (isNaN(val) || val <= 0) return;
-        selectAmount(val, filteredVouchers[0]?.displayCurrency);
+        
+        const voucher = filteredVouchers[0];
+        const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4) : 4;
+        selectAmount(val, voucher?.displayCurrency, precision);
     };
 
     const handleVoucherToggle = (v: VoucherSummary) => {
         toggleVoucher(v.localInstanceId, v.currentAmount);
+    };
+
+    const handleAmountChange = (id: string, amt: string) => {
+        setVoucherAmount(id, amt);
     };
 
     const handlePrepareTransfer = (e: FormEvent) => {
@@ -395,7 +402,7 @@ export function SendView() {
                             onTargetAmountChange={handleTargetAmountChange}
                             selection={selectedMap}
                             onVoucherToggle={handleVoucherToggle}
-                            onAmountChange={() => {}} // Manual change handled via toggle in simplified refactor
+                            onAmountChange={handleAmountChange}
                             uuidToPrecisionMap={uuidToPrecisionMap}
                             standardIdToUuidMap={standardIdToUuidMap}
                         />

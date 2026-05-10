@@ -16,7 +16,16 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     });
   }, []);
 
-  const selectAmount = useCallback((targetAmount: number, displayCurrency: string) => {
+  const setVoucherAmount = useCallback((localInstanceId: string, amount: string) => {
+    setSelectedMap(prev => {
+      if (!prev.has(localInstanceId)) return prev;
+      const next = new Map(prev);
+      next.set(localInstanceId, amount);
+      return next;
+    });
+  }, []);
+
+  const selectAmount = useCallback((targetAmount: number, displayCurrency: string, precision: number = 4) => {
     const relevantVouchers = vouchers
       .filter(v => {
         const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
@@ -37,8 +46,19 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
 
     for (const v of relevantVouchers) {
       if (accumulated >= targetAmount) break;
-      newSelection.set(v.localInstanceId, v.currentAmount);
-      accumulated += parseFloat(v.currentAmount);
+      
+      const remainingNeeded = targetAmount - accumulated;
+      const voucherAmount = parseFloat(v.currentAmount);
+
+      if (v.allowPartialTransfers && voucherAmount > remainingNeeded) {
+        // Take only what's needed
+        newSelection.set(v.localInstanceId, remainingNeeded.toFixed(precision));
+        accumulated += remainingNeeded;
+      } else {
+        // Take full voucher
+        newSelection.set(v.localInstanceId, v.currentAmount);
+        accumulated += voucherAmount;
+      }
     }
 
     setSelectedMap(newSelection);
@@ -69,6 +89,7 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
   return {
     selectedMap,
     toggleVoucher,
+    setVoucherAmount,
     selectAmount,
     clearSelection,
     selectionStats
