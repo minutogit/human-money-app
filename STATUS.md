@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0-beta.10"
+version: "0.1.0-beta.11"
 phase: "beta"
 health: "green"
-last_updated: "2026-05-09"
+last_updated: "2026-05-10"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -139,6 +139,12 @@ priority_tasks:
     priority: "high"
     depends_on: []
     description: "Resolved architectural break where the frontend expected 'divisible' but the backend sent 'allow_partial_transfers'. Updated DTOs and interfaces to ensure consistency across the stack."
+  - id: "APP-023"
+    title: "Stealth Identity Resolution"
+    status: "completed"
+    priority: "high"
+    depends_on: ["CORE-001"]
+    description: "Unmasking stealth transaction identities by decrypting privacy_guard in the core library. Integrated React hook to prioritize address book names over truncated DIDs in Dashboard and Activity Log."
 ---
 
 # Human Money App — Status
@@ -209,6 +215,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Code Quality & Automated Hardening (Integrated ESLint, Clippy, and static analysis into `run-tests.sh` quality gate)
 - [x] Navigation & Session Context Refactoring (Eliminated prop-drilling across core view hierarchy) (APP-021)
 - [x] Voucher Divisibility Bug Fix (Resolved architectural break and updated DTO/Frontend interface alignment) (APP-022)
+- [x] Stealth Identity Resolution (Unmasked anonymous senders via privacy_guard decryption and contact mapping) (APP-023)
 
 
 

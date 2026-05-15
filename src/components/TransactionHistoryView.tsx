@@ -22,12 +22,14 @@ import {
     Search,
     CheckCircle2
 } from 'lucide-react';
-import { extractDisplayName, truncateUserId, suggestFilename } from '../utils/userIdHelper';
+import { truncateUserId, suggestFilename } from '../utils/userIdHelper';
 
 import { useNavigation } from '../context/NavigationContext';
+import { useContactResolver } from '../hooks/useContactResolver';
 
 export function TransactionHistoryView() {
     const { goBack } = useNavigation();
+    const { resolveIdentity } = useContactResolver();
     const [history, setHistory] = useState<TransactionRecord[]>([]);
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(true);
@@ -158,9 +160,9 @@ export function TransactionHistoryView() {
                                                     <div className="flex flex-col">
                                                         <p className="text-sm font-bold text-theme-secondary truncate">
                                                             {isSent ? (
-                                                                <>To: <span className="text-theme-primary">{extractDisplayName(record.recipientId || '')}</span></>
+                                                                <>To: <span className="text-theme-primary">{resolveIdentity(record.recipientId, null)}</span></>
                                                             ) : (
-                                                                <>From: <span className="text-theme-primary">{record.senderProfileName || extractDisplayName(record.senderId || '')}</span></>
+                                                                <>From: <span className="text-theme-primary">{resolveIdentity(record.senderId, record.senderProfileName)}</span></>
                                                             )}
                                                         </p>
                                                         {record.notes && (

@@ -21,6 +21,8 @@ export interface InvolvedVoucherInfo {
     isTestVoucher: boolean;
     displayCurrency: string;
     displayStandardName: string;
+    counterpartyId?: string;
+    counterpartyName?: string;
 }
 
 export interface SourceTransfer {

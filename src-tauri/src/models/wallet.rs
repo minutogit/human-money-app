@@ -98,6 +98,8 @@ pub struct FrontendInvolvedVoucherInfo {
     pub is_test_voucher: bool,
     pub display_currency: String,
     pub display_standard_name: String,
+    pub counterparty_id: Option<String>,
+    pub counterparty_name: Option<String>,
 }
 
 impl From<human_money_core::wallet::types::InvolvedVoucherInfo> for FrontendInvolvedVoucherInfo {
@@ -112,6 +114,8 @@ impl From<human_money_core::wallet::types::InvolvedVoucherInfo> for FrontendInvo
             is_test_voucher: i.is_test_voucher,
             display_currency: i.display_currency,
             display_standard_name: i.display_standard_name,
+            counterparty_id: i.counterparty_id,
+            counterparty_name: i.counterparty_name,
         }
     }
 }
@@ -128,6 +132,8 @@ impl From<FrontendInvolvedVoucherInfo> for human_money_core::wallet::types::Invo
             is_test_voucher: i.is_test_voucher,
             display_currency: i.display_currency,
             display_standard_name: i.display_standard_name,
+            counterparty_id: i.counterparty_id,
+            counterparty_name: i.counterparty_name,
         }
     }
 }

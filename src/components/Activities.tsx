@@ -19,45 +19,52 @@ import {
 } from 'lucide-react';
 
 import { useNavigation } from '../context/NavigationContext';
+import { useContactResolver } from '../hooks/useContactResolver';
 
-function getEventDetails(event: WalletEvent): { label: string; icon: React.ElementType; color: string; bgColor: string } {
-    const type = event.eventType;
-    const bff = event.bffData;
-
-    if (typeof type === 'string') {
-        switch (type) {
-            case 'voucherCreated':
-                return { label: 'Voucher Created', icon: PlusCircle, color: 'text-blue-600', bgColor: 'bg-blue-50' };
-            case 'transferSent':
-                return { 
-                    label: `Sent to ${bff.counterpartyName || 'Anonymous'}`, 
-                    icon: ArrowUpRight, 
-                    color: 'text-rose-600', 
-                    bgColor: 'bg-rose-50' 
-                };
-            case 'transferReceived':
-                return { 
-                    label: `Received from ${bff.counterpartyName || 'Anonymous'}`, 
-                    icon: ArrowDownLeft, 
-                    color: 'text-emerald-600', 
-                    bgColor: 'bg-emerald-50' 
-                };
-            case 'voucherQuarantined':
-                return { label: 'Security Quarantine', icon: ShieldAlert, color: 'text-amber-600', bgColor: 'bg-amber-50' };
-            case 'voucherActivated':
-                return { label: 'Voucher Activated', icon: CheckCircle2, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
-            case 'voucherVoided':
-                return { label: 'Voucher Voided', icon: XCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
-            case 'voucherExpired':
-                return { label: 'Voucher Expired', icon: Clock, color: 'text-orange-600', bgColor: 'bg-orange-50' };
-        }
-    }
-
-    return { label: 'Wallet Event', icon: Info, color: 'text-gray-600', bgColor: 'bg-gray-50' };
-}
 
 export function Activities() {
     const { navigate, goBack } = useNavigation();
+    const { resolveIdentity } = useContactResolver();
+
+    function getEventDetails(event: WalletEvent): { label: string; icon: React.ElementType; color: string; bgColor: string } {
+        const type = event.eventType;
+        const bff = event.bffData;
+
+        if (typeof type === 'string') {
+            switch (type) {
+                case 'voucherCreated':
+                    return { label: 'Voucher Created', icon: PlusCircle, color: 'text-blue-600', bgColor: 'bg-blue-50' };
+                case 'transferSent': {
+                    const recipientName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
+                    return { 
+                        label: `Sent to ${recipientName}`, 
+                        icon: ArrowUpRight, 
+                        color: 'text-rose-600', 
+                        bgColor: 'bg-rose-50' 
+                    };
+                }
+                case 'transferReceived': {
+                    const senderName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
+                    return { 
+                        label: `Received from ${senderName}`, 
+                        icon: ArrowDownLeft, 
+                        color: 'text-emerald-600', 
+                        bgColor: 'bg-emerald-50' 
+                    };
+                }
+                case 'voucherQuarantined':
+                    return { label: 'Security Quarantine', icon: ShieldAlert, color: 'text-amber-600', bgColor: 'bg-amber-50' };
+                case 'voucherActivated':
+                    return { label: 'Voucher Activated', icon: CheckCircle2, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
+                case 'voucherVoided':
+                    return { label: 'Voucher Voided', icon: XCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
+                case 'voucherExpired':
+                    return { label: 'Voucher Expired', icon: Clock, color: 'text-orange-600', bgColor: 'bg-orange-50' };
+            }
+        }
+
+        return { label: 'Wallet Event', icon: Info, color: 'text-gray-600', bgColor: 'bg-gray-50' };
+    }
     const [events, setEvents] = useState<WalletEvent[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState('');

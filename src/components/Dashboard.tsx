@@ -26,10 +26,12 @@ import {
 import { truncateUserId } from "../utils/userIdHelper";
 
 import { useNavigation } from "../context/NavigationContext";
+import { useContactResolver } from "../hooks/useContactResolver";
 
 export function Dashboard() {
     const { navigate } = useNavigation();
     const { profileName, integrityReport } = useSession();
+    const { resolveIdentity } = useContactResolver();
 
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<AggregatedBalance[]>([]);
@@ -127,10 +129,14 @@ export function Dashboard() {
             switch (type) {
                 case 'voucherCreated':
                     return { label: 'Voucher Created', icon: Plus, color: 'text-blue-600', bgColor: 'bg-blue-50' };
-                case 'transferSent':
-                    return { label: `Sent to ${bff.counterpartyName || 'Anonymous'}`, icon: ArrowUpRight, color: 'text-rose-600', bgColor: 'bg-rose-50' };
-                case 'transferReceived':
-                    return { label: `Received from ${bff.counterpartyName || 'Anonymous'}`, icon: ArrowDownLeft, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
+                case 'transferSent': {
+                    const recipientName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
+                    return { label: `Sent to ${recipientName}`, icon: ArrowUpRight, color: 'text-rose-600', bgColor: 'bg-rose-50' };
+                }
+                case 'transferReceived': {
+                    const senderName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
+                    return { label: `Received from ${senderName}`, icon: ArrowDownLeft, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
+                }
                 case 'voucherQuarantined':
                     return { label: 'Voucher Quarantined', icon: AlertCircle, color: 'text-amber-600', bgColor: 'bg-amber-50' };
                 case 'voucherActivated':
