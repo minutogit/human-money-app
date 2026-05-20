@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0-beta.11"
 phase: "beta"
 health: "green"
-last_updated: "2026-05-10"
+last_updated: "2026-05-20"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -216,6 +216,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Navigation & Session Context Refactoring (Eliminated prop-drilling across core view hierarchy) (APP-021)
 - [x] Voucher Divisibility Bug Fix (Resolved architectural break and updated DTO/Frontend interface alignment) (APP-022)
 - [x] Stealth Identity Resolution (Unmasked anonymous senders via privacy_guard decryption and contact mapping) (APP-023)
+- [x] Backend State & Command Handler Refactoring (Centralized session initialization in AppState, consolidated inline DTOs, and simplified read-only commands to Cache-Only)
 
 
 

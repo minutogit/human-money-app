@@ -1,6 +1,7 @@
 // src-tauri/src/state.rs
 use std::sync::{Mutex, MutexGuard};
 use log::{info, error};
+use chrono::{Duration, Utc};
 use human_money_core::app_service::AppService;
 use crate::models::{TransactionRecord, FrontendAddressBook, FrontendContact};
 use crate::settings::{AppSettings, SETTINGS_KEY};
@@ -214,5 +215,54 @@ impl AppState {
         *self.events.lock().unwrap() = None;
         *self.contacts.lock().unwrap() = None;
         *self.settings.lock().unwrap() = None;
+    }
+
+    /// Central session initializer — called after Login, Create Profile, Recovery, and Handover.
+    /// Loads all caches (Settings, History, Events, Contacts) and starts the session timer.
+    pub fn initialize_profile_session(
+        &self,
+        service: &mut AppService,
+        password: &str,
+    ) -> Result<(), String> {
+        info!("Initializing profile session and member caches...");
+
+        // 1. Load or create settings
+        let settings = self.load_settings(service, Some(password))?;
+
+        // 2. Start session timer if configured
+        if settings.session_timeout_seconds > 0 {
+            service.unlock_session(password, settings.session_timeout_seconds)?;
+        }
+
+        // 3. Load transaction history and clean up expired bundle data
+        let mut history = self.load_history_from_disk(service, Some(password))?;
+        let mut changed = false;
+        let retention_duration = Duration::days(settings.bundle_retention_days as i64);
+
+        for record in history.iter_mut() {
+            if record.bundle_data.is_empty() {
+                continue;
+            }
+            if let Ok(timestamp) = record.timestamp.parse::<chrono::DateTime<Utc>>() {
+                if Utc::now().signed_duration_since(timestamp) > retention_duration {
+                    info!("Clearing bundle data for old transaction record: {}", record.id);
+                    record.bundle_data.clear();
+                    changed = true;
+                }
+            }
+        }
+
+        if changed {
+            info!("Saving cleaned transaction history back to disk...");
+            self.save_history(service, history, Some(password))?;
+        }
+
+        // 4. Pre-cache the last 50 wallet events
+        self.refresh_events_cache(service, Some(password))?;
+
+        // 5. Load the address book
+        let _ = self.load_contacts(service, Some(password));
+
+        Ok(())
     }
 }

@@ -1,6 +1,5 @@
-use crate::{models::{FrontendUserProfile}, AppState, settings::AppSettings};
+use crate::{models::{FrontendUserProfile, SealUploadData}, AppState, settings::AppSettings};
 use log::{info, error};
-use serde::{Serialize};
 
 #[tauri::command]
 pub fn get_app_settings(state: tauri::State<AppState>) -> Result<AppSettings, String> {
@@ -87,13 +86,6 @@ pub fn get_seal_sync_status(state: tauri::State<AppState>) -> Result<String, Str
         human_money_core::models::seal::SyncStatus::Synced => "Synced",
     };
     Ok(status_str.to_string())
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SealUploadData {
-    pub seal_bytes: Vec<u8>,
-    pub seal_hash: String,
 }
 
 #[tauri::command]

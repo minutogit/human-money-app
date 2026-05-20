@@ -192,19 +192,14 @@ pub fn get_event_history(
     limit: usize,
     state: tauri::State<AppState>,
 ) -> Result<Vec<crate::models::FrontendWalletEvent>, String> {
-    // 1. Check cache first
     let events_cache = state.events.lock().unwrap();
     if let Some(events) = events_cache.as_ref() {
-        // Return slice from cache based on offset/limit
         let start = offset.min(events.len());
         let end = (offset + limit).min(events.len());
-        return Ok(events[start..end].iter().map(|e| e.clone().into()).collect());
+        Ok(events[start..end].iter().map(|e| e.clone().into()).collect())
+    } else {
+        Err("Events cache not initialized".to_string())
     }
-    
-    // 2. Fallback to backend (might require session to be active)
-    let mut service = state.service.lock().unwrap();
-    let events = service.get_event_history(offset, limit, None)?;
-    Ok(events.into_iter().map(|e| e.into()).collect())
 }
 
 #[cfg(test)]

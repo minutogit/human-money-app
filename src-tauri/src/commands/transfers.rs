@@ -1,42 +1,19 @@
 // src-tauri/src/commands/transfers.rs
-use crate::{models::{FrontendTransactionRecord, TransactionRecord}, AppState};
+use crate::{
+    models::{
+        CreateBundleResult, FrontendSourceTransfer, FrontendTransactionRecord,
+        ReceiveSuccessPayload, TransactionRecord,
+    },
+    AppState,
+};
 use chrono::Utc;
 use log::{info, error};
 use uuid::Uuid;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use human_money_core::{
     archive::VoucherArchive,
     wallet::{MultiTransferRequest, SourceTransfer},
 };
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendSourceTransfer {
-    local_instance_id: String,
-    amount_to_send: String,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ReceiveSuccessPayload {
-    pub sender_id: String,
-    pub sender_profile_name: Option<String>,
-    pub notes: Option<String>,
-    pub transfer_summary: crate::models::FrontendTransferSummary,
-    pub involved_vouchers: Vec<String>,
-    pub involved_vouchers_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
-    pub verifiable_conflicts: HashMap<String, Vec<human_money_core::models::conflict::TransactionFingerprint>>,
-    pub conflict_summaries: Vec<crate::models::FrontendProofOfDoubleSpendSummary>,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateBundleResult {
-    pub bundle_data: Vec<u8>,
-    pub bundle_id: String,
-    pub involved_sources_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
-}
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -178,12 +155,6 @@ pub fn save_transaction_record(
 #[tauri::command]
 pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<FrontendTransactionRecord>, String> {
     info!("Loading transaction history...");
-    
-    if let Ok(history) = state.get_cached_history() {
-        return Ok(history.iter().map(|r| r.into()).collect());
-    }
-    
-    let mut service = state.service.lock().unwrap();
-    let history = state.load_history_from_disk(&mut service, None)?;
+    let history = state.get_cached_history()?;
     Ok(history.iter().map(|r| r.into()).collect())
 }

@@ -5,11 +5,7 @@ use log::info;
 
 #[tauri::command]
 pub fn get_contacts(state: tauri::State<AppState>) -> Result<Vec<FrontendContact>, String> {
-    if let Ok(contacts) = state.get_cached_contacts() {
-        return Ok(contacts);
-    }
-    let mut service = state.service.lock().unwrap();
-    state.load_contacts(&mut service, None)
+    state.get_cached_contacts()
 }
 
 #[tauri::command]

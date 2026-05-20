@@ -1,7 +1,7 @@
 use crate::models::{ProfileInfo, MnemonicLanguage};
 use crate::settings::{AppSettings, SETTINGS_KEY};
 use crate::AppState;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -170,7 +170,7 @@ pub fn create_profile(
                 .map_err(|e| format!("Failed to save default settings: {}", e))?;
 
             // 2. Initialisiere die Session und den Cache (lädt Settings & leere History)
-            initialize_profile_session(&mut service, &password, &state)
+            state.initialize_profile_session(&mut service, &password)
         }
         Err(e) => {
             error!("Profile creation failed: {}", e);
@@ -202,7 +202,7 @@ pub fn login(
             }
 
             // Initialisiere die Session und den Cache
-            initialize_profile_session(&mut service, &password, &state)
+            state.initialize_profile_session(&mut service, &password)
         }
         Err(e) => {
             error!("Login failed: {}", e);
@@ -230,7 +230,7 @@ pub fn recover_wallet_and_set_new_password(
             
             // NEU: Nach der Recovery müssen wir die Session und den Cache ebenfalls initialisieren,
             // da der User im Frontend direkt ins Dashboard (logged_in) wechselt.
-            initialize_profile_session(&mut service, &new_password, &state)
+            state.initialize_profile_session(&mut service, &new_password)
         }
         Err(e) => {
             error!("Wallet recovery failed: {}", e);
@@ -259,7 +259,7 @@ pub fn handover_to_this_device(
             }
 
             // Initialisiere die Session und den Cache
-            initialize_profile_session(&mut service, &password, &state)
+            state.initialize_profile_session(&mut service, &password)
         }
         Err(e) => {
             error!("Handover failed: {}", e);
@@ -268,55 +268,6 @@ pub fn handover_to_this_device(
     }
 }
 
-/// Helper-Funktion zur Initialisierung der Sitzung und der AppState-Caches (Settings & History).
-/// Wird nach Login, Profile-Erstellung (teilweise) und Recovery aufgerufen.
-fn initialize_profile_session(
-    service: &mut human_money_core::app_service::AppService,
-    password: &str,
-    state: &AppState,
-) -> Result<(), String> {
-    info!("Initializing profile session and member caches...");
-    
-    // 1. Lade oder erstelle die Einstellungen
-    let settings = state.load_settings(service, Some(password))?;
-
-    // 2. Wenn ein Timeout konfiguriert ist, starten wir direkt die Session.
-    if settings.session_timeout_seconds > 0 {
-        service.unlock_session(password, settings.session_timeout_seconds)?;
-    }
-
-    // 3. Lade die Transaktionshistorie und führe die Bereinigung durch
-    let mut history = state.load_history_from_disk(service, Some(password))?;
-    let mut changed = false;
-    let retention_duration = Duration::days(settings.bundle_retention_days as i64);
-
-    for record in history.iter_mut() {
-        if record.bundle_data.is_empty() {
-            continue;
-        }
-        if let Ok(timestamp) = record.timestamp.parse::<chrono::DateTime<Utc>>() {
-            if Utc::now().signed_duration_since(timestamp) > retention_duration {
-                info!("Clearing bundle data for old transaction record: {}", record.id);
-                record.bundle_data.clear();
-                changed = true;
-            }
-        }
-    }
-
-    if changed {
-        info!("Saving cleaned transaction history back to disk...");
-        state.save_history(service, history, Some(password))?;
-    }
-
-    // 4. Lade die Event-Historie (BFF-Query für das Dashboard)
-    // Wir laden die letzten 50 Events vorab in den Cache
-    state.refresh_events_cache(service, Some(password))?;
-
-    // 5. Lade das Adressbuch
-    let _ = state.load_contacts(service, Some(password));
-
-    Ok(())
-}
 
 
 #[tauri::command]

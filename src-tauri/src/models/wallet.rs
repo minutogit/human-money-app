@@ -250,3 +250,38 @@ impl From<FrontendTransactionRecord> for TransactionRecord {
         }
     }
 }
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendSourceTransfer {
+    pub local_instance_id: String,
+    pub amount_to_send: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiveSuccessPayload {
+    pub sender_id: String,
+    pub sender_profile_name: Option<String>,
+    pub notes: Option<String>,
+    pub transfer_summary: crate::models::FrontendTransferSummary,
+    pub involved_vouchers: Vec<String>,
+    pub involved_vouchers_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
+    pub verifiable_conflicts: std::collections::HashMap<String, Vec<human_money_core::models::conflict::TransactionFingerprint>>,
+    pub conflict_summaries: Vec<crate::models::FrontendProofOfDoubleSpendSummary>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBundleResult {
+    pub bundle_data: Vec<u8>,
+    pub bundle_id: String,
+    pub involved_sources_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SealUploadData {
+    pub seal_bytes: Vec<u8>,
+    pub seal_hash: String,
+}
