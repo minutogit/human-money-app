@@ -29,7 +29,7 @@ export const profileService = {
         return await invoke<void>("save_user_profile", { profile, password });
     },
 
-    getIdentity: async () => {
+    getUserId: async () => {
         return await invoke<string>("get_user_id");
     },
 

@@ -4,7 +4,7 @@ import logo from "../assets/logo.png";
 
 import { authService } from "../services/authService";
 import { AuthLayout } from "./AuthLayout";
-import { utilityService } from "../services/voucherService";
+import { profileService } from "../services/profileService";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -120,7 +120,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 targetInstanceId: localInstanceId,
             });
             
-            const userId = await utilityService.getUserId();
+            const userId = await profileService.getUserId();
             setHandoverUserId(userId);
             setShowPostHandoverWarning(true);
             setIsLoggingIn(false);

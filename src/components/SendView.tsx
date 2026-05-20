@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, FormEvent, useReducer } from "react";
-import { voucherService, utilityService } from "../services/voucherService";
+import { voucherService } from "../services/voucherService";
 import { transferService, CreateBundleResult } from "../services/transferService";
 import { settingsService } from "../services/settingsService";
 import { profileService } from "../services/profileService";
@@ -141,7 +141,7 @@ export function SendView() {
             try {
                 const [summaries, userId, profile, standards, settings, fetchedContacts, activeClasses] = await Promise.all([
                     voucherService.getSummaries(),
-                    utilityService.getUserId(),
+                    profileService.getUserId(),
                     profileService.getProfile().catch(() => null),
                     standardsService.getStandards(),
                     settingsService.getSettings(),

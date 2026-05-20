@@ -1,6 +1,6 @@
 // src/components/Dashboard.tsx
 import { useState, useEffect } from "react";
-import { voucherService, utilityService } from "../services/voucherService";
+import { voucherService } from "../services/voucherService";
 import { transferService } from "../services/transferService";
 import { profileService } from "../services/profileService";
 import { contactService } from "../services/contactService";
@@ -51,7 +51,7 @@ export function Dashboard() {
         async function fetchData() {
             try {
                 const [id, balanceList, , voucherSummaries, userProfile, , eventHistory] = await Promise.all([
-                    utilityService.getUserId(),
+                    profileService.getUserId(),
                     voucherService.getTotalBalanceByCurrency(),
                     transferService.getHistory().catch(() => []),
                     voucherService.getSummaries().catch(() => []),

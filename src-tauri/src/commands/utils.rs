@@ -130,11 +130,6 @@ pub fn get_bip39_wordlist(language: MnemonicLanguage) -> Vec<&'static str> {
     AppService::get_mnemonic_wordlist(core_language)
 }
 
-#[tauri::command]
-pub fn frontend_log(message: String) {
-    info!("[Frontend]: {}", message);
-}
-
 
 #[tauri::command]
 pub async fn log_to_backend(level: String, message: String) -> Result<(), String> {

@@ -73,10 +73,3 @@ export const voucherService = {
         return await invoke<AggregatedBalance[]>("get_total_balance_by_currency");
     }
 };
-
-
-export const utilityService = {
-    getUserId: async () => {
-        return await invoke<string>("get_user_id");
-    }
-};

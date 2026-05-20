@@ -137,7 +137,7 @@ pub fn run() {
             get_transaction_history,
             get_app_settings, save_app_settings,
             update_user_profile,
-            frontend_log, log_to_backend,
+            log_to_backend,
             // Multi-signature commands
             create_signing_request_bundle, open_voucher_signing_request, create_detached_signature_response_bundle,
             process_and_attach_signature, get_allowed_signature_roles_from_standard, evaluate_signature_suitability,
