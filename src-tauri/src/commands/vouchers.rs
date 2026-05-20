@@ -1,6 +1,5 @@
 // src-tauri/src/commands/vouchers.rs
 use crate::{models::{FrontendNewVoucherData}, AppState};
-use crate::commands::auth::update_events_cache;
 use log::{info, error};
 use human_money_core::{
     models::voucher::Voucher,
@@ -64,7 +63,7 @@ pub fn create_new_voucher(
 
     let voucher = service.create_new_voucher(&standard_toml_content, lang_preference, voucher_data, password.as_deref())?;
     
-    if let Err(e) = update_events_cache(&mut service, &state, password.as_deref()) {
+    if let Err(e) = state.refresh_events_cache(&mut service, password.as_deref()) {
         error!("Failed to refresh events cache after create_new_voucher: {}", e);
     }
 

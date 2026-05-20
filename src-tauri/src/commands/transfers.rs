@@ -1,6 +1,5 @@
 // src-tauri/src/commands/transfers.rs
 use crate::{models::{FrontendTransactionRecord, TransactionRecord}, AppState};
-use crate::commands::auth::update_events_cache;
 use chrono::Utc;
 use log::{info, error};
 use uuid::Uuid;
@@ -8,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use human_money_core::{
     archive::VoucherArchive,
-    app_service::AppService,
     wallet::{MultiTransferRequest, SourceTransfer},
 };
 
@@ -78,7 +76,7 @@ pub fn create_transfer_bundle(
 
     match service.create_transfer_bundle(request, &standard_definitions_toml, archive, password.as_deref()) {
         Ok(result) => {
-            if let Err(e) = update_events_cache(&mut service, &state, password.as_deref()) {
+            if let Err(e) = state.refresh_events_cache(&mut service, password.as_deref()) {
                 error!("Failed to refresh events cache after create_transfer_bundle: {}", e);
             }
 
@@ -141,20 +139,9 @@ pub fn receive_bundle(
                 sender_profile_name: sender_profile_name.clone(),
             };
 
-            let mut history = load_history_from_disk(&mut service, password.as_deref())?;
-            let new_record = record.clone();
-            history.push(record);
-            let history_bytes = serde_json::to_vec(&history).map_err(|e| e.to_string())?;
-            service.save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, password.as_deref())?;
+            state.append_to_history(&mut service, record.clone(), password.as_deref())?;
 
-            let mut history_cache = state.history.lock().unwrap();
-            if let Some(cache) = history_cache.as_mut() {
-                cache.push(new_record);
-            } else {
-                *history_cache = Some(history);
-            }
-
-            if let Err(e) = update_events_cache(&mut service, &state, password.as_deref()) {
+            if let Err(e) = state.refresh_events_cache(&mut service, password.as_deref()) {
                 error!("Failed to refresh events cache after receive_bundle: {}", e);
             }
 
@@ -176,8 +163,6 @@ pub fn receive_bundle(
     }
 }
 
-pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
-
 #[tauri::command]
 pub fn save_transaction_record(
     record: FrontendTransactionRecord,
@@ -187,58 +172,18 @@ pub fn save_transaction_record(
     let record: TransactionRecord = record.into();
     info!("Saving new transaction record with id: {}", record.id);
     let mut service = state.service.lock().unwrap();
-
-    let mut history = load_history_from_disk(&mut service, password.as_deref())?;
-    let new_record = record.clone();
-    history.push(record);
-
-    let history_bytes = serde_json::to_vec(&history).map_err(|e| e.to_string())?;
-    service.save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, password.as_deref())?;
-
-    let mut history_cache = state.history.lock().unwrap();
-    if let Some(cache) = history_cache.as_mut() {
-        cache.push(new_record);
-    } else {
-        *history_cache = Some(history);
-    }
-    Ok(())
-}
-
-pub fn load_history_from_disk(
-    service: &mut AppService,
-    password: Option<&str>,
-) -> Result<Vec<TransactionRecord>, String> {
-    match service.load_encrypted_data(TRANSACTION_HISTORY_KEY, password) {
-        Ok(data) => {
-            let records: Result<Vec<TransactionRecord>, _> = serde_json::from_slice(&data);
-            match records {
-                 Ok(parsed_records) => Ok(parsed_records),
-                Err(e) => {
-                     let msg = format!("Failed to parse transaction history: {}", e);
-                     error!("{}", msg);
-                     Err(msg)
-                }
-            }
-        },
-        Err(_) => {
-            info!("Keine Transaktionshistorie auf Festplatte gefunden. Erstelle neue.");
-            Ok(Vec::new())
-        }
-    }
+    state.append_to_history(&mut service, record, password.as_deref())
 }
 
 #[tauri::command]
 pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<FrontendTransactionRecord>, String> {
     info!("Loading transaction history...");
     
-    let mut history_cache = state.history.lock().unwrap();
-    if history_cache.is_none() {
-        info!("History cache empty, loading from disk...");
-        let mut service = state.service.lock().unwrap();
-        let history = load_history_from_disk(&mut service, None)?;
-        *history_cache = Some(history);
+    if let Ok(history) = state.get_cached_history() {
+        return Ok(history.iter().map(|r| r.into()).collect());
     }
     
-    let history = history_cache.as_ref().unwrap();
+    let mut service = state.service.lock().unwrap();
+    let history = state.load_history_from_disk(&mut service, None)?;
     Ok(history.iter().map(|r| r.into()).collect())
 }

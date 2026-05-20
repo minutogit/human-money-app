@@ -1,16 +1,11 @@
-// src-tauri/src/commands/settings_cmd.rs
-use crate::{models::{FrontendUserProfile}, AppState, settings::{AppSettings, SETTINGS_KEY}};
+use crate::{models::{FrontendUserProfile}, AppState, settings::AppSettings};
 use log::{info, error};
 use serde::{Serialize};
 
 #[tauri::command]
 pub fn get_app_settings(state: tauri::State<AppState>) -> Result<AppSettings, String> {
     info!("Getting app settings from cache...");
-    let settings_cache = state.settings.lock().unwrap();
-    settings_cache
-        .as_ref()
-        .cloned()
-        .ok_or_else(|| "Settings not available. User might be logged out or core initialization missing.".to_string())
+    state.get_cached_settings()
 }
 
 #[tauri::command]
@@ -21,12 +16,7 @@ pub fn save_app_settings(
 ) -> Result<(), String> {
     info!("Saving app settings to disk...");
     let mut service = state.service.lock().unwrap();
-    let bytes = serde_json::to_vec(&settings).map_err(|e| e.to_string())?;
-    service.save_encrypted_data(SETTINGS_KEY, &bytes, password.as_deref())?;
-
-    *state.settings.lock().unwrap() = Some(settings);
-    info!("App settings saved and cache updated successfully.");
-    Ok(())
+    state.save_settings(&mut service, settings, password.as_deref())
 }
 
 #[tauri::command]

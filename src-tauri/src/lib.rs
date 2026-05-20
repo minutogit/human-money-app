@@ -5,6 +5,9 @@
 pub mod commands;
 pub mod models;
 pub mod settings;
+pub mod state;
+
+pub use state::AppState;
 
 use chrono::Local;
 use std::fs;
@@ -20,8 +23,6 @@ use tauri_plugin_log::{
 use human_money_core::app_service::AppService;
 
 use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*};
-use crate::models::TransactionRecord;
-use crate::settings::AppSettings;
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
 
@@ -54,14 +55,6 @@ fn setup_log_rotation(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>>
     }
 
     Ok(())
-}
-
-pub struct AppState {
-    pub service: Mutex<AppService>,
-    pub history: Mutex<Option<Vec<TransactionRecord>>>,
-    pub events: Mutex<Option<Vec<human_money_core::models::wallet_event::WalletEvent>>>,
-    pub contacts: Mutex<Option<crate::models::FrontendAddressBook>>,
-    pub settings: Mutex<Option<AppSettings>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

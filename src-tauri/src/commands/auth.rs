@@ -1,9 +1,6 @@
 use crate::models::{ProfileInfo, MnemonicLanguage};
 use crate::settings::{AppSettings, SETTINGS_KEY};
-use crate::{
-    commands::transfers::{load_history_from_disk, TRANSACTION_HISTORY_KEY},
-    AppState,
-};
+use crate::AppState;
 use chrono::{DateTime, Duration, Utc};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
@@ -281,18 +278,7 @@ fn initialize_profile_session(
     info!("Initializing profile session and member caches...");
     
     // 1. Lade oder erstelle die Einstellungen
-    let settings: AppSettings = match service.load_encrypted_data(SETTINGS_KEY, Some(password)) {
-        Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
-        Err(_) => {
-            info!("No settings file found, creating default settings.");
-            let default_settings = AppSettings::default();
-            let bytes = serde_json::to_vec(&default_settings).unwrap();
-            service
-                .save_encrypted_data(SETTINGS_KEY, &bytes, Some(password))
-                .map_err(|e| format!("Failed to save default settings: {}", e))?;
-            default_settings
-        }
-    };
+    let settings = state.load_settings(service, Some(password))?;
 
     // 2. Wenn ein Timeout konfiguriert ist, starten wir direkt die Session.
     if settings.session_timeout_seconds > 0 {
@@ -300,7 +286,7 @@ fn initialize_profile_session(
     }
 
     // 3. Lade die Transaktionshistorie und führe die Bereinigung durch
-    let mut history = load_history_from_disk(service, Some(password))?;
+    let mut history = state.load_history_from_disk(service, Some(password))?;
     let mut changed = false;
     let retention_duration = Duration::days(settings.bundle_retention_days as i64);
 
@@ -319,38 +305,16 @@ fn initialize_profile_session(
 
     if changed {
         info!("Saving cleaned transaction history back to disk...");
-        let history_bytes = serde_json::to_vec(&history)
-            .map_err(|e| format!("Failed to serialize cleaned history: {}", e))?;
-        service
-            .save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, Some(password))
-            .map_err(|e| format!("Failed to save cleaned history: {}", e))?;
+        state.save_history(service, history, Some(password))?;
     }
 
     // 4. Lade die Event-Historie (BFF-Query für das Dashboard)
     // Wir laden die letzten 50 Events vorab in den Cache
-    update_events_cache(service, state, password.into())?;
+    state.refresh_events_cache(service, Some(password))?;
 
     // 5. Lade das Adressbuch
-    let contacts_data = service.load_encrypted_data("address_book", Some(password)).ok();
-    let contacts: Option<crate::models::FrontendAddressBook> = contacts_data.and_then(|d| serde_json::from_slice(&d).ok());
+    let _ = state.load_contacts(service, Some(password));
 
-    // 6. Speichere die geladenen Daten im AppState
-    *state.settings.lock().unwrap() = Some(settings);
-    *state.history.lock().unwrap() = Some(history);
-    *state.contacts.lock().unwrap() = contacts;
-
-    Ok(())
-}
-
-/// Lädt die letzten 50 Events aus dem Backend und aktualisiert den Cache im AppState.
-pub fn update_events_cache(
-    service: &mut human_money_core::app_service::AppService,
-    state: &AppState,
-    password: Option<&str>,
-) -> Result<(), String> {
-    info!("Refreshing events cache...");
-    let events = service.get_event_history(0, 50, password)?;
-    *state.events.lock().unwrap() = Some(events);
     Ok(())
 }
 
@@ -359,10 +323,7 @@ pub fn update_events_cache(
 pub fn logout(state: tauri::State<AppState>) {
     info!("Logging out...");
     // Leere die zwischengespeicherten Daten sicher aus dem Speicher
-    *state.history.lock().unwrap() = None;
-    *state.events.lock().unwrap() = None;
-    *state.contacts.lock().unwrap() = None;
-    *state.settings.lock().unwrap() = None;
+    state.clear_all_caches();
 
     let mut service = state.service.lock().unwrap();
     service.logout();
