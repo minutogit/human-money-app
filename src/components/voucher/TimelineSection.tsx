@@ -1,19 +1,21 @@
 import { FileSignature, History, CheckCircle2, Trash2 } from 'lucide-react';
 import { Card } from '../ui/Card';
-import { VoucherDetails } from '../../types';
+import { VoucherDetails, VoucherStatus } from '../../types';
 
 interface TimelineSectionProps {
   signatures: VoucherDetails['voucher']['signatures'];
   transactions: VoucherDetails['voucher']['transactions'];
   displayCurrency: string;
   onRemoveSignature: (id: string) => void;
+  voucherStatus: VoucherStatus;
 }
 
 export function TimelineSection({
   signatures,
   transactions,
   displayCurrency,
-  onRemoveSignature
+  onRemoveSignature,
+  voucherStatus
 }: TimelineSectionProps) {
   const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
 
@@ -47,12 +49,14 @@ export function TimelineSection({
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-[10px] font-bold text-theme-light opacity-60">{formatDateTime(sig.signatureTime)}</span>
-                    <button 
-                      className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-rose-50 text-rose-500 transition-all"
-                      onClick={() => onRemoveSignature(sig.signatureId)}
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {voucherStatus === "incomplete" && !isCreator && (
+                      <button 
+                        className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-rose-50 text-rose-500 transition-all"
+                        onClick={() => onRemoveSignature(sig.signatureId)}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

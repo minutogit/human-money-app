@@ -311,6 +311,7 @@ export function VoucherDetailsView() {
                                 transactions={voucher.transactions}
                                 displayCurrency={details.displayCurrency}
                                 onRemoveSignature={setShowRemoveSignatureModal}
+                                voucherStatus={details.status}
                             />
                         </div>
 

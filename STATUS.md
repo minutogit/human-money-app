@@ -235,6 +235,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] UI Component Testing for Settings (Implemented React Testing Library component tests for ProfileSettings and SettingsView, validating form submittals, geolocation triggers, tab navigation, and clipboard interactions)
 - [x] Fixed Double-Spend Conflict UI Sorting (Sorted conflicting transactions chronologically in both backend DTO mapping and frontend component to ensure the valid earliest transaction is correctly shown as the Winner)
 - [x] Fixed Double-Spend Conflict Classification & Quarantine Logic (Resolved bug classifying local victims as witnesses, quarantined losing vouchers automatically on proof import, and verified with integration tests) (CORE-003)
+- [x] Hardened Signature Management (Restricted signature removal to incomplete vouchers and prevented deletion of the creator/issuer signature)
 
 ## Next Milestones
 
