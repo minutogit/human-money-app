@@ -2315,6 +2315,7 @@ dependencies = [
  "machine-uid",
  "serde",
  "serde_json",
+ "sysinfo",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",

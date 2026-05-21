@@ -419,4 +419,14 @@ mod tests {
         assert!(state.contacts.lock().unwrap().is_none());
         assert!(state.settings.lock().unwrap().is_none());
     }
+
+    #[test]
+    fn test_sysinfo_processes() {
+        use sysinfo::{System, Pid};
+        let mut s = System::new();
+        s.refresh_processes();
+        let current_pid = std::process::id();
+        let proc = s.process(Pid::from_u32(current_pid));
+        assert!(proc.is_some(), "Current process should be found in refreshed processes! PID: {}", current_pid);
+    }
 }
