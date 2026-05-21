@@ -510,7 +510,15 @@ describe('RecreateProfile Component', () => {
       await waitFor(() => {
         expect(screen.getByLabelText(/Profile Name/i)).toBeInTheDocument();
         expect(screen.getByPlaceholderText('Minimum 8 characters')).toBeInTheDocument();
-        expect(screen.getByLabelText(/Device Prefix/i)).toBeInTheDocument();
+        expect(screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i)).toBeInTheDocument();
+      });
+
+      // Toggle checkbox to reveal prefix input
+      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
+      fireEvent.click(checkbox);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/Sub-Account Name \/ Device Prefix/i)).toBeInTheDocument();
       });
     });
 
@@ -543,7 +551,11 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
+      // Toggle checkbox to reveal prefix input
+      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
+      fireEvent.click(checkbox);
+
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -588,7 +600,11 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
+      // Toggle checkbox to reveal prefix input
+      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
+      fireEvent.click(checkbox);
+
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -669,7 +685,11 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
+      // Toggle checkbox to reveal prefix input
+      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
+      fireEvent.click(checkbox);
+
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -715,7 +735,11 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
+      // Toggle checkbox to reveal prefix input
+      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
+      fireEvent.click(checkbox);
+
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -768,7 +792,11 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
+      // Toggle checkbox to reveal prefix input
+      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
+      fireEvent.click(checkbox);
+
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
@@ -842,7 +870,11 @@ describe('RecreateProfile Component', () => {
       const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
       fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
 
-      const userPrefixInput = screen.getByPlaceholderText(/e.g. 'my_laptop', '0', or 'pc'/i);
+      // Toggle checkbox to reveal prefix input
+      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
+      fireEvent.click(checkbox);
+
+      const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
       const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');

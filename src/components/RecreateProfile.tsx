@@ -48,6 +48,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     const [confirmPassphrase, setConfirmPassphrase] = useState<string>("");
     const [profileName, setProfileName] = useState("");
     const [userPrefix, setUserPrefix] = useState("");
+    const [isSubAccount, setIsSubAccount] = useState(false);
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
     const [showPrefixInfo, setShowPrefixInfo] = useState(false);
@@ -274,7 +275,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                     profileName,
                     mnemonic: mnemonicWords.join(' '), // Use the imported mnemonic
                     passphrase: passphrase || undefined,
-                    userPrefix: userPrefix || undefined,
+                    userPrefix: isSubAccount ? (userPrefix || undefined) : undefined,
                     password,
                     localInstanceId,
                     language: selectedLanguage,
@@ -462,25 +463,65 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                             />
                         </div>
 
-                        <div className="border-t border-theme-light-border pt-5 space-y-5">
-                            <div>
-                                <div className="flex items-center justify-between mb-1">
-                                    <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary">Device Prefix (Optional)</label>
-                                    <button 
-                                        type="button" 
-                                        onClick={() => setShowPrefixInfo(true)}
-                                        className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20"
-                                    >
-                                        <HelpCircle size={12} />
-                                        <span>Read Instructions</span>
-                                    </button>
+                        <div className="border-t border-theme-light-border pt-5 space-y-4">
+                            <div className="flex items-start gap-2.5 py-1">
+                                <input
+                                    id="checkbox-sub-account"
+                                    type="checkbox"
+                                    checked={isSubAccount}
+                                    onChange={(e) => {
+                                        setIsSubAccount(e.target.checked);
+                                        if (!e.target.checked) {
+                                            setUserPrefix("");
+                                        }
+                                    }}
+                                    className="mt-1 h-4.5 w-4.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary/30 cursor-pointer"
+                                />
+                                <div className="flex flex-col">
+                                    <label htmlFor="checkbox-sub-account" className="text-xs font-bold text-theme-secondary cursor-pointer select-none">
+                                        Set up as sub-account / for multiple devices (Optional)
+                                    </label>
+                                    <p className="text-[10px] font-medium text-theme-light leading-normal mt-0.5">
+                                        Check this if you plan to use this seed phrase on more than one device (e.g. computer and phone) at the same time.
+                                    </p>
                                 </div>
-                                <Input id="userPrefix" data-testid="user-prefix-input" type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g. 'my_laptop', '0', or 'pc'" />
-                                <p className="text-[10px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic mt-1.5">
-                                    <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                                    Critical: Every device MUST have a unique prefix to prevent irreversible reputation loss.
-                                </p>
                             </div>
+
+                            {isSubAccount && (
+                                <div className="space-y-2 pt-2 border-t border-theme-light-border animate-in fade-in duration-300">
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary">
+                                            Sub-Account Name / Device Prefix
+                                        </label>
+                                        <button 
+                                            type="button" 
+                                            onClick={() => setShowPrefixInfo(true)}
+                                            className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20"
+                                        >
+                                            <HelpCircle size={12} />
+                                            <span>Read Instructions</span>
+                                        </button>
+                                    </div>
+                                    <Input 
+                                        id="userPrefix" 
+                                        data-testid="user-prefix-input" 
+                                        type="text" 
+                                        value={userPrefix} 
+                                        onChange={(e) => setUserPrefix(e.target.value)} 
+                                        placeholder="e.g. laptop, phone, or my-company" 
+                                    />
+                                    
+                                    <div className="space-y-1.5 p-3.5 bg-theme-subtle/20 border border-theme-subtle rounded-2xl">
+                                        <p className="text-[10px] text-theme-secondary leading-relaxed">
+                                            Required if using the same seed phrase on multiple devices. Can also be used as a public identifier (e.g. company name) for easy recognition. You can create multiple profiles on this device in parallel without deleting old ones.
+                                        </p>
+                                        <p className="text-[9px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic">
+                                            <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                                            Critical: Every active device MUST have a unique prefix to prevent irreversible reputation loss.
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         <PrefixInfoModal 
