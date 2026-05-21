@@ -1,6 +1,6 @@
 ---
 project: human-money-app
-version: "0.1.0-beta.13"
+version: "0.1.0-beta.14"
 phase: "beta"
 health: "green"
 last_updated: "2026-05-21"
@@ -151,6 +151,12 @@ priority_tasks:
     priority: "medium"
     depends_on: []
     description: "Added automatic coordinate extraction from map links, device-native GPS location detection, and Nominatim-based address geocoding to profile settings and voucher creation forms."
+  - id: "CORE-003"
+    title: "Double Spend Conflict Classification & Quarantine Fix"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Fixed critical bug where double-spend conflicts affecting the local wallet were incorrectly classified as Witness instead of Victim, and ensured affected local vouchers are correctly quarantined immediately upon detection or proof import."
 ---
 
 # Human Money App — Status
@@ -227,10 +233,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Map Coordinate Entry Helpers (OSM Nominatim Geocoding, GPS location, and Map Link Parsing) (APP-024)
 - [x] Tauri Command Integrity & Mismatch Fixes (Added static analysis test validating all frontend invoke calls against backend command registrations, and corrected profile/integrity command name mismatches)
 - [x] UI Component Testing for Settings (Implemented React Testing Library component tests for ProfileSettings and SettingsView, validating form submittals, geolocation triggers, tab navigation, and clipboard interactions)
-
-
-
-
+- [x] Fixed Double-Spend Conflict UI Sorting (Sorted conflicting transactions chronologically in both backend DTO mapping and frontend component to ensure the valid earliest transaction is correctly shown as the Winner)
+- [x] Fixed Double-Spend Conflict Classification & Quarantine Logic (Resolved bug classifying local victims as witnesses, quarantined losing vouchers automatically on proof import, and verified with integration tests) (CORE-003)
 
 ## Next Milestones
 

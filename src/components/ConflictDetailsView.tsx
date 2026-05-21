@@ -73,6 +73,13 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
     const { proof, localOverride, conflictRole } = details;
     const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
 
+    // Sort conflicting transactions by timestamp (earliest first) so the winner is index 0
+    const sortedTransactions = [...proof.conflictingTransactions].sort((a, b) => {
+        const timeA = a.tTime ? new Date(a.tTime).getTime() : 0;
+        const timeB = b.tTime ? new Date(b.tTime).getTime() : 0;
+        return timeA - timeB;
+    });
+
     return (
         <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-12">
             <header className="flex items-center gap-4">
@@ -177,7 +184,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                     <p className="text-xs text-theme-light mb-4">Secure proof of conflicting transactions:</p>
                     
                     <div className="space-y-4">
-                        {proof.conflictingTransactions.map((tx, idx) => (
+                        {sortedTransactions.map((tx, idx) => (
                             <div key={tx.tId} className={`p-3 rounded border-l-4 ${idx === 0 ? 'border-green-500 bg-green-50/30' : 'border-red-500 bg-red-50/30'}`}>
                                 <div className="flex justify-between items-center mb-2">
                                     <span className="text-[10px] font-bold uppercase text-gray-400">Transaction {idx + 1} {idx === 0 && '(Winner)'}</span>

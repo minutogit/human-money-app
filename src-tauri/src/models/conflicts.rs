@@ -66,11 +66,27 @@ pub struct FrontendProofOfDoubleSpend {
 
 impl From<human_money_core::models::conflict::ProofOfDoubleSpend> for FrontendProofOfDoubleSpend {
     fn from(p: human_money_core::models::conflict::ProofOfDoubleSpend) -> Self {
+        let mut conflicting_transactions: Vec<FrontendTransaction> = p
+            .conflicting_transactions
+            .into_iter()
+            .map(|t| t.into())
+            .collect();
+
+        // Sort conflicting transactions by timestamp (earliest first) so the winner is index 0
+        conflicting_transactions.sort_by(|a, b| {
+            let ta = chrono::DateTime::parse_from_rfc3339(&a.t_time);
+            let tb = chrono::DateTime::parse_from_rfc3339(&b.t_time);
+            match (ta, tb) {
+                (Ok(da), Ok(db)) => da.cmp(&db),
+                _ => a.t_time.cmp(&b.t_time),
+            }
+        });
+
         Self {
             proof_id: p.proof_id,
             offender_id: p.offender_id,
             fork_point_prev_hash: p.fork_point_prev_hash,
-            conflicting_transactions: p.conflicting_transactions.into_iter().map(|t| t.into()).collect(),
+            conflicting_transactions,
             deletable_at: p.deletable_at,
             reporter_id: p.reporter_id,
             report_timestamp: p.report_timestamp,
