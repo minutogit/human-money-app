@@ -39,16 +39,17 @@ export function truncateUserId(userId: string): string {
         const parts = userId.split('@');
         const prefix = parts[0];
         const key = parts[1];
-        if (key.length > 10) {
-            return `${prefix}@...${key.substring(key.length - 6)}`;
+        if (key.length > 25) {
+            const afterDidKey = key.startsWith(DID_KEY_PREFIX) ? key.substring(DID_KEY_PREFIX.length) : key;
+            return `${prefix}@${DID_KEY_PREFIX}${afterDidKey.substring(0, 12)}...${key.substring(key.length - 5)}`;
         }
         return userId;
     }
 
     if (userId.startsWith(DID_KEY_PREFIX)) {
         const key = userId.substring(DID_KEY_PREFIX.length);
-        if (key.length > 15) {
-            return `${DID_KEY_PREFIX}${key.substring(0, 8)}...${key.substring(key.length - 5)}`;
+        if (key.length > 25) {
+            return `${DID_KEY_PREFIX}${key.substring(0, 20)}...${key.substring(key.length - 5)}`;
         }
         return userId;
     }

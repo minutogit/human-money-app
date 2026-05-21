@@ -125,6 +125,24 @@ export function useVoucherCreation() {
         }
     }, [identity.coordinates]);
 
+    useEffect(() => {
+        if (amount) {
+            setErrors(prev => prev.amount ? { ...prev, amount: false } : prev);
+        }
+    }, [amount]);
+
+    useEffect(() => {
+        if (identity.firstName) {
+            setErrors(prev => prev.firstName ? { ...prev, firstName: false } : prev);
+        }
+    }, [identity.firstName]);
+
+    useEffect(() => {
+        if (identity.lastName) {
+            setErrors(prev => prev.lastName ? { ...prev, lastName: false } : prev);
+        }
+    }, [identity.lastName]);
+
     const validate = useCallback(() => {
         const newErrors: Record<string, boolean> = {};
         if (!selectedStandardId) newErrors.standard = true;

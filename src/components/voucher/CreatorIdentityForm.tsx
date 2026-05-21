@@ -96,99 +96,103 @@ export function CreatorIdentityForm({
             </div>
         }>
             <div className="space-y-8">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <label htmlFor="creator-first-name" className="text-[10px] font-black text-theme-light uppercase tracking-widest">First Name (Required)</label>
-                                <Input id="creator-first-name" ref={firstNameRef} value={identity.firstName} onChange={(e) => handleChange('firstName', e.target.value)} className={errors.firstName ? 'border-rose-500' : ''} />
-                            </div>
-                            <div className="space-y-2">
-                                <label htmlFor="creator-last-name" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Last Name (Required)</label>
-                                <Input id="creator-last-name" ref={lastNameRef} value={identity.lastName} onChange={(e) => handleChange('lastName', e.target.value)} className={errors.lastName ? 'border-rose-500' : ''} />
-                            </div>
+                {/* Personal Details Section */}
+                <div className="space-y-4">
+                    <h4 className="text-[10px] font-black text-theme-primary uppercase tracking-widest">Personal Details</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <label htmlFor="creator-first-name" className="text-[10px] font-black text-theme-light uppercase tracking-widest">First Name (Required)</label>
+                            <Input id="creator-first-name" ref={firstNameRef} value={identity.firstName} onChange={(e) => handleChange('firstName', e.target.value)} className={errors.firstName ? 'border-rose-500' : ''} />
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Community</label>
-                                <Input value={identity.community || ""} onChange={(e) => handleChange('community', e.target.value)} placeholder="Optional" />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Organization / Company</label>
-                                <Input value={identity.organization || ""} onChange={(e) => handleChange('organization', e.target.value)} placeholder="Optional" />
-                            </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Gender</label>
-                                <select value={identity.gender} onChange={(e) => handleChange('gender', e.target.value)} className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-3 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
-                                    <option value="1">Male</option>
-                                    <option value="2">Female</option>
-                                    <option value="0">Not Known</option>
-                                    <option value="9">Not Applicable</option>
-                                </select>
-                            </div>
-                            <div className="space-y-2">
-                                <div className="flex items-center justify-between">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Coordinates</label>
-                                    <div className="flex gap-2">
-                                        <button
-                                            type="button"
-                                            onClick={handleUseGPS}
-                                            disabled={isLocating || isGeocoding}
-                                            className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
-                                            title="Use current GPS location"
-                                        >
-                                            {isLocating ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "📍"}
-                                            <span>GPS</span>
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={handleGeocodeAddress}
-                                            disabled={isLocating || isGeocoding || !identity.address.city}
-                                            className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
-                                            title="Resolve coordinates from the address"
-                                        >
-                                            {isGeocoding ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "🔍"}
-                                            <span>Auto-Address</span>
-                                        </button>
-                                    </div>
-                                </div>
-                                <Input value={identity.coordinates} placeholder="51.16, 10.45 or Maps Link" onChange={(e) => handleChange('coordinates', e.target.value)} onBlur={onCoordBlur} className={coordWarning ? 'border-rose-500' : ''} />
-                                {coordWarning && <p className="text-[10px] text-rose-500 font-bold">{coordWarning}</p>}
-                                {geoFeedback && (
-                                    <p className={`text-[10px] font-bold ${geoFeedbackError ? 'text-rose-500 animate-pulse' : 'text-emerald-500'}`}>
-                                        {geoFeedback}
-                                    </p>
-                                )}
-                            </div>
+                        <div className="space-y-2">
+                            <label htmlFor="creator-last-name" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Last Name (Required)</label>
+                            <Input id="creator-last-name" ref={lastNameRef} value={identity.lastName} onChange={(e) => handleChange('lastName', e.target.value)} className={errors.lastName ? 'border-rose-500' : ''} />
                         </div>
                     </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Gender</label>
+                            <select value={identity.gender} onChange={(e) => handleChange('gender', e.target.value)} className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-3 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
+                                <option value="1">Male</option>
+                                <option value="2">Female</option>
+                                <option value="0">Not Known</option>
+                                <option value="9">Not Applicable</option>
+                            </select>
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Community</label>
+                            <Input value={identity.community || ""} onChange={(e) => handleChange('community', e.target.value)} placeholder="Optional" />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Organization / Company</label>
+                            <Input value={identity.organization || ""} onChange={(e) => handleChange('organization', e.target.value)} placeholder="Optional" />
+                        </div>
+                    </div>
+                </div>
 
-                    <div className="space-y-4">
-                        <div className="grid grid-cols-4 gap-4">
-                            <div className="col-span-3 space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Street</label>
-                                <Input value={identity.address.street || ""} onChange={(e) => handleAddressChange('street', e.target.value)} />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Nr.</label>
-                                <Input value={identity.address.houseNumber || ""} onChange={(e) => handleAddressChange('houseNumber', e.target.value)} />
-                            </div>
+                {/* Address & Location Section */}
+                <div className="border-t border-theme-subtle/40 pt-6 space-y-4">
+                    <h4 className="text-[10px] font-black text-theme-primary uppercase tracking-widest">Address & Location</h4>
+                    <div className="grid grid-cols-4 gap-4">
+                        <div className="col-span-3 space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Street</label>
+                            <Input value={identity.address.street || ""} onChange={(e) => handleAddressChange('street', e.target.value)} />
                         </div>
-                        <div className="grid grid-cols-3 gap-4">
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">ZIP</label>
-                                <Input value={identity.address.zipCode || ""} onChange={(e) => handleAddressChange('zipCode', e.target.value)} />
-                            </div>
-                            <div className="col-span-2 space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">City</label>
-                                <Input value={identity.address.city || ""} onChange={(e) => handleAddressChange('city', e.target.value)} />
-                            </div>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Nr.</label>
+                            <Input value={identity.address.houseNumber || ""} onChange={(e) => handleAddressChange('houseNumber', e.target.value)} />
                         </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">ZIP</label>
+                            <Input value={identity.address.zipCode || ""} onChange={(e) => handleAddressChange('zipCode', e.target.value)} />
+                        </div>
+                        <div className="col-span-1 md:col-span-2 space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">City</label>
+                            <Input value={identity.address.city || ""} onChange={(e) => handleAddressChange('city', e.target.value)} />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Country</label>
                             <Input value={identity.address.country || ""} onChange={(e) => handleAddressChange('country', e.target.value)} />
+                        </div>
+                        <div className="col-span-1 md:col-span-2 space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Coordinates</label>
+                            <Input value={identity.coordinates} placeholder="51.16, 10.45 or Maps Link" onChange={(e) => handleChange('coordinates', e.target.value)} onBlur={onCoordBlur} className={coordWarning ? 'border-rose-500' : ''} />
+                            <div className="flex items-center justify-between flex-wrap gap-2 min-h-[26px]">
+                                <div className="flex-1 min-w-[120px]">
+                                    {coordWarning && <p className="text-[10px] text-rose-500 font-bold">{coordWarning}</p>}
+                                    {geoFeedback && (
+                                        <p className={`text-[10px] font-bold ${geoFeedbackError ? 'text-rose-500 animate-pulse' : 'text-emerald-500'}`}>
+                                            {geoFeedback}
+                                        </p>
+                                    )}
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleUseGPS}
+                                        disabled={isLocating || isGeocoding}
+                                        className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
+                                        title="Use current GPS location"
+                                    >
+                                        {isLocating ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "📍"}
+                                        <span>GPS</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleGeocodeAddress}
+                                        disabled={isLocating || isGeocoding || !identity.address.city}
+                                        className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
+                                        title="Resolve coordinates from the address"
+                                    >
+                                        {isGeocoding ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "🔍"}
+                                        <span>Auto-Address</span>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -215,11 +219,11 @@ export function CreatorIdentityForm({
                     <div className="space-y-6">
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> Service Offer (I can help with)</label>
-                            <textarea value={identity.serviceOffer || ""} onChange={(e) => handleChange('serviceOffer', e.target.value)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[80px]" placeholder="What do you offer?" />
+                            <textarea value={identity.serviceOffer || ""} onChange={(e) => handleChange('serviceOffer', e.target.value)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[140px]" placeholder="What do you offer?" />
                         </div>
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Heart size={10}/> Needs (I'm looking for)</label>
-                            <textarea value={identity.needs || ""} onChange={(e) => handleChange('needs', e.target.value)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[80px]" placeholder="What do you need?" />
+                            <textarea value={identity.needs || ""} onChange={(e) => handleChange('needs', e.target.value)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[140px]" placeholder="What do you need?" />
                         </div>
                     </div>
                 </div>

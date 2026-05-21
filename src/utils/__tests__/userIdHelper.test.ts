@@ -21,13 +21,13 @@ describe('userIdHelper', () => {
 
     describe('truncateUserId', () => {
         it('truncates SAI ID correctly', () => {
-            // key is 'did:key:z6MkpTHR8VNsBxYqzFoHqi1oMrY', last 6 is 'i1oMrY'
-            expect(truncateUserId(saiId)).toBe('alice:abc123@...i1oMrY');
+            // key is 'did:key:z6MkpTHR8VNsBxYqzFoHqi1oMrY', first 12 after did:key: is 'z6MkpTHR8VNs', last 5 is '1oMrY'
+            expect(truncateUserId(saiId)).toBe('alice:abc123@did:key:z6MkpTHR8VNs...1oMrY');
         });
 
         it('truncates root ID correctly', () => {
-            // key part 'z6MkpTHR8VNsBxYqzFoHqi1oMrY', start 8 is 'z6MkpTHR', last 5 is '1oMrY'
-            expect(truncateUserId(rootId)).toBe('did:key:z6MkpTHR...1oMrY');
+            // key part 'z6MkpTHR8VNsBxYqzFoHqi1oMrY', start 20 is 'z6MkpTHR8VNsBxYqzFoH', last 5 is '1oMrY'
+            expect(truncateUserId(rootId)).toBe('did:key:z6MkpTHR8VNsBxYqzFoH...1oMrY');
         });
     });
 

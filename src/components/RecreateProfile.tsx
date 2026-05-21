@@ -510,18 +510,18 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                         onChange={(e) => setUserPrefix(e.target.value)} 
                                         placeholder="e.g. laptop, phone, or my-company" 
                                     />
-                                    
-                                    <div className="space-y-1.5 p-3.5 bg-theme-subtle/20 border border-theme-subtle rounded-2xl">
-                                        <p className="text-[10px] text-theme-secondary leading-relaxed">
-                                            Required if using the same seed phrase on multiple devices. Can also be used as a public identifier (e.g. company name) for easy recognition. You can create multiple profiles on this device in parallel without deleting old ones.
-                                        </p>
-                                        <p className="text-[9px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic">
-                                            <AlertTriangle size={10} className="shrink-0 mt-0.5" />
-                                            Critical: Every active device MUST have a unique prefix to prevent irreversible reputation loss.
-                                        </p>
-                                    </div>
                                 </div>
                             )}
+
+                            <div className="space-y-1.5 p-3.5 bg-theme-subtle/20 border border-theme-subtle rounded-2xl">
+                                <p className="text-[10px] text-theme-secondary leading-relaxed">
+                                    Required if using the same seed phrase on multiple devices. Can also be used as a public identifier (e.g. company name) for easy recognition. You can create multiple profiles on this device in parallel without deleting old ones.
+                                </p>
+                                <p className="text-[9px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic">
+                                    <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                                    Critical: Every active device MUST have a unique prefix to prevent irreversible reputation loss.
+                                </p>
+                            </div>
                         </div>
 
                         <PrefixInfoModal 

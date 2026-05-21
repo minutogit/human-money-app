@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0-beta.14"
 phase: "beta"
 health: "green"
-last_updated: "2026-05-21"
+last_updated: "2026-05-23"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -236,6 +236,9 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Fixed Double-Spend Conflict UI Sorting (Sorted conflicting transactions chronologically in both backend DTO mapping and frontend component to ensure the valid earliest transaction is correctly shown as the Winner)
 - [x] Fixed Double-Spend Conflict Classification & Quarantine Logic (Resolved bug classifying local victims as witnesses, quarantined losing vouchers automatically on proof import, and verified with integration tests) (CORE-003)
 - [x] Hardened Signature Management (Restricted signature removal to incomplete vouchers and prevented deletion of the creator/issuer signature)
+- [x] Fixed Voucher Creation Validation Bug (Ensured missing field banner only displays active errors and clears immediately as fields are filled)
+- [x] Improved Create Voucher Layout Aesthetics (Reorganized form into vertically stacked sections, unified input/select heights in the Basics form, and expanded the min-height of Service Offer/Needs textareas for better legibility)
+- [x] Redesigned Voucher Mode Selection (Replaced checkbox with a segmented switch selector and dynamic contextual descriptions for test vs real vouchers)
 
 ## Next Milestones
 

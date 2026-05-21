@@ -381,7 +381,7 @@ export function ProfileSettings() {
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> Service Offer (I can help with)</label>
                             <textarea
-                                className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[120px]"
+                                className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[140px]"
                                 value={profile.serviceOffer || ''}
                                 onChange={(e) => setProfile({ ...profile, serviceOffer: e.target.value })}
                                 placeholder="Describe what you bring to the network..."
@@ -390,7 +390,7 @@ export function ProfileSettings() {
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Heart size={10}/> Needs (I'm looking for)</label>
                             <textarea
-                                className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[120px]"
+                                className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[140px]"
                                 value={profile.needs || ''}
                                 onChange={(e) => setProfile({ ...profile, needs: e.target.value })}
                                 placeholder="Describe what you are looking for..."

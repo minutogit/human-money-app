@@ -189,7 +189,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                     </div>
 
                     <div className="flex flex-col items-center gap-4 py-4">
-                        {Object.keys(errors).length > 0 && (
+                        {Object.values(errors).some(v => v) && (
                             <div className="flex items-center gap-2 text-rose-600 bg-rose-50 px-4 py-2 rounded-xl border border-rose-100 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                 <AlertCircle size={16} />
                                 <span className="text-xs font-bold">Missing: {getMissingFieldNames(errors)}</span>

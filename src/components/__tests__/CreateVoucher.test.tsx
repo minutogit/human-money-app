@@ -182,4 +182,19 @@ amount_decimal_places = 4`,
       expect(screen.getByDisplayValue('1')).toBeInTheDocument();
     });
   });
+
+  it('does not display empty "Missing:" text when selecting a standard before validation', async () => {
+    render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    // Wait for standards to load
+    const select = await screen.findByLabelText(/Voucher Type/i) as HTMLSelectElement;
+    
+    // Select standard (sets errors.standard = false)
+    await userEvent.selectOptions(select, 'freetaler_v1');
+
+    // The "Missing:" text should NOT be visible
+    expect(screen.queryByText(/Missing:/i)).not.toBeInTheDocument();
+  });
 });
