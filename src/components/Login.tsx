@@ -51,6 +51,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     const [isDeleting, setIsDeleting] = useState(false);
     const [isVerifyingDelete, setIsVerifyingDelete] = useState(false);
     
+    const [localInstanceId, setLocalInstanceId] = useState("");
+    
     const passwordInputRef = useRef<HTMLInputElement>(null);
 
     const refreshProfiles = useCallback(async () => {
@@ -71,6 +73,9 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     useEffect(() => {
         logger.info("Login component displayed");
         refreshProfiles();
+        authService.getLocalInstanceId()
+            .then(setLocalInstanceId)
+            .catch(err => logger.error(`Failed to load local instance ID: ${err}`));
     }, [refreshProfiles]);
 
     async function handleLogin() {
@@ -397,10 +402,15 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                         )}
                     </form>
 
-                    <div className="pt-4 border-t border-theme-subtle/40 flex justify-center">
+                    <div className="pt-4 border-t border-theme-subtle/40 flex flex-col items-center gap-1.5">
                         <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em] flex items-center gap-2">
                             <ShieldCheck size={12} /> Human Money Protocol v2.0
                         </p>
+                        {localInstanceId && (
+                            <p className="text-[8px] font-bold font-mono text-slate-400/80 uppercase tracking-widest">
+                                Device: {localInstanceId.slice(0, 12)}...
+                            </p>
+                        )}
                     </div>
                 </>
             )}

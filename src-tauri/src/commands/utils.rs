@@ -143,46 +143,42 @@ pub async fn log_to_backend(level: String, message: String) -> Result<(), String
 }
 #[tauri::command]
 pub fn get_local_instance_id(app: tauri::AppHandle) -> Result<String, String> {
+    // 1. Primary: OS-level Machine ID (clone-resistant) - only on Desktop
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+    {
+        match machine_uid::get() {
+            Ok(id) if !id.trim().is_empty() => {
+                info!("Device binding: Using OS Machine ID.");
+                return Ok(id.trim().to_string());
+            }
+            Ok(_) => {
+                warn!("OS Machine ID returned empty. Falling back to file-based ID.");
+            }
+            Err(e) => {
+                warn!("Failed to read OS Machine ID: {}. Falling back to file-based ID.", e);
+            }
+        }
+    }
+
+    // 2. Fallback: File-based UUID for sandboxed/restricted environments
     let app_config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    
-    let config_id_path = app_config_dir.join("instance_id");
-    let legacy_data_id_path = app_data_dir.join("instance_id");
+    let fallback_path = app_config_dir.join("instance_id_fallback");
 
-    // 1. Check if it already exists in the secure config dir
-    if config_id_path.exists() {
-        let id = std::fs::read_to_string(&config_id_path).map_err(|e| e.to_string())?;
+    if fallback_path.exists() {
+        let id = std::fs::read_to_string(&fallback_path).map_err(|e| e.to_string())?;
         let trimmed = id.trim().to_string();
         if !trimmed.is_empty() {
-            // Success. Now proactively clean up legacy path if it exists to avoid core panic.
-            if legacy_data_id_path.exists() {
-                let _ = std::fs::remove_file(&legacy_data_id_path);
-            }
+            info!("Device binding: Using fallback file-based ID.");
             return Ok(trimmed);
         }
     }
 
-    // 2. Not in config dir? Check legacy data dir for migration
-    if legacy_data_id_path.exists() {
-        let id = std::fs::read_to_string(&legacy_data_id_path).map_err(|e| e.to_string())?;
-        let trimmed = id.trim().to_string();
-        if !trimmed.is_empty() {
-            // Migrate to config dir
-            if !app_config_dir.exists() {
-                std::fs::create_dir_all(&app_config_dir).map_err(|e| e.to_string())?;
-            }
-            std::fs::write(&config_id_path, &trimmed).map_err(|e| e.to_string())?;
-            // DELETE the legacy file. This is mandatory for cloning protection check.
-            let _ = std::fs::remove_file(&legacy_data_id_path);
-            return Ok(trimmed);
-        }
-    }
-
-    // 3. Brand new installation: Generate and store in config dir
+    // 3. Generate new fallback (first run in sandboxed environment)
     if !app_config_dir.exists() {
         std::fs::create_dir_all(&app_config_dir).map_err(|e| e.to_string())?;
     }
     let new_id = uuid::Uuid::new_v4().to_string();
-    std::fs::write(&config_id_path, &new_id).map_err(|e| e.to_string())?;
+    std::fs::write(&fallback_path, &new_id).map_err(|e| e.to_string())?;
+    warn!("Device binding: Generated new fallback instance ID for sandboxed environment.");
     Ok(new_id)
 }

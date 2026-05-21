@@ -10,6 +10,7 @@ import { useSession } from '../context/SessionContext';
 
 import { ProfileSettings } from './ProfileSettings';
 import { PageLayout } from './ui/PageLayout';
+import { authService } from '../services/authService';
 import { 
     User, 
     Settings as SettingsIcon, 
@@ -30,6 +31,7 @@ interface SettingsViewProps {
 export function SettingsView({ onBack }: SettingsViewProps) {
     const { protectAction } = useSession();
     const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [localInstanceId, setLocalInstanceId] = useState('');
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
@@ -42,6 +44,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 logger.info("SettingsView: Fetching current settings.");
                 const currentSettings = await settingsService.getSettings();
                 setSettings(currentSettings);
+                
+                const deviceId = await authService.getLocalInstanceId();
+                setLocalInstanceId(deviceId);
             } catch (e) {
                 const msg = `Failed to load settings: ${e}`;
                 logger.error(msg);
@@ -205,6 +210,42 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                 </div>
                             </div>
                         </Card>
+
+                        {/* Device Cryptographic Binding */}
+                        <Card header={
+                            <div className="flex items-center gap-2">
+                                <Fingerprint size={18} className="text-theme-primary" />
+                                <span className="font-black text-xs uppercase tracking-widest">Device Binding</span>
+                            </div>
+                        }>
+                            <div className="space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">OS Machine ID / Fallback ID</label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            readOnly
+                                            value={localInstanceId || "Retrieving ID..."}
+                                            className="w-full bg-slate-50 border border-theme-subtle rounded-2xl px-5 py-4 text-xs font-mono text-theme-secondary select-all"
+                                        />
+                                        <Button 
+                                            type="button" 
+                                            onClick={() => {
+                                                navigator.clipboard.writeText(localInstanceId);
+                                            }}
+                                            variant="outline"
+                                            className="px-4 text-xs font-black uppercase tracking-widest"
+                                        >
+                                            Copy
+                                        </Button>
+                                    </div>
+                                    <p className="text-[10px] text-theme-light/60 font-medium leading-relaxed">
+                                        This unique identifier binds your wallet cryptographic seals to this physical device installation to prevent unauthorized cloning.
+                                    </p>
+                                </div>
+                            </div>
+                        </Card>
+
 
                         <div className="pt-6 flex flex-col items-center gap-4">
                             <Button type="submit" disabled={isSaving} className="min-w-[240px] gap-2 rounded-2xl py-4 shadow-lg shadow-theme-primary/20">

@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0-beta.11"
 phase: "beta"
 health: "green"
-last_updated: "2026-05-20"
+last_updated: "2026-05-21"
 blocks: []
 blocked_by: []
 priority_tasks:
