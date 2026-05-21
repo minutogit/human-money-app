@@ -23,7 +23,7 @@ export const integrityService = {
     },
 
     checkIntegrity: async () => {
-        return await invoke<IntegrityReport>("get_integrity_report");
+        return await invoke<IntegrityReport>("check_wallet_integrity");
     },
 
     getDoubleSpendConflicts: async () => {

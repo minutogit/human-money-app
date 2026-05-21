@@ -225,6 +225,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Backend State & Command Handler Refactoring (Centralized session initialization in AppState, consolidated inline DTOs, and simplified read-only commands to Cache-Only)
 - [x] DID Prefix / Sub-Account UX Improvement (Simplified profile setup using a clean Q&A format and checkbox toggle for multi-device setups)
 - [x] Map Coordinate Entry Helpers (OSM Nominatim Geocoding, GPS location, and Map Link Parsing) (APP-024)
+- [x] Tauri Command Integrity & Mismatch Fixes (Added static analysis test validating all frontend invoke calls against backend command registrations, and corrected profile/integrity command name mismatches)
+- [x] UI Component Testing for Settings (Implemented React Testing Library component tests for ProfileSettings and SettingsView, validating form submittals, geolocation triggers, tab navigation, and clipboard interactions)
 
 
 

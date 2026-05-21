@@ -26,7 +26,7 @@ export const profileService = {
     },
 
     saveProfile: async (profile: PublicProfile, password?: string) => {
-        return await invoke<void>("save_user_profile", { profile, password });
+        return await invoke<void>("update_user_profile", { profile, password });
     },
 
     getUserId: async () => {
