@@ -73,9 +73,19 @@ pub fn run() {
                 .app_data_dir()
                 .expect("Failed to find app data directory");
 
+            // Proactively clean up legacy instance_id files to prevent core security panics on upgrade
+            let legacy_id_in_data = data_dir.join("instance_id");
+            if legacy_id_in_data.exists() {
+                let _ = fs::remove_file(&legacy_id_in_data);
+            }
+
             let wallet_path = data_dir.join("wallet_data");
             if !wallet_path.exists() {
                 fs::create_dir_all(&wallet_path).expect("Failed to create wallet data directory");
+            }
+            let legacy_id_in_wallet = wallet_path.join("instance_id");
+            if legacy_id_in_wallet.exists() {
+                let _ = fs::remove_file(&legacy_id_in_wallet);
             }
             info!("Using wallet data path: {}", wallet_path.display());
 
