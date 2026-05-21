@@ -1,10 +1,12 @@
 // src/components/voucher/CreatorIdentityForm.tsx
 
+import { useState } from "react";
 import { UserCircle, Mail, Phone, Globe, Briefcase, Heart } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
 import { Button } from "../ui/Button";
 import { CreatorData } from "../../types";
+import { geocodeAddress, getCurrentLocation } from "../../utils/geoUtils";
 
 interface CreatorIdentityFormProps {
     identity: CreatorData;
@@ -27,6 +29,49 @@ export function CreatorIdentityForm({
     firstNameRef,
     lastNameRef
 }: CreatorIdentityFormProps) {
+    const [isLocating, setIsLocating] = useState(false);
+    const [isGeocoding, setIsGeocoding] = useState(false);
+    const [geoFeedback, setGeoFeedback] = useState("");
+    const [geoFeedbackError, setGeoFeedbackError] = useState(false);
+
+    const handleUseGPS = async () => {
+        setIsLocating(true);
+        setGeoFeedback("Locating...");
+        setGeoFeedbackError(false);
+        try {
+            const coords = await getCurrentLocation();
+            handleChange("coordinates", coords);
+            setGeoFeedback("Location detected!");
+            setTimeout(() => setGeoFeedback(""), 3000);
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "GPS failed";
+            setGeoFeedback(msg);
+            setGeoFeedbackError(true);
+            setTimeout(() => setGeoFeedback(""), 5000);
+        } finally {
+            setIsLocating(false);
+        }
+    };
+
+    const handleGeocodeAddress = async () => {
+        if (!identity.address) return;
+        setIsGeocoding(true);
+        setGeoFeedback("Geocoding address...");
+        setGeoFeedbackError(false);
+        try {
+            const coords = await geocodeAddress(identity.address);
+            handleChange("coordinates", coords);
+            setGeoFeedback("Coordinates resolved!");
+            setTimeout(() => setGeoFeedback(""), 3000);
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Lookup failed";
+            setGeoFeedback(msg);
+            setGeoFeedbackError(true);
+            setTimeout(() => setGeoFeedback(""), 5000);
+        } finally {
+            setIsGeocoding(false);
+        }
+    };
     const handleChange = (field: string, value: string) => {
         onIdentityChange({ ...identity, [field]: value });
     };
@@ -84,8 +129,38 @@ export function CreatorIdentityForm({
                                 </select>
                             </div>
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Coordinates</label>
-                                <Input value={identity.coordinates} placeholder="51.16, 10.45" onChange={(e) => handleChange('coordinates', e.target.value)} onBlur={onCoordBlur} className={coordWarning ? 'border-rose-500' : ''} />
+                                <div className="flex items-center justify-between">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Coordinates</label>
+                                    <div className="flex gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleUseGPS}
+                                            disabled={isLocating || isGeocoding}
+                                            className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
+                                            title="Use current GPS location"
+                                        >
+                                            {isLocating ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "📍"}
+                                            <span>GPS</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleGeocodeAddress}
+                                            disabled={isLocating || isGeocoding || !identity.address.city}
+                                            className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
+                                            title="Resolve coordinates from the address"
+                                        >
+                                            {isGeocoding ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "🔍"}
+                                            <span>Auto-Address</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <Input value={identity.coordinates} placeholder="51.16, 10.45 or Maps Link" onChange={(e) => handleChange('coordinates', e.target.value)} onBlur={onCoordBlur} className={coordWarning ? 'border-rose-500' : ''} />
+                                {coordWarning && <p className="text-[10px] text-rose-500 font-bold">{coordWarning}</p>}
+                                {geoFeedback && (
+                                    <p className={`text-[10px] font-bold ${geoFeedbackError ? 'text-rose-500 animate-pulse' : 'text-emerald-500'}`}>
+                                        {geoFeedback}
+                                    </p>
+                                )}
                             </div>
                         </div>
                     </div>

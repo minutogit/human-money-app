@@ -1,6 +1,6 @@
 ---
 project: human-money-app
-version: "0.1.0-beta.12"
+version: "0.1.0-beta.13"
 phase: "beta"
 health: "green"
 last_updated: "2026-05-21"
@@ -145,6 +145,12 @@ priority_tasks:
     priority: "high"
     depends_on: ["CORE-001"]
     description: "Unmasking stealth transaction identities by decrypting privacy_guard in the core library. Integrated React hook to prioritize address book names over truncated DIDs in Dashboard and Activity Log."
+  - id: "APP-024"
+    title: "Map Coordinate Entry Helpers"
+    status: "completed"
+    priority: "medium"
+    depends_on: []
+    description: "Added automatic coordinate extraction from map links, device-native GPS location detection, and Nominatim-based address geocoding to profile settings and voucher creation forms."
 ---
 
 # Human Money App — Status
@@ -218,6 +224,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Stealth Identity Resolution (Unmasked anonymous senders via privacy_guard decryption and contact mapping) (APP-023)
 - [x] Backend State & Command Handler Refactoring (Centralized session initialization in AppState, consolidated inline DTOs, and simplified read-only commands to Cache-Only)
 - [x] DID Prefix / Sub-Account UX Improvement (Simplified profile setup using a clean Q&A format and checkbox toggle for multi-device setups)
+- [x] Map Coordinate Entry Helpers (OSM Nominatim Geocoding, GPS location, and Map Link Parsing) (APP-024)
 
 
 

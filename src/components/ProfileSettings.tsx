@@ -7,7 +7,7 @@ import { Card } from './ui/Card';
 import { Input } from './ui/Input';
 import { PublicProfile, Address } from '../types';
 import { useSession } from '../context/SessionContext';
-import { normalizeCoordinates } from '../utils/geoUtils';
+import { normalizeCoordinates, geocodeAddress, getCurrentLocation } from '../utils/geoUtils';
 import { 
     User, 
     MapPin, 
@@ -29,6 +29,53 @@ export function ProfileSettings() {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [coordWarning, setCoordWarning] = useState('');
+    const [isLocating, setIsLocating] = useState(false);
+    const [isGeocoding, setIsGeocoding] = useState(false);
+    const [geoFeedback, setGeoFeedback] = useState('');
+    const [geoFeedbackError, setGeoFeedbackError] = useState(false);
+
+    const handleUseGPS = async () => {
+        setIsLocating(true);
+        setGeoFeedback('Locating...');
+        setGeoFeedbackError(false);
+        try {
+            const coords = await getCurrentLocation();
+            if (profile) {
+                setProfile({ ...profile, coordinates: coords });
+            }
+            setCoordWarning('');
+            setGeoFeedback('Location detected!');
+            setTimeout(() => setGeoFeedback(''), 3000);
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : 'GPS failed';
+            setGeoFeedback(msg);
+            setGeoFeedbackError(true);
+            setTimeout(() => setGeoFeedback(''), 5000);
+        } finally {
+            setIsLocating(false);
+        }
+    };
+
+    const handleGeocodeAddress = async () => {
+        if (!profile?.address) return;
+        setIsGeocoding(true);
+        setGeoFeedback('Geocoding address...');
+        setGeoFeedbackError(false);
+        try {
+            const coords = await geocodeAddress(profile.address);
+            setProfile({ ...profile, coordinates: coords });
+            setCoordWarning('');
+            setGeoFeedback('Coordinates resolved!');
+            setTimeout(() => setGeoFeedback(''), 3000);
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : 'Lookup failed';
+            setGeoFeedback(msg);
+            setGeoFeedbackError(true);
+            setTimeout(() => setGeoFeedback(''), 5000);
+        } finally {
+            setIsGeocoding(false);
+        }
+    };
 
     useEffect(() => {
         async function fetchProfile() {
@@ -233,7 +280,31 @@ export function ProfileSettings() {
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Map Coordinates (Lat, Long)</label>
+                            <div className="flex items-center justify-between">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Map Coordinates (Lat, Long)</label>
+                                <div className="flex gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleUseGPS}
+                                        disabled={isLocating || isGeocoding}
+                                        className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
+                                        title="Use current GPS location"
+                                    >
+                                        {isLocating ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "📍"}
+                                        <span>GPS</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleGeocodeAddress}
+                                        disabled={isLocating || isGeocoding || !profile.address?.city}
+                                        className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
+                                        title="Resolve coordinates from the address above"
+                                    >
+                                        {isGeocoding ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "🔍"}
+                                        <span>Auto-Address</span>
+                                    </button>
+                                </div>
+                            </div>
                             <Input
                                 value={profile.coordinates || ''}
                                 onChange={(e) => {
@@ -242,9 +313,14 @@ export function ProfileSettings() {
                                 }}
                                 onBlur={handleCoordBlur}
                                 className={coordWarning ? 'border-rose-500 focus:ring-rose-500' : ''}
-                                placeholder="51.16, 10.45"
+                                placeholder="51.16, 10.45 or Maps Link"
                             />
                             {coordWarning && <p className="text-[10px] text-rose-500 font-bold">{coordWarning}</p>}
+                            {geoFeedback && (
+                                <p className={`text-[10px] font-bold ${geoFeedbackError ? 'text-rose-500 animate-pulse' : 'text-emerald-500'}`}>
+                                    {geoFeedback}
+                                </p>
+                            )}
                         </div>
                     </div>
                 </Card>
