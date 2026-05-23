@@ -1,94 +1,124 @@
 #!/bin/bash
 
 # Dieses Skript führt alle Tests der Human Money App aus (Frontend & Backend).
-clear
-echo "🧪 Starte alle Tests..."
+
+QUIET=false
+FRONTEND_ONLY=false
+BACKEND_ONLY=false
+
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -q|--quiet) QUIET=true ;;
+        -f|--frontend-only) FRONTEND_ONLY=true ;;
+        -b|--backend-only) BACKEND_ONLY=true ;;
+        -h|--help)
+            echo "Nutzung: $0 [Optionen]"
+            echo "Optionen:"
+            echo "  -q, --quiet          Quiet-Modus (zeigt nur Fehler an, spart Token)"
+            echo "  -f, --frontend-only  Führt nur Frontend-Tests/Checks aus"
+            echo "  -b, --backend-only   Führt nur Backend-Tests/Checks aus"
+            echo "  -h, --help           Zeigt diese Hilfe an"
+            exit 0
+            ;;
+        *) echo "Unbekannte Option: $1"; exit 1 ;;
+    esac
+    shift
+done
+
+# Wenn weder frontend-only noch backend-only explizit gesetzt wurde, führen wir beides aus
+if [ "$FRONTEND_ONLY" = false ] && [ "$BACKEND_ONLY" = false ]; then
+    RUN_FRONTEND=true
+    RUN_BACKEND=true
+else
+    RUN_FRONTEND=$FRONTEND_ONLY
+    RUN_BACKEND=$BACKEND_ONLY
+fi
+
+if [ "$QUIET" = false ]; then
+    clear
+    echo "🧪 Starte alle Tests..."
+fi
 
 FAILED_TESTS=()
+LOG_FILE=$(mktemp)
 
+# Sicherstellen, dass das Temp-File beim Beenden gelöscht wird
+trap 'rm -f "$LOG_FILE"' EXIT
 
-# 0. Tauri Version Check
-echo "🔍 Prüfe Tauri Versionssynchronisation..."
-npm run check-versions
-if [ $? -ne 0 ]; then
-    echo "❌ Tauri Versionscheck fehlgeschlagen!"
-    FAILED_TESTS+=("Tauri Versionssynchronisation")
-else
-    echo "✅ Tauri Versionscheck erfolgreich."
+run_step() {
+    local step_name="$1"
+    local cmd="$2"
+
+    if [ "$QUIET" = true ]; then
+        ( eval "$cmd" ) > "$LOG_FILE" 2>&1
+        local status=$?
+        if [ $status -ne 0 ]; then
+            echo "❌ $step_name fehlgeschlagen! Details:"
+            cat "$LOG_FILE"
+            echo "--------------------------------------------------"
+            exit 1
+        fi
+
+        # Suche nach Warnungen (z.B. ESLint warning, rustc warning, npm WARN)
+        if grep -E -i "warning:|warning[[:space:]]+|npm WARN|warn:" "$LOG_FILE" >/dev/null 2>&1; then
+            echo "⚠️  Warnungen in $step_name gefunden! Details:"
+            cat "$LOG_FILE"
+            echo "--------------------------------------------------"
+        fi
+    else
+        echo "🔍 Führe aus: $step_name..."
+        ( eval "$cmd" )
+        local status=$?
+        if [ $status -ne 0 ]; then
+            echo "❌ $step_name fehlgeschlagen!"
+            FAILED_TESTS+=("$step_name")
+        else
+            echo "✅ $step_name erfolgreich."
+        fi
+        echo ""
+    fi
+}
+
+# 0. Tauri Version Check (immer wenn Frontend oder Backend ausgeführt wird, da es beide vergleicht)
+run_step "Tauri Versionssynchronisation" "npm run check-versions"
+
+if [ "$RUN_FRONTEND" = true ]; then
+    # 1. TypeScript Check (Frontend)
+    run_step "TypeScript Check (Frontend)" "npx tsc --noEmit"
+    
+    # 2. TypeScript Check (Node/Configs)
+    run_step "TypeScript Check (Node/Configs)" "npx tsc -p tsconfig.node.json --noEmit"
+    
+    # 3. Lint Check (Frontend)
+    run_step "Linting (ESLint)" "npm run lint"
+    
+    # 4. Frontend Tests (Vitest)
+    run_step "Frontend Tests (Vitest)" "DEBUG_PRINT_LIMIT=0 npm test -- --run --reporter=verbose"
 fi
 
-
-# 1. TypeScript Check
-echo "🔍 Prüfe TypeScript Typen (Frontend)..."
-npx tsc --noEmit
-TSC_EXIT=$?
-echo "🔍 Prüfe TypeScript Typen (Node/Configs)..."
-npx tsc -p tsconfig.node.json --noEmit
-TSC_NODE_EXIT=$?
-
-if [ $TSC_EXIT -ne 0 ] || [ $TSC_NODE_EXIT -ne 0 ]; then
-    echo "❌ TypeScript Check fehlgeschlagen!"
-    FAILED_TESTS+=("TypeScript Check (Frontend/Node)")
-else
-    echo "✅ TypeScript Check erfolgreich."
+if [ "$RUN_BACKEND" = true ]; then
+    # 5. Backend Lint Check (Clippy)
+    run_step "Backend Linting (Clippy)" "cd src-tauri && cargo clippy -- -D warnings"
+    
+    # 6. Backend Tests (Cargo)
+    run_step "Backend Integrationstests (Rust)" "cd src-tauri && cargo test"
 fi
 
-
-# 2. Lint Check (Frontend)
-echo "🔍 Prüfe Code-Qualität (ESLint)..."
-npm run lint
-if [ $? -ne 0 ]; then
-    echo "❌ Linting fehlgeschlagen!"
-    FAILED_TESTS+=("Linting (ESLint)")
-else
-    echo "✅ Linting erfolgreich."
-fi
-
-
-# 3. Frontend Tests (Vitest)
-echo "⚛️ Starte Frontend Komponententests (Vitest)..."
-# DEBUG_PRINT_LIMIT=0 unterdrückt den riesigen DOM-Dump bei Fehlern
-DEBUG_PRINT_LIMIT=0 npm test -- --run --reporter=verbose
-if [ $? -ne 0 ]; then
-    echo "❌ Frontend Tests fehlgeschlagen!"
-    FAILED_TESTS+=("Frontend Tests (Vitest)")
-else
-    echo "✅ Frontend Tests erfolgreich."
-fi
-
-
-# 4. Backend Lint Check (Clippy)
-echo "🦀 Prüfe Rust Code-Qualität (Clippy)..."
-# In den src-tauri Ordner wechseln und clippy ausführen
-(cd src-tauri && cargo clippy -- -D warnings)
-if [ $? -ne 0 ]; then
-    echo "❌ Clippy Check fehlgeschlagen!"
-    FAILED_TESTS+=("Backend Linting (Clippy)")
-else
-    echo "✅ Clippy Check erfolgreich."
-fi
-
-
-# 5. Backend Tests (Cargo)
-echo "🦀 Starte Backend Integrationstests (Rust)..."
-(cd src-tauri && cargo test)
-if [ $? -ne 0 ]; then
-    echo "❌ Backend Tests fehlgeschlagen!"
-    FAILED_TESTS+=("Backend Integrationstests (Rust)")
-else
-    echo "✅ Backend Tests erfolgreich."
-fi
-
-echo ""
-echo "--------------------------------------------------"
-if [ ${#FAILED_TESTS[@]} -eq 0 ]; then
-    echo "🎉 ALLE TESTS BESTANDEN! 🎉"
-    exit 0
-else
-    echo "❌ FOLGENDE TESTS SIND FEHLGESCHLAGEN:"
-    for test in "${FAILED_TESTS[@]}"; do
-        echo "   - $test"
-    done
+if [ "$QUIET" = false ]; then
     echo "--------------------------------------------------"
-    exit 1
+    if [ ${#FAILED_TESTS[@]} -eq 0 ]; then
+        echo "🎉 ALLE TESTS BESTANDEN! 🎉"
+        exit 0
+    else
+        echo "❌ FOLGENDE TESTS SIND FEHLGESCHLAGEN:"
+        for test in "${FAILED_TESTS[@]}"; do
+            echo "   - $test"
+        done
+        echo "--------------------------------------------------"
+        exit 1
+    fi
+else
+    # Quiet mode success
+    echo "🎉 Alle Tests erfolgreich bestanden! 🎉"
+    exit 0
 fi

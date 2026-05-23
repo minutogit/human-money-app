@@ -1,6 +1,6 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi, Mock, MockInstance } from 'vitest';
 import { SettingsView } from '../SettingsView';
 import { settingsService } from '../../services/settingsService';
 import { authService } from '../../services/authService';
@@ -44,7 +44,7 @@ describe('SettingsView Component', () => {
   };
 
   const mockOnBack = vi.fn();
-  let writeTextSpy: any;
+  let writeTextSpy: MockInstance;
 
   beforeEach(() => {
     vi.clearAllMocks();
