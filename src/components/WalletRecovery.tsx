@@ -76,9 +76,9 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 const availableProfiles = await authService.listProfiles();
                 setProfiles(availableProfiles);
                 if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folderName);
-                else setFeedbackMsg("Error: No profiles found to recover");
+                else                 setFeedbackMsg(t('auth.noProfilesToRecover'));
             } catch (e) {
-                setFeedbackMsg(`Error: ${translateError(e, t)}`);
+                setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(e, t)}`);
             } finally {
                 setIsLoading(false);
             }
@@ -150,14 +150,14 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 try {
                     await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
                     setIsValidMnemonic(true);
-                    setFeedbackMsg("Seed phrase is valid.");
+                    setFeedbackMsg(t('auth.seedPhraseValid'));
                 } catch (e) {
                     setIsValidMnemonic(false);
-                    setFeedbackMsg(`Error: ${translateError(e, t)}`);
+                    setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(e, t)}`);
                 }
             } else {
                 setIsValidMnemonic(false);
-                setFeedbackMsg(nonEmptyWords.length > 0 ? "Awaiting full sequence..." : "");
+                setFeedbackMsg(nonEmptyWords.length > 0 ? t('auth.awaitingSequence') : "");
             }
         };
         validate();
@@ -185,13 +185,13 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     };
 
     async function handleRecovery() {
-        if (!selectedProfile) { setFeedbackMsg("Error: Please select a profile to recover"); return; }
-        if (!isValidMnemonic) { setFeedbackMsg("Error: Seed phrase is not valid"); return; }
-        if (newPassword !== confirmPassword) { setFeedbackMsg("Error: The passwords do not match"); return; }
-        if (newPassword.length < 8) { setFeedbackMsg("Error: Password must be at least 8 characters"); return; }
+        if (!selectedProfile) { setFeedbackMsg(t('auth.selectProfileToRecover')); return; }
+        if (!isValidMnemonic) { setFeedbackMsg(t('auth.seedPhraseInvalid')); return; }
+        if (newPassword !== confirmPassword) { setFeedbackMsg(t('auth.passwordsDontMatch')); return; }
+        if (newPassword.length < 8) { setFeedbackMsg(t('auth.passwordMinLength')); return; }
 
         setIsLoading(true);
-        setFeedbackMsg("Recovering wallet, please wait...");
+        setFeedbackMsg(t('auth.recoveringWallet'));
         try {
             const localInstanceId = await authService.getLocalInstanceId();
             await profileService.recoverWallet({
@@ -204,7 +204,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
             });
             onRecoverySuccess();
         } catch (e) {
-            setFeedbackMsg(`Error recovering wallet: ${translateError(e, t)}`);
+            setFeedbackMsg(`${t('auth.errorRecoveringWallet')}: ${translateError(e, t)}`);
         } finally {
             setIsLoading(false);
         }
@@ -220,12 +220,12 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 />
                 <div className="text-left space-y-0 sm:space-y-0.5">
                     <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
-                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">Recover Wallet</p>
+                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">{t('auth.recoverWallet')}</p>
                 </div>
             </div>
 
             <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); handleRecovery(); }}>
-                    <Card header={<div className="flex items-center gap-2"><User size={14}/><label htmlFor="profile-select" className="font-black text-[10px] uppercase tracking-widest cursor-pointer">Select Profile</label></div>}>
+                    <Card header={<div className="flex items-center gap-2"><User size={14}/><label htmlFor="profile-select" className="font-black text-[10px] uppercase tracking-widest cursor-pointer">{t('profile.selectProfile')}</label></div>}>
                         <div className="space-y-4">
                             {profiles.length > 0 ? (
                                 <select
@@ -244,7 +244,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                             ) : (
                                 <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3">
                                     <ShieldAlert size={20} className="text-rose-500" />
-                                    <p className="text-xs font-bold text-rose-800">No local profiles detected for restoration.</p>
+                                    <p className="text-xs font-bold text-rose-800">{t('auth.noProfilesToRecover')}</p>
                                 </div>
                             )}
                         </div>
@@ -253,18 +253,18 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                     <Card header={
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
-                                <Key size={14}/><span className="font-black text-[10px] uppercase tracking-widest">Enter Master Key</span>
+                                <Key size={14}/><span className="font-black text-[10px] uppercase tracking-widest">{t('auth.enterMasterKey')}</span>
                             </div>
                             <button type="button" onClick={handleInputModeToggle} className="px-3 py-1 bg-theme-primary/5 border border-theme-primary/10 rounded-full text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-2">
                                 {inputMode === "words" ? <Type size={10}/> : <Grid size={10}/>}
-                                {inputMode === "words" ? "Enter full phrase" : "Use single fields"}
+                                {inputMode === "words" ? t('auth.enterFullPhrase') : t('auth.useSingleFields')}
                             </button>
                         </div>
                     }>
                         <div className="space-y-6">
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Languages size={10}/> Dictionary</label>
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Languages size={10}/> {t('common.dictionary')}</label>
                                     <select value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value as MnemonicLanguage)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-2.5 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
                                         <option value="english">English</option>
                                         <option value="german">Deutsch</option>
@@ -280,10 +280,10 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                                     </select>
                                 </div>
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><BookOpen size={10}/> Sequence Depth</label>
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><BookOpen size={10}/> {t('auth.sequenceDepth')}</label>
                                     <select value={wordCount} onChange={(e) => setWordCount(parseInt(e.target.value, 10) as 12 | 24)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-2.5 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
-                                        <option value={12}>12 Words</option>
-                                        <option value={24}>24 Words</option>
+                                        <option value={12}>{t('profile.wordCount12')}</option>
+                                        <option value={24}>{t('profile.wordCount24')}</option>
                                     </select>
                                 </div>
                             </div>
@@ -310,31 +310,31 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                                         ref={textareaRef}
                                         value={rawPhrase}
                                         onChange={(e) => setRawPhrase(e.target.value)}
-                                        placeholder="Enter your 12 or 24 word seed phrase here"
+                                        placeholder={t('auth.seedPhrasePlaceholder')}
                                         className="w-full h-32 px-4 py-3 bg-white border border-theme-subtle rounded-2xl text-theme-primary font-mono text-sm focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all"
                                         rows={4}
                                     />
-                                    <p className="text-[9px] font-bold text-theme-light italic flex items-center gap-1.5"><Info size={10}/> Numbers and punctuation are auto-cleaned.</p>
+                                    <p className="text-[9px] font-bold text-theme-light italic flex items-center gap-1.5"><Info size={10}/> {t('auth.autoCleaned')}</p>
                                 </div>
                             )}
 
                             <div className="space-y-2 pt-4 border-t border-theme-primary/10">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={10}/> Passphrase (If used)</label>
-                                <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Enter extra word if you used one during creation" />
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={10}/> {t('auth.passphraseIfUsed')}</label>
+                                <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder={t('auth.passphrasePlaceholder')} />
                             </div>
                         </div>
                     </Card>
 
-                    <Card header={<div className="flex items-center gap-2"><Lock size={14}/><span className="font-black text-[10px] uppercase tracking-widest">Re-Encryption Credentials</span></div>}>
+                    <Card header={<div className="flex items-center gap-2"><Lock size={14}/><span className="font-black text-[10px] uppercase tracking-widest">{t('auth.reEncryptionCredentials')}</span></div>}>
                         <div className="space-y-6">
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">New Wallet Password</label>
-                                    <Input type="password" value={newPassword} onChange={(e) => { setNewPassword(e.target.value); if (feedbackMsg.includes("match")) setFeedbackMsg(""); }} placeholder="Minimum 8 characters" onFocus={() => setFeedbackMsg("")} />
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('auth.newWalletPassword')}</label>
+                                    <Input type="password" value={newPassword} onChange={(e) => { setNewPassword(e.target.value); if (feedbackMsg.includes("match")) setFeedbackMsg(""); }} placeholder={t('auth.passwordMinChars')} onFocus={() => setFeedbackMsg("")} />
                                 </div>
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Confirm Password</label>
-                                    <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repeat your new password" />
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('auth.confirmPassword')}</label>
+                                    <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder={t('auth.repeatPassword')} />
                                 </div>
                             </div>
                         </div>
@@ -343,10 +343,10 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                     <div className="flex flex-col items-center gap-4 pt-4">
                         <Button type="submit" disabled={isLoading || !isValidMnemonic || profiles.length === 0} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
                             {isLoading ? <RefreshCw className="animate-spin" size={24} /> : <Fingerprint size={24} />}
-                            {isLoading ? "Loading Wallet..." : "Recover Wallet & Login"}
+                            {isLoading ? t('auth.loadingWallet') : t('auth.recoverWalletAndLogin')}
                         </Button>
                         <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="w-full py-4 rounded-2xl shadow-sm gap-2">
-                            <ArrowLeft size={18} /> Back to Login
+                            <ArrowLeft size={18} /> {t('auth.backToLogin')}
                         </Button>
                     </div>
 

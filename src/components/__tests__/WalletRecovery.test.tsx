@@ -35,6 +35,7 @@ describe('WalletRecovery Component', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      console.log(`[TEST MOCK INVOKE] command: ${cmd}`, args);
       if (cmd === 'list_profiles') {
         return Promise.resolve(mockProfiles);
       }
@@ -145,7 +146,7 @@ describe('WalletRecovery Component', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText(/Error: No profiles found to recover/i)).toBeInTheDocument();
+        expect(screen.getByText(/No local profiles detected/i)).toBeInTheDocument();
       });
     });
 
@@ -540,7 +541,7 @@ describe('WalletRecovery Component', () => {
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
-        expect(screen.getByText(/Error: The passwords do not match/i)).toBeInTheDocument();
+        expect(screen.getByText(/The passwords do not match/i)).toBeInTheDocument();
       });
     });
 
@@ -574,7 +575,7 @@ describe('WalletRecovery Component', () => {
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
-        expect(screen.getByText(/Error: Password must be at least 8 characters/i)).toBeInTheDocument();
+        expect(screen.getByText(/Password must be at least 8 characters/i)).toBeInTheDocument();
       });
     });
 
@@ -608,14 +609,14 @@ describe('WalletRecovery Component', () => {
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
-        expect(screen.getByText(/Error: The passwords do not match/i)).toBeInTheDocument();
+        expect(screen.getByText(/The passwords do not match/i)).toBeInTheDocument();
       });
 
       // Focus on password field
       fireEvent.focus(newPasswordInput);
 
       await waitFor(() => {
-        expect(screen.queryByText(/Error: The passwords do not match/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/The passwords do not match/i)).not.toBeInTheDocument();
       });
     });
 
@@ -677,7 +678,7 @@ describe('WalletRecovery Component', () => {
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
-        expect(screen.getByText(/Error: Please select a profile to recover/i)).toBeInTheDocument();
+        expect(screen.getByText(/Please select a profile to recover/i)).toBeInTheDocument();
       });
     });
 

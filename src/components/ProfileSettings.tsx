@@ -39,7 +39,7 @@ export function ProfileSettings() {
 
     const handleUseGPS = async () => {
         setIsLocating(true);
-        setGeoFeedback('Locating...');
+        setGeoFeedback(t('profile.locating'));
         setGeoFeedbackError(false);
         try {
             const coords = await getCurrentLocation();
@@ -47,10 +47,10 @@ export function ProfileSettings() {
                 setProfile({ ...profile, coordinates: coords });
             }
             setCoordWarning('');
-            setGeoFeedback('Location detected!');
+            setGeoFeedback(t('profile.locationDetected'));
             setTimeout(() => setGeoFeedback(''), 3000);
         } catch (e) {
-            const msg = e instanceof Error ? e.message : 'GPS failed';
+            const msg = e instanceof Error ? e.message : t('profile.gpsFailed');
             setGeoFeedback(msg);
             setGeoFeedbackError(true);
             setTimeout(() => setGeoFeedback(''), 5000);
@@ -62,16 +62,16 @@ export function ProfileSettings() {
     const handleGeocodeAddress = async () => {
         if (!profile?.address) return;
         setIsGeocoding(true);
-        setGeoFeedback('Geocoding address...');
+        setGeoFeedback(t('profile.geocodingAddress'));
         setGeoFeedbackError(false);
         try {
             const coords = await geocodeAddress(profile.address);
             setProfile({ ...profile, coordinates: coords });
             setCoordWarning('');
-            setGeoFeedback('Coordinates resolved!');
+            setGeoFeedback(t('profile.coordinatesResolved'));
             setTimeout(() => setGeoFeedback(''), 3000);
         } catch (e) {
-            const msg = e instanceof Error ? e.message : 'Lookup failed';
+            const msg = e instanceof Error ? e.message : t('profile.lookupFailed');
             setGeoFeedback(msg);
             setGeoFeedbackError(true);
             setTimeout(() => setGeoFeedback(''), 5000);
@@ -87,7 +87,7 @@ export function ProfileSettings() {
                 const currentProfile = await profileService.getProfile();
                 setProfile(currentProfile);
             } catch (e) {
-                const msg = `Failed to load profile: ${translateError(e, t)}`;
+                const msg = `${t('profile.errorLoading')}: ${translateError(e, t)}`;
                 logger.error(msg);
                 setError(msg);
             } finally {
@@ -107,7 +107,7 @@ export function ProfileSettings() {
             setProfile({ ...profile, coordinates: normalized });
             setCoordWarning('');
         } else {
-            setCoordWarning('Invalid format. Please use "Latitude, Longitude"');
+            setCoordWarning(t('profile.invalidCoordinateFormat'));
         }
     };
 
@@ -121,11 +121,11 @@ export function ProfileSettings() {
             await protectAction(async (password) => {
                 await profileService.saveProfile(profile, password || undefined);
             });
-            setSuccess("Profile updated!");
+            setSuccess(t('profile.updatedSuccess'));
             logger.info("Profile updated successfully.");
             setTimeout(() => setSuccess(''), 3000);
         } catch (e) {
-            setError(`Failed to update profile: ${translateError(e, t)}`);
+            setError(`${t('profile.errorUpdating')}: ${translateError(e, t)}`);
         } finally {
             setIsSaving(false);
         }
@@ -141,8 +141,8 @@ export function ProfileSettings() {
         });
     };
 
-    if (isLoading) return <div className="py-20 text-center animate-pulse text-theme-light font-black uppercase tracking-[0.2em]">Loading Profile...</div>;
-    if (!profile) return <div className="p-8 text-center text-rose-500 font-bold">Profile not found.</div>;
+    if (isLoading) return <div className="py-20 text-center animate-pulse text-theme-light font-black uppercase tracking-[0.2em]">{t('profile.loadingProfile')}</div>;
+    if (!profile) return <div className="p-8 text-center text-rose-500 font-bold">{t('profile.notFound')}</div>;
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20">
@@ -152,9 +152,9 @@ export function ProfileSettings() {
                     <Lock size={24} />
                 </div>
                 <div>
-                    <h3 className="text-sm font-black text-emerald-900 uppercase tracking-widest mb-1">Wallet Security</h3>
+                    <h3 className="text-sm font-black text-emerald-900 uppercase tracking-widest mb-1">{t('profile.walletSecurity')}</h3>
                     <p className="text-xs text-emerald-800/80 font-medium leading-relaxed">
-                        Your identity is stored encrypted on your local device. It is only shared with counterparties when you explicitly sign a voucher.
+                        {t('profile.walletSecurityDesc')}
                     </p>
                 </div>
             </div>
@@ -164,63 +164,63 @@ export function ProfileSettings() {
                 <Card header={
                     <div className="flex items-center gap-2">
                         <User size={18} className="text-theme-primary" />
-                        <span className="font-black text-xs uppercase tracking-widest">Profile Details</span>
+                        <span className="font-black text-xs uppercase tracking-widest">{t('profile.profileDetails')}</span>
                     </div>
                 }>
                     <div className="space-y-6 p-2">
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
-                                    First Name
-                                    <span className="text-theme-accent text-[8px]">(Required)</span>
+                                    {t('profile.firstName')}
+                                    <span className="text-theme-accent text-[8px]">({t('common.required')})</span>
                                 </label>
                                 <Input
                                     value={profile.firstName || ''}
                                     onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
-                                    placeholder="e.g. Alice"
+                                    placeholder={t('profile.firstNamePlaceholder')}
                                 />
                             </div>
                             <div className="space-y-2">
                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
-                                    Last Name
-                                    <span className="text-theme-accent text-[8px]">(Required)</span>
+                                    {t('profile.lastName')}
+                                    <span className="text-theme-accent text-[8px]">({t('common.required')})</span>
                                 </label>
                                 <Input
                                     value={profile.lastName || ''}
                                     onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
-                                    placeholder="e.g. Smith"
+                                    placeholder={t('profile.lastNamePlaceholder')}
                                 />
                             </div>
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Gender</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.gender')}</label>
                             <select
                                 className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
                                 value={profile.gender || ''}
                                 onChange={(e) => setProfile({ ...profile, gender: e.target.value })}
                             >
-                                <option value="">Select...</option>
-                                <option value="1">Male</option>
-                                <option value="2">Female</option>
-                                <option value="0">Other / Not Declared</option>
-                                <option value="9">Not Applicable</option>
+                                <option value="">{t('common.select')}</option>
+                                <option value="1">{t('profile.genderMale')}</option>
+                                <option value="2">{t('profile.genderFemale')}</option>
+                                <option value="0">{t('profile.genderOther')}</option>
+                                <option value="9">{t('profile.genderNa')}</option>
                             </select>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Organization / Company</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.organizationCompany')}</label>
                                 <Input
                                     value={profile.organization || ''}
                                     onChange={(e) => setProfile({ ...profile, organization: e.target.value })}
-                                    placeholder="Organization Name"
+                                    placeholder={t('profile.organizationPlaceholder')}
                                 />
                             </div>
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Community</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.community')}</label>
                                 <Input
                                     value={profile.community || ''}
                                     onChange={(e) => setProfile({ ...profile, community: e.target.value })}
-                                    placeholder="Community Name"
+                                    placeholder={t('profile.communityPlaceholder')}
                                 />
                             </div>
                         </div>
@@ -231,31 +231,31 @@ export function ProfileSettings() {
                 <Card header={
                     <div className="flex items-center gap-2">
                         <MapPin size={18} className="text-theme-primary" />
-                        <span className="font-black text-xs uppercase tracking-widest">Location</span>
+                        <span className="font-black text-xs uppercase tracking-widest">{t('profile.location')}</span>
                     </div>
                 }>
                     <div className="space-y-6 p-2">
                         <div className="grid grid-cols-4 gap-4">
                             <div className="col-span-3 space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Street</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.street')}</label>
                                 <Input
                                     value={profile.address?.street || ''}
                                     onChange={(e) => updateAddress('street', e.target.value)}
-                                    placeholder="Street Address"
+                                    placeholder={t('profile.streetPlaceholder')}
                                 />
                             </div>
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Nr.</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.houseNumber')}</label>
                                 <Input
                                     value={profile.address?.houseNumber || ''}
                                     onChange={(e) => updateAddress('houseNumber', e.target.value)}
-                                    placeholder="123"
+                                    placeholder={t('profile.houseNumberPlaceholder')}
                                 />
                             </div>
                         </div>
                         <div className="grid grid-cols-3 gap-4">
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">ZIP</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.zipCode')}</label>
                                 <Input
                                     value={profile.address?.zipCode || ''}
                                     onChange={(e) => updateAddress('zipCode', e.target.value)}
@@ -264,47 +264,47 @@ export function ProfileSettings() {
                             </div>
                             <div className="col-span-2 space-y-2">
                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
-                                    City
-                                    <span className="text-theme-accent text-[8px]">(Required)</span>
+                                    {t('profile.city')}
+                                    <span className="text-theme-accent text-[8px]">({t('common.required')})</span>
                                 </label>
                                 <Input
                                     value={profile.address?.city || ''}
                                     onChange={(e) => updateAddress('city', e.target.value)}
-                                    placeholder="City Name"
+                                    placeholder={t('profile.cityPlaceholder')}
                                 />
                             </div>
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Country</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.country')}</label>
                             <Input
                                 value={profile.address?.country || ''}
                                 onChange={(e) => updateAddress('country', e.target.value)}
-                                placeholder="Country Name"
+                                placeholder={t('profile.countryPlaceholder')}
                             />
                         </div>
                         <div className="space-y-2">
                             <div className="flex items-center justify-between">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Map Coordinates (Lat, Long)</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.coordinates')}</label>
                                 <div className="flex gap-2">
                                     <button
                                         type="button"
                                         onClick={handleUseGPS}
                                         disabled={isLocating || isGeocoding}
                                         className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
-                                        title="Use current GPS location"
+                                        title={t('profile.gpsTooltip')}
                                     >
                                         {isLocating ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "📍"}
-                                        <span>GPS</span>
+                                        <span>{t('profile.gpsButton')}</span>
                                     </button>
                                     <button
                                         type="button"
                                         onClick={handleGeocodeAddress}
                                         disabled={isLocating || isGeocoding || !profile.address?.city}
                                         className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
-                                        title="Resolve coordinates from the address above"
+                                        title={t('profile.autoAddressTooltip')}
                                     >
                                         {isGeocoding ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "🔍"}
-                                        <span>Auto-Address</span>
+                                        <span>{t('profile.autoAddressButton')}</span>
                                     </button>
                                 </div>
                             </div>
@@ -316,7 +316,7 @@ export function ProfileSettings() {
                                 }}
                                 onBlur={handleCoordBlur}
                                 className={coordWarning ? 'border-rose-500 focus:ring-rose-500' : ''}
-                                placeholder="51.16, 10.45 or Maps Link"
+                                placeholder={t('profile.coordinatesPlaceholder')}
                             />
                             {coordWarning && <p className="text-[10px] text-rose-500 font-bold">{coordWarning}</p>}
                             {geoFeedback && (
@@ -332,42 +332,42 @@ export function ProfileSettings() {
                 <Card header={
                     <div className="flex items-center gap-2">
                         <Globe size={18} className="text-theme-primary" />
-                        <span className="font-black text-xs uppercase tracking-widest">Contact & Links</span>
+                        <span className="font-black text-xs uppercase tracking-widest">{t('profile.contactLinks')}</span>
                     </div>
                 }>
                     <div className="space-y-6 p-2">
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Mail size={10}/> Public Email</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Mail size={10}/> {t('profile.publicEmail')}</label>
                             <Input
                                 type="email"
                                 value={profile.email || ''}
                                 onChange={(e) => setProfile({ ...profile, email: e.target.value })}
-                                placeholder="identity@domain.com"
+                                placeholder={t('profile.emailPlaceholder')}
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Phone size={10}/> Public Phone</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Phone size={10}/> {t('profile.publicPhone')}</label>
                             <Input
                                 type="tel"
                                 value={profile.phone || ''}
                                 onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
-                                placeholder="+49 000 000000"
+                                placeholder={t('profile.phonePlaceholder')}
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Globe size={10}/> Website</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Globe size={10}/> {t('profile.website')}</label>
                             <Input
                                 value={profile.url || ''}
                                 onChange={(e) => setProfile({ ...profile, url: e.target.value })}
-                                placeholder="https://profile.com"
+                                placeholder={t('profile.websitePlaceholder')}
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><User size={10}/> Profile Picture URL</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><User size={10}/> {t('profile.pictureUrl')}</label>
                             <Input
                                 value={profile.pictureUrl || ''}
                                 onChange={(e) => setProfile({ ...profile, pictureUrl: e.target.value })}
-                                placeholder="https://domain.com/avatar.jpg"
+                                placeholder={t('profile.pictureUrlPlaceholder')}
                             />
                         </div>
                     </div>
@@ -377,26 +377,26 @@ export function ProfileSettings() {
                 <Card header={
                     <div className="flex items-center gap-2">
                         <Briefcase size={18} className="text-theme-primary" />
-                        <span className="font-black text-xs uppercase tracking-widest">Community</span>
+                        <span className="font-black text-xs uppercase tracking-widest">{t('profile.community')}</span>
                     </div>
                 }>
                     <div className="space-y-6 p-2">
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> Service Offer (I can help with)</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> {t('profile.serviceOffer')}</label>
                             <textarea
                                 className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[140px]"
                                 value={profile.serviceOffer || ''}
                                 onChange={(e) => setProfile({ ...profile, serviceOffer: e.target.value })}
-                                placeholder="Describe what you bring to the network..."
+                                placeholder={t('profile.serviceOfferPlaceholder')}
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Heart size={10}/> Needs (I'm looking for)</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Heart size={10}/> {t('profile.needs')}</label>
                             <textarea
                                 className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[140px]"
                                 value={profile.needs || ''}
                                 onChange={(e) => setProfile({ ...profile, needs: e.target.value })}
-                                placeholder="Describe what you are looking for..."
+                                placeholder={t('profile.needsPlaceholder')}
                             />
                         </div>
                     </div>
@@ -406,7 +406,7 @@ export function ProfileSettings() {
             <div className="pt-6 flex flex-col items-center gap-4">
                 <Button onClick={handleSave} disabled={isSaving} className="min-w-[240px] gap-2 rounded-2xl py-4 shadow-lg shadow-theme-primary/20">
                     {isSaving ? <CheckCircle2 className="animate-pulse" size={18} /> : <Save size={18} />}
-                    {isSaving ? 'Updating Profile...' : 'Update Profile'}
+                    {isSaving ? t('profile.updating') : t('profile.updateProfile')}
                 </Button>
                 {error && <p className="text-sm font-bold text-rose-500 animate-bounce">{error}</p>}
                 {success && <p className="text-sm font-bold text-emerald-500 flex items-center gap-2"><CheckCircle2 size={16}/> {success}</p>}

@@ -1,5 +1,6 @@
 import { FileSignature, History, CheckCircle2, Trash2 } from 'lucide-react';
 import { Card } from '../ui/Card';
+import { useTranslation } from 'react-i18next';
 import { VoucherDetails, VoucherStatus } from '../../types';
 
 interface TimelineSectionProps {
@@ -17,14 +18,15 @@ export function TimelineSection({
   onRemoveSignature,
   voucherStatus
 }: TimelineSectionProps) {
-  const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
+  const { t } = useTranslation();
+  const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : t('common.na');
 
   return (
     <div className="space-y-6">
       <Card className="border-none shadow-premium" header={
         <div className="flex items-center gap-2">
           <FileSignature size={18} className="text-theme-primary" />
-          <span className="font-black text-xs uppercase tracking-widest">Signatures</span>
+          <span className="font-black text-xs uppercase tracking-widest">{t('voucher.signaturesHeader')}</span>
         </div>
       }>
         <div className="space-y-4">
@@ -40,7 +42,9 @@ export function TimelineSection({
                 <div className="bg-white/40 border border-theme-subtle/30 rounded-2xl p-4 flex items-center justify-between group hover:border-theme-primary/30 transition-all shadow-sm">
                   <div>
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-theme-light">{sig.role}</span>
+                      <span className="text-[10px] font-black uppercase tracking-widest text-theme-light">
+                        {t(`voucher.role.${sig.role}`, { defaultValue: sig.role })}
+                      </span>
                       <span className="text-xs font-bold text-theme-secondary">
                         {sig.details?.firstName} {sig.details?.lastName}
                       </span>
@@ -68,24 +72,24 @@ export function TimelineSection({
       <Card className="border-none shadow-premium" header={
         <div className="flex items-center gap-2">
           <History size={18} className="text-theme-primary" />
-          <span className="font-black text-xs uppercase tracking-widest">Transaction History</span>
+          <span className="font-black text-xs uppercase tracking-widest">{t('voucher.transactionHistoryHeader')}</span>
         </div>
       }>
         <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-          {transactions.slice().reverse().map((t) => (
-            <div key={t.tId} className="p-3 bg-white/40 border border-theme-subtle/30 rounded-xl relative">
+          {transactions.slice().reverse().map((tItem) => (
+            <div key={tItem.tId} className="p-3 bg-white/40 border border-theme-subtle/30 rounded-xl relative">
               <div className="flex justify-between items-start mb-2">
-                <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${t.tType === 'init' ? 'bg-emerald-500 text-white' : 'bg-theme-secondary text-white'}`}>
-                  {t.tType}
+                <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${tItem.tType === 'init' ? 'bg-emerald-500 text-white' : 'bg-theme-secondary text-white'}`}>
+                  {t(`voucher.txType.${tItem.tType}`, { defaultValue: tItem.tType })}
                 </span>
                 <span className="text-xs font-black text-theme-primary">
-                  {t.amount} {displayCurrency}
+                  {tItem.amount} {displayCurrency}
                 </span>
               </div>
               <div className="space-y-1">
                 <p className="text-[9px] text-theme-light flex items-center justify-between">
-                  <span>By: {t.senderId ? t.senderId.slice(0, 12) + "..." : "SYSTEM"}</span>
-                  <span>{formatDateTime(t.tTime).split(',')[0]}</span>
+                  <span>{tItem.senderId ? `${t('transfer.from')}: ${tItem.senderId.slice(0, 12)}...` : `${t('transfer.from')}: SYSTEM`}</span>
+                  <span>{formatDateTime(tItem.tTime).split(',')[0]}</span>
                 </p>
               </div>
             </div>

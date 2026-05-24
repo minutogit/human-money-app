@@ -1,9 +1,10 @@
+import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
 
 interface ConfirmationModalProps {
     isOpen: boolean;
     title: string;
-    description: React.ReactNode; // ReactNode erlaubt auch HTML/JSX im Text
+    description: React.ReactNode;
     confirmVariant?: "primary" | "secondary" | "outline" | "danger";
     confirmText?: string;
     cancelText?: string;
@@ -18,13 +19,14 @@ export function ConfirmationModal({
     title, 
     description, 
     confirmVariant = "primary",
-    confirmText = "Confirm", 
-    cancelText = "Cancel", 
+    confirmText, 
+    cancelText, 
     onConfirm, 
     onCancel,
     isProcessing = false,
     confirmDisabled = false
 }: ConfirmationModalProps) {
+    const { t } = useTranslation();
     if (!isOpen) return null;
 
     return (
@@ -34,10 +36,10 @@ export function ConfirmationModal({
                 <div className="text-sm text-theme-light mb-6">{description}</div>
                 <div className="flex justify-end gap-3">
                     <Button variant="secondary" onClick={onCancel} disabled={isProcessing}>
-                        {cancelText}
+                        {cancelText || t('common.cancel')}
                     </Button>
                     <Button variant={confirmVariant} onClick={onConfirm} disabled={isProcessing || confirmDisabled}>
-                        {isProcessing ? "Processing..." : confirmText}
+                        {isProcessing ? t('common.processing') : (confirmText || t('common.confirm'))}
                     </Button>
                 </div>
             </div>

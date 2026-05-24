@@ -256,6 +256,12 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Structured Error DTOs for i18n Localization (Transitioned error handling from opaque strings to FrontendError DTOs with variable interpolation support)
 - [x] Structured AppFacadeError Handling (Refactored AppState and remaining commands to return structured AppFacadeError / FrontendError DTOs to improve i18n error propagation)
 - [x] Migrated remaining UI component catch blocks to translateError (SettingsView, ProfileSettings, ContactDialog) and stabilized all affected unit tests.
+- [x] Localized ProfileSettings component (Batch 4 i18n migration).
+- [x] Localized VoucherDetailsView and associated subcomponents (Batch 5 i18n migration: CreatorSection, PolicySection, TimelineSection, ExportDialog, and SignatureRequestBanner).
+- [x] Localized AddressBook and ContactDialog components (Batch 6 i18n migration).
+- [x] Localized Transaction History and Activities components (Batch 7 i18n migration).
+- [x] Localized Conflict Management views (Batch 8 i18n migration).
+- [x] Localized Settings and Integrity Report Modal (Batch 9 i18n migration).
 
 ## Next Milestones
 

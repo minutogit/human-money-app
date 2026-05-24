@@ -177,15 +177,15 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                 try {
                     await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
                     setIsValidMnemonic(true);
-                    setFeedbackMsg("Seed phrase is valid.");
+                    setFeedbackMsg(t('auth.seedPhraseValid'));
                 } catch (e) {
                     setIsValidMnemonic(false);
-                    setFeedbackMsg(`Error: ${translateError(e, t)}`);
+                    setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(e, t)}`);
                 }
             } else {
                 setIsValidMnemonic(false);
                 if (nonEmptyWords.length > 0) {
-                    setFeedbackMsg("Awaiting valid seed phrase...");
+                    setFeedbackMsg(t('profile.awaitingValidSeed'));
                 } else {
                     setFeedbackMsg("");
                 }
@@ -234,11 +234,11 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     // Handler for proceeding to step 2
     const handleGoToDetails = () => {
         if (!isValidMnemonic) {
-            setFeedbackMsg("Error: Please enter a valid seed phrase to continue.");
+            setFeedbackMsg(t('auth.enterValidSeed'));
             return;
         }
         if (passphrase !== confirmPassphrase) {
-            setFeedbackMsg("Error: The passphrases do not match.");
+            setFeedbackMsg(t('profile.passphraseMismatch'));
             return;
         }
         setFeedbackMsg("");
@@ -250,17 +250,17 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     async function handleCreateProfileSubmit(e: FormEvent) {
         e.preventDefault();
         if (password !== confirmPassword) {
-            setFeedbackMsg("Error: The passwords do not match.");
+            setFeedbackMsg(t('profile.passwordMismatch'));
             passwordInputRef.current?.focus();
             return;
         }
         if (password.length < 8) {
-            setFeedbackMsg("Error: Password must be at least 8 characters long.");
+            setFeedbackMsg(t('profile.passwordMinLength'));
             passwordInputRef.current?.focus();
             return;
         }
         if (passphrase !== confirmPassphrase) {
-            setFeedbackMsg("Error: The passphrases do not match.");
+            setFeedbackMsg(t('profile.passphraseMismatch'));
             passwordInputRef.current?.focus();
             return;
         }
@@ -286,7 +286,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                 // Keep loading state true during transition, like Login
                 onProfileCreated();
             } catch (e) {
-                setFeedbackMsg(`Error creating profile: ${translateError(e, t)}`);
+                setFeedbackMsg(`${t('profile.errorCreatingProfile')}: ${translateError(e, t)}`);
                 error(`Frontend: Profile recreation failed: ${translateError(e, t)}`);
             } finally {
                 setIsLoading(false);
@@ -306,15 +306,15 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                 return (
                     <form onSubmit={(e) => { e.preventDefault(); handleGoToDetails(); }}>
                         <div className="text-center">
-                            <h2 className="text-2xl font-bold text-theme-primary">Step 1: Your Seed Phrase</h2>
-                            <p className="text-theme-light mt-1">Enter your existing 12 or 24-word secret seed phrase.</p>
+                            <h2 className="text-2xl font-bold text-theme-primary">{t('profile.recoverStep1Title')}</h2>
+                            <p className="text-theme-light mt-1">{t('profile.recoverStep1Subtitle')}</p>
                         </div>
 
                         <div className="space-y-5 my-8">
                             <div>
                                 <div className="flex flex-col gap-3 mb-2">
                                     <div className="flex justify-between items-center">
-                                        <label className="text-sm font-semibold text-theme-secondary">Seed Phrase</label>
+                                        <label className="text-sm font-semibold text-theme-secondary">{t('auth.seedPhrase')}</label>
                                         <select 
                                             value={selectedLanguage} 
                                             onChange={(e) => setSelectedLanguage(e.target.value as MnemonicLanguage)} 
@@ -336,12 +336,12 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                     <div className="flex justify-between items-center">
                                         <div className="flex items-center gap-4">
                                             <button type="button" onClick={handleInputModeToggle} className="text-xs text-theme-primary hover:underline">
-                                                {inputMode === "words" ? "Enter full phrase" : "Use single fields"}
+                                                {inputMode === "words" ? t('auth.enterFullPhrase') : t('auth.useSingleFields')}
                                             </button>
                                         </div>
                                         <select id="wordCount" value={wordCount} onChange={(e) => setWordCount(Number(e.target.value) as 12 | 24)} className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary">
-                                            <option value={12}>12 Words</option>
-                                            <option value={24}>24 Words</option>
+                                            <option value={12}>{t('profile.wordCount12')}</option>
+                                            <option value={24}>{t('profile.wordCount24')}</option>
                                         </select>
                                     </div>
                                 </div>
@@ -371,35 +371,35 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                             data-testid="phrase-textarea"
                                             value={rawPhrase}
                                             onChange={(e) => { setRawPhrase(cleanPhrase(e.target.value)); }}
-                                            placeholder="Paste full seed phrase here... Numbers and punctuation are cleaned automatically."
+                                            placeholder={t('profile.pasteSeedPhrasePlaceholder')}
                                             rows={6}
                                             className="font-mono text-sm"
                                         />
-                                        <p className="text-[10px] text-theme-light mt-1">Automatic cleaning handles numbers (e.g. 1. 2.), dots, newlines and extra spaces.</p>
+                                        <p className="text-[10px] text-theme-light mt-1">{t('profile.autoCleaningHint')}</p>
                                     </div>
                                 )}
                             </div>
 
                             <div className="border-t border-theme-light-border pt-5 space-y-5">
                                 <div>
-                                    <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (13th/25th Word)</label>
+                                    <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary mb-1">{t('profile.optionalPassphraseLabel')}</label>
                                     <Input 
                                         id="passphrase"
                                         type="password" 
                                         value={passphrase} 
                                         onChange={(e) => setPassphrase(e.target.value)} 
-                                        placeholder="Enter extra security word if used" 
+                                        placeholder={t('profile.passphraseIfUsedPlaceholder')}
                                     />
                                 </div>
                                 {passphrase && (
                                     <div>
-                                        <label htmlFor="confirmPassphrase" className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Optional Passphrase</label>
+                                        <label htmlFor="confirmPassphrase" className="block text-sm font-semibold text-theme-secondary mb-1">{t('profile.confirmOptionalPassphrase')}</label>
                                         <Input 
                                             id="confirmPassphrase"
                                             type="password" 
                                             value={confirmPassphrase} 
                                             onChange={(e) => setConfirmPassphrase(e.target.value)} 
-                                            placeholder="Verify your extra word" 
+                                            placeholder={t('profile.verifyExtraWord')}
                                         />
                                     </div>
                                 )}
@@ -408,10 +408,10 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
 
                         <div className="flex gap-4 w-full pt-4">
                             <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="flex-1 py-4 rounded-2xl gap-2">
-                                <ArrowLeft size={18} /> Back to Login
+                                <ArrowLeft size={18} /> {t('auth.backToLogin')}
                             </Button>
                             <Button type="submit" disabled={!isValidMnemonic} className="flex-1 py-4 rounded-2xl gap-2">
-                                Next <ArrowRight size={18} />
+                                {t('profile.next')} <ArrowRight size={18} />
                             </Button>
                         </div>
                     </form>
@@ -422,16 +422,16 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                 return (
                     <form onSubmit={handleCreateProfileSubmit} className="space-y-5">
                         <div className="text-center">
-                            <h2 className="text-2xl font-bold text-theme-primary">Step 2: Secure Your Profile</h2>
-                            <p className="text-theme-light mt-1">Create a name and password for this new profile.</p>
+                            <h2 className="text-2xl font-bold text-theme-primary">{t('profile.recoverStep2Title')}</h2>
+                            <p className="text-theme-light mt-1">{t('profile.recoverStep2Subtitle')}</p>
                         </div>
 
                         <div>
-                            <label htmlFor="profileName" className="block text-sm font-semibold text-theme-secondary mb-1">Profile Name</label>
-                            <Input id="profileName" data-testid="profile-name-input" type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="e.g., 'My Main Wallet'" required />
+                            <label htmlFor="profileName" className="block text-sm font-semibold text-theme-secondary mb-1">{t('profile.profileName')}</label>
+                            <Input id="profileName" data-testid="profile-name-input" type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder={t('profile.profileNamePlaceholder2')} required />
                         </div>
                         <div>
-                            <label htmlFor="password" className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
+                            <label htmlFor="password" className="block text-sm font-semibold text-theme-secondary mb-1">{t('auth.password')}</label>
                             <Input 
                                 id="password"
                                 type="password" 
@@ -444,13 +444,13 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                     setPassword("");
                                     setConfirmPassword("");
                                 }}
-                                placeholder="Minimum 8 characters" 
+                                placeholder={t('auth.passwordMinChars')}
                                 required 
                                 ref={passwordInputRef}
                             />
                         </div>
                         <div>
-                            <label htmlFor="confirmPassword" className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Password</label>
+                            <label htmlFor="confirmPassword" className="block text-sm font-semibold text-theme-secondary mb-1">{t('profile.confirmPassword')}</label>
                             <Input 
                                 id="confirmPassword"
                                 type="password" 
@@ -461,7 +461,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                         setFeedbackMsg("");
                                     }
                                 }}
-                                placeholder="Repeat your password" 
+                                placeholder={t('profile.repeatPassword')}
                                 required 
                             />
                         </div>
@@ -482,10 +482,10 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                 />
                                 <div className="flex flex-col">
                                     <label htmlFor="checkbox-sub-account" className="text-xs font-bold text-theme-secondary cursor-pointer select-none">
-                                        Set up as sub-account / for multiple devices (Optional)
+                                        {t('profile.subAccountOption')}
                                     </label>
                                     <p className="text-[10px] font-medium text-theme-light leading-normal mt-0.5">
-                                        Check this if you plan to use this seed phrase on more than one device (e.g. computer and phone) at the same time.
+                                        {t('profile.subAccountDescription')}
                                     </p>
                                 </div>
                             </div>
@@ -494,7 +494,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                 <div className="space-y-2 pt-2 border-t border-theme-light-border animate-in fade-in duration-300">
                                     <div className="flex items-center justify-between mb-1">
                                         <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary">
-                                            Sub-Account Name / Device Prefix
+                                            {t('profile.subAccountName')}
                                         </label>
                                         <button 
                                             type="button" 
@@ -502,7 +502,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                             className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20"
                                         >
                                             <HelpCircle size={12} />
-                                            <span>Read Instructions</span>
+                                            <span>{t('profile.readInstructions')}</span>
                                         </button>
                                     </div>
                                     <Input 
@@ -511,18 +511,18 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                         type="text" 
                                         value={userPrefix} 
                                         onChange={(e) => setUserPrefix(e.target.value)} 
-                                        placeholder="e.g. laptop, phone, or my-company" 
+                                        placeholder={t('profile.prefixPlaceholder')}
                                     />
                                 </div>
                             )}
 
                             <div className="space-y-1.5 p-3.5 bg-theme-subtle/20 border border-theme-subtle rounded-2xl">
                                 <p className="text-[10px] text-theme-secondary leading-relaxed">
-                                    Required if using the same seed phrase on multiple devices. Can also be used as a public identifier (e.g. company name) for easy recognition. You can create multiple profiles on this device in parallel without deleting old ones.
+                                    {t('profile.prefixDescription')}
                                 </p>
                                 <p className="text-[9px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic">
                                     <AlertTriangle size={10} className="shrink-0 mt-0.5" />
-                                    Critical: Every active device MUST have a unique prefix to prevent irreversible reputation loss.
+                                    {t('profile.criticalPrefix')}
                                 </p>
                             </div>
                         </div>
@@ -535,16 +535,16 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                         <div className="flex flex-col items-center gap-4 pt-3">
                             {isLoading && (
                                 <p className="text-center text-sm font-medium text-theme-secondary animate-pulse">
-                                    Creating profile, please wait... This may take a moment.
+                                    {t('profile.creatingProgress')}
                                 </p>
                             )}
                             <div className="flex gap-4 w-full pt-4">
                                 <Button type="button" variant="secondary" onClick={() => setWizardStep("import_seed")} className="flex-1 py-4 rounded-2xl gap-2">
-                                    <ArrowLeft size={18} /> Back
+                                    <ArrowLeft size={18} /> {t('profile.back')}
                                 </Button>
                                 <Button type="submit" disabled={isLoading} className="flex-[2] py-4 rounded-2xl gap-2">
                                     {isLoading ? <RefreshCw className="animate-spin" size={18} /> : <CheckCircle2 size={18} />}
-                                    {isLoading ? "Creating Profile..." : "Create & Encrypt Profile"}
+                                    {isLoading ? t('profile.creating') : t('profile.createAndEncrypt')}
                                 </Button>
                             </div>
                         </div>
@@ -563,7 +563,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                 />
                 <div className="text-left space-y-0 sm:space-y-0.5">
                     <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
-                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">Recreate Profile from Seed</p>
+                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">{t('profile.recreateFromSeedTitle')}</p>
                 </div>
             </div>
 

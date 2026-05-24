@@ -1,5 +1,6 @@
 // src/components/TransactionHistoryView.tsx
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { transferService } from '../services/transferService';
 import { logger } from '../utils/log';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -28,6 +29,7 @@ import { useNavigation } from '../context/NavigationContext';
 import { useContactResolver } from '../hooks/useContactResolver';
 
 export function TransactionHistoryView() {
+    const { t } = useTranslation();
     const { goBack } = useNavigation();
     const { resolveIdentity } = useContactResolver();
     const [history, setHistory] = useState<TransactionRecord[]>([]);
@@ -46,19 +48,19 @@ export function TransactionHistoryView() {
                 records.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
                 setHistory(records);
             } catch (e) {
-                const msg = `Failed to load transaction history: ${e}`;
-                logger.error(msg);
+                const msg = t('history.loadFailed', { error: String(e) });
+                logger.error(`Failed to load transaction history: ${e}`);
                 setError(msg);
             } finally {
                 setIsLoading(false);
             }
         }
         fetchHistory();
-    }, []);
+    }, [t]);
 
     async function handleSaveBundle(record: TransactionRecord) {
         if (!record.bundleData || record.bundleData.length === 0) {
-            setFeedback(f => ({ ...f, [record.id]: 'Error: No bundle data available.' }));
+            setFeedback(f => ({ ...f, [record.id]: t('history.noBundleData') }));
             return;
         }
 
@@ -70,18 +72,18 @@ export function TransactionHistoryView() {
             const suggestedFilename = `${recipientName}_${dateTimePart}.transfer`;
 
             const filePath = await save({
-                title: 'Save Transfer File',
+                title: t('history.saveTitle'),
                 defaultPath: suggestedFilename,
-                filters: [{ name: 'Transfer File', extensions: ['transfer'] }]
+                filters: [{ name: t('history.saveFilterName'), extensions: ['transfer'] }]
             });
 
             if (filePath) {
                 const content = new Uint8Array(record.bundleData);
                 await writeFile(filePath, content);
-                setFeedback(f => ({ ...f, [record.id]: `Saved!` }));
+                setFeedback(f => ({ ...f, [record.id]: t('history.saved') }));
             }
         } catch (e) {
-            setFeedback(f => ({ ...f, [record.id]: `Error: ${e}` }));
+            setFeedback(f => ({ ...f, [record.id]: t('history.saveError', { error: String(e) }) }));
         } finally {
             setIsSaving(null);
         }
@@ -99,8 +101,8 @@ export function TransactionHistoryView() {
 
     return (
         <PageLayout 
-            title="Activity Audit" 
-            description="Complete record of all secure transfers." 
+            title={t('history.auditTitle')} 
+            description={t('history.auditDescription')} 
             onBack={goBack}
         >
             <div className="max-w-4xl mx-auto space-y-6">
@@ -111,7 +113,7 @@ export function TransactionHistoryView() {
                     </div>
                     <input 
                         type="text" 
-                        placeholder="Filter by recipient, sender or notes..." 
+                        placeholder={t('history.searchPlaceholder')} 
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         className="w-full pl-12 pr-4 py-4 bg-white/50 backdrop-blur-sm border border-theme-subtle rounded-2xl focus:outline-none focus:ring-2 focus:ring-theme-primary/10 transition-all shadow-inner-soft placeholder:text-theme-light/60 font-medium"
@@ -120,7 +122,7 @@ export function TransactionHistoryView() {
 
                 {isLoading && (
                     <div className="text-center py-20 text-theme-light animate-pulse font-black uppercase tracking-[0.2em]">
-                        Loading history...
+                        {t('history.loading')}
                     </div>
                 )}
                 
@@ -150,7 +152,7 @@ export function TransactionHistoryView() {
                                                 <div className="min-w-0">
                                                     <div className="flex items-center gap-2 mb-0.5">
                                                         <span className={`text-[10px] font-black uppercase tracking-widest ${isSent ? 'text-rose-500' : 'text-emerald-500'}`}>
-                                                            {isSent ? 'Outbound' : 'Inbound'}
+                                                            {isSent ? t('history.outbound') : t('history.inbound')}
                                                         </span>
                                                         <span className="text-[10px] text-theme-light/60 font-medium flex items-center gap-1">
                                                             <Calendar size={10} />
@@ -160,9 +162,9 @@ export function TransactionHistoryView() {
                                                     <div className="flex flex-col">
                                                         <p className="text-sm font-bold text-theme-secondary truncate">
                                                             {isSent ? (
-                                                                <>To: <span className="text-theme-primary">{resolveIdentity(record.recipientId, null)}</span></>
+                                                                <>{t('history.to')} <span className="text-theme-primary">{resolveIdentity(record.recipientId, null)}</span></>
                                                             ) : (
-                                                                <>From: <span className="text-theme-primary">{resolveIdentity(record.senderId, record.senderProfileName)}</span></>
+                                                                <>{t('history.from')} <span className="text-theme-primary">{resolveIdentity(record.senderId, record.senderProfileName)}</span></>
                                                             )}
                                                         </p>
                                                         {record.notes && (
@@ -190,7 +192,7 @@ export function TransactionHistoryView() {
                                                     <div className="space-y-4">
                                                         <div>
                                                             <p className="text-[9px] font-black text-theme-light uppercase tracking-[0.2em] mb-2 flex items-center gap-1.5">
-                                                                <Hash size={10} /> Transaction ID
+                                                                <Hash size={10} /> {t('history.txId')}
                                                             </p>
                                                             <p className="text-xs font-mono text-theme-secondary break-all bg-theme-subtle/10 p-3 rounded-xl border border-theme-subtle/20">
                                                                 {record.bundleId}
@@ -198,7 +200,7 @@ export function TransactionHistoryView() {
                                                         </div>
                                                         <div>
                                                             <p className="text-[9px] font-black text-theme-light uppercase tracking-[0.2em] mb-2 flex items-center gap-1.5">
-                                                                <User size={10} /> Full {isSent ? 'Recipient' : 'Sender'} DID
+                                                                <User size={10} /> {isSent ? t('history.recipientDid') : t('history.senderDid')}
                                                             </p>
                                                             <p className="text-xs font-mono text-theme-secondary break-all bg-theme-subtle/10 p-3 rounded-xl border border-theme-subtle/20">
                                                                 {isSent ? record.recipientId : record.senderId}
@@ -208,10 +210,10 @@ export function TransactionHistoryView() {
                                                     
                                                     <div className="flex flex-col justify-between">
                                                         <div className="p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/10">
-                                                            <p className="text-[9px] font-black text-theme-primary uppercase tracking-[0.2em] mb-2">Transaction Status</p>
+                                                            <p className="text-[9px] font-black text-theme-primary uppercase tracking-[0.2em] mb-2">{t('history.txStatus')}</p>
                                                             <div className="flex items-center gap-2 text-theme-secondary">
                                                                 <CheckCircle2 size={16} className="text-emerald-500" />
-                                                                <span className="text-sm font-bold">Securely Verified</span>
+                                                                <span className="text-sm font-bold">{t('history.verified')}</span>
                                                             </div>
                                                         </div>
                                                         
@@ -228,7 +230,7 @@ export function TransactionHistoryView() {
                                                                     disabled={isSaving === record.id}
                                                                 >
                                                                     <Download size={14} />
-                                                                    {isSaving === record.id ? 'Saving...' : 'Export Transfer File'}
+                                                                    {isSaving === record.id ? t('history.saving') : t('history.export')}
                                                                 </Button>
                                                                 {feedback[record.id] && (
                                                                     <span className="text-[10px] font-bold text-emerald-500 animate-pulse">{feedback[record.id]}</span>
@@ -242,15 +244,15 @@ export function TransactionHistoryView() {
                                                 {record.involvedSourcesDetails && record.involvedSourcesDetails.length > 0 && (
                                                     <div className="space-y-3">
                                                         <p className="text-[9px] font-black text-theme-light uppercase tracking-[0.2em] flex items-center gap-1.5">
-                                                            <Layers size={10} /> Involved Assets ({record.involvedSourcesDetails.length})
+                                                            <Layers size={10} /> {t('history.involvedAssets', { count: record.involvedSourcesDetails.length })}
                                                         </p>
                                                         <div className="overflow-hidden border border-theme-subtle rounded-2xl">
                                                             <table className="w-full text-[11px] text-left">
                                                                 <thead className="bg-theme-subtle/10 border-b border-theme-subtle">
                                                                     <tr>
-                                                                        <th className="px-4 py-2 font-black text-theme-light uppercase tracking-widest">Asset Standard</th>
-                                                                        <th className="px-4 py-2 font-black text-theme-light uppercase tracking-widest text-right">Value</th>
-                                                                        <th className="px-4 py-2 font-black text-theme-light uppercase tracking-widest">Local ID</th>
+                                                                        <th className="px-4 py-2 font-black text-theme-light uppercase tracking-widest">{t('history.assetStandard')}</th>
+                                                                        <th className="px-4 py-2 font-black text-theme-light uppercase tracking-widest text-right">{t('history.value')}</th>
+                                                                        <th className="px-4 py-2 font-black text-theme-light uppercase tracking-widest">{t('history.localId')}</th>
                                                                     </tr>
                                                                 </thead>
                                                                 <tbody className="divide-y divide-theme-subtle/50">
@@ -276,8 +278,8 @@ export function TransactionHistoryView() {
                                 <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-theme-subtle/20 text-theme-light mb-4">
                                     <Info size={32} />
                                 </div>
-                                <p className="text-theme-light font-bold">No matching transactions found.</p>
-                                <p className="text-xs text-theme-light/60 mt-1">Try adjusting your filter or search query.</p>
+                                <p className="text-theme-light font-bold">{t('history.noMatchingTx')}</p>
+                                <p className="text-xs text-theme-light/60 mt-1">{t('history.adjustFilter')}</p>
                             </div>
                         )}
                     </div>

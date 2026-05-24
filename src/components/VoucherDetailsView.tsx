@@ -11,6 +11,7 @@ import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { useSession } from "../context/SessionContext";
+import { useTranslation } from "react-i18next";
 import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardDefinition } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
@@ -39,6 +40,7 @@ import { SignatureRequestBanner } from "./voucher/SignatureRequestBanner";
 import { useNavigation } from "../context/NavigationContext";
 
 export function VoucherDetailsView() {
+    const { t } = useTranslation();
     const { navigate, goBack, appState } = useNavigation();
     
     // Extract voucherId from appState
@@ -101,7 +103,7 @@ export function VoucherDetailsView() {
                 }
                 setParsedStandards(parsed);
             } catch (e) {
-                const msg = `Failed to fetch voucher details: ${e}`;
+                const msg = `${t('voucher.errorFetchingDetails')}: ${e}`;
                 logger.error(msg);
                 setErrorMsg(msg);
             } finally {
@@ -109,7 +111,7 @@ export function VoucherDetailsView() {
             }
         }
         fetchDetails();
-    }, [voucherId]);
+    }, [voucherId, t]);
 
     useEffect(() => {
         contactService.getContacts().then(setContacts).catch(e => logger.error(`Failed to fetch contacts: ${e}`));
@@ -143,23 +145,23 @@ export function VoucherDetailsView() {
 
     function getStatusInfo(details: VoucherDetails) {
         const { status } = details;
-        if (status === "active") return { name: 'Active', color: 'text-emerald-600', bgColor: 'bg-emerald-50', icon: CheckCircle2 };
-        if (status === "archived") return { name: 'Archived', color: 'text-gray-600', bgColor: 'bg-gray-50', icon: History };
-        if (status === "incomplete") return { name: 'Incomplete', color: 'text-amber-600', bgColor: 'bg-amber-50', icon: Clock };
-        if (status === "quarantined") return { name: 'Quarantined', color: 'text-rose-600', bgColor: 'bg-rose-50', icon: ShieldAlert };
-        if (status === "endorsed") return { name: 'Endorsed', color: 'text-indigo-600', bgColor: 'bg-indigo-50', icon: FileSignature };
-        if (status === "expired") return { name: 'Expired', color: 'text-orange-600', bgColor: 'bg-orange-50', icon: Clock };
-        return { name: 'Unknown', color: 'text-gray-600', bgColor: 'bg-gray-50', icon: Info };
+        if (status === "active") return { id: 'active', label: t('voucher.statusActive'), color: 'text-emerald-600', bgColor: 'bg-emerald-50', icon: CheckCircle2 };
+        if (status === "archived") return { id: 'archived', label: t('voucher.statusArchived'), color: 'text-gray-600', bgColor: 'bg-gray-50', icon: History };
+        if (status === "incomplete") return { id: 'incomplete', label: t('voucher.statusIncomplete'), color: 'text-amber-600', bgColor: 'bg-amber-50', icon: Clock };
+        if (status === "quarantined") return { id: 'quarantined', label: t('voucher.statusQuarantined'), color: 'text-rose-600', bgColor: 'bg-rose-50', icon: ShieldAlert };
+        if (status === "endorsed") return { id: 'endorsed', label: t('voucher.statusEndorsed'), color: 'text-indigo-600', bgColor: 'bg-indigo-50', icon: FileSignature };
+        if (status === "expired") return { id: 'expired', label: t('voucher.statusExpired'), color: 'text-orange-600', bgColor: 'bg-orange-50', icon: Clock };
+        return { id: 'unknown', label: t('voucher.statusUnknown'), color: 'text-gray-600', bgColor: 'bg-gray-50', icon: Info };
     }
 
-    const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
+    const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : t('common.na');
     const statusInfo = details ? getStatusInfo(details) : null;
     const StatusIcon = statusInfo?.icon;
 
-    if (isLoading) return <div className="text-center p-20 text-theme-light animate-pulse font-black uppercase tracking-[0.2em]">Loading Voucher Details...</div>;
-    if (errorMsg || !details || !voucher) return <div className="p-10 text-center text-rose-500 font-bold">{errorMsg || "Voucher not found"}</div>;
+    if (isLoading) return <div className="text-center p-20 text-theme-light animate-pulse font-black uppercase tracking-[0.2em]">{t('voucher.loadingDetails')}</div>;
+    if (errorMsg || !details || !voucher) return <div className="p-10 text-center text-rose-500 font-bold">{errorMsg || t('voucher.notFound')}</div>;
 
-    const signatureHint = statusInfo?.name === 'Incomplete' && userProfile
+    const signatureHint = statusInfo?.id === 'incomplete' && userProfile
         ? (() => {
             const targetUuid = voucher.voucherStandard.uuid;
             const standard = parsedStandards[targetUuid] || Object.values(parsedStandards).find(s => s.immutable.identity.uuid === targetUuid);
@@ -188,7 +190,7 @@ export function VoucherDetailsView() {
                 setShowExportModal(false);
             }
         } catch (e) {
-            setExportError(`Export failed: ${e}`);
+            setExportError(`${t('voucher.exportFailed')}: ${e}`);
         } finally {
             setIsExporting(false);
         }
@@ -205,7 +207,7 @@ export function VoucherDetailsView() {
             await refreshDetails();
         } catch (e) {
             logger.error(`Failed to remove signature: ${e}`);
-            alert(`Failed to remove signature: ${e}`);
+            alert(`${t('voucher.failedRemoveSignature')}: ${e}`);
         } finally {
             setIsRemovingSignature(false);
         }
@@ -213,14 +215,14 @@ export function VoucherDetailsView() {
 
     return (
         <PageLayout 
-            title="Voucher Details" 
+            title={t('voucher.detailsTitle')} 
             description={details.displayStandardName}
             onBack={goBack}
             actions={
                 <div className="flex items-center gap-2">
-                    {statusInfo?.name === 'Incomplete' && (
+                    {statusInfo?.id === 'incomplete' && (
                         <Button variant="primary" size="sm" onClick={() => setShowExportModal(true)} className="gap-2">
-                            <FileSignature size={16} /> Sign
+                            <FileSignature size={16} /> {t('voucher.signButton')}
                         </Button>
                     )}
                     <button 
@@ -245,8 +247,8 @@ export function VoucherDetailsView() {
                                     <span className="text-xl font-bold text-theme-light uppercase tracking-widest">{details.displayCurrency}</span>
                                 </div>
                                 <div className="flex items-center gap-2 mt-2">
-                                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${statusInfo?.bgColor} ${statusInfo?.color}`}>{statusInfo?.name}</span>
-                                    {details.isTestVoucher && <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-500 text-white shadow-lg shadow-rose-200">Test Voucher</span>}
+                                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${statusInfo?.bgColor} ${statusInfo?.color}`}>{statusInfo?.label}</span>
+                                    {details.isTestVoucher && <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-500 text-white shadow-lg shadow-rose-200">{t('voucher.testVoucher')}</span>}
                                 </div>
                             </div>
                         </div>
@@ -254,11 +256,11 @@ export function VoucherDetailsView() {
                         <div className="flex flex-col gap-3 w-full md:w-auto">
                             {isQuarantined && (
                                 <Button variant="secondary" size="sm" className="bg-white/20 text-white hover:bg-white/30 border-white/30 backdrop-blur-md" onClick={() => proofId && navigate({ view: 'conflict_details', proofId, previousView: appState })} disabled={!proofId}>
-                                    <ShieldAlert size={16} className="mr-2" /> View Proof
+                                    <ShieldAlert size={16} className="mr-2" /> {t('voucher.viewProof')}
                                 </Button>
                             )}
                             <div className="bg-white/20 backdrop-blur-md px-4 py-2 rounded-2xl border border-white/30">
-                                <p className="text-[9px] font-black text-theme-light uppercase tracking-[0.2em] mb-1">Standard</p>
+                                <p className="text-[9px] font-black text-theme-light uppercase tracking-[0.2em] mb-1">{t('voucher.standardLabel')}</p>
                                 <p className="text-xs font-bold text-theme-secondary truncate max-w-[200px]">{details.displayStandardName}</p>
                             </div>
                         </div>
@@ -268,14 +270,14 @@ export function VoucherDetailsView() {
                         <div className="bg-blue-500/10 border-t border-blue-500/20 p-4 px-8 flex items-start gap-4">
                             <Info size={18} className="text-blue-500 mt-1 shrink-0" />
                             <p className="text-sm text-blue-900 font-medium leading-relaxed">
-                                <span className="font-black uppercase text-[10px] tracking-widest block mb-1">Signature Hint</span>
+                                <span className="font-black uppercase text-[10px] tracking-widest block mb-1">{t('voucher.signatureHint')}</span>
                                 {signatureHint}
                             </p>
                         </div>
                     )}
                 </Card>
 
-                {statusInfo?.name === 'Incomplete' && (
+                {statusInfo?.id === 'incomplete' && (
                     <SignatureRequestBanner 
                         onAction={() => setShowExportModal(true)}
                     />
@@ -319,21 +321,21 @@ export function VoucherDetailsView() {
                             <Card className="border-none shadow-premium" header={
                                 <div className="flex items-center gap-2">
                                     <Info size={16} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">Details</span>
+                                    <span className="font-black text-xs uppercase tracking-widest">{t('voucher.detailsHeader')}</span>
                                 </div>
                             }>
                                 <div className="space-y-6">
-                                    <InfoRow label="Voucher ID" isMono icon={Shield}>{voucher.voucherId}</InfoRow>
-                                    <InfoRow label="Issue Date" icon={Clock}>{formatDateTime(voucher.creationDate)}</InfoRow>
-                                    <InfoRow label="Valid Until" icon={AlertCircle}>{formatDateTime(voucher.validUntil || undefined)}</InfoRow>
+                                    <InfoRow label={t('voucher.idLabel')} isMono icon={Shield}>{voucher.voucherId}</InfoRow>
+                                    <InfoRow label={t('voucher.issueDateLabel')} icon={Clock}>{formatDateTime(voucher.creationDate)}</InfoRow>
+                                    <InfoRow label={t('voucher.validUntilLabel')} icon={AlertCircle}>{formatDateTime(voucher.validUntil || undefined)}</InfoRow>
                                     <div className="pt-4 border-t border-theme-subtle/30 grid grid-cols-2 gap-4">
                                         <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
-                                            <p className="text-[9px] font-black uppercase text-theme-light mb-1">Divisible</p>
-                                            <p className="text-xs font-bold">{voucher.voucherStandard.template.allowPartialTransfers ? "YES" : "NO"}</p>
+                                            <p className="text-[9px] font-black uppercase text-theme-light mb-1">{t('voucher.divisibleLabel')}</p>
+                                            <p className="text-xs font-bold">{voucher.voucherStandard.template.allowPartialTransfers ? t('common.yes') : t('common.no')}</p>
                                         </div>
                                         <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
-                                            <p className="text-[9px] font-black uppercase text-theme-light mb-1">Collateral</p>
-                                            <p className="text-xs font-bold">{voucher.collateral?.amount ? "YES" : "NO"}</p>
+                                            <p className="text-[9px] font-black uppercase text-theme-light mb-1">{t('voucher.collateralLabel')}</p>
+                                            <p className="text-xs font-bold">{voucher.collateral?.amount ? t('common.yes') : t('common.no')}</p>
                                         </div>
                                     </div>
                                 </div>
@@ -367,9 +369,9 @@ export function VoucherDetailsView() {
 
             <ConfirmationModal
                 isOpen={showRemoveSignatureModal !== null}
-                title="Remove Signature"
-                description="Are you sure you want to remove this signature? This will be recorded and might affect the voucher's validity."
-                confirmText="Remove"
+                title={t('voucher.removeSignatureTitle')}
+                description={t('voucher.removeSignatureConfirm')}
+                confirmText={t('common.remove')}
                 confirmVariant="danger"
                 onConfirm={handleRemoveSignature}
                 onCancel={() => setShowRemoveSignatureModal(null)}

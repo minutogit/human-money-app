@@ -1,5 +1,6 @@
 // src/components/Activities.tsx
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { transferService } from '../services/transferService';
 import { logger } from '../utils/log';
 import { WalletEvent } from '../types';
@@ -21,8 +22,8 @@ import {
 import { useNavigation } from '../context/NavigationContext';
 import { useContactResolver } from '../hooks/useContactResolver';
 
-
 export function Activities() {
+    const { t } = useTranslation();
     const { navigate, goBack } = useNavigation();
     const { resolveIdentity } = useContactResolver();
 
@@ -33,11 +34,11 @@ export function Activities() {
         if (typeof type === 'string') {
             switch (type) {
                 case 'voucherCreated':
-                    return { label: 'Voucher Created', icon: PlusCircle, color: 'text-blue-600', bgColor: 'bg-blue-50' };
+                    return { label: t('history.eventCreated'), icon: PlusCircle, color: 'text-blue-600', bgColor: 'bg-blue-50' };
                 case 'transferSent': {
                     const recipientName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
                     return { 
-                        label: `Sent to ${recipientName}`, 
+                        label: t('history.eventSent', { recipient: recipientName }), 
                         icon: ArrowUpRight, 
                         color: 'text-rose-600', 
                         bgColor: 'bg-rose-50' 
@@ -46,24 +47,24 @@ export function Activities() {
                 case 'transferReceived': {
                     const senderName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
                     return { 
-                        label: `Received from ${senderName}`, 
+                        label: t('history.eventReceived', { sender: senderName }), 
                         icon: ArrowDownLeft, 
                         color: 'text-emerald-600', 
                         bgColor: 'bg-emerald-50' 
                     };
                 }
                 case 'voucherQuarantined':
-                    return { label: 'Security Quarantine', icon: ShieldAlert, color: 'text-amber-600', bgColor: 'bg-amber-50' };
+                    return { label: t('history.eventQuarantine'), icon: ShieldAlert, color: 'text-amber-600', bgColor: 'bg-amber-50' };
                 case 'voucherActivated':
-                    return { label: 'Voucher Activated', icon: CheckCircle2, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
+                    return { label: t('history.eventActivated'), icon: CheckCircle2, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
                 case 'voucherVoided':
-                    return { label: 'Voucher Voided', icon: XCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
+                    return { label: t('history.eventVoided'), icon: XCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
                 case 'voucherExpired':
-                    return { label: 'Voucher Expired', icon: Clock, color: 'text-orange-600', bgColor: 'bg-orange-50' };
+                    return { label: t('history.eventExpired'), icon: Clock, color: 'text-orange-600', bgColor: 'bg-orange-50' };
             }
         }
 
-        return { label: 'Wallet Event', icon: Info, color: 'text-gray-600', bgColor: 'bg-gray-50' };
+        return { label: t('history.eventDefault'), icon: Info, color: 'text-gray-600', bgColor: 'bg-gray-50' };
     }
     const [events, setEvents] = useState<WalletEvent[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -76,24 +77,24 @@ export function Activities() {
                 setEvents(data);
             } catch (e) {
                 logger.error(`Failed to fetch activities: ${e}`);
-                setError('Failed to load activity history.');
+                setError(t('history.loadActivitiesFailed'));
             } finally {
                 setIsLoading(false);
             }
         }
         fetchEvents();
-    }, []);
+    }, [t]);
 
     return (
         <PageLayout 
-            title="Activity Log" 
-            description="A chronological record of your wallet events." 
+            title={t('history.activitiesTitle')} 
+            description={t('history.activitiesDescription')} 
             onBack={goBack}
         >
             <div className="max-w-4xl mx-auto space-y-6">
                 {isLoading && (
                     <div className="py-20 text-center animate-pulse text-theme-light font-black uppercase tracking-[0.2em]">
-                        Loading Activities...
+                        {t('history.loadingActivities')}
                     </div>
                 )}
                 
@@ -143,7 +144,7 @@ export function Activities() {
                                             <div className="hidden sm:block">
                                                 <p className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-end gap-1 mb-1">
                                                     <Calendar size={10} />
-                                                    Date
+                                                    {t('history.date')}
                                                 </p>
                                                 <p className="text-xs font-bold text-theme-secondary">
                                                     {formatDateTime(event.timestamp)}
@@ -159,8 +160,8 @@ export function Activities() {
                                 <div className="p-6 bg-theme-subtle/10 rounded-full text-theme-light mb-6">
                                     <Clock size={48} />
                                 </div>
-                                <h3 className="text-2xl font-black text-theme-primary tracking-tight">No Events Recorded</h3>
-                                <p className="text-theme-light mt-2 max-w-sm font-medium">Your activity trail will appear here as you create and spend vouchers.</p>
+                                <h3 className="text-2xl font-black text-theme-primary tracking-tight">{t('history.noEvents')}</h3>
+                                <p className="text-theme-light mt-2 max-w-sm font-medium">{t('history.noEventsDetail')}</p>
                             </div>
                         )}
                     </div>

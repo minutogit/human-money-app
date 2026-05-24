@@ -2,6 +2,7 @@ import React from 'react';
 import { FileSignature } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
+import { useTranslation } from 'react-i18next';
 
 interface SignatureRequestBannerProps {
     onAction: (e: React.MouseEvent) => void;
@@ -12,6 +13,8 @@ export const SignatureRequestBanner: React.FC<SignatureRequestBannerProps> = ({
     onAction,
     hint
 }) => {
+    const { t } = useTranslation();
+
     return (
         <div className="space-y-3">
             <Card variant="accent" className="p-4 flex flex-col sm:flex-row items-center justify-between gap-4 border-none shadow-premium">
@@ -20,8 +23,8 @@ export const SignatureRequestBanner: React.FC<SignatureRequestBannerProps> = ({
                         <FileSignature size={24} />
                     </div>
                     <div>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-theme-accent">Action Required</p>
-                        <p className="text-base font-bold text-theme-secondary">Needs more signatures</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-theme-accent">{t('auth.actionRequired')}</p>
+                        <p className="text-base font-bold text-theme-secondary">{t('voucher.needsMoreSignatures')}</p>
                     </div>
                 </div>
                 <Button 
@@ -30,7 +33,7 @@ export const SignatureRequestBanner: React.FC<SignatureRequestBannerProps> = ({
                     onClick={onAction}
                     className="px-6"
                 >
-                    Request Signatures
+                    {t('voucher.requestSignaturesBtn')}
                 </Button>
             </Card>
             

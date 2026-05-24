@@ -51,8 +51,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 const deviceId = await authService.getLocalInstanceId();
                 setLocalInstanceId(deviceId);
             } catch (e) {
-                const msg = `Failed to load settings: ${translateError(e, t)}`;
-                logger.error(msg);
+                const msg = t('settings.loadFailed', { error: translateError(e, t) });
+                logger.error(`Failed to load settings: ${e}`);
                 setError(msg);
             } finally {
                 setIsLoading(false);
@@ -64,7 +64,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     const handleSave = async (event: FormEvent) => {
         event.preventDefault();
         if (!settings) {
-            setError("Please fill in all fields.");
+            setError(t('settings.fillAllFields'));
             return;
         }
 
@@ -75,12 +75,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         try {
             logger.info("Attempting to save settings...");
             await protectAction(async (password) => { await settingsService.saveSettings(settings, password || undefined); });
-            setSuccess("Configuration synchronized!");
+            setSuccess(t('settings.saveSuccess'));
             logger.info("Settings saved successfully.");
             setTimeout(() => setSuccess(''), 3000);
         } catch (e) {
-            const msg = `Failed to save settings: ${translateError(e, t)}`;
-            logger.error(msg);
+            const msg = t('settings.saveFailed', { error: translateError(e, t) });
+            logger.error(`Failed to save settings: ${e}`);
             setError(msg);
         } finally {
             setIsSaving(false);
@@ -88,13 +88,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     };
 
     if (isLoading) {
-        return <div className="py-20 text-center animate-pulse text-theme-light font-black uppercase tracking-[0.2em]">Configuring Environment...</div>;
+        return <div className="py-20 text-center animate-pulse text-theme-light font-black uppercase tracking-[0.2em]">{t('settings.configuringEnvironment')}</div>;
     }
 
     return (
         <PageLayout 
-            title="System Preferences" 
-            description="Manage your identity, security protocols and network defaults."
+            title={t('settings.systemPreferencesTitle')} 
+            description={t('settings.systemPreferencesDescription')}
             onBack={onBack}
         >
             <div className="max-w-4xl mx-auto">
@@ -105,14 +105,14 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'profile' ? 'bg-white text-theme-primary shadow-premium' : 'text-theme-light hover:text-theme-secondary hover:bg-white/40'}`}
                     >
                         <User size={14} />
-                        Identity Profile
+                        {t('settings.tabIdentityProfile')}
                     </button>
                     <button 
                         onClick={() => setActiveTab('app')}
                         className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'app' ? 'bg-white text-theme-primary shadow-premium' : 'text-theme-light hover:text-theme-secondary hover:bg-white/40'}`}
                     >
                         <SettingsIcon size={14} />
-                        Security & Ops
+                        {t('settings.tabSecurityOps')}
                     </button>
                 </div>
 
@@ -125,12 +125,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                             <Card header={
                                 <div className="flex items-center gap-2">
                                     <Database size={18} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">Data Stewardship</span>
+                                    <span className="font-black text-xs uppercase tracking-widest">{t('settings.dataStewardshipTitle')}</span>
                                 </div>
                             }>
                                 <div className="space-y-6">
                                     <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">History Storage (Days)</label>
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('settings.historyStorageLabel')}</label>
                                         <Input
                                             type="number"
                                             value={settings?.bundleRetentionDays ?? 30}
@@ -139,7 +139,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                             className="font-bold"
                                         />
                                         <p className="text-[10px] text-theme-light/60 font-medium leading-relaxed">
-                                            Sets the storage threshold for transaction history and transfer files.
+                                            {t('settings.historyStorageDescription')}
                                         </p>
                                     </div>
                                 </div>
@@ -149,12 +149,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                             <Card header={
                                 <div className="flex items-center gap-2">
                                     <Clock size={18} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">Active Session</span>
+                                    <span className="font-black text-xs uppercase tracking-widest">{t('settings.activeSessionTitle')}</span>
                                 </div>
                             }>
                                 <div className="space-y-6">
                                     <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Timeout Interval (Minutes)</label>
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('settings.timeoutIntervalLabel')}</label>
                                         <Input
                                             type="number"
                                             value={settings ? Math.floor((settings.sessionTimeoutSeconds || 0) / 60) : 10}
@@ -166,7 +166,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                             className="font-bold"
                                         />
                                         <p className="text-[10px] text-theme-light/60 font-medium leading-relaxed">
-                                            Inactivity period before requiring re-authentication.
+                                            {t('settings.timeoutIntervalDescription')}
                                         </p>
                                     </div>
                                 </div>
@@ -177,16 +177,16 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         <Card header={
                             <div className="flex items-center gap-2">
                                 <Shield size={18} className="text-theme-primary" />
-                                <span className="font-black text-xs uppercase tracking-widest">Privacy Protocols</span>
+                                <span className="font-black text-xs uppercase tracking-widest">{t('settings.privacyProtocolsTitle')}</span>
                             </div>
                         }>
                             <div className="space-y-4">
-                                <p className="text-xs text-theme-light font-medium mb-4">Default visibility for flexible standard transactions:</p>
+                                <p className="text-xs text-theme-light font-medium mb-4">{t('settings.privacyProtocolsDescription')}</p>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     {[
-                                        { id: 'ask', label: 'Interactive', icon: Fingerprint, desc: 'Always prompt' },
-                                        { id: 'stealth', label: 'Stealth', icon: EyeOff, desc: 'Maximum privacy' },
-                                        { id: 'public', label: 'Public', icon: Eye, desc: 'Identity transparency' }
+                                        { id: 'ask', label: t('settings.privacyModeInteractive'), icon: Fingerprint, desc: t('settings.privacyModeInteractiveDesc') },
+                                        { id: 'stealth', label: t('settings.privacyModeStealth'), icon: EyeOff, desc: t('settings.privacyModeStealthDesc') },
+                                        { id: 'public', label: t('settings.privacyModePublic'), icon: Eye, desc: t('settings.privacyModePublicDesc') }
                                     ].map((mode) => (
                                         <label 
                                             key={mode.id}
@@ -218,17 +218,17 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         <Card header={
                             <div className="flex items-center gap-2">
                                 <Fingerprint size={18} className="text-theme-primary" />
-                                <span className="font-black text-xs uppercase tracking-widest">Device Binding</span>
+                                <span className="font-black text-xs uppercase tracking-widest">{t('settings.deviceBindingTitle')}</span>
                             </div>
                         }>
                             <div className="space-y-4">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">OS Machine ID / Fallback ID</label>
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('settings.deviceBindingLabel')}</label>
                                     <div className="flex gap-2">
                                         <input
                                             type="text"
                                             readOnly
-                                            value={localInstanceId || "Retrieving ID..."}
+                                            value={localInstanceId || t('settings.retrievingId')}
                                             className="w-full bg-slate-50 border border-theme-subtle rounded-2xl px-5 py-4 text-xs font-mono text-theme-secondary select-all"
                                         />
                                         <Button 
@@ -239,11 +239,11 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                             variant="outline"
                                             className="px-4 text-xs font-black uppercase tracking-widest"
                                         >
-                                            Copy
+                                            {t('settings.copyButton')}
                                         </Button>
                                     </div>
                                     <p className="text-[10px] text-theme-light/60 font-medium leading-relaxed">
-                                        This unique identifier binds your wallet cryptographic seals to this physical device installation to prevent unauthorized cloning.
+                                        {t('settings.deviceBindingDescription')}
                                     </p>
                                 </div>
                             </div>
@@ -253,7 +253,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         <div className="pt-6 flex flex-col items-center gap-4">
                             <Button type="submit" disabled={isSaving} className="min-w-[240px] gap-2 rounded-2xl py-4 shadow-lg shadow-theme-primary/20">
                                 {isSaving ? <Clock className="animate-spin" size={18} /> : <Save size={18} />}
-                                {isSaving ? 'Synchronizing...' : 'Save System Changes'}
+                                {isSaving ? t('settings.saving') : t('settings.saveButton')}
                             </Button>
                             {error && <p className="text-sm font-bold text-rose-500 animate-bounce">{error}</p>}
                             {success && <p className="text-sm font-bold text-emerald-500 flex items-center gap-2"><CheckCircle2 size={16}/> {success}</p>}

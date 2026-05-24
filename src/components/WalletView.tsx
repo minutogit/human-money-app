@@ -1,5 +1,6 @@
 // src/components/WalletView.tsx
 import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { voucherService } from "../services/voucherService";
 import { settingsService } from "../services/settingsService";
 import { profileService } from "../services/profileService";
@@ -24,6 +25,7 @@ import { ExportSigningRequestModal } from "./voucher/ExportSigningRequestModal";
 import { SignatureRequestBanner } from "./voucher/SignatureRequestBanner";
 
 export function WalletView() {
+    const { t } = useTranslation();
     const { protectAction } = useSession();
     const { navigate, goBack, appState } = useNavigation();
     
@@ -121,13 +123,13 @@ export function WalletView() {
 
     return (
         <PageLayout 
-            title="Wallet" 
-            description="Manage your digital assets." 
+            title={t('wallet.title')} 
+            description={t('wallet.description')} 
             onBack={goBack}
             actions={
                 <Button onClick={() => navigate({ view: 'create_voucher' })} size="sm" className="gap-2 px-6">
                     <Plus size={18} />
-                    Create
+                    {t('common.create')}
                 </Button>
             }
         >
@@ -162,24 +164,24 @@ export function WalletView() {
                             >
                                 <div className="space-y-6 pt-6 border-t border-theme-subtle/30">
                                     <div>
-                                        <h4 className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-2">Description</h4>
+                                        <h4 className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-2">{t('common.description')}</h4>
                                         <p className="text-sm text-theme-secondary leading-relaxed bg-theme-subtle/10 p-4 rounded-xl border border-theme-subtle/20">
-                                            {v.description || "No description provided."}
+                                            {v.description || t('voucher.noDescription')}
                                         </p>
                                     </div>
 
                                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                                         <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
-                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">Signatures</p>
+                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">{t('voucher.signatures')}</p>
                                             <p className="text-sm font-bold text-theme-secondary">✍️ {v.signaturesCount}</p>
                                         </div>
                                         <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
-                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">Collateral</p>
-                                            <p className="text-sm font-bold text-theme-secondary">{v.hasCollateral ? "✅ Yes" : "❌ No"}</p>
+                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">{t('voucher.collateral')}</p>
+                                            <p className="text-sm font-bold text-theme-secondary">{v.hasCollateral ? `✅ ${t('common.yes')}` : `❌ ${t('common.no')}`}</p>
                                         </div>
                                         <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
-                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">Validity</p>
-                                            <p className="text-sm font-bold text-theme-secondary">Until {formatDate(v.validUntil)}</p>
+                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">{t('voucher.validity')}</p>
+                                            <p className="text-sm font-bold text-theme-secondary">{t('voucher.validUntil', { date: formatDate(v.validUntil) })}</p>
                                         </div>
                                     </div>
 
@@ -195,7 +197,7 @@ export function WalletView() {
                                     
                                     <div className="flex justify-end pt-4">
                                         <Button variant="outline" size="sm" onClick={() => navigate({ view: "voucher_details", voucherId: v.localInstanceId, previousView: appState })}>
-                                            Full Details View
+                                            {t('voucher.fullDetailsView')}
                                         </Button>
                                     </div>
                                 </div>
@@ -204,7 +206,7 @@ export function WalletView() {
                     }) : (
                         <div className="text-center py-20 bg-white/50 rounded-3xl border-2 border-dashed border-theme-subtle/50">
                             <History size={48} className="mx-auto text-theme-light opacity-20 mb-4" />
-                            <p className="text-sm font-black text-theme-placeholder uppercase tracking-[0.2em]">No vouchers found</p>
+                            <p className="text-sm font-black text-theme-placeholder uppercase tracking-[0.2em]">{t('wallet.noVouchersFound')}</p>
                         </div>
                     )}
                 </div>

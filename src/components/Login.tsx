@@ -67,7 +67,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 setSelectedProfile(availableProfiles[0].folderName);
             }
         } catch (e) {
-            setFeedbackMsg(`Profile Access Error: ${translateError(e, t)}`);
+            setFeedbackMsg(`${t('profile.accessError')}: ${translateError(e, t)}`);
         } finally {
             setIsLoading(false);
         }
@@ -83,7 +83,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
 
     async function handleLogin() {
         if (!selectedProfile || !password) {
-            setFeedbackMsg("Please select a profile and enter your password.");
+            setFeedbackMsg(t('profile.loginSelectProfile'));
             return;
         }
 
@@ -108,7 +108,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     setFeedbackMsg(translateError(e, t));
                     setShowHandoverUI(true);
                 } else {
-                    setFeedbackMsg(`Verification Failure: ${translateError(e, t)}`);
+                    setFeedbackMsg(`${t('profile.verificationFailure')}: ${translateError(e, t)}`);
                 }
                 setIsLoggingIn(false);
                 setPassword("");
@@ -119,7 +119,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
 
     async function handleHandover() {
         setIsLoggingIn(true);
-        setFeedbackMsg("Linking profile to this device...");
+        setFeedbackMsg(t('profile.linkingDevice'));
         try {
             const localInstanceId = await authService.getLocalInstanceId();
             await authService.handoverToThisDevice({
@@ -133,7 +133,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             setShowPostHandoverWarning(true);
             setIsLoggingIn(false);
         } catch (e) {
-            setFeedbackMsg(`Handover Failure: ${translateError(e, t)}`);
+            setFeedbackMsg(`${t('profile.handoverFailure')}: ${translateError(e, t)}`);
             setIsLoggingIn(false);
         }
     }
@@ -150,7 +150,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             setShowDeletePasswordPrompt(false);
             setShowDeleteConfirm(true);
         } catch (e) {
-            setFeedbackMsg(`Authentication Error: ${translateError(e, t)}`);
+            setFeedbackMsg(`${t('profile.authenticationError')}: ${translateError(e, t)}`);
         } finally {
             setIsVerifyingDelete(false);
         }
@@ -158,14 +158,14 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
 
     async function handleDeleteProfile() {
         setIsDeleting(true);
-        setFeedbackMsg("Deleting profile...");
+        setFeedbackMsg(t('profile.deleting'));
         try {
             await authService.deleteProfile({
                 folderName: selectedProfile,
                 password: deletePassword,
             });
             
-            setFeedbackMsg(`Profile deleted successfully.`);
+            setFeedbackMsg(t('profile.deletedSuccess'));
             setShowDeleteConfirm(false);
             setDeletePassword("");
             await refreshProfiles();
@@ -173,14 +173,14 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folderName);
             else onSwitchToCreate();
         } catch (e) {
-            setFeedbackMsg(`Purge failure: ${translateError(e, t)}`);
+            setFeedbackMsg(`${t('profile.purgeFailure')}: ${translateError(e, t)}`);
         } finally {
             setIsDeleting(false);
         }
     }
 
     const activeProfile = profiles.find(p => p.folderName === selectedProfile);
-    const activeProfileName = activeProfile?.profileName || "Unknown Profile";
+    const activeProfileName = activeProfile?.profileName || t('profile.unknown');
 
     return (
         <AuthLayout maxWidth="max-w-2xl">
@@ -193,30 +193,30 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                 <UserX size={40} />
                             </div>
                             <div className="space-y-1">
-                                <h2 className="text-3xl font-black text-rose-900 tracking-tighter uppercase">Delete Profile</h2>
-                                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-500">Identity: {activeProfileName}</p>
+                                <h2 className="text-3xl font-black text-rose-900 tracking-tighter uppercase">{t('profile.deleteProfile')}</h2>
+                                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-500">{t('profile.identity')} {activeProfileName}</p>
                             </div>
                         </div>
 
                         <div className="p-6 bg-slate-50 border border-slate-200 rounded-[32px] space-y-3">
-                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">User ID (DID)</p>
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('profile.userId')}</p>
                             <p className="text-xs font-mono break-all text-slate-800 bg-white p-3 rounded-2xl border border-slate-100">{deleteUserId}</p>
                         </div>
 
                         <div className="p-6 bg-rose-50 border border-rose-100 rounded-[32px] space-y-4">
                             <div className="flex items-center gap-2 text-rose-600">
                                 <ShieldAlert size={18} />
-                                <h3 className="text-xs font-black uppercase tracking-widest">Restoration Advisory</h3>
+                                <h3 className="text-xs font-black uppercase tracking-widest">{t('profile.restorationAdvisory')}</h3>
                             </div>
                             <p className="text-sm font-medium text-rose-900 leading-relaxed">
-                                If you haven't moved this wallet (Handover), <span className="font-black text-rose-500">EVERYTHING WILL BE LOST PERMANENTLY</span>. Only proceed if you have a verified backup on another device or your master key sequence.
+                                {t('profile.restoreWarning')}
                             </p>
                         </div>
 
                         <div className="flex gap-4">
-                            <Button type="button" variant="secondary" onClick={() => setShowDeleteConfirm(false)} className="flex-1 rounded-2xl">Abort</Button>
+                            <Button type="button" variant="secondary" onClick={() => setShowDeleteConfirm(false)} className="flex-1 rounded-2xl">{t('common.abort')}</Button>
                             <Button type="button" onClick={handleDeleteProfile} disabled={isDeleting} className="flex-1 rounded-3xl !bg-rose-600 hover:!bg-rose-700 shadow-premium-lg">
-                                {isDeleting ? "Deleting..." : "Delete Profile"}
+                                {isDeleting ? t('profile.deleting') : t('profile.deleteProfile')}
                             </Button>
                         </div>
                     </Card>
@@ -231,21 +231,21 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                 <Lock size={32} />
                             </div>
                             <div className="space-y-1">
-                                <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">Delete Profile</h2>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Authorize deletion for {activeProfileName}</p>
+                                <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">{t('profile.deleteProfile')}</h2>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{t('profile.authorizeDeletionFor', { name: activeProfileName })}</p>
                             </div>
                         </div>
                         
                         <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleVerifyDeletePassword(); }}>
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Wallet Password</label>
-                                <Input type="password" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} placeholder="Required" autoFocus />
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('profile.walletPassword')}</label>
+                                <Input type="password" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} placeholder={t('common.required')} autoFocus />
                             </div>
 
                             <div className="flex gap-4">
-                                <Button type="button" variant="secondary" onClick={() => { setShowDeletePasswordPrompt(false); setDeletePassword(""); setFeedbackMsg(""); }} disabled={isVerifyingDelete} className="flex-1 rounded-2xl">Cancel</Button>
+                                <Button type="button" variant="secondary" onClick={() => { setShowDeletePasswordPrompt(false); setDeletePassword(""); setFeedbackMsg(""); }} disabled={isVerifyingDelete} className="flex-1 rounded-2xl">{t('common.cancel')}</Button>
                                 <Button type="submit" disabled={isVerifyingDelete || !deletePassword} className="flex-1 rounded-3xl shadow-md">
-                                    {isVerifyingDelete ? "Verifying..." : "Verify"}
+                                    {isVerifyingDelete ? t('profile.verifying') : t('profile.verify')}
                                 </Button>
                             </div>
                         </form>
@@ -261,23 +261,23 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                 <ShieldCheck size={40} />
                             </div>
                             <div className="space-y-1">
-                                <h2 className="text-3xl font-black text-theme-primary tracking-tighter uppercase">Handover Complete</h2>
-                                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">Handover Complete</p>
+                                <h2 className="text-3xl font-black text-theme-primary tracking-tighter uppercase">{t('profile.handoverComplete')}</h2>
+                                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">{t('profile.handoverComplete')}</p>
                             </div>
                         </div>
 
                         <div className="p-6 bg-slate-50 border border-slate-200 rounded-[32px] space-y-3">
-                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Bound Identity (DID)</p>
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('profile.boundIdentity')}</p>
                             <p className="text-xs font-mono break-all text-theme-primary bg-white p-3 rounded-2xl border border-slate-100">{handoverUserId}</p>
                         </div>
 
                         <div className="p-6 bg-amber-50 border border-amber-100 rounded-[32px] space-y-4">
                             <div className="flex items-center gap-2 text-amber-600">
                                 <AlertTriangle size={18} />
-                                <h3 className="text-xs font-black uppercase tracking-widest">Double-Spend Prevention</h3>
+                                <h3 className="text-xs font-black uppercase tracking-widest">{t('profile.doubleSpendPrevention')}</h3>
                             </div>
                             <p className="text-sm font-medium text-amber-900 leading-relaxed">
-                                This wallet is now bound to this instance. <span className="font-black">DO NOT</span> use this profile on the old device. Simultaneous use will cause permanent reputation damage and asset locking.
+                                {t('profile.doubleSpendWarning')}
                             </p>
                         </div>
 
@@ -285,7 +285,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                             const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
                             if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName);
                         }} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
-                            Acknowledge & Access Dashboard <ArrowRight size={20} />
+                            {t('profile.acknowledgeAccess')} <ArrowRight size={20} />
                         </Button>
                     </Card>
                 </div>
@@ -299,14 +299,14 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                         />
                         <div className="text-left space-y-0 sm:space-y-0.5">
                             <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
-                            <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">Login to Your Wallet</p>
+                            <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">{t('auth.loginToYourWallet')}</p>
                         </div>
                     </div>
 
                     <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
                         {profiles.length > 0 && (
                             <div className="space-y-3">
-                                <label htmlFor="profile-select" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><UserCircle size={12}/> Select Profile</label>
+                                <label htmlFor="profile-select" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><UserCircle size={12}/> {t('profile.selectProfile')}</label>
                                 <div className="flex gap-3">
                                     <div className="relative flex-1 group">
                                         <select
@@ -329,7 +329,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                         type="button"
                                         onClick={() => setShowDeletePasswordPrompt(true)}
                                         className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-200 text-slate-400 hover:text-rose-500 hover:bg-rose-50 hover:border-rose-200 transition-all flex items-center justify-center shadow-sm"
-                                        title="Delete profile"
+                                        title={t('profile.deleteProfile')}
                                     >
                                         <Trash2 size={22} />
                                     </button>
@@ -338,13 +338,13 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                         )}
 
                         <div className="space-y-3">
-                            <label htmlFor="password-input" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={12}/> Password</label>
+                            <label htmlFor="password-input" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={12}/> {t('auth.password')}</label>
                             <Input 
                                 id="password-input"
                                 type="password" 
                                 value={password} 
                                 onChange={(e) => { setPassword(e.target.value); if (feedbackMsg.includes("Verification")) setFeedbackMsg(""); }} 
-                                placeholder="Enter Access Password"
+                                placeholder={t('auth.enterAccessPassword')}
                                 ref={passwordInputRef}
                                 className="py-5 px-6 text-lg font-bold tracking-widest"
                             />
@@ -360,7 +360,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                         className="w-full py-5 rounded-3xl !bg-amber-600 hover:!bg-amber-700 shadow-premium-lg text-lg gap-3"
                                     >
                                         {isLoggingIn ? <RefreshCw className="animate-spin" /> : <ShieldAlert size={24} />}
-                                        Perform Device Handover
+                                        {t('profile.performHandover')}
                                     </Button>
                                     <button 
                                         type="button" 
@@ -368,29 +368,29 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                         disabled={isLoggingIn}
                                         className="w-full text-center text-[10px] font-black uppercase tracking-widest text-theme-light hover:text-theme-primary transition-colors"
                                     >
-                                        Cancel Protocol
+                                        {t('profile.cancelProtocol')}
                                     </button>
                                 </div>
                             ) : (
                                 <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0 || !password || !selectedProfile} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
                                     {isLoggingIn ? <RefreshCw className="animate-spin" size={24} /> : <LogIn size={24} />}
-                                    {isLoggingIn ? "Authorizing..." : "Login"}
+                                    {isLoggingIn ? t('auth.authorizing') : t('auth.login')}
                                 </Button>
                             )}
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <button type="button" onClick={onSwitchToCreate} className="p-4 bg-slate-50 border border-slate-200 rounded-[24px] text-center group hover:border-theme-primary/40 transition-all">
                                     <PlusCircle size={20} className="mx-auto mb-2 text-slate-400 group-hover:text-theme-primary" />
-                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 group-hover:text-theme-primary">Don't have a wallet? Create one</p>
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 group-hover:text-theme-primary">{t('auth.dontHaveWallet')}</p>
                                 </button>
                                 <button type="button" onClick={onSwitchToRecreate} className="p-4 bg-slate-50 border border-slate-200 rounded-[24px] text-center group hover:border-theme-primary/40 transition-all">
                                     <RefreshCw size={20} className="mx-auto mb-2 text-slate-400 group-hover:text-theme-primary" />
-                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 group-hover:text-theme-primary">Recreate profile from seed</p>
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 group-hover:text-theme-primary">{t('profile.recreateFromSeed')}</p>
                                 </button>
                             </div>
 
                             <button type="button" onClick={onSwitchToReset} className="w-full text-center text-[10px] font-black uppercase tracking-[0.2em] text-theme-light hover:text-theme-primary transition-colors flex items-center justify-center gap-2">
-                                <Key size={12} /> Forgot password?
+                                <Key size={12} /> {t('auth.forgotPassword')}
                             </button>
                         </div>
 
@@ -398,7 +398,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                             <div className={`p-5 rounded-[32px] border flex items-center gap-4 animate-in slide-in-from-bottom-4 ${feedbackMsg.includes('Error') || feedbackMsg.includes('Failure') || feedbackMsg.includes('Mismatch') ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
                                 {feedbackMsg.includes('Error') || feedbackMsg.includes('Failure') || feedbackMsg.includes('Mismatch') ? <ShieldAlert size={20} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={20} className="text-emerald-500 shrink-0" />}
                                 <div>
-                                    <h4 className="text-[10px] font-black uppercase tracking-widest mb-1">{feedbackMsg.includes('Error') ? 'Verification System' : 'Protocol Alert'}</h4>
+                                    <h4 className="text-[10px] font-black uppercase tracking-widest mb-1">{feedbackMsg.includes('Error') ? t('profile.verificationSystem') : t('profile.protocolAlert')}</h4>
                                     <p className="text-sm font-bold leading-tight">{feedbackMsg}</p>
                                 </div>
                             </div>
@@ -407,11 +407,11 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
 
                     <div className="pt-4 border-t border-theme-subtle/40 flex flex-col items-center gap-1.5">
                         <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                            <ShieldCheck size={12} /> Human Money Protocol v2.0
+                            <ShieldCheck size={12} /> {t('common.protocolVersion')}
                         </p>
                         {localInstanceId && (
                             <p className="text-[8px] font-bold font-mono text-slate-400/80 uppercase tracking-widest">
-                                Device: {localInstanceId.slice(0, 12)}...
+                                {t('profile.deviceId')} {localInstanceId.slice(0, 12)}...
                             </p>
                         )}
                     </div>

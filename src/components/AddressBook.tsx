@@ -1,5 +1,6 @@
 // src/components/AddressBook.tsx
 import React, { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { PageLayout } from './ui/PageLayout';
 import { Button } from './ui/Button';
 import { contactService } from '../services/contactService';
@@ -27,6 +28,7 @@ interface AddressBookProps {
 }
 
 const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery }) => {
+    const { t } = useTranslation();
     const { protectAction } = useSession();
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [searchQuery, setSearchQuery] = useState(initialSearchQuery || '');
@@ -109,8 +111,8 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
 
     return (
         <PageLayout 
-            title="Contacts" 
-            description="Manage your verified identities and local address book." 
+            title={t('contacts.title')} 
+            description={t('contacts.description')} 
             onBack={onBack}
             actions={
                 <Button
@@ -121,7 +123,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                     className="gap-2"
                 >
                     <UserPlus size={18} />
-                    New Contact
+                    {t('contacts.newContact')}
                 </Button>
             }
         >
@@ -134,7 +136,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                         </div>
                         <input
                             type="text"
-                            placeholder="Search name, organization or DID..."
+                            placeholder={t('contacts.searchPlaceholder')}
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             className="w-full bg-white/50 backdrop-blur-sm border border-theme-subtle rounded-2xl pl-12 pr-10 py-4 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/10 transition-all font-medium shadow-inner-soft"
@@ -143,7 +145,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                             <button
                                 onClick={() => setSearchQuery('')}
                                 className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-light hover:text-rose-500 hover:bg-rose-50 rounded-full p-1 transition-colors"
-                                title="Clear search"
+                                title={t('contacts.clearSearch')}
                             >
                                 <X size={16} />
                             </button>
@@ -159,7 +161,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                     : 'bg-white border-theme-subtle text-theme-light hover:border-theme-primary/30'
                             }`}
                         >
-                            All
+                            {t('contacts.filterAll')}
                         </button>
                         {allTags.map(tag => (
                             <button
@@ -180,15 +182,15 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                 {/* Contact List */}
                 {isLoading ? (
                     <div className="py-20 text-center animate-pulse text-theme-light font-black uppercase tracking-[0.2em]">
-                        Loading Contacts...
+                        {t('contacts.loading')}
                     </div>
                 ) : filteredContacts.length === 0 ? (
                     <div className="py-24 flex flex-col items-center justify-center text-center bg-white/30 backdrop-blur-sm rounded-[40px] border-2 border-dashed border-theme-subtle/50">
                         <div className="p-6 bg-theme-subtle/10 rounded-full text-theme-light mb-6">
                             <Users size={48} />
                         </div>
-                        <h3 className="text-2xl font-black text-theme-primary tracking-tight">Empty Address Book</h3>
-                        <p className="text-theme-light mt-2 max-w-sm font-medium">No contacts match your current filter. Add your first contact to get started.</p>
+                        <h3 className="text-2xl font-black text-theme-primary tracking-tight">{t('contacts.emptyTitle')}</h3>
+                        <p className="text-theme-light mt-2 max-w-sm font-medium">{t('contacts.emptyDescription')}</p>
                         <Button
                             variant="secondary"
                             onClick={() => {
@@ -197,7 +199,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                             }}
                             className="mt-8 rounded-2xl"
                         >
-                            Add Your First Contact
+                            {t('contacts.addFirstContact')}
                         </Button>
                     </div>
                 ) : (
@@ -228,14 +230,14 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                                     setIsDialogOpen(true);
                                                 }}
                                                 className="p-2 hover:bg-theme-subtle/20 rounded-xl text-theme-light hover:text-theme-primary transition-all"
-                                                title="Edit Profile"
+                                                title={t('contacts.editProfile')}
                                             >
                                                 <Edit3 size={18} />
                                             </button>
                                             <button 
                                                 onClick={() => setDeleteRequest(contact.did)}
                                                 className="p-2 hover:bg-rose-50 rounded-xl text-theme-light hover:text-rose-500 transition-all"
-                                                title="Remove Contact"
+                                                title={t('contacts.removeContact')}
                                             >
                                                 <Trash2 size={18} />
                                             </button>
@@ -246,7 +248,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                         <h3 className="text-lg font-black text-theme-primary tracking-tight leading-tight group-hover:text-theme-accent transition-colors">
                                             {contact.profile.firstName || contact.profile.lastName 
                                                 ? `${contact.profile.firstName || ''} ${contact.profile.lastName || ''}`.trim()
-                                                : contact.profile.organization || 'Unnamed Identity'}
+                                                : contact.profile.organization || t('contacts.unnamedIdentity')}
                                         </h3>
                                         
                                         <div className="flex items-center gap-1.5 mt-2 mb-4">
@@ -273,7 +275,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                                 </span>
                                             ))}
                                             {contact.tags.length === 0 && (
-                                                <span className="text-[9px] font-black uppercase tracking-widest text-theme-light/40 italic">No tags assigned</span>
+                                                <span className="text-[9px] font-black uppercase tracking-widest text-theme-light/40 italic">{t('contacts.noTagsAssigned')}</span>
                                             )}
                                         </div>
                                     </div>
@@ -293,9 +295,9 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
 
             <ConfirmationModal
                 isOpen={!!deleteRequest}
-                title="Delete Contact"
-                description="Are you sure you want to remove this contact from your address book?"
-                confirmText="Delete Contact"
+                title={t('contacts.deleteTitle')}
+                description={t('contacts.deleteDescription')}
+                confirmText={t('contacts.deleteConfirmButton')}
                 confirmVariant="danger"
                 onConfirm={handleDeleteContact}
                 onCancel={() => setDeleteRequest(null)}

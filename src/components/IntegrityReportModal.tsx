@@ -1,5 +1,6 @@
 import { integrityService } from "../services/integrityService";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { IntegrityReport } from "../types";
 import { useSession } from "../context/SessionContext";
 import { logger } from "../utils/log";
@@ -10,6 +11,7 @@ interface IntegrityReportModalProps {
 }
 
 export function IntegrityReportModal({ report, onClose }: IntegrityReportModalProps) {
+    const { t } = useTranslation();
     const { protectAction, checkIntegrity } = useSession();
     const [isRepairing, setIsRepairing] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -25,7 +27,7 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
             await checkIntegrity();
             onClose();
         } catch (e) {
-            setError(String(e));
+            setError(t('integrity.repairFailed', { error: String(e) }));
             logger.error(`Failed to repair integrity: ${e}`);
         } finally {
             setIsRepairing(false);
@@ -36,41 +38,41 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
         switch (report.type) {
             case 'missingItems':
                 return {
-                    title: "Missing Items",
-                    description: "Some critical wallet data items are missing from the disk. This could lead to data loss.",
+                    title: t('integrity.missingItemsTitle'),
+                    description: t('integrity.missingItemsDescription'),
                     severity: "error",
                     items: report.items
                 };
             case 'manipulatedItems':
                 return {
-                    title: "Manipulated Items",
-                    description: "Data items have been modified outside of this application. This is a security risk.",
+                    title: t('integrity.manipulatedItemsTitle'),
+                    description: t('integrity.manipulatedItemsDescription'),
                     severity: "error",
                     items: report.items
                 };
             case 'unknownItems':
                 return {
-                    title: "Unknown Items",
-                    description: "Unrecognized data items were found in your wallet directory.",
+                    title: t('integrity.unknownItemsTitle'),
+                    description: t('integrity.unknownItemsDescription'),
                     severity: "warning",
                     items: report.items
                 };
             case 'integrityOutdated':
                 return {
-                    title: "Outdated Integrity Record",
-                    description: "The security integrity record does not match the current wallet state epoch. Possible rollback attempt.",
+                    title: t('integrity.integrityOutdatedTitle'),
+                    description: t('integrity.integrityOutdatedDescription'),
                     severity: "error"
                 };
             case 'invalidSignature':
                 return {
-                    title: "Invalid Signature",
-                    description: "The security integrity record signature is invalid. The record itself might have been tampered with.",
+                    title: t('integrity.invalidSignatureTitle'),
+                    description: t('integrity.invalidSignatureDescription'),
                     severity: "error"
                 };
             case 'missingIntegrityRecord':
                 return {
-                    title: "Missing Integrity Record",
-                    description: "Your wallet does not have a security integrity record yet. You should create one to enable protection.",
+                    title: t('integrity.missingIntegrityRecordTitle'),
+                    description: t('integrity.missingIntegrityRecordDescription'),
                     severity: "info"
                 };
             default:
@@ -99,7 +101,7 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
                         </div>
                         <div>
                             <h2 className="text-2xl font-bold text-gray-900 dark:text-white">{details.title}</h2>
-                            <p className="text-sm font-medium uppercase tracking-wider opacity-60">Storage Integrity Report</p>
+                            <p className="text-sm font-medium uppercase tracking-wider opacity-60">{t('integrity.reportSubtitle')}</p>
                         </div>
                     </div>
                 </div>
@@ -111,7 +113,7 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
 
                     {details.items && details.items.length > 0 && (
                         <div className="mb-8">
-                            <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-3">Affected Items</h3>
+                            <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-3">{t('integrity.affectedItemsTitle')}</h3>
                             <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl p-4 border border-gray-100 dark:border-gray-800 max-h-48 overflow-y-auto font-mono text-sm">
                                 {details.items.map((item, i) => (
                                     <div key={i} className="py-1 flex items-center gap-2">
@@ -133,7 +135,7 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
                     )}
 
                     <div className="bg-blue-500/5 rounded-2xl p-4 border border-blue-500/10 text-blue-600 dark:text-blue-400 text-sm italic">
-                        By repairing the wallet, you accept the current state of items as valid and sign a new security integrity record.
+                        {t('integrity.repairInstruction')}
                     </div>
                 </div>
 
@@ -142,7 +144,7 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
                         onClick={onClose}
                         className="flex-1 px-6 py-4 rounded-2xl font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                     >
-                        Close
+                        {t('common.close')}
                     </button>
                     <button
                         onClick={handleRepair}
@@ -155,9 +157,9 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                 </svg>
-                                Repairing...
+                                {t('integrity.repairing')}
                             </span>
-                        ) : "Repair Integrity Record & Accept State"}
+                        ) : t('integrity.repairButton')}
                     </button>
                 </div>
             </div>

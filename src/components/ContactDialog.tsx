@@ -118,63 +118,63 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                     </div>
                     <div>
                         <h2 className="text-xl font-extrabold text-theme-secondary">
-                            {existingContact ? 'Edit Contact' : 'Add New Contact'}
+                            {existingContact ? t('contacts.editContact') : t('contacts.addNewContact')}
                         </h2>
                         <p className="text-theme-light text-sm font-mono truncate max-w-[280px]">
-                            {did || 'Enter DID below'}
+                            {did || t('contacts.enterDidBelow')}
                         </p>
                     </div>
                 </div>
 
                 <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
                     <div>
-                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">User ID (DID)</label>
+                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.userId')}</label>
                         <input
                             type="text"
                             value={did}
                             onChange={(e) => setDid(e.target.value)}
                             disabled={!!existingContact}
-                            placeholder="did:key:z..."
+                            placeholder={t('contacts.didPlaceholder')}
                             className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 disabled:opacity-50 font-mono text-sm shadow-sm"
                         />
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">First Name</label>
+                            <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.firstName')}</label>
                             <input
                                 type="text"
                                 value={firstName}
                                 onChange={(e) => setFirstName(e.target.value)}
-                                placeholder="e.g. Alice"
+                                placeholder={t('contacts.firstNamePlaceholder')}
                                 className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm"
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">Last Name</label>
+                            <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.lastName')}</label>
                             <input
                                 type="text"
                                 value={lastName}
                                 onChange={(e) => setLastName(e.target.value)}
-                                placeholder="e.g. Smith"
+                                placeholder={t('contacts.lastNamePlaceholder')}
                                 className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm"
                             />
                         </div>
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">Organization / Community</label>
+                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.organizationCommunity')}</label>
                         <input
                             type="text"
                             value={organization}
                             onChange={(e) => setOrganization(e.target.value)}
-                            placeholder="e.g. Green Valley Inc."
+                            placeholder={t('contacts.organizationPlaceholder')}
                             className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm"
                         />
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">Tags</label>
+                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.tags')}</label>
                         <div className="flex flex-wrap gap-2 mb-3">
                             {availableTags.map(tag => (
                                 <button
@@ -195,7 +195,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                 type="text"
                                 value={newTag}
                                 onChange={(e) => setNewTag(e.target.value)}
-                                placeholder="Add custom tag..."
+                                placeholder={t('contacts.addCustomTagPlaceholder')}
                                 className="flex-1 bg-white border border-theme-subtle rounded-lg px-3 py-1.5 text-xs text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-1 focus:ring-theme-primary/30 shadow-sm"
                             />
                             <button
@@ -211,11 +211,11 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">Notes</label>
+                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.notes')}</label>
                         <textarea
                             value={notes}
                             onChange={(e) => setNotes(e.target.value)}
-                            placeholder="Internal notes about this contact..."
+                            placeholder={t('contacts.notesPlaceholder')}
                             rows={3}
                             className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 resize-none shadow-sm"
                         />
@@ -238,14 +238,14 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                         onClick={onClose}
                         className="flex-1 py-3 px-4 rounded-xl border border-theme-subtle text-theme-light font-bold hover:bg-bg-app transition-colors"
                     >
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                     <button
                         onClick={handleSave}
                         disabled={isSaving || !did.trim()}
                         className="flex-[2] py-3 px-4 rounded-xl bg-theme-primary text-white font-bold hover:bg-theme-accent disabled:opacity-50 disabled:hover:bg-theme-primary transition-all shadow-lg shadow-theme-primary/20 active:scale-[0.98]"
                     >
-                        {isSaving ? 'Saving...' : (existingContact ? 'Update Contact' : 'Save Contact')}
+                        {isSaving ? t('contacts.saving') : (existingContact ? t('contacts.updateContact') : t('contacts.saveContact'))}
                     </button>
                 </div>
             </div>

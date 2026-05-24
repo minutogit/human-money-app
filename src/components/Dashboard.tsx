@@ -1,5 +1,6 @@
 // src/components/Dashboard.tsx
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { voucherService } from "../services/voucherService";
 import { transferService } from "../services/transferService";
 import { profileService } from "../services/profileService";
@@ -29,6 +30,7 @@ import { useNavigation } from "../context/NavigationContext";
 import { useContactResolver } from "../hooks/useContactResolver";
 
 export function Dashboard() {
+    const { t } = useTranslation();
     const { navigate } = useNavigation();
     const { profileName, integrityReport } = useSession();
     const { resolveIdentity } = useContactResolver();
@@ -128,28 +130,28 @@ export function Dashboard() {
         if (typeof type === 'string') {
             switch (type) {
                 case 'voucherCreated':
-                    return { label: 'Voucher Created', icon: Plus, color: 'text-blue-600', bgColor: 'bg-blue-50' };
+                    return { label: t('dashboard.eventVoucherCreated'), icon: Plus, color: 'text-blue-600', bgColor: 'bg-blue-50' };
                 case 'transferSent': {
                     const recipientName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
-                    return { label: `Sent to ${recipientName}`, icon: ArrowUpRight, color: 'text-rose-600', bgColor: 'bg-rose-50' };
+                    return { label: t('dashboard.eventSent', { name: recipientName }), icon: ArrowUpRight, color: 'text-rose-600', bgColor: 'bg-rose-50' };
                 }
                 case 'transferReceived': {
                     const senderName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
-                    return { label: `Received from ${senderName}`, icon: ArrowDownLeft, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
+                    return { label: t('dashboard.eventReceived', { name: senderName }), icon: ArrowDownLeft, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
                 }
                 case 'voucherQuarantined':
-                    return { label: 'Voucher Quarantined', icon: AlertCircle, color: 'text-amber-600', bgColor: 'bg-amber-50' };
+                    return { label: t('dashboard.eventVoucherQuarantined'), icon: AlertCircle, color: 'text-amber-600', bgColor: 'bg-amber-50' };
                 case 'voucherActivated':
-                    return { label: 'Voucher Activated', icon: CheckCircle2, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
+                    return { label: t('dashboard.eventVoucherActivated'), icon: CheckCircle2, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
                 case 'voucherVoided':
-                    return { label: 'Voucher Voided', icon: AlertCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
+                    return { label: t('dashboard.eventVoucherVoided'), icon: AlertCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
                 case 'voucherExpired':
-                    return { label: 'Voucher Expired', icon: Clock, color: 'text-orange-600', bgColor: 'bg-orange-50' };
+                    return { label: t('dashboard.eventVoucherExpired'), icon: Clock, color: 'text-orange-600', bgColor: 'bg-orange-50' };
             }
         }
-        return { label: 'Unknown Event', icon: AlertCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
+        return { label: t('dashboard.eventUnknown'), icon: AlertCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
     }
-    const truncatedUserId = userId ? truncateUserId(userId) : "Lade...";
+    const truncatedUserId = userId ? truncateUserId(userId) : t('common.loading');
 
     return (
         <PageLayout 
@@ -176,7 +178,7 @@ export function Dashboard() {
                                     : 'bg-white/50 text-theme-secondary border-theme-subtle/50 hover:border-theme-primary hover:bg-white hover:shadow-sm'
                                 }`}
                             >
-                                <span className="font-mono text-[10px]">{copied ? "Copied!" : truncatedUserId}</span>
+                                <span className="font-mono text-[10px]">{copied ? t('common.copied') : truncatedUserId}</span>
                                 {copied ? <CheckCircle2 size={12} /> : <Copy size={12} className="opacity-50" />}
                             </button>
                         </div>
@@ -188,8 +190,8 @@ export function Dashboard() {
                 {/* Welcome Message */}
                 {balances.length === 0 && (
                     <div className="px-2 pt-4 text-center">
-                        <h1 className="text-3xl font-black text-theme-primary tracking-tighter">👋 Welcome to your Wallet!</h1>
-                        <p className="text-sm font-medium text-theme-light mt-1">Manage your community vouchers and local currency.</p>
+                        <h1 className="text-3xl font-black text-theme-primary tracking-tighter">{t('dashboard.welcomeTitle')}</h1>
+                        <p className="text-sm font-medium text-theme-light mt-1">{t('dashboard.welcomeSubtitle')}</p>
                     </div>
                 )}
 
@@ -215,8 +217,8 @@ export function Dashboard() {
                                     <ShieldAlert size={20} />
                                 </div>
                                 <div>
-                                    <p className="font-bold text-sm text-theme-secondary">Security Warning</p>
-                                    <p className="text-xs opacity-70">Action required to repair your wallet.</p>
+                                    <p className="font-bold text-sm text-theme-secondary">{t('dashboard.securityWarning')}</p>
+                                    <p className="text-xs opacity-70">{t('dashboard.securityWarningDesc')}</p>
                                 </div>
                             </div>
                             <ArrowUpRight size={18} className="opacity-30" />
@@ -235,11 +237,11 @@ export function Dashboard() {
                                     <UserCircle size={20} />
                                 </div>
                                 <div>
-                                    <p className="font-bold text-sm text-theme-secondary">Profile Incomplete</p>
-                                    <p className="text-xs opacity-70">Building trust requires a complete identity.</p>
+                                    <p className="font-bold text-sm text-theme-secondary">{t('dashboard.profileIncomplete')}</p>
+                                    <p className="text-xs opacity-70">{t('dashboard.profileIncompleteDesc')}</p>
                                 </div>
                             </div>
-                            <Button variant="primary" size="xs" className="shadow-none">Fix Now</Button>
+                            <Button variant="primary" size="xs" className="shadow-none">{t('dashboard.fixNow')}</Button>
                         </Card>
                     )}
 
@@ -255,8 +257,8 @@ export function Dashboard() {
                                     <AlertCircle size={20} />
                                 </div>
                                 <div>
-                                    <p className="font-bold text-sm text-theme-secondary">Quarantine: {quarantinedCount} Vouchers Locked</p>
-                                    <p className="text-xs opacity-70">Double-spend detected. Resolve conflicts now.</p>
+                                    <p className="font-bold text-sm text-theme-secondary">{t('dashboard.quarantineLocked', { count: quarantinedCount })}</p>
+                                    <p className="text-xs opacity-70">{t('dashboard.quarantineDesc')}</p>
                                 </div>
                             </div>
                             <ArrowUpRight size={18} className="opacity-30" />
@@ -267,7 +269,7 @@ export function Dashboard() {
                 {/* Zone 2: Balances (Wallet Cards) */}
                 <section>
                     <div className="flex items-center justify-between mb-4 px-2">
-                        <h2 className="text-xs font-black text-theme-light uppercase tracking-[0.2em]">Your Balances</h2>
+                        <h2 className="text-xs font-black text-theme-light uppercase tracking-[0.2em]">{t('dashboard.yourBalances')}</h2>
                     </div>
                     
                     {isLoading ? (
@@ -304,7 +306,7 @@ export function Dashboard() {
                                                 </h3>
                                             </div>
                                             <div className="px-2 py-1 bg-white/20 backdrop-blur-md rounded-lg border border-white/20 text-[10px] font-bold text-white">
-                                                {count} Vouchers
+                                                {t('dashboard.vouchersCount', { count })}
                                             </div>
                                         </div>
 
@@ -316,7 +318,7 @@ export function Dashboard() {
 
                                         <div className="relative z-10 flex justify-end">
                                             <div className="text-[10px] font-bold text-white/40 uppercase tracking-widest group-hover:text-white transition-colors">
-                                                View Details ➔
+                                                {t('dashboard.viewDetails')}
                                             </div>
                                         </div>
                                     </Card>
@@ -332,7 +334,7 @@ export function Dashboard() {
                                     onClick={() => navigate({ view: 'create_voucher' })}
                                 >
                                     <Plus size={32} className="mb-2 opacity-50 group-hover:scale-110 transition-transform" />
-                                    <span className="text-sm font-bold uppercase tracking-widest">Create New Voucher</span>
+                                    <span className="text-sm font-bold uppercase tracking-widest">{t('voucher.create')}</span>
                                 </Card>
                             )}
                         </div>
@@ -348,7 +350,7 @@ export function Dashboard() {
                         disabled={activeVouchersCount === 0}
                     >
                         <ArrowUpRight size={20} />
-                        Send
+                        {t('transfer.send')}
                     </Button>
                     <Button 
                         onClick={() => navigate({ view: 'receive_bundle' })} 
@@ -357,7 +359,7 @@ export function Dashboard() {
                         size="lg"
                     >
                         <ArrowDownLeft size={20} />
-                        Receive
+                        {t('transfer.receive')}
                     </Button>
                     <Button 
                         onClick={() => navigate({ view: 'create_voucher' })}
@@ -366,7 +368,7 @@ export function Dashboard() {
                         size="lg"
                     >
                         <Plus size={20} />
-                        Create
+                        {t('common.create')}
                     </Button>
                 </section>
 
@@ -384,11 +386,11 @@ export function Dashboard() {
                                     <Clock size={24} />
                                 </div>
                                 <div>
-                                    <p className="font-black text-theme-secondary uppercase tracking-wider text-xs">Action Required</p>
-                                    <p className="text-lg font-bold text-theme-primary">{incompleteCount} Vouchers need signatures</p>
+                                    <p className="font-black text-theme-secondary uppercase tracking-wider text-xs">{t('auth.actionRequired')}</p>
+                                    <p className="text-lg font-bold text-theme-primary">{t('dashboard.needSignatures', { count: incompleteCount })}</p>
                                 </div>
                             </div>
-                            <Button variant="primary" size="sm" className="rounded-full px-6">View</Button>
+                            <Button variant="primary" size="sm" className="rounded-full px-6">{t('common.view')}</Button>
                         </Card>
                     </section>
                 )}
@@ -396,12 +398,12 @@ export function Dashboard() {
                 {/* Zone 5: Recent Activity */}
                 <section>
                     <div className="flex items-center justify-between mb-6 px-2">
-                        <h2 className="text-xs font-black text-theme-light uppercase tracking-[0.2em]">Recent Activity</h2>
+                        <h2 className="text-xs font-black text-theme-light uppercase tracking-[0.2em]">{t('dashboard.recentActivity')}</h2>
                         <button 
                             onClick={() => navigate({ view: 'activities' })}
                             className="text-[10px] font-black text-theme-accent uppercase tracking-widest hover:underline"
                         >
-                            History ➔
+                            {t('dashboard.historyLink')}
                         </button>
                     </div>
 
@@ -444,7 +446,7 @@ export function Dashboard() {
                         }) : (
                             <div className="text-center py-12 px-6">
                                 <Card variant="none" className="border-2 border-dashed border-theme-subtle p-8 opacity-50">
-                                    <p className="text-sm font-bold uppercase tracking-widest text-theme-placeholder">No recent activity</p>
+                                    <p className="text-sm font-bold uppercase tracking-widest text-theme-placeholder">{t('dashboard.noRecentActivity')}</p>
                                 </Card>
                             </div>
                         )}

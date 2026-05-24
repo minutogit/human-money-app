@@ -1,1 +1,3755 @@
-{}
+{
+  "auth.actionRequired": {
+    "ai_hint": "Label in ForkLockOverlay indicating user action is needed to resolve a fork.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Action Required"
+  },
+  "auth.authenticationRequired": {
+    "ai_hint": "Modal title shown when wallet password is required to proceed with a sensitive operation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Authentication Required"
+  },
+  "auth.authorizing": {
+    "ai_hint": "Button loading text during login authorization.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Authorizing..."
+  },
+  "auth.autoCleaned": {
+    "ai_hint": "Helper text in WalletRecovery indicating numbers and punctuation are automatically cleaned from input.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Numbers and punctuation are auto-cleaned."
+  },
+  "auth.awaitingSequence": {
+    "ai_hint": "Validation feedback in WalletRecovery when the seed phrase is incomplete.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Awaiting full sequence..."
+  },
+  "auth.backToLogin": {
+    "ai_hint": "Button label to navigate back to the login screen from recovery or profile creation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Back to Login"
+  },
+  "auth.confirmPassword": {
+    "ai_hint": "Label for the confirm password input field in wallet recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Confirm Password"
+  },
+  "auth.dontHaveWallet": {
+    "ai_hint": "Login screen prompt to navigate to the create profile wizard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Don't have a wallet? Create one"
+  },
+  "auth.enterAccessPassword": {
+    "ai_hint": "Placeholder text for the password input on the login screen.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Enter Access Password"
+  },
+  "auth.enterFullPhrase": {
+    "ai_hint": "Toggle button label to switch to full seed phrase textarea input mode.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Enter full phrase"
+  },
+  "auth.enterMasterKey": {
+    "ai_hint": "Card header title for the seed phrase input section in wallet recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Enter Master Key"
+  },
+  "auth.enterPasswordToContinue": {
+    "ai_hint": "Descriptive text in auth modal telling the user to enter their wallet password.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Please enter your wallet password to continue."
+  },
+  "auth.enterValidSeed": {
+    "ai_hint": "Validation error when attempting to proceed with an invalid seed phrase.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Please enter a valid seed phrase to continue."
+  },
+  "auth.errorRecoveringWallet": {
+    "ai_hint": "Prefix for error feedback message during wallet recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Error recovering wallet"
+  },
+  "auth.forgotPassword": {
+    "ai_hint": "Login screen link text for password reset flow.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Forgot password?"
+  },
+  "auth.forkDetected": {
+    "ai_hint": "Main description text in ForkLockOverlay explaining what a fork is.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "A fork has been detected in your transaction history! This usually happens if you restore an old backup or use this wallet on multiple devices simultaneously without proper synchronization."
+  },
+  "auth.forkRecoveryRequired": {
+    "ai_hint": "Detail text in ForkLockOverlay explaining that wallet recovery is required.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "To ensure your identity and reputation are protected, you must perform a full wallet recovery using your seed phrase."
+  },
+  "auth.functionsSuspended": {
+    "ai_hint": "Footer note in ForkLockOverlay stating wallet functions are suspended during recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "All normal wallet functions are suspended until recovery is complete."
+  },
+  "auth.loadingWallet": {
+    "ai_hint": "Button loading text during wallet recovery submission.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Loading Wallet..."
+  },
+  "auth.loggedIn": {
+    "ai_hint": "Status label shown in the sidebar when a session is active and the user is logged in.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Logged In"
+  },
+  "auth.login": {
+    "ai_hint": "Primary action button label on the login screen.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Login"
+  },
+  "auth.loginToYourWallet": {
+    "ai_hint": "Subtitle text above the login form.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Login to Your Wallet"
+  },
+  "auth.logout": {
+    "ai_hint": "Button label in the sidebar footer to log out of the current session.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Logout"
+  },
+  "auth.newWalletPassword": {
+    "ai_hint": "Label for the new password input field in wallet recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "New Wallet Password"
+  },
+  "auth.noProfilesToRecover": {
+    "ai_hint": "Error message in WalletRecovery when no local profiles exist.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "No local profiles detected for restoration."
+  },
+  "auth.passphraseIfUsed": {
+    "ai_hint": "Label for the optional passphrase input in wallet recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Passphrase (If used)"
+  },
+  "auth.passphrasePlaceholder": {
+    "ai_hint": "Placeholder for the passphrase input explaining when to use it.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Enter extra word if you used one during creation"
+  },
+  "auth.password": {
+    "ai_hint": "Generic label for a password input field.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Password"
+  },
+  "auth.passwordMinChars": {
+    "ai_hint": "Placeholder text indicating the minimum password length requirement.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Minimum 8 characters"
+  },
+  "auth.passwordMinLength": {
+    "ai_hint": "Validation error when the entered password is too short.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Password must be at least 8 characters"
+  },
+  "auth.passwordsDontMatch": {
+    "ai_hint": "Validation error when password and confirm password fields do not match.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "The passwords do not match"
+  },
+  "auth.reEncryptionCredentials": {
+    "ai_hint": "Card header title for the new password section in wallet recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Re-Encryption Credentials"
+  },
+  "auth.recoverWallet": {
+    "ai_hint": "Page subtitle on the wallet recovery screen.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Recover Wallet"
+  },
+  "auth.recoverWalletAndLogin": {
+    "ai_hint": "Primary action button label to recover wallet and log in.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Recover Wallet & Login"
+  },
+  "auth.recoverWalletSeed": {
+    "ai_hint": "Button label in ForkLockOverlay to start recovery with seed phrase.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Recover Wallet with Seed Phrase"
+  },
+  "auth.recoveringWallet": {
+    "ai_hint": "Loading feedback text during the wallet recovery process.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Recovering wallet, please wait..."
+  },
+  "auth.repeatPassword": {
+    "ai_hint": "Placeholder for the confirm password input in wallet recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Repeat your new password"
+  },
+  "auth.securityLockdown": {
+    "ai_hint": "Title heading in ForkLockOverlay when a fork is detected.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Security Lockdown"
+  },
+  "auth.seedPhrase": {
+    "ai_hint": "Label for the seed phrase input section in RecreateProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Seed Phrase"
+  },
+  "auth.seedPhraseInvalid": {
+    "ai_hint": "Validation error when the entered seed phrase is not valid.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Seed phrase is not valid"
+  },
+  "auth.seedPhrasePlaceholder": {
+    "ai_hint": "Placeholder text for the seed phrase textarea in wallet recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Enter your 12 or 24 word seed phrase here"
+  },
+  "auth.seedPhraseValid": {
+    "ai_hint": "Success feedback when the seed phrase passes validation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Seed phrase is valid."
+  },
+  "auth.selectProfileToRecover": {
+    "ai_hint": "Validation error when no profile is selected for recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Please select a profile to recover"
+  },
+  "auth.sequenceDepth": {
+    "ai_hint": "Label for the word count (12/24) selector in wallet recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Sequence Depth"
+  },
+  "auth.sessionLocked": {
+    "ai_hint": "Status label shown in the sidebar when the session exists but the wallet is locked.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Session Locked"
+  },
+  "auth.useSingleFields": {
+    "ai_hint": "Toggle button label to switch to individual word input fields.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Use single fields"
+  },
+  "auth.walletPasswordPlaceholder": {
+    "ai_hint": "Placeholder text for the password input field in the auth modal.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Wallet Password"
+  },
+  "common.abort": {
+    "ai_hint": "Button label to abort/cancel a destructive action like profile deletion.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Abort"
+  },
+  "common.activeWallet": {
+    "ai_hint": "Status indicator shown next to the profile name in the sidebar when the wallet is unlocked.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Active Wallet"
+  },
+  "common.appName": {
+    "ai_hint": "Brand name 'Human Money App' displayed in the sidebar header.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Human Money App"
+  },
+  "common.back": {
+    "source_text": "Back",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Generic back navigation action."
+  },
+  "common.cancel": {
+    "ai_hint": "Generic cancel button used in modals and dialogs.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Cancel"
+  },
+  "common.close": {
+    "source_text": "Close",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Generic close action."
+  },
+  "common.confirm": {
+    "ai_hint": "Generic confirm/ok button used in modals and dialogs.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Confirm"
+  },
+  "common.copied": {
+    "source_text": "Copied!",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "UI text in the common domain."
+  },
+  "common.create": {
+    "source_text": "Create",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "UI text in the common domain."
+  },
+  "common.description": {
+    "source_text": "Description",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "UI text in the common domain."
+  },
+  "common.dictionary": {
+    "ai_hint": "Label for the language/wordlist selector in profile creation and recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Dictionary"
+  },
+  "common.guest": {
+    "ai_hint": "Fallback display name shown in the sidebar avatar when no profile name is set.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Guest"
+  },
+  "common.loading": {
+    "source_text": "Loading...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "UI text in the common domain."
+  },
+  "common.na": {
+    "source_text": "N/A",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "UI text in the common domain."
+  },
+  "common.no": {
+    "source_text": "No",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "UI text in the common domain."
+  },
+  "common.prefixInfoA1": {
+    "ai_hint": "First FAQ answer explaining what device prefixes and sub-accounts are. Contains inline <code> HTML tags.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "When you use the same seed phrase on multiple devices, they all share the same base cryptographic key (<code>did:key:...</code>). To prevent the devices from clashing (e.g. using the same transaction sequence numbers), each device needs a unique prefix (like <code>laptop</code> or <code>phone</code>). This splits the wallet into separate, safe branches."
+  },
+  "common.prefixInfoA2": {
+    "ai_hint": "Second FAQ answer explaining how prefixes can be used for branding/recognition. Contains inline <code> HTML tags.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Yes! The prefix is visible to your contacts (e.g., <code>my-company:abc@did:key:...</code>). Using a recognizable name (like your name or business name) makes it extremely easy for your partners to quickly identify and verify payments from you."
+  },
+  "common.prefixInfoA3": {
+    "ai_hint": "Third FAQ answer explaining that device prefixes are optional and what happens if left blank. Contains <strong> HTML tags.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "<strong>Yes, it is optional.</strong> If you only use this wallet on this single device, leave the field empty. This creates a standard \"Root Account\". You do not lose any features or security."
+  },
+  "common.prefixInfoA4": {
+    "ai_hint": "Fourth FAQ answer explaining that prefixes are permanent but new profiles can be created. Contains <strong> HTML tags.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "A prefix is permanently tied to a profile once it is created. However, you can always <strong>create another profile</strong> (sub-account) on the same device using the same seed phrase but with a different prefix. <strong>You do not need to delete your old profile to do this.</strong>"
+  },
+  "common.prefixInfoModalSubtitle": {
+    "ai_hint": "Subtitle text below the title in the device prefix informational modal.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Learn how to configure your multi-device sub-accounts safely."
+  },
+  "common.prefixInfoModalTitle": {
+    "ai_hint": "Title of the informational modal about device prefixes and sub-accounts.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Device Prefixes & Sub-Accounts"
+  },
+  "common.prefixInfoQ1": {
+    "ai_hint": "First FAQ question about what a device prefix / sub-account is. Begins with ❓ emoji.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "❓ What is a Device Prefix / Sub-Account?"
+  },
+  "common.prefixInfoQ2": {
+    "ai_hint": "Second FAQ question about using prefixes for branding/recognition. Begins with 🏢 emoji.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "🏢 Can I use it for branding / recognition?"
+  },
+  "common.prefixInfoQ3": {
+    "ai_hint": "Third FAQ question about whether prefix is optional and what happens when blank. Begins with ⚙️ emoji.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "⚙️ Is it optional? What if I leave it blank?"
+  },
+  "common.prefixInfoQ4": {
+    "ai_hint": "Fourth FAQ question about changing or setting the prefix later. Begins with ✏️ emoji.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "✏️ Can I change or set the prefix later?"
+  },
+  "common.prefixInfoSafety1": {
+    "ai_hint": "First safety alert paragraph: every device must use a different prefix. Contains <strong> HTML tags.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Every active device using the same seed phrase <strong>must use a different prefix</strong>."
+  },
+  "common.prefixInfoSafety2": {
+    "ai_hint": "Second safety alert paragraph explaining consequences of prefix collisions.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Using the exact same prefix (including leaving it blank) on two devices at the same time will cause sequence collisions. This will result in severe errors and inevitably damage your reputation in the network."
+  },
+  "common.prefixInfoSafetyTitle": {
+    "ai_hint": "Heading of the safety alert section in the prefix info modal.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Critical Safety Rule"
+  },
+  "common.prefixInfoUnderstandBtn": {
+    "ai_hint": "Button text to close the prefix info modal, confirming the user understands the explanation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "I Understand"
+  },
+  "common.processing": {
+    "ai_hint": "Loading/processing state text shown inside buttons while an async operation is in progress.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Processing..."
+  },
+  "common.protocolVersion": {
+    "ai_hint": "Version badge displayed in the login screen footer.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Human Money Protocol v2.0"
+  },
+  "common.remove": {
+    "source_text": "Remove",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "UI text in the common domain."
+  },
+  "common.required": {
+    "ai_hint": "Placeholder text indicating a field is required.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Required"
+  },
+  "common.select": {
+    "source_text": "Select...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "UI text in the common domain."
+  },
+  "common.sidebarActions": {
+    "ai_hint": "Heading label for the 'Actions' navigation group in the sidebar.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Actions"
+  },
+  "common.sidebarMain": {
+    "ai_hint": "Heading label for the 'Main' navigation group in the sidebar.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Main"
+  },
+  "common.sidebarRecords": {
+    "ai_hint": "Heading label for the 'Records & Network' navigation group in the sidebar.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Records & Network"
+  },
+  "common.sidebarSecurity": {
+    "ai_hint": "Heading label for the 'Security' navigation group in the sidebar.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Security"
+  },
+  "common.unknown": {
+    "source_text": "Unknown",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "UI text in the common domain."
+  },
+  "common.version": {
+    "ai_hint": "Version display text in the sidebar footer. {{version}} is the app version number.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Version {{version}}"
+  },
+  "common.view": {
+    "source_text": "View",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "UI text in the common domain."
+  },
+  "common.yes": {
+    "source_text": "Yes",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "UI text in the common domain."
+  },
+  "conflict.actionRequired": {
+    "source_text": "Action Required",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.affectedVoucherLabel": {
+    "source_text": "Affected Voucher Name:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.affectedVoucherName": {
+    "source_text": "Affected Voucher Name",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.closeReportButton": {
+    "source_text": "Close Report",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Action button label in conflict resolver."
+  },
+  "conflict.compensationSignatureLabel": {
+    "source_text": "Compensation Signature",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.criticalConflictTitle": {
+    "source_text": "Critical Conflict Report",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.errorPrefix": {
+    "source_text": "Error: {{error}}",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver. Contains variables: {{error}}."
+  },
+  "conflict.evidenceDescription": {
+    "source_text": "Detailed transactions demonstrating the double-spend. The earliest transaction is considered valid.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive paragraph text in conflict resolver."
+  },
+  "conflict.evidenceId": {
+    "source_text": "Transaction ID:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.evidenceRecipient": {
+    "source_text": "Recipient ID:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.evidenceTime": {
+    "source_text": "Time Signed:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.evidenceTitle": {
+    "source_text": "Evidence Portfolio",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.evidenceTx": {
+    "source_text": "Transaction #{{index}} (Conflicting / Double-Spend)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver. Contains variables: {{index}}."
+  },
+  "conflict.evidenceTxWinner": {
+    "source_text": "Transaction #{{index}} (Earliest / Winner)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver. Contains variables: {{index}}."
+  },
+  "conflict.fetchDetailsFailed": {
+    "source_text": "Failed to fetch double-spend proof details: {{error}}",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Error message in conflict resolver. Contains variables: {{error}}."
+  },
+  "conflict.fetchFailed": {
+    "source_text": "Failed to fetch conflicts: {{error}}",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Error message in conflict resolver. Contains variables: {{error}}."
+  },
+  "conflict.forkPointLabel": {
+    "source_text": "Fork Point Previous Hash:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.fraudReports": {
+    "ai_hint": "Sidebar navigation item label for the Fraud Reports / conflict list page.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Fraud Reports"
+  },
+  "conflict.genericVoucherInstance": {
+    "source_text": "Generic Voucher Instance",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.idLabel": {
+    "source_text": "Conflict ID:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.informationOnlyTitle": {
+    "source_text": "Information Only (Witness Report)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.l2VerdictAvailable": {
+    "source_text": "Network Verdict Available",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.loadErrorTitle": {
+    "source_text": "Conflict Load Failure",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.loading": {
+    "source_text": "Checking for double-spend conflicts...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.loadingDetails": {
+    "source_text": "Loading double-spend proof details...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.markSettledButton": {
+    "source_text": "Mark Conflict as Settled Locally",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Action button label in conflict resolver."
+  },
+  "conflict.metadataTitle": {
+    "source_text": "Resolution Status & Metadata",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.noConflictsDescription": {
+    "source_text": "Your wallet is currently healthy. No conflicting transactions have been detected.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive paragraph text in conflict resolver."
+  },
+  "conflict.noConflictsTitle": {
+    "source_text": "No Double-Spend Conflicts",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.observationReportTitle": {
+    "source_text": "Security Observation Report",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.offenderDescription": {
+    "source_text": "This identity has double-spent assets. All transactions signed by this offender are marked untrusted.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive paragraph text in conflict resolver."
+  },
+  "conflict.offenderIdLabel": {
+    "source_text": "Offender User ID (DID)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.offenderInfoTitle": {
+    "source_text": "Offender Information",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.offenderLabel": {
+    "source_text": "Offender ID:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.officialResolutionsTitle": {
+    "source_text": "Official Network Resolutions",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.personalNote": {
+    "source_text": "Personal Note",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.personalResolutionNoteLabel": {
+    "source_text": "Personal Resolution Note:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.proofIdLabel": {
+    "source_text": "Conflict Proof ID:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.proofNotFound": {
+    "source_text": "Double-spend proof not found.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.protocolRulesDescription": {
+    "source_text": "Transactions must be strictly sequenced. Once a state is spent, any subsequent transaction referencing that same state is a double-spend. Offending vouchers are quarantined to maintain system integrity.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive paragraph text in conflict resolver."
+  },
+  "conflict.protocolRulesTitle": {
+    "source_text": "Network Protocol Rule Summary:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.reportDateLabel": {
+    "source_text": "Report Date:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.reportTotalCount": {
+    "source_text": "1 Conflict Report",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.reportedLabel": {
+    "source_text": "Reported: {{date}}",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver. Contains variables: {{date}}."
+  },
+  "conflict.reportsTotalCount": {
+    "source_text": "{{count}} Conflict Reports",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver. Contains variables: {{count}}."
+  },
+  "conflict.resolutionDescription": {
+    "source_text": "If you have resolved this dispute offline with the counterparty (e.g., they gave you cash or standard currency to compensate for the blocked voucher), you can override this conflict locally to unblock your wallet.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive paragraph text in conflict resolver."
+  },
+  "conflict.resolutionPlaceholder": {
+    "source_text": "Describe how this dispute was settled...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Input field placeholder in conflict resolver."
+  },
+  "conflict.resolutionTitle": {
+    "source_text": "Local Dispute Override",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.resolvedLocally": {
+    "source_text": "Resolved (Local Override)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.resolvedOfficially": {
+    "source_text": "Resolved (Network Verdict)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.securityInsight": {
+    "source_text": "Security Insight",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.showWitnessConflicts": {
+    "source_text": "Show witness conflicts",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.statusLocallySettled": {
+    "source_text": "Resolved (Local Override)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.statusOfficiallyResolved": {
+    "source_text": "Resolved (Network Verdict)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.statusUnresolved": {
+    "source_text": "Unresolved",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.title": {
+    "source_text": "Double-Spend Conflict Resolver",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.trustStatusLabel": {
+    "source_text": "Trust Status:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.unknownVoucher": {
+    "source_text": "Unknown Voucher",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.unresolved": {
+    "source_text": "Unresolved",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.verifySecurityDescription": {
+    "source_text": "Please enter your wallet password to authorize this local conflict override.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive paragraph text in conflict resolver."
+  },
+  "conflict.verifySecurityPlaceholder": {
+    "source_text": "Wallet Password",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Input field placeholder in conflict resolver."
+  },
+  "conflict.verifySecurityTitle": {
+    "source_text": "Verify Security Credentials",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.victimConfirmedSolution": {
+    "source_text": "Victim {{victim}} confirmed compensation was received.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver. Contains variables: {{victim}}."
+  },
+  "conflict.victimConflictsHeader": {
+    "source_text": "Your Wallet Affected ({{count}})",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver. Contains variables: {{count}}."
+  },
+  "conflict.victimDescription": {
+    "source_text": "A double-spend attempt was detected! The offender issued two conflicting transactions referencing the same voucher state. This is a violation of the network protocol. Your local balance has been quarantined.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive paragraph text in conflict resolver."
+  },
+  "conflict.viewDetails": {
+    "source_text": "View Details",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.witnessConflictsHeader": {
+    "source_text": "Network Witness Reports ({{count}})",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or status text in double-spend conflict resolver. Contains variables: {{count}}."
+  },
+  "conflict.witnessDescription": {
+    "source_text": "This double-spend was observed in the network, but does not directly affect your balance. It is shown here for transparency and security monitoring.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive paragraph text in conflict resolver."
+  },
+  "contacts.addCustomTagPlaceholder": {
+    "source_text": "Add custom tag...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Placeholder in contact creation dialog for custom tags."
+  },
+  "contacts.addFirstContact": {
+    "source_text": "Add Your First Contact",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Button label on empty contacts state to add first contact."
+  },
+  "contacts.addNewContact": {
+    "source_text": "Add New Contact",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Header title in contact modal when creating a new contact."
+  },
+  "contacts.addressBook": {
+    "ai_hint": "Sidebar navigation item label for the Address Book / contacts page.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Address Book"
+  },
+  "contacts.clearSearch": {
+    "source_text": "Clear search",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Tooltip/accessibility label for clearing the search input."
+  },
+  "contacts.deleteConfirmButton": {
+    "source_text": "Delete Contact",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Action button in confirmation modal to delete a contact."
+  },
+  "contacts.deleteDescription": {
+    "source_text": "Are you sure you want to remove this contact from your address book?",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Body message in confirmation modal asking if user is sure about deleting a contact."
+  },
+  "contacts.deleteTitle": {
+    "source_text": "Delete Contact",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title of the confirmation modal for deleting a contact."
+  },
+  "contacts.description": {
+    "source_text": "Manage your verified identities and local address book.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Subtitle of the Address Book view page."
+  },
+  "contacts.didPlaceholder": {
+    "source_text": "did:key:z...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Placeholder showing format of DID (did:key:z...)."
+  },
+  "contacts.editContact": {
+    "source_text": "Edit Contact",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Header title in contact modal when editing an existing contact."
+  },
+  "contacts.editProfile": {
+    "source_text": "Edit Profile",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Tooltip/accessibility label on the edit contact profile button."
+  },
+  "contacts.emptyDescription": {
+    "source_text": "No contacts match your current filter. Add your first contact to get started.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Information text when no contacts are found matching filters."
+  },
+  "contacts.emptyTitle": {
+    "source_text": "Empty Address Book",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Headline when contacts list is empty."
+  },
+  "contacts.enterDidBelow": {
+    "source_text": "Enter DID below",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Placeholder subtitle in contact dialog before DID is typed."
+  },
+  "contacts.filterAll": {
+    "source_text": "All",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Filter button to show all contacts regardless of tags."
+  },
+  "contacts.firstName": {
+    "source_text": "First Name",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Field label for first name."
+  },
+  "contacts.firstNamePlaceholder": {
+    "source_text": "e.g. Alice",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Input placeholder for first name."
+  },
+  "contacts.lastName": {
+    "source_text": "Last Name",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Field label for last name."
+  },
+  "contacts.lastNamePlaceholder": {
+    "source_text": "e.g. Smith",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Input placeholder for last name."
+  },
+  "contacts.loading": {
+    "source_text": "Loading Contacts...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Spinner text when loading contacts."
+  },
+  "contacts.newContact": {
+    "source_text": "New Contact",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Button label to open contact creation dialog."
+  },
+  "contacts.noTagsAssigned": {
+    "source_text": "No tags assigned",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Placeholder text when a contact has no tags."
+  },
+  "contacts.notes": {
+    "source_text": "Notes",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Field label for internal notes about a contact."
+  },
+  "contacts.notesPlaceholder": {
+    "source_text": "Internal notes about this contact...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Textarea placeholder for internal notes about a contact."
+  },
+  "contacts.organizationCommunity": {
+    "source_text": "Organization / Community",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Field label for organization or community name."
+  },
+  "contacts.organizationPlaceholder": {
+    "source_text": "e.g. Green Valley Inc.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Input placeholder for organization name."
+  },
+  "contacts.removeContact": {
+    "source_text": "Remove Contact",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Tooltip/accessibility label on delete contact button."
+  },
+  "contacts.saveContact": {
+    "source_text": "Save Contact",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Button label to save/create a new contact."
+  },
+  "contacts.saving": {
+    "source_text": "Saving...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Button loading state text when saving a contact."
+  },
+  "contacts.searchPlaceholder": {
+    "source_text": "Search name, organization or DID...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Placeholder in the search input on the Address Book page."
+  },
+  "contacts.tags": {
+    "source_text": "Tags",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Field label for tags."
+  },
+  "contacts.title": {
+    "source_text": "Contacts",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Page title of the Address Book view."
+  },
+  "contacts.unnamedIdentity": {
+    "source_text": "Unnamed Identity",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Fallback display name for a contact without first/last name or organization."
+  },
+  "contacts.updateContact": {
+    "source_text": "Update Contact",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Button label to save changes to an existing contact."
+  },
+  "contacts.userId": {
+    "source_text": "User ID (DID)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Field label for User ID / Decentralized Identifier (DID)."
+  },
+  "dashboard.eventReceived": {
+    "source_text": "Received from {{name}}",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.eventSent": {
+    "source_text": "Sent to {{name}}",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.eventUnknown": {
+    "source_text": "Unknown Event",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.eventVoucherActivated": {
+    "source_text": "Voucher Activated",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.eventVoucherCreated": {
+    "source_text": "Voucher Created",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.eventVoucherExpired": {
+    "source_text": "Voucher Expired",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.eventVoucherQuarantined": {
+    "source_text": "Voucher Quarantined",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.eventVoucherVoided": {
+    "source_text": "Voucher Voided",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.fixNow": {
+    "source_text": "Fix Now",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.historyLink": {
+    "source_text": "History ➔",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.needSignatures": {
+    "source_text": "{{count}} Vouchers need signatures",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.noRecentActivity": {
+    "source_text": "No recent activity",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.profileIncomplete": {
+    "source_text": "Profile Incomplete",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.profileIncompleteDesc": {
+    "source_text": "Building trust requires a complete identity.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.quarantineDesc": {
+    "source_text": "Double-spend detected. Resolve conflicts now.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.quarantineLocked": {
+    "source_text": "Quarantine: {{count}} Vouchers Locked",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.recentActivity": {
+    "source_text": "Recent Activity",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.securityWarning": {
+    "source_text": "Security Warning",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.securityWarningDesc": {
+    "source_text": "Action required to repair your wallet.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.title": {
+    "ai_hint": "Sidebar navigation item label and page title for the Dashboard view.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Dashboard"
+  },
+  "dashboard.viewDetails": {
+    "source_text": "View Details ➔",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.vouchersCount": {
+    "source_text": "{{count}} Vouchers",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.welcomeSubtitle": {
+    "source_text": "Manage your community vouchers and local currency.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.welcomeTitle": {
+    "source_text": "👋 Welcome to your Wallet!",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "dashboard.yourBalances": {
+    "source_text": "Your Balances",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.auth.deviceMismatch": {
+    "source_text": "Security Protocol: Device Mismatch Detected.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.auth.passwordRequired": {
+    "source_text": "Password required. Please use 'Remember Password' or enter your password.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.auth.sessionNotActive": {
+    "source_text": "Session is not active. Password required.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.auth.sessionTimeout": {
+    "source_text": "Session timed out. Please provide your password.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.conflict.doubleSpendBlocked": {
+    "source_text": "Double spend attempt was blocked for this voucher.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.conflict.voucherQuarantined": {
+    "source_text": "This voucher is quarantined due to a detected double-spend conflict.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.internal.unknown": {
+    "source_text": "An unexpected error occurred.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.security.rollbackDetected": {
+    "source_text": "Critical: Wallet state manipulation or outdated backup detected.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.security.sealRecoveryRequired": {
+    "source_text": "Security Alert: No local security seal found. Recovery is required.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.security.walletLockedDueToFork": {
+    "source_text": "Security Lockdown: Wallet is locked due to a detected fork. Recovery required.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.transfer.bundleRecoveryZone": {
+    "source_text": "CRITICAL WARNING: This transaction is from the recovery tolerance zone. High double-spend risk.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.transfer.bundleToleranceZone": {
+    "source_text": "Warning: This transaction occurred shortly before the recent wallet recovery.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.transfer.bundleTooOld": {
+    "source_text": "Transaction rejected: This transaction is too old relative to the last wallet recovery.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.validation.generic": {
+    "source_text": "Validation failed.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.validation.initAmountMismatch": {
+    "source_text": "Initial transaction amount must match nominal value. Expected: {{expected}}, Found: {{found}}.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.validation.insufficientFunds": {
+    "source_text": "Insufficient funds. Needed: {{needed}}, Available: {{available}}.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.validation.voucherNotActive": {
+    "source_text": "The voucher is not active.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "error.wallet.locked": {
+    "source_text": "Wallet is locked. Please log in first.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "history.activitiesDescription": {
+    "source_text": "Comprehensive journal of identity changes, signatures and transactions.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive paragraph text in transaction history / activity log."
+  },
+  "history.activitiesTitle": {
+    "source_text": "Activity Logs",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for transaction history / activity log view."
+  },
+  "history.activityLog": {
+    "ai_hint": "Sidebar navigation item label for the Activity Log page.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Activity Log"
+  },
+  "history.adjustFilter": {
+    "source_text": "Try adjusting your search terms or filters.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.assetStandard": {
+    "source_text": "Asset / Minuto Standard",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.auditDescription": {
+    "source_text": "Comprehensive ledger showing signed inbound and outbound transfer bundles.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive paragraph text in transaction history / activity log."
+  },
+  "history.auditTitle": {
+    "source_text": "Transaction Audit Log",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for transaction history / activity log view."
+  },
+  "history.date": {
+    "source_text": "Date",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.eventActivated": {
+    "source_text": "Voucher activated",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Activity log status event message."
+  },
+  "history.eventCreated": {
+    "source_text": "Voucher created",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Activity log status event message."
+  },
+  "history.eventDefault": {
+    "source_text": "Voucher status change",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Activity log status event message."
+  },
+  "history.eventExpired": {
+    "source_text": "Voucher expired",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Activity log status event message."
+  },
+  "history.eventQuarantine": {
+    "source_text": "Voucher quarantined",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Activity log status event message."
+  },
+  "history.eventReceived": {
+    "source_text": "Received from {{sender}}",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Activity log status event message. Contains variables: {{sender}}."
+  },
+  "history.eventSent": {
+    "source_text": "Sent to {{recipient}}",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Activity log status event message. Contains variables: {{recipient}}."
+  },
+  "history.eventVoided": {
+    "source_text": "Voucher voided",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Activity log status event message."
+  },
+  "history.export": {
+    "source_text": "Export Transfer File",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.from": {
+    "source_text": "From",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.inbound": {
+    "source_text": "Inbound Transfer",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.involvedAssets": {
+    "source_text": "Involved Vouchers & Assets ({{count}})",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log. Contains variables: {{count}}."
+  },
+  "history.loadActivitiesFailed": {
+    "source_text": "Failed to load activity log.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Error notification shown in transaction history / activities."
+  },
+  "history.loadFailed": {
+    "source_text": "Failed to load transaction history: {{error}}",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Error notification shown in transaction history / activities. Contains variables: {{error}}."
+  },
+  "history.loading": {
+    "source_text": "Decrypting Ledger...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.loadingActivities": {
+    "source_text": "Retreiving System Journals...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.localId": {
+    "source_text": "Local ID",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.noBundleData": {
+    "source_text": "No transfer bundle data available for this transaction.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.noEvents": {
+    "source_text": "No activity recorded yet",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.noEventsDetail": {
+    "source_text": "Your device and transaction activity history will be logged here.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive paragraph text in transaction history / activity log."
+  },
+  "history.noMatchingTx": {
+    "source_text": "No transactions match your current query.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.outbound": {
+    "source_text": "Outbound Transfer",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.recipientDid": {
+    "source_text": "Recipient User ID (DID)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.saveError": {
+    "source_text": "Failed to export: {{error}}",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Error notification shown in transaction history / activities. Contains variables: {{error}}."
+  },
+  "history.saveFilterName": {
+    "source_text": "Minuto Transfer Files",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.saveTitle": {
+    "source_text": "Save Transfer Bundle File",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for transaction history / activity log view."
+  },
+  "history.saved": {
+    "source_text": "Transfer bundle file exported!",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.saving": {
+    "source_text": "Exporting...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.searchPlaceholder": {
+    "source_text": "Search recipient, sender, notes, or DIDs...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Search or input field placeholder in transaction history."
+  },
+  "history.senderDid": {
+    "source_text": "Sender User ID (DID)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.to": {
+    "source_text": "To",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.transactionHistory": {
+    "ai_hint": "Sidebar navigation item label for the Transaction History page.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Transaction History"
+  },
+  "history.txId": {
+    "source_text": "Transfer Bundle ID",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.txStatus": {
+    "source_text": "Transaction Status",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.value": {
+    "source_text": "Value",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.verified": {
+    "source_text": "Verified Cryptographically",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "integrity.affectedItemsTitle": {
+    "source_text": "Affected Items",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for database integrity check report."
+  },
+  "integrity.integrityOutdatedDescription": {
+    "source_text": "The security integrity record does not match the current wallet state epoch. Possible rollback attempt.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive text or warning details in integrity checks."
+  },
+  "integrity.integrityOutdatedTitle": {
+    "source_text": "Outdated Integrity Record",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for database integrity check report."
+  },
+  "integrity.invalidSignatureDescription": {
+    "source_text": "The security integrity record signature is invalid. The record itself might have been tampered with.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive text or warning details in integrity checks."
+  },
+  "integrity.invalidSignatureTitle": {
+    "source_text": "Invalid Signature",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for database integrity check report."
+  },
+  "integrity.manipulatedItemsDescription": {
+    "source_text": "Data items have been modified outside of this application. This is a security risk.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive text or warning details in integrity checks."
+  },
+  "integrity.manipulatedItemsTitle": {
+    "source_text": "Manipulated Items",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for database integrity check report."
+  },
+  "integrity.missingIntegrityRecordDescription": {
+    "source_text": "Your wallet does not have a security integrity record yet. You should create one to enable protection.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive text or warning details in integrity checks."
+  },
+  "integrity.missingIntegrityRecordTitle": {
+    "source_text": "Missing Integrity Record",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for database integrity check report."
+  },
+  "integrity.missingItemsDescription": {
+    "source_text": "Some critical wallet data items are missing from the disk. This could lead to data loss.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive text or warning details in integrity checks."
+  },
+  "integrity.missingItemsTitle": {
+    "source_text": "Missing Items",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for database integrity check report."
+  },
+  "integrity.repairButton": {
+    "source_text": "Repair Integrity Record & Accept State",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Action button label in integrity report modal."
+  },
+  "integrity.repairFailed": {
+    "source_text": "Failed to repair integrity: {{error}}",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Error message during database/integrity repairs. Contains variables: {{error}}."
+  },
+  "integrity.repairInstruction": {
+    "source_text": "By repairing the wallet, you accept the current state of items as valid and sign a new security integrity record.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive text or warning details in integrity checks."
+  },
+  "integrity.repairing": {
+    "source_text": "Repairing...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in integrity report."
+  },
+  "integrity.reportSubtitle": {
+    "source_text": "Storage Integrity Report",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in integrity report."
+  },
+  "integrity.unknownItemsDescription": {
+    "source_text": "Unrecognized data items were found in your wallet directory.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive text or warning details in integrity checks."
+  },
+  "integrity.unknownItemsTitle": {
+    "source_text": "Unknown Items",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for database integrity check report."
+  },
+  "profile.accessError": {
+    "ai_hint": "Prefix for profile list loading error in login screen.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Profile Access Error"
+  },
+  "profile.accessPassword": {
+    "ai_hint": "Label for the access password input in profile creation step 3.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Access Password"
+  },
+  "profile.acknowledgeAccess": {
+    "ai_hint": "Button label to acknowledge handover completion and access the dashboard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Acknowledge & Access Dashboard"
+  },
+  "profile.authenticationError": {
+    "ai_hint": "Prefix for password verification error during profile deletion.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Authentication Error"
+  },
+  "profile.authorizeDeletionFor": {
+    "ai_hint": "Description text asking the user to authorize deletion for a named profile. {{name}} is the profile name.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Authorize deletion for {{name}}"
+  },
+  "profile.autoAddressButton": {
+    "source_text": "Auto-Address",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.autoAddressTooltip": {
+    "source_text": "Resolve coordinates from the address above",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.autoCleaningHint": {
+    "ai_hint": "Helper text in RecreateProfile describing automatic cleaning of numbers, dots, newlines and extra spaces.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Automatic cleaning handles numbers (e.g. 1. 2.), dots, newlines and extra spaces."
+  },
+  "profile.awaitingValidSeed": {
+    "ai_hint": "Validation feedback in RecreateProfile when the seed phrase is not yet complete.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Awaiting valid seed phrase..."
+  },
+  "profile.back": {
+    "ai_hint": "Generic Back button label for wizard navigation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Back"
+  },
+  "profile.boundIdentity": {
+    "ai_hint": "Label for the bound DID display after handover completion.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Bound Identity (DID)"
+  },
+  "profile.cancelProtocol": {
+    "ai_hint": "Button label to cancel the device handover protocol.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Cancel Protocol"
+  },
+  "profile.city": {
+    "source_text": "City",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.cityPlaceholder": {
+    "source_text": "City Name",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.community": {
+    "source_text": "Community",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.communityPlaceholder": {
+    "source_text": "Community Name",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.confirmOptionalPassphrase": {
+    "ai_hint": "Label for confirming the optional passphrase in RecreateProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Confirm Optional Passphrase"
+  },
+  "profile.confirmPassphrase": {
+    "ai_hint": "Label for the confirm passphrase input in seed confirmation step.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Confirm Passphrase"
+  },
+  "profile.confirmPassword": {
+    "ai_hint": "Label for the confirm password input in profile creation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Confirm Password"
+  },
+  "profile.confirmSeed": {
+    "ai_hint": "Button label to confirm the seed phrase verification.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Confirm Seed"
+  },
+  "profile.contactLinks": {
+    "source_text": "Contact & Links",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.coordinates": {
+    "source_text": "Map Coordinates (Lat, Long)",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.coordinatesPlaceholder": {
+    "source_text": "51.16, 10.45 or Maps Link",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.coordinatesResolved": {
+    "source_text": "Coordinates resolved!",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.country": {
+    "source_text": "Country",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.countryPlaceholder": {
+    "source_text": "Country Name",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.create": {
+    "ai_hint": "Primary submit button label to create a new profile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Create Profile"
+  },
+  "profile.createAndEncrypt": {
+    "ai_hint": "Primary submit button label in RecreateProfile to create and encrypt the profile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Create & Encrypt Profile"
+  },
+  "profile.createNewProfile": {
+    "ai_hint": "Page subtitle on the create new profile screen.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Create a New Profile"
+  },
+  "profile.creating": {
+    "ai_hint": "Button loading text during profile creation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Creating Profile..."
+  },
+  "profile.creatingProgress": {
+    "ai_hint": "Loading feedback text during profile creation in RecreateProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Creating profile, please wait... This may take a moment."
+  },
+  "profile.criticalPrefix": {
+    "ai_hint": "Critical safety warning about unique device prefixes in the device settings section.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Critical: Every active device MUST have a unique prefix to prevent irreversible reputation loss."
+  },
+  "profile.dataEncrypted": {
+    "ai_hint": "Footer note in profile creation confirming data is encrypted on device.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Your data is securely encrypted on this device."
+  },
+  "profile.deleteProfile": {
+    "ai_hint": "Heading and button label for the delete profile flow.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Delete Profile"
+  },
+  "profile.deletedSuccess": {
+    "ai_hint": "Success feedback after a profile is deleted.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Profile deleted successfully."
+  },
+  "profile.deleting": {
+    "ai_hint": "Button loading text and feedback during profile deletion.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Deleting..."
+  },
+  "profile.deviceId": {
+    "ai_hint": "Label prefix for the local device ID display in login footer.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Device:"
+  },
+  "profile.deviceSettings": {
+    "ai_hint": "Card header title for the device settings section in profile creation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Device Settings"
+  },
+  "profile.doubleSpendPrevention": {
+    "ai_hint": "Heading for the double-spend prevention warning after handover.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Double-Spend Prevention"
+  },
+  "profile.doubleSpendWarning": {
+    "ai_hint": "Warning text about not using the profile on the old device after handover.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "This wallet is now bound to this instance. DO NOT use this profile on the old device. Simultaneous use will cause permanent reputation damage and asset locking."
+  },
+  "profile.emailPlaceholder": {
+    "source_text": "identity@domain.com",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.enterExtraWord": {
+    "ai_hint": "Placeholder for re-entering the passphrase during seed confirmation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Enter your extra word again"
+  },
+  "profile.errorCreatingProfile": {
+    "ai_hint": "Prefix for error feedback during profile creation in RecreateProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Error creating profile"
+  },
+  "profile.errorLoading": {
+    "source_text": "Failed to load profile",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.errorPrefix": {
+    "ai_hint": "Generic 'Error' prefix used in feedback messages across auth and profile flows.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Error"
+  },
+  "profile.errorUpdating": {
+    "source_text": "Failed to update profile",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.firstName": {
+    "source_text": "First Name",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.firstNamePlaceholder": {
+    "source_text": "e.g. Alice",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.formattingAuto": {
+    "ai_hint": "Helper text indicating automatic formatting standardization in bulk paste mode.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Formatting is automatically standardized."
+  },
+  "profile.gender": {
+    "source_text": "Gender",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.genderFemale": {
+    "source_text": "Female",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.genderMale": {
+    "source_text": "Male",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.genderNa": {
+    "source_text": "Not Applicable",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.genderOther": {
+    "source_text": "Other / Not Declared",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.geocodingAddress": {
+    "source_text": "Geocoding address...",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.gpsButton": {
+    "source_text": "GPS",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.gpsFailed": {
+    "source_text": "GPS failed",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.gpsTooltip": {
+    "source_text": "Use current GPS location",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.handoverComplete": {
+    "ai_hint": "Heading and subtitle for the handover completion overlay.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Handover Complete"
+  },
+  "profile.handoverFailure": {
+    "ai_hint": "Prefix for error feedback when device handover fails.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Handover Failure"
+  },
+  "profile.houseNumber": {
+    "source_text": "Nr.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.houseNumberPlaceholder": {
+    "source_text": "123",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.identity": {
+    "ai_hint": "Label for the profile identity display in delete confirmation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Identity:"
+  },
+  "profile.interactiveMode": {
+    "ai_hint": "Toggle label to switch to individual word input mode in seed confirmation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Interactive Mode"
+  },
+  "profile.invalidCoordinateFormat": {
+    "source_text": "Invalid format. Please use \"Latitude, Longitude\"",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.lastName": {
+    "source_text": "Last Name",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.lastNamePlaceholder": {
+    "source_text": "e.g. Smith",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.linkingDevice": {
+    "ai_hint": "Loading feedback text during device handover.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Linking profile to this device..."
+  },
+  "profile.loadingProfile": {
+    "source_text": "Loading Profile...",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.locating": {
+    "source_text": "Locating...",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.location": {
+    "source_text": "Location",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.locationDetected": {
+    "source_text": "Location detected!",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.loginSelectProfile": {
+    "ai_hint": "Validation error when no profile and password are selected for login.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Please select a profile and enter your password."
+  },
+  "profile.lookupFailed": {
+    "source_text": "Lookup failed",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.needs": {
+    "source_text": "Needs (I'm looking for)",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.needsPlaceholder": {
+    "source_text": "Describe what you are looking for...",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.next": {
+    "ai_hint": "Button label to proceed to the next wizard step.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Next"
+  },
+  "profile.notFound": {
+    "source_text": "Profile not found.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.optionalPassphrase": {
+    "ai_hint": "Label for optional passphrase field with dynamic ordinal (13th/25th). {{ordinal}} is replaced with '13th' or '25th'.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "{{ordinal}} Word (Optional Passphrase)"
+  },
+  "profile.optionalPassphraseLabel": {
+    "ai_hint": "Label for the optional passphrase input in RecreateProfile step 1.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Optional Passphrase (13th/25th Word)"
+  },
+  "profile.organizationCompany": {
+    "source_text": "Organization / Company",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.organizationPlaceholder": {
+    "source_text": "Organization Name",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.passphraseAdvanced": {
+    "ai_hint": "Advanced notice about the passphrase being part of the backup. {{wordCount}} is number of seed words.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Advanced: This word is part of your backup. You MUST save it along with the other {{wordCount}} words!"
+  },
+  "profile.passphraseIfUsedPlaceholder": {
+    "ai_hint": "Placeholder for the optional passphrase input in RecreateProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Enter extra security word if used"
+  },
+  "profile.passphraseMismatch": {
+    "ai_hint": "Validation error when passphrase and confirm passphrase do not match.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Error: The passphrases do not match"
+  },
+  "profile.passphrasePlaceholder": {
+    "ai_hint": "Placeholder for the optional passphrase input in seed creation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Enter extra security word..."
+  },
+  "profile.passwordMinLength": {
+    "ai_hint": "Validation error when the password is less than the minimum required length.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Error: Password must be at least 8 characters"
+  },
+  "profile.passwordMismatch": {
+    "ai_hint": "Validation error when password and confirm password fields do not match.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Error: The passwords do not match"
+  },
+  "profile.pasteFullSeed": {
+    "ai_hint": "Label for the bulk paste textarea in seed confirmation step.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Paste Full Seed Phrase"
+  },
+  "profile.pasteHere": {
+    "ai_hint": "Placeholder for the bulk paste textarea.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Paste here"
+  },
+  "profile.pasteSeedPhrasePlaceholder": {
+    "ai_hint": "Placeholder for the full seed phrase paste textarea in RecreateProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Paste full seed phrase here... Numbers and punctuation are cleaned automatically."
+  },
+  "profile.performHandover": {
+    "ai_hint": "Button label to execute the device handover process.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Perform Device Handover"
+  },
+  "profile.phonePlaceholder": {
+    "source_text": "+49 000 000000",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.pictureUrl": {
+    "source_text": "Profile Picture URL",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.pictureUrlPlaceholder": {
+    "source_text": "https://domain.com/avatar.jpg",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.prefixDescription": {
+    "ai_hint": "Descriptive text about when and why to use device prefixes.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Required if using the same seed phrase on multiple devices. Can also be used as a public identifier (e.g. company name) for easy recognition. You can create multiple profiles on this device in parallel without deleting old ones."
+  },
+  "profile.prefixPlaceholder": {
+    "ai_hint": "Placeholder for the device prefix input field.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "e.g. laptop, phone, or my-company"
+  },
+  "profile.profileDetails": {
+    "ai_hint": "Card header title for the profile details section in creation step 3.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Profile Details"
+  },
+  "profile.profileLabel": {
+    "ai_hint": "Label for the profile name input field.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Profile Label"
+  },
+  "profile.profileName": {
+    "ai_hint": "Label for the profile name input in RecreateProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Profile Name"
+  },
+  "profile.profileNamePlaceholder": {
+    "ai_hint": "Placeholder for the profile name input in CreateNewProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "e.g. My Secure Wallet"
+  },
+  "profile.profileNamePlaceholder2": {
+    "ai_hint": "Placeholder for the profile name input in RecreateProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "e.g., 'My Main Wallet'"
+  },
+  "profile.protocolAlert": {
+    "ai_hint": "Feedback section heading shown for informational/success messages.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Protocol Alert"
+  },
+  "profile.publicEmail": {
+    "source_text": "Public Email",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.publicPhone": {
+    "source_text": "Public Phone",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.purgeFailure": {
+    "ai_hint": "Prefix for error feedback when profile deletion (purge) fails.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Purge failure"
+  },
+  "profile.readInstructions": {
+    "ai_hint": "Button label to open the prefix info modal.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Read Instructions"
+  },
+  "profile.recoverStep1Subtitle": {
+    "ai_hint": "Subtitle text for step 1 of the recreate profile wizard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Enter your existing 12 or 24-word secret seed phrase."
+  },
+  "profile.recoverStep1Title": {
+    "ai_hint": "Title heading for step 1 of the recreate profile wizard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Step 1: Your Seed Phrase"
+  },
+  "profile.recoverStep2Subtitle": {
+    "ai_hint": "Subtitle text for step 2 of the recreate profile wizard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Create a name and password for this new profile."
+  },
+  "profile.recoverStep2Title": {
+    "ai_hint": "Title heading for step 2 of the recreate profile wizard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Step 2: Secure Your Profile"
+  },
+  "profile.recreateFromSeed": {
+    "ai_hint": "Login screen link to recreate a profile from an existing seed phrase.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Recreate profile from seed"
+  },
+  "profile.recreateFromSeedTitle": {
+    "ai_hint": "Page subtitle on the recreate profile screen.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Recreate Profile from Seed"
+  },
+  "profile.recreateHere": {
+    "ai_hint": "Link text in CreateNewProfile to switch to recreate profile flow.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Recreate profile here"
+  },
+  "profile.repeatPassword": {
+    "ai_hint": "Placeholder for confirming the password in profile creation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Repeat your password"
+  },
+  "profile.restorationAdvisory": {
+    "ai_hint": "Heading for the restoration warning in delete confirmation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Restoration Advisory"
+  },
+  "profile.restoreWarning": {
+    "ai_hint": "Warning text about permanent data loss when deleting a profile without handover.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "If you haven't moved this wallet (Handover), EVERYTHING WILL BE LOST PERMANENTLY. Only proceed if you have a verified backup on another device or your master key sequence."
+  },
+  "profile.savedSeed": {
+    "ai_hint": "Button label confirming the user has saved their seed phrase.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "I've Saved My Seed Phrase"
+  },
+  "profile.seedConfirmed": {
+    "ai_hint": "Success feedback when the seed phrase confirmation matches.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Seed phrase confirmed!"
+  },
+  "profile.seedMismatch": {
+    "ai_hint": "Validation error when the pasted seed phrase does not match the generated one.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Error: The phrase does not match"
+  },
+  "profile.seedWarning": {
+    "ai_hint": "Warning text about never sharing the seed phrase and avoiding digital copies.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Never share this phrase with anyone. Digital copies are highly discouraged."
+  },
+  "profile.seedWordsIncorrect": {
+    "ai_hint": "Validation error when one or more confirmation words are incorrect.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Error: One or more words are incorrect"
+  },
+  "profile.selectProfile": {
+    "ai_hint": "Label for the profile selector dropdown in login and recovery.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Select Profile"
+  },
+  "profile.serviceOffer": {
+    "source_text": "Service Offer (I can help with)",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.serviceOfferPlaceholder": {
+    "source_text": "Describe what you bring to the network...",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.step1Subtitle": {
+    "ai_hint": "Subtitle text for step 1 of the create new profile wizard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "This unique word sequence is your physical backup. Store it offline."
+  },
+  "profile.step1Title": {
+    "ai_hint": "Title heading for step 1 of the create new profile wizard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Step 1: Your Secret Seed Phrase"
+  },
+  "profile.step2Subtitle": {
+    "ai_hint": "Subtitle text for step 2 of the create new profile wizard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Confirm the key sequence to ensure backup integrity."
+  },
+  "profile.step2Title": {
+    "ai_hint": "Title heading for step 2 of the create new profile wizard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Step 2: Confirm Your Seed Phrase"
+  },
+  "profile.step3Subtitle": {
+    "ai_hint": "Subtitle text for step 3 of the create new profile wizard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Create your access credentials for this device."
+  },
+  "profile.step3Title": {
+    "ai_hint": "Title heading for step 3 of the create new profile wizard.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Step 3: Secure Your Wallet"
+  },
+  "profile.street": {
+    "source_text": "Street",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.streetPlaceholder": {
+    "source_text": "Street Address",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.subAccountDescription": {
+    "ai_hint": "Description text for the sub-account checkbox explaining multi-device usage.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Check this if you plan to use this seed phrase on more than one device (e.g. computer and phone) at the same time."
+  },
+  "profile.subAccountName": {
+    "ai_hint": "Label for the sub-account name / device prefix input field.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Sub-Account Name / Device Prefix"
+  },
+  "profile.subAccountOption": {
+    "ai_hint": "Checkbox label for setting up as sub-account for multiple devices.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Set up as sub-account / for multiple devices (Optional)"
+  },
+  "profile.switchBulkPaste": {
+    "ai_hint": "Toggle label to switch to bulk paste mode in seed confirmation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Switch to Bulk Paste"
+  },
+  "profile.unknown": {
+    "ai_hint": "Fallback profile name when the active profile has no name.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Unknown Profile"
+  },
+  "profile.updateProfile": {
+    "source_text": "Update Profile",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.updatedSuccess": {
+    "source_text": "Profile updated!",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.updating": {
+    "source_text": "Updating Profile...",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.userId": {
+    "ai_hint": "Label for the user ID / DID display in delete confirmation and handover overlays.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "User ID (DID)"
+  },
+  "profile.verificationFailure": {
+    "ai_hint": "Prefix for error feedback when login verification fails.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Verification Failure"
+  },
+  "profile.verificationSystem": {
+    "ai_hint": "Feedback section heading shown for error/verification messages.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Verification System"
+  },
+  "profile.verify": {
+    "ai_hint": "Button label to verify the delete password.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Verify"
+  },
+  "profile.verifyExtraWord": {
+    "ai_hint": "Placeholder for confirming the optional passphrase in RecreateProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Verify your extra word"
+  },
+  "profile.verifyWord": {
+    "ai_hint": "Label for individual word verification input. {{number}} is the word position.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Verify Word #{{number}}"
+  },
+  "profile.verifying": {
+    "ai_hint": "Button loading text during delete password verification.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Verifying..."
+  },
+  "profile.walletPassword": {
+    "ai_hint": "Label for the wallet password input in delete password prompt.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Wallet Password"
+  },
+  "profile.walletSecurity": {
+    "source_text": "Wallet Security",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.walletSecurityDesc": {
+    "source_text": "Your identity is stored encrypted on your local device. It is only shared with counterparties when you explicitly sign a voucher.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.warning": {
+    "ai_hint": "Heading for the seed phrase warning section.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Warning"
+  },
+  "profile.website": {
+    "source_text": "Website",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.websitePlaceholder": {
+    "source_text": "https://profile.com",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "profile.wordCount": {
+    "ai_hint": "Label for the word count (12/24) selector in profile creation.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Word Count"
+  },
+  "profile.wordCount12": {
+    "ai_hint": "Option label for 12-word seed phrase in dropdowns.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "12 Words"
+  },
+  "profile.wordCount24": {
+    "ai_hint": "Option label for 24-word seed phrase in dropdowns.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "24 Words"
+  },
+  "profile.wordCountHigh": {
+    "ai_hint": "Option label for 24-word high security in CreateNewProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "24 Words (High Security)"
+  },
+  "profile.wordCountStandard": {
+    "ai_hint": "Option label for 12-word standard security in CreateNewProfile.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "12 Words (Standard Security)"
+  },
+  "profile.zipCode": {
+    "source_text": "ZIP",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "settings.activeSessionTitle": {
+    "source_text": "Active Session",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for app settings panel."
+  },
+  "settings.configuringEnvironment": {
+    "source_text": "Configuring Environment...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in settings."
+  },
+  "settings.copyButton": {
+    "source_text": "Copy",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Action button label in settings."
+  },
+  "settings.dataStewardshipTitle": {
+    "source_text": "Data Stewardship",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for app settings panel."
+  },
+  "settings.deviceBindingDescription": {
+    "source_text": "This unique identifier binds your wallet cryptographic seals to this physical device installation to prevent unauthorized cloning.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive helper text for settings configuration options."
+  },
+  "settings.deviceBindingLabel": {
+    "source_text": "OS Machine ID / Fallback ID",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label for input field in settings."
+  },
+  "settings.deviceBindingTitle": {
+    "source_text": "Device Binding",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for app settings panel."
+  },
+  "settings.fillAllFields": {
+    "source_text": "Please fill in all fields.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in settings."
+  },
+  "settings.historyStorageDescription": {
+    "source_text": "Sets the storage threshold for transaction history and transfer files.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive helper text for settings configuration options."
+  },
+  "settings.historyStorageLabel": {
+    "source_text": "History Storage (Days)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label for input field in settings."
+  },
+  "settings.loadFailed": {
+    "source_text": "Failed to load settings: {{error}}",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Error message in settings view. Contains variables: {{error}}."
+  },
+  "settings.privacyModeInteractive": {
+    "source_text": "Interactive",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in settings."
+  },
+  "settings.privacyModeInteractiveDesc": {
+    "source_text": "Always prompt",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive helper text for settings configuration options."
+  },
+  "settings.privacyModePublic": {
+    "source_text": "Public",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in settings."
+  },
+  "settings.privacyModePublicDesc": {
+    "source_text": "Identity transparency",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive helper text for settings configuration options."
+  },
+  "settings.privacyModeStealth": {
+    "source_text": "Stealth",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in settings."
+  },
+  "settings.privacyModeStealthDesc": {
+    "source_text": "Maximum privacy",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive helper text for settings configuration options."
+  },
+  "settings.privacyProtocolsDescription": {
+    "source_text": "Default visibility for flexible standard transactions:",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive helper text for settings configuration options."
+  },
+  "settings.privacyProtocolsTitle": {
+    "source_text": "Privacy Protocols",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for app settings panel."
+  },
+  "settings.retrievingId": {
+    "source_text": "Retrieving ID...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in settings."
+  },
+  "settings.saveButton": {
+    "source_text": "Save System Changes",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Action button label in settings."
+  },
+  "settings.saveFailed": {
+    "source_text": "Failed to save settings: {{error}}",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Error message in settings view. Contains variables: {{error}}."
+  },
+  "settings.saveSuccess": {
+    "source_text": "Configuration synchronized!",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in settings."
+  },
+  "settings.saving": {
+    "source_text": "Synchronizing...",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in settings."
+  },
+  "settings.systemPreferencesDescription": {
+    "source_text": "Manage your identity, security protocols and network defaults.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive helper text for settings configuration options."
+  },
+  "settings.systemPreferencesTitle": {
+    "source_text": "System Preferences",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Title header for app settings panel."
+  },
+  "settings.tabIdentityProfile": {
+    "source_text": "Identity Profile",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in settings."
+  },
+  "settings.tabSecurityOps": {
+    "source_text": "Security & Ops",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Text or status label in settings."
+  },
+  "settings.timeoutIntervalDescription": {
+    "source_text": "Inactivity period before requiring re-authentication.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Descriptive helper text for settings configuration options."
+  },
+  "settings.timeoutIntervalLabel": {
+    "source_text": "Timeout Interval (Minutes)",
+    "status": {
+      "de": "needs-translation"
+    },
+    "ai_hint": "Label for input field in settings."
+  },
+  "settings.title": {
+    "ai_hint": "Sidebar navigation item label and page title for the Settings view.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Settings"
+  },
+  "transfer.from": {
+    "source_text": "From",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "transfer.receive": {
+    "source_text": "Receive",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "transfer.receiveProcess": {
+    "ai_hint": "Sidebar navigation item label for the Receive / Process page.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Receive / Process"
+  },
+  "transfer.send": {
+    "ai_hint": "Sidebar navigation item label for the Send page.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Send"
+  },
+  "voucher.accessPasswordPlaceholder": {
+    "source_text": "Access Password",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.accountIdLabel": {
+    "source_text": "Account ID",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.cleanReputation": {
+    "source_text": "Clean Reputation",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.collateral": {
+    "source_text": "Collateral",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.collateralLabel": {
+    "source_text": "Collateral",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.communityOfferingsHeader": {
+    "source_text": "Community Offerings",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.confirmAccessPasswordPlaceholder": {
+    "source_text": "Confirm Access Password",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.contactChannelsLabel": {
+    "source_text": "Contact Channels",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.coordinatesLabel": {
+    "source_text": "Map Coordinates",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.create": {
+    "ai_hint": "Sidebar navigation item label for the Create Voucher page.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Create Voucher"
+  },
+  "voucher.createSignatureFileBtn": {
+    "source_text": "Create Signature File",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.creatorHeader": {
+    "source_text": "Creator",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.detailsHeader": {
+    "source_text": "Details",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.detailsTitle": {
+    "source_text": "Voucher Details",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.divisibleLabel": {
+    "source_text": "Divisible",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.errorEnterPassword": {
+    "source_text": "Please enter a password.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.errorEnterRecipientDid": {
+    "source_text": "Please enter a recipient DID.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.errorFetchingDetails": {
+    "source_text": "Failed to fetch voucher details",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.exportFailed": {
+    "source_text": "Export failed",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.failedRemoveSignature": {
+    "source_text": "Failed to remove signature",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.footnoteLabel": {
+    "source_text": "Footnote",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.fullDetailsView": {
+    "source_text": "Full Details View",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.genderOrientationLabel": {
+    "source_text": "Gender Orientation",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.helpWithLabel": {
+    "source_text": "I can help with...",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.highRiskAccount": {
+    "source_text": "High Risk Account",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.idLabel": {
+    "source_text": "Voucher ID",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.identityBasedEncryption": {
+    "source_text": "Identity-Based Encryption",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.independent": {
+    "source_text": "Independent",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.issueDateLabel": {
+    "source_text": "Issue Date",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.legalNameLabel": {
+    "source_text": "Legal Name",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.loadingDetails": {
+    "source_text": "Loading Voucher Details...",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.lookingForLabel": {
+    "source_text": "I am looking for...",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.needsMoreSignatures": {
+    "source_text": "Needs more signatures",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.noDescription": {
+    "source_text": "No description provided.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.notFound": {
+    "source_text": "Voucher not found",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.orgCommunityLabel": {
+    "source_text": "Organization / Community",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.passwordProtection": {
+    "source_text": "Password Protection",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.policyConditionsHeader": {
+    "source_text": "Policy & Conditions",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.postalAddressLabel": {
+    "source_text": "Postal Address",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.removeSignatureConfirm": {
+    "source_text": "Are you sure you want to remove this signature? This will be recorded and might affect the voucher's validity.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.removeSignatureTitle": {
+    "source_text": "Remove Signature",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.reputationStatusLabel": {
+    "source_text": "Reputation Status",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.requestSignaturesBtn": {
+    "source_text": "Request Signatures",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.sendForSignatureHeader": {
+    "source_text": "Send for Signature",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.signButton": {
+    "source_text": "Sign",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.signatureHint": {
+    "source_text": "Signature Hint",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.signatures": {
+    "source_text": "Signatures",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.signaturesHeader": {
+    "source_text": "Signatures",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.signerDidPlaceholder": {
+    "source_text": "Enter Signer DID (did:key:...)",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.standardLabel": {
+    "source_text": "Standard",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.statusActive": {
+    "source_text": "Active",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.statusArchived": {
+    "source_text": "Archived",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.statusEndorsed": {
+    "source_text": "Endorsed",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.statusExpired": {
+    "source_text": "Expired",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.statusIncomplete": {
+    "source_text": "Incomplete",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.statusQuarantined": {
+    "source_text": "Quarantined",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.statusUnknown": {
+    "source_text": "Unknown",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.systemSender": {
+    "source_text": "SYSTEM",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.testVoucher": {
+    "source_text": "Test Voucher",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.transactionHistoryHeader": {
+    "source_text": "Transaction History",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.validUntil": {
+    "source_text": "Until {{date}}",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.validUntilLabel": {
+    "source_text": "Valid Until",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.validity": {
+    "source_text": "Validity",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "voucher.viewProof": {
+    "source_text": "View Proof",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "wallet.description": {
+    "source_text": "Manage your digital assets.",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "wallet.noVouchersFound": {
+    "source_text": "No vouchers found",
+    "status": {
+      "de": "needs-translation"
+    }
+  },
+  "wallet.title": {
+    "ai_hint": "Sidebar navigation item label and page title for the Wallet view.",
+    "status": {
+      "de": "needs-translation"
+    },
+    "source_text": "Wallet"
+  }
+}

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
+import { useTranslation } from 'react-i18next';
 
 import { SigningRequestConfig } from '../../services/voucherService';
 
@@ -18,6 +19,7 @@ export function ExportDialog({
   isProcessing,
   error
 }: ExportDialogProps) {
+  const { t } = useTranslation();
   const [recipientId, setRecipientId] = useState("");
   const [encryptToDid, setEncryptToDid] = useState(true);
   const [protectWithPassword, setProtectWithPassword] = useState(false);
@@ -30,17 +32,17 @@ export function ExportDialog({
     let config;
     if (encryptToDid) {
       if (!recipientId.trim()) {
-        setLocalError("Please enter a recipient DID.");
+        setLocalError(t('voucher.errorEnterRecipientDid'));
         return;
       }
       config = { type: "TargetDid" as const, value: [recipientId.trim(), "TrialDecryption"] as [string, string] };
     } else if (protectWithPassword) {
       if (!exportPassword) {
-        setLocalError("Please enter a password.");
+        setLocalError(t('voucher.errorEnterPassword'));
         return;
       }
       if (exportPassword !== exportPasswordConfirm) {
-        setLocalError("Passwords do not match.");
+        setLocalError(t('auth.passwordsDontMatch'));
         return;
       }
       config = { type: "Password" as const, value: exportPassword };
@@ -53,7 +55,7 @@ export function ExportDialog({
   return (
     <ConfirmationModal
       isOpen={isOpen}
-      title="Send for Signature"
+      title={t('voucher.sendForSignatureHeader')}
       description={
         <div className="space-y-6 pt-2 text-left">
           <div className="p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/20 space-y-4">
@@ -66,7 +68,7 @@ export function ExportDialog({
                 className="h-5 w-5 rounded-lg border-theme-subtle text-theme-primary focus:ring-theme-primary transition-all"
               />
               <label htmlFor="encryptToDid" className="text-sm font-bold text-theme-secondary cursor-pointer select-none">
-                Identity-Based Encryption
+                {t('voucher.identityBasedEncryption')}
               </label>
             </div>
             {encryptToDid && (
@@ -75,7 +77,7 @@ export function ExportDialog({
                   type="text"
                   value={recipientId}
                   onChange={(e) => setRecipientId(e.target.value)}
-                  placeholder="Enter Signer DID (did:key:...)"
+                  placeholder={t('voucher.signerDidPlaceholder')}
                   className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-white text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-inner-soft text-sm"
                   autoFocus
                 />
@@ -94,7 +96,7 @@ export function ExportDialog({
                   className="h-5 w-5 rounded-lg border-theme-subtle text-theme-accent focus:ring-theme-accent transition-all"
                 />
                 <label htmlFor="protectWithPassword" className="text-sm font-bold text-theme-secondary cursor-pointer select-none">
-                  Password Protection
+                  {t('voucher.passwordProtection')}
                 </label>
               </div>
               {protectWithPassword && (
@@ -103,14 +105,14 @@ export function ExportDialog({
                     type="password"
                     value={exportPassword}
                     onChange={(e) => setExportPassword(e.target.value)}
-                    placeholder="Access Password"
+                    placeholder={t('voucher.accessPasswordPlaceholder')}
                     className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-white text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-accent/20 shadow-inner-soft text-sm"
                   />
                   <input
                     type="password"
                     value={exportPasswordConfirm}
                     onChange={(e) => setExportPasswordConfirm(e.target.value)}
-                    placeholder="Confirm Access Password"
+                    placeholder={t('voucher.confirmAccessPasswordPlaceholder')}
                     className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-white text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-accent/20 shadow-inner-soft text-sm"
                   />
                 </div>
@@ -120,7 +122,7 @@ export function ExportDialog({
           {(error || localError) && <p className="text-rose-500 text-xs font-bold px-2">{error || localError}</p>}
         </div>
       }
-      confirmText="Create Signature File"
+      confirmText={t('voucher.createSignatureFileBtn')}
       onConfirm={handleConfirm}
       onCancel={onClose}
       isProcessing={isProcessing}

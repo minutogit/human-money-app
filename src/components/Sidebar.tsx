@@ -1,5 +1,6 @@
 // src/components/Sidebar.tsx
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import Avatar from "boring-avatars";
 import logo from '../assets/logo.png';
 import { AppState } from '../types';
@@ -41,6 +42,7 @@ export const INTERNAL_VIEWS = [
 ];
 
 export const Sidebar: React.FC = () => {
+  const { t } = useTranslation();
   const { isSessionActive, profileName, notifyLogout } = useSession();
   const { appState, navigate, appVersion, isSidebarOpen, setSidebarOpen } = useNavigation();
   const currentView = appState.view;
@@ -59,32 +61,32 @@ export const Sidebar: React.FC = () => {
 
   const navGroups = [
     {
-      label: 'Main',
+      label: t('common.sidebarMain'),
       items: [
-        { id: 'logged_in', label: 'Dashboard', icon: LayoutDashboard, view: { view: 'logged_in' } },
-        { id: 'wallet', label: 'Wallet', icon: Wallet, view: { view: 'wallet' } },
+        { id: 'logged_in', label: t('dashboard.title'), icon: LayoutDashboard, view: { view: 'logged_in' } },
+        { id: 'wallet', label: t('wallet.title'), icon: Wallet, view: { view: 'wallet' } },
       ]
     },
     {
-      label: 'Actions',
+      label: t('common.sidebarActions'),
       items: [
-        { id: 'send_vouchers', label: 'Send', icon: Send, view: { view: 'send_vouchers' } },
-        { id: 'receive_bundle', label: 'Receive / Process', icon: Download, view: { view: 'receive_bundle' } },
-        { id: 'create_voucher', label: 'Create Voucher', icon: PlusCircle, view: { view: 'create_voucher', previousView: appState } },
+        { id: 'send_vouchers', label: t('transfer.send'), icon: Send, view: { view: 'send_vouchers' } },
+        { id: 'receive_bundle', label: t('transfer.receiveProcess'), icon: Download, view: { view: 'receive_bundle' } },
+        { id: 'create_voucher', label: t('voucher.create'), icon: PlusCircle, view: { view: 'create_voucher', previousView: appState } },
       ]
     },
     {
-      label: 'Records & Network',
+      label: t('common.sidebarRecords'),
       items: [
-        { id: 'activities', label: 'Activity Log', icon: ClipboardList, view: { view: 'activities' } },
-        { id: 'transaction_history', label: 'Transaction History', icon: History, view: { view: 'transaction_history' } },
-        { id: 'address_book', label: 'Address Book', icon: Contact, view: { view: 'address_book' } },
+        { id: 'activities', label: t('history.activityLog'), icon: ClipboardList, view: { view: 'activities' } },
+        { id: 'transaction_history', label: t('history.transactionHistory'), icon: History, view: { view: 'transaction_history' } },
+        { id: 'address_book', label: t('contacts.addressBook'), icon: Contact, view: { view: 'address_book' } },
       ]
     },
     {
-      label: 'Security',
+      label: t('common.sidebarSecurity'),
       items: [
-        { id: 'conflict_list', label: 'Fraud Reports', icon: ShieldAlert, view: { view: 'conflict_list' } },
+        { id: 'conflict_list', label: t('conflict.fraudReports'), icon: ShieldAlert, view: { view: 'conflict_list' } },
       ]
     }
   ];
@@ -114,7 +116,7 @@ export const Sidebar: React.FC = () => {
           <div className="w-8 h-8 rounded-lg bg-white shadow-sm flex items-center justify-center overflow-hidden border border-theme-subtle">
             <img src={logo} alt="Logo" className="w-7 h-7 object-contain" />
           </div>
-          <h1 className="text-sm font-bold text-theme-secondary tracking-tight">Human Money App</h1>
+          <h1 className="text-sm font-bold text-theme-secondary tracking-tight">{t('common.appName')}</h1>
         </div>
 
         {/* Profile Header */}
@@ -123,14 +125,14 @@ export const Sidebar: React.FC = () => {
             <div className="ring-2 ring-theme-primary/20 rounded-full p-0.5 shadow-sm">
               <Avatar
                 size={32}
-                name={profileName || "Guest"}
+                name={profileName || t('common.guest')}
                 variant="beam"
                 colors={["#E63946", "#F4A261", "#E76F51", "#2A9D8F", "#2B1B17"]}
               />
             </div>
             <div className="flex flex-col min-w-0">
               <h2 className="text-sm font-bold text-theme-secondary truncate flex items-center gap-1.5">
-                {profileName || (isSessionActive ? "Logged In" : "Session Locked")}
+                {profileName || (isSessionActive ? t('auth.loggedIn') : t('auth.sessionLocked'))}
                 {!isSessionActive && profileName && (
                   <svg className="w-3.5 h-3.5 text-theme-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
@@ -139,7 +141,7 @@ export const Sidebar: React.FC = () => {
               </h2>
               <span className="text-[10px] font-medium text-theme-light uppercase tracking-widest flex items-center gap-1">
                 <span className={`w-1.5 h-1.5 rounded-full ${isSessionActive ? "bg-theme-success animate-pulse" : "bg-theme-warning"}`}></span>
-                {isSessionActive ? "Active Wallet" : "Session Locked"}
+                {isSessionActive ? t('common.activeWallet') : t('auth.sessionLocked')}
               </span>
             </div>
           </div>
@@ -200,7 +202,7 @@ export const Sidebar: React.FC = () => {
             }`}
           >
             <Settings size={18} className={currentView === 'settings' ? "text-theme-primary" : "text-theme-placeholder"} />
-            <span className="text-sm">Settings</span>
+            <span className="text-sm">{t('settings.title')}</span>
           </button>
           
           <button 
@@ -208,12 +210,12 @@ export const Sidebar: React.FC = () => {
             className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-theme-light hover:bg-red-50 hover:text-theme-error transition-all duration-200"
           >
             <LogOut size={18} className="text-theme-placeholder group-hover:text-theme-error" />
-            <span className="text-sm">Logout</span>
+            <span className="text-sm">{t('auth.logout')}</span>
           </button>
 
           <div className="pt-4 text-center">
             <span className="text-[10px] font-medium text-theme-placeholder bg-theme-subtle/30 px-2 py-1 rounded-full">
-              Version {appVersion}
+              {t('common.version', { version: appVersion })}
             </span>
           </div>
         </div>
