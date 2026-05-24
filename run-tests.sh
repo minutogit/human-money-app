@@ -94,6 +94,9 @@ if [ "$RUN_FRONTEND" = true ]; then
     
     # 4. Frontend Tests (Vitest)
     run_step "Frontend Tests (Vitest)" "DEBUG_PRINT_LIMIT=0 npm test -- --run --reporter=verbose"
+    
+    # 4b. i18n Keys Check
+    run_step "i18n Translation Keys Check" "npm run i18n:check"
 fi
 
 if [ "$RUN_BACKEND" = true ]; then

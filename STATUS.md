@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0-beta.15"
 phase: "beta"
 health: "green"
-last_updated: "2026-05-23"
+last_updated: "2026-05-24"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -157,6 +157,12 @@ priority_tasks:
     priority: "high"
     depends_on: []
     description: "Fixed critical bug where double-spend conflicts affecting the local wallet were incorrectly classified as Witness instead of Victim, and ensured affected local vouchers are correctly quarantined immediately upon detection or proof import."
+  - id: "APP-025"
+    title: "i18n Localization Foundation"
+    status: "completed"
+    priority: "medium"
+    depends_on: []
+    description: "Established i18n file structure, basic react-i18next runtime initialization, and custom prep and merge node utility scripts for translation workflow validation."
 ---
 
 # Human Money App — Status
@@ -239,6 +245,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Fixed Voucher Creation Validation Bug (Ensured missing field banner only displays active errors and clears immediately as fields are filled)
 - [x] Improved Create Voucher Layout Aesthetics (Reorganized form into vertically stacked sections, unified input/select heights in the Basics form, and expanded the min-height of Service Offer/Needs textareas for better legibility)
 - [x] Redesigned Voucher Mode Selection (Replaced checkbox with a segmented switch selector and dynamic contextual descriptions for test vs real vouchers)
+- [x] i18n Localization Foundation (Dateistruktur, Prep/Merge-Scripts, react-i18next Setup) (APP-025)
+- [x] Structured Domain-Prefixes for i18n (Domain linter, multi-line parsing, en.json auto-sorting, and keySeparator option)
 
 ## Next Milestones
 

@@ -29,3 +29,7 @@ dist-ssr
 # Local Cargo config
 /src-tauri/.cargo/
 .cargo/
+
+# i18n temporary files
+i18n-task.json
+i18n-result.json

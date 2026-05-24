@@ -12,7 +12,11 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "check-versions": "node scripts/check-tauri-versions.js",
-    "lint": "eslint src --ext .ts,.tsx"
+    "lint": "eslint src --ext .ts,.tsx",
+    "i18n:prep": "node scripts/i18n-prep.js",
+    "i18n:merge": "node scripts/i18n-merge.js",
+    "i18n:status": "node scripts/i18n-prep.js --dry-run",
+    "i18n:check": "node scripts/i18n-check-keys.js"
   },
   "dependencies": {
     "@tauri-apps/api": "~2.11.0",
@@ -22,9 +26,11 @@
     "@tauri-apps/plugin-log": "^2.8.0",
     "@tauri-apps/plugin-opener": "^2.5.3",
     "boring-avatars": "^1.11.2",
+    "i18next": "^26.2.0",
     "lucide-react": "^1.14.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "react-i18next": "^17.0.8"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.13",
