@@ -1,5 +1,6 @@
 // src/components/CreateNewProfile.tsx
 import { useState, useEffect, useRef, FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 import logo from "../assets/logo.png";
 import { profileService } from "../services/profileService";
 import { authService } from "../services/authService";
@@ -9,6 +10,7 @@ import { MnemonicLanguage } from "../types";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
+import { translateError } from "../utils/errorHelper";
 import {
     ShieldCheck,
     Lock,
@@ -41,6 +43,7 @@ interface CreateNewProfileProps {
 }
 
 export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitchToLogin }: CreateNewProfileProps) {
+    const { t } = useTranslation();
     const [wizardStep, setWizardStep] = useState<WizardStep>("display_seed");
     const [generatedSeed, setGeneratedSeed] = useState<string[]>([]);
     const [wordCount, setWordCount] = useState<12 | 24>(12);
@@ -85,13 +88,13 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                 const newSeed: string = await profileService.generateMnemonic(wordCount, selectedLanguage);
                 setGeneratedSeed(newSeed.split(' '));
             } catch (e) {
-                setFeedbackMsg(`Error: ${e}`);
+                setFeedbackMsg(`Error: ${translateError(e, t)}`);
             } finally {
                 setIsLoading(false);
             }
         }
         generateNewSeed();
-    }, [wordCount, selectedLanguage]);
+    }, [wordCount, selectedLanguage, t]);
 
     useEffect(() => {
         if (!isBulkMode) return;
@@ -163,7 +166,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                 });
                 onProfileCreated();
             } catch (e) {
-                setFeedbackMsg(`Error: ${e}`);
+                setFeedbackMsg(`Error: ${translateError(e, t)}`);
             } finally {
                 setIsLoading(false);
             }

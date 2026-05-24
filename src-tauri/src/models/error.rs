@@ -98,6 +98,9 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
     if msg.starts_with("Password required") {
         return ("error.auth.passwordRequired".into(), details);
     }
+    if msg.contains("device mismatch") || msg.contains("belongs to a different device") || msg.contains("Device Mismatch") {
+        return ("error.auth.deviceMismatch".into(), details);
+    }
 
     // --- Security Errors ---
     if msg.starts_with("Security Alert:") {

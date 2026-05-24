@@ -1,5 +1,6 @@
 // src/components/ReceiveView.tsx
 import React, { useState, useEffect, FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { transferService } from '../services/transferService';
 import { settingsService } from '../services/settingsService';
 import { voucherService } from '../services/voucherService';
@@ -12,6 +13,7 @@ import { Input } from './ui/Input';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
+import { translateError, isBackendError } from '../utils/errorHelper';
 import { 
     VoucherStandardInfo,
     AppSettings,
@@ -38,6 +40,7 @@ interface ReceiveViewProps {
 }
 
 export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
+    const { t } = useTranslation();
     const { protectAction } = useSession();
     const [bundlePath, setBundlePath] = useState<string | null>(null);
     const [bundleName, setBundleName] = useState<string | null>(null);
@@ -66,22 +69,22 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             try {
                 logger.info("ReceiveView opened, fetching initial data.");
                 const [standards, currentSettings] = await Promise.all([
-                    standardsService.getStandards(),
-                    settingsService.getSettings().catch(e => {
-                        logger.warn(`Failed to fetch app settings: ${e}`);
-                        return null;
-                    })
+                     standardsService.getStandards(),
+                     settingsService.getSettings().catch(e => {
+                         logger.warn(`Failed to fetch app settings: ${translateError(e, t)}`);
+                         return null;
+                     })
                 ]);
                 setVoucherStandards(standards);
                 setSettings(currentSettings);
             } catch (e) {
-                const msg = `Failed to fetch initial data: ${e}`;
+                const msg = `Failed to fetch initial data: ${translateError(e, t)}`;
                 logger.error(msg);
-                setFeedbackMsg(`Error: ${msg}`);
+                setFeedbackMsg(msg);
             }
         }
         fetchData();
-    }, []);
+    }, [t]);
 
     const handleFileSelect = async () => {
         setFeedbackMsg('');
@@ -120,7 +123,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 }
             }
         } catch (e) {
-            setFeedbackMsg(String(e));
+            setFeedbackMsg(translateError(e, t));
         }
     };
 
@@ -186,7 +189,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     else if (file.name.endsWith('.ask') || file.name.endsWith('.humocoreq')) setFileType('ask');
                     else if (file.name.endsWith('.sig') || file.name.endsWith('.humocosig')) setFileType('sig');
                 } catch (error) {
-                    setFeedbackMsg(String(error));
+                    setFeedbackMsg(translateError(error, t));
                 }
             } else {
                 setFeedbackMsg("Invalid file type dropped.");
@@ -261,11 +264,13 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 }
             }
         } catch (e) {
-            const errorStr = String(e);
-            if (errorStr.includes("ToleranceZone")) {
+            const errorStr = isBackendError(e) ? e.message : String(e);
+            const isTolerance = (isBackendError(e) && (e.code === 'error.transfer.bundleRecoveryZone' || e.code === 'error.transfer.bundleToleranceZone')) || errorStr.includes("ToleranceZone");
+            if (isTolerance) {
+                const isCritical = (isBackendError(e) && e.code === 'error.transfer.bundleRecoveryZone') || errorStr.includes("Extended");
                 setToleranceModal({
-                    type: errorStr.includes("Extended") ? 'Critical' : 'Soft',
-                    message: "DANGER: This file predates your last wallet recovery. Re-importing may lead to double-spend conflicts."
+                    type: isCritical ? 'Critical' : 'Soft',
+                    message: translateError(e, t)
                 });
                 return;
             }
@@ -282,7 +287,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     return;
                 }
             }
-            setFeedbackMsg(errorStr);
+            setFeedbackMsg(translateError(e, t));
         } finally {
             if (!toleranceModal) {
                 setIsProcessing(false);
@@ -319,7 +324,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
             if (payload) onReceiveSuccess(payload);
         } catch (e) {
-            setFeedbackMsg(String(e));
+            setFeedbackMsg(translateError(e, t));
         } finally {
             setIsProcessing(false);
             setToleranceModal(null);

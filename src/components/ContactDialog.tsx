@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Contact, PublicProfile } from '../types';
 import Avatar from 'boring-avatars';
+import { translateError } from '../utils/errorHelper';
 
 interface ContactDialogProps {
     isOpen: boolean;
@@ -19,6 +21,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     initialProfile,
     initialDid
 }) => {
+    const { t } = useTranslation();
     const [did, setDid] = useState(initialDid || '');
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
@@ -79,9 +82,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             await onSave(contact);
             onClose();
         } catch (e: unknown) {
-            const err = e as Error;
-            console.error("Failed to save contact:", err);
-            setError(err.message || String(e));
+            console.error("Failed to save contact:", e);
+            setError(translateError(e, t));
         } finally {
             setIsSaving(false);
         }

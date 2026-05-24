@@ -1,5 +1,6 @@
 // src/components/Login.tsx
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import logo from "../assets/logo.png";
 
 import { authService } from "../services/authService";
@@ -10,6 +11,7 @@ import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
 import { ProfileInfo } from "../types";
+import { translateError, isBackendError } from "../utils/errorHelper";
 import { 
     UserCircle, 
     Lock, 
@@ -34,6 +36,7 @@ interface LoginProps {
 }
 
 export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, onSwitchToReset }: LoginProps) {
+    const { t } = useTranslation();
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
     const [selectedProfile, setSelectedProfile] = useState<string>("");
     const [password, setPassword] = useState("");
@@ -64,11 +67,11 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 setSelectedProfile(availableProfiles[0].folderName);
             }
         } catch (e) {
-            setFeedbackMsg(`Profile Access Error: ${e}`);
+            setFeedbackMsg(`Profile Access Error: ${translateError(e, t)}`);
         } finally {
             setIsLoading(false);
         }
-    }, [selectedProfile]);
+    }, [selectedProfile, t]);
 
     useEffect(() => {
         logger.info("Login component displayed");
@@ -100,12 +103,12 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
                 if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName);
             } catch (e) {
-                const msg = String(e);
-                if (msg.includes("Device Mismatch") || msg.includes("different device")) {
-                    setFeedbackMsg("Security Protocol: Device Mismatch Detected.");
+                const msg = isBackendError(e) ? e.message : String(e);
+                if ((isBackendError(e) && e.code === 'error.auth.deviceMismatch') || msg.includes("Device Mismatch") || msg.includes("different device")) {
+                    setFeedbackMsg(translateError(e, t));
                     setShowHandoverUI(true);
                 } else {
-                    setFeedbackMsg(`Verification Failure: ${msg}`);
+                    setFeedbackMsg(`Verification Failure: ${translateError(e, t)}`);
                 }
                 setIsLoggingIn(false);
                 setPassword("");
@@ -130,7 +133,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             setShowPostHandoverWarning(true);
             setIsLoggingIn(false);
         } catch (e) {
-            setFeedbackMsg(`Handover Failure: ${e}`);
+            setFeedbackMsg(`Handover Failure: ${translateError(e, t)}`);
             setIsLoggingIn(false);
         }
     }
@@ -147,7 +150,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             setShowDeletePasswordPrompt(false);
             setShowDeleteConfirm(true);
         } catch (e) {
-            setFeedbackMsg(`Authentication Error: ${e}`);
+            setFeedbackMsg(`Authentication Error: ${translateError(e, t)}`);
         } finally {
             setIsVerifyingDelete(false);
         }
@@ -170,7 +173,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folderName);
             else onSwitchToCreate();
         } catch (e) {
-            setFeedbackMsg(`Purge failure: ${e}`);
+            setFeedbackMsg(`Purge failure: ${translateError(e, t)}`);
         } finally {
             setIsDeleting(false);
         }

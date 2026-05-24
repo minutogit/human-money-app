@@ -169,7 +169,7 @@ describe('SettingsView Component', () => {
     const saveButton = screen.getByRole('button', { name: /Save System Changes/i });
     await user.click(saveButton);
 
-    expect(await screen.findByText(/Failed to save settings: Error: Save failed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Failed to save settings: Save failed/i)).toBeInTheDocument();
   });
 
   it('calls onBack prop when back button clicked', async () => {

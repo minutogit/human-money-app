@@ -271,7 +271,7 @@ describe('WalletRecovery Component', () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText(/Error: Seed phrase is not valid/i)).toBeInTheDocument();
+        expect(screen.getByText(/Error: Invalid mnemonic/i)).toBeInTheDocument();
       }, { timeout: 1000 });
     });
 
@@ -697,7 +697,7 @@ describe('WalletRecovery Component', () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText(/Error: Seed phrase is not valid/i)).toBeInTheDocument();
+        expect(screen.getByText(/Error: Invalid mnemonic/i)).toBeInTheDocument();
       }, { timeout: 1000 });
 
       // Fill password

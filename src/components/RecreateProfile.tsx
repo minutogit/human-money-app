@@ -1,5 +1,6 @@
 // src/components/RecreateProfile.tsx
 import { useState, useEffect, useRef, FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 import logo from "../assets/logo.png";
 import { profileService } from "../services/profileService";
 import { authService } from "../services/authService";
@@ -7,6 +8,7 @@ import { AuthLayout } from "./AuthLayout";
 import { info, error } from "@tauri-apps/plugin-log";
 import { logger } from "../utils/log";
 import { MnemonicLanguage } from "../types";
+import { translateError } from "../utils/errorHelper";
 
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -27,6 +29,7 @@ interface RecreateProfileProps {
 }
 
 export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateProfileProps) {
+    const { t } = useTranslation();
     const [wizardStep, setWizardStep] = useState<WizardStep>("import_seed");
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
@@ -175,9 +178,9 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                     await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
                     setIsValidMnemonic(true);
                     setFeedbackMsg("Seed phrase is valid.");
-                } catch {
+                } catch (e) {
                     setIsValidMnemonic(false);
-                    setFeedbackMsg("Error: Seed phrase is not valid.");
+                    setFeedbackMsg(`Error: ${translateError(e, t)}`);
                 }
             } else {
                 setIsValidMnemonic(false);
@@ -190,7 +193,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
         };
         const timer = setTimeout(validate, 300); // Debounce validation
         return () => clearTimeout(timer);
-    }, [mnemonicWords, selectedLanguage, wordCount]);
+    }, [mnemonicWords, selectedLanguage, wordCount, t]);
 
 
     // --- Event Handlers ---
@@ -283,8 +286,8 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                 // Keep loading state true during transition, like Login
                 onProfileCreated();
             } catch (e) {
-                setFeedbackMsg(`Error creating profile: ${e}`);
-                error(`Frontend: Profile recreation failed: ${e}`);
+                setFeedbackMsg(`Error creating profile: ${translateError(e, t)}`);
+                error(`Frontend: Profile recreation failed: ${translateError(e, t)}`);
             } finally {
                 setIsLoading(false);
             }

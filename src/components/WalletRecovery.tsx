@@ -1,5 +1,6 @@
 // src/components/WalletRecovery.tsx
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import logo from "../assets/logo.png";
 import { profileService } from "../services/profileService";
 import { authService } from "../services/authService";
@@ -9,6 +10,7 @@ import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
 import { ProfileInfo, MnemonicLanguage } from "../types";
+import { translateError } from "../utils/errorHelper";
 import {
     Key,
     Lock,
@@ -32,6 +34,7 @@ interface WalletRecoveryProps {
 type InputMode = "words" | "phrase";
 
 export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRecoveryProps) {
+    const { t } = useTranslation();
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
     const [selectedProfile, setSelectedProfile] = useState<string>("");
 
@@ -75,13 +78,13 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folderName);
                 else setFeedbackMsg("Error: No profiles found to recover");
             } catch (e) {
-                setFeedbackMsg(`Error: ${e}`);
+                setFeedbackMsg(`Error: ${translateError(e, t)}`);
             } finally {
                 setIsLoading(false);
             }
         }
         fetchProfiles();
-    }, []);
+    }, [t]);
 
     useEffect(() => {
         setMnemonicWords(prev => {
@@ -96,11 +99,11 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 const list = await profileService.getWordlist(selectedLanguage);
                 setBip39Wordlist(list);
             } catch (e) {
-                logger.error(`Failed to fetch BIP-39 wordlist: ${e}`);
+                logger.error(`Failed to fetch BIP-39 wordlist: ${translateError(e, t)}`);
             }
         }
         fetchWordlist();
-    }, [selectedLanguage]);
+    }, [selectedLanguage, t]);
 
     useEffect(() => {
         if (inputMode !== 'phrase') return;
@@ -148,9 +151,9 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                     await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
                     setIsValidMnemonic(true);
                     setFeedbackMsg("Seed phrase is valid.");
-                } catch {
+                } catch (e) {
                     setIsValidMnemonic(false);
-                    setFeedbackMsg("Error: Seed phrase is not valid");
+                    setFeedbackMsg(`Error: ${translateError(e, t)}`);
                 }
             } else {
                 setIsValidMnemonic(false);
@@ -158,7 +161,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
             }
         };
         validate();
-    }, [mnemonicWords, selectedLanguage, wordCount]);
+    }, [mnemonicWords, selectedLanguage, wordCount, t]);
 
     const handleWordChange = (index: number, value: string) => {
         const cleanedText = value.replace(/[0-9]+\.\s*/g, '');
@@ -201,7 +204,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
             });
             onRecoverySuccess();
         } catch (e) {
-            setFeedbackMsg(`Error recovering wallet: ${e}`);
+            setFeedbackMsg(`Error recovering wallet: ${translateError(e, t)}`);
         } finally {
             setIsLoading(false);
         }

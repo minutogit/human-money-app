@@ -4,7 +4,7 @@ import { BackendError } from '../types';
 /**
  * Type guard: checks if the caught error is a structured BackendError DTO.
  */
-function isBackendError(error: unknown): error is BackendError {
+export function isBackendError(error: unknown): error is BackendError {
   return (
     typeof error === 'object' &&
     error !== null &&
@@ -23,6 +23,9 @@ function isBackendError(error: unknown): error is BackendError {
  */
 export function translateError(error: unknown, t: TFunction): string {
   if (isBackendError(error)) {
+    if (error.code === 'error.internal.unknown') {
+      return error.message;
+    }
     return t(error.code, {
       ...error.details,
       defaultValue: error.message,
@@ -30,6 +33,9 @@ export function translateError(error: unknown, t: TFunction): string {
   }
   if (typeof error === 'string') {
     return error;
+  }
+  if (error instanceof Error) {
+    return error.message;
   }
   return t('error.internal.unknown', { defaultValue: 'An unexpected error occurred.' });
 }

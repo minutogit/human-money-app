@@ -1,5 +1,6 @@
 // src/components/ProfileSettings.tsx
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { profileService } from '../services/profileService';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
@@ -8,6 +9,7 @@ import { Input } from './ui/Input';
 import { PublicProfile, Address } from '../types';
 import { useSession } from '../context/SessionContext';
 import { normalizeCoordinates, geocodeAddress, getCurrentLocation } from '../utils/geoUtils';
+import { translateError } from '../utils/errorHelper';
 import { 
     User, 
     MapPin, 
@@ -22,6 +24,7 @@ import {
 } from 'lucide-react';
 
 export function ProfileSettings() {
+    const { t } = useTranslation();
     const { protectAction } = useSession();
     const [profile, setProfile] = useState<PublicProfile | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -84,7 +87,7 @@ export function ProfileSettings() {
                 const currentProfile = await profileService.getProfile();
                 setProfile(currentProfile);
             } catch (e) {
-                const msg = `Failed to load profile: ${e}`;
+                const msg = `Failed to load profile: ${translateError(e, t)}`;
                 logger.error(msg);
                 setError(msg);
             } finally {
@@ -92,7 +95,7 @@ export function ProfileSettings() {
             }
         }
         fetchProfile();
-    }, []);
+    }, [t]);
 
     const handleCoordBlur = () => {
         if (!profile?.coordinates) {
@@ -122,7 +125,7 @@ export function ProfileSettings() {
             logger.info("Profile updated successfully.");
             setTimeout(() => setSuccess(''), 3000);
         } catch (e) {
-            setError(`Failed to update profile: ${e}`);
+            setError(`Failed to update profile: ${translateError(e, t)}`);
         } finally {
             setIsSaving(false);
         }

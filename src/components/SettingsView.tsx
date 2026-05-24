@@ -1,5 +1,6 @@
 // src/components/SettingsView.tsx
 import { useState, useEffect, FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { settingsService } from '../services/settingsService';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
@@ -7,6 +8,7 @@ import { Card } from './ui/Card';
 import { Input } from './ui/Input';
 import { AppSettings, PrivacyDefault } from '../types';
 import { useSession } from '../context/SessionContext';
+import { translateError } from '../utils/errorHelper';
 
 import { ProfileSettings } from './ProfileSettings';
 import { PageLayout } from './ui/PageLayout';
@@ -29,6 +31,7 @@ interface SettingsViewProps {
 }
 
 export function SettingsView({ onBack }: SettingsViewProps) {
+    const { t } = useTranslation();
     const { protectAction } = useSession();
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [localInstanceId, setLocalInstanceId] = useState('');
@@ -48,7 +51,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 const deviceId = await authService.getLocalInstanceId();
                 setLocalInstanceId(deviceId);
             } catch (e) {
-                const msg = `Failed to load settings: ${e}`;
+                const msg = `Failed to load settings: ${translateError(e, t)}`;
                 logger.error(msg);
                 setError(msg);
             } finally {
@@ -56,7 +59,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             }
         }
         fetchSettings();
-    }, []);
+    }, [t]);
 
     const handleSave = async (event: FormEvent) => {
         event.preventDefault();
@@ -76,7 +79,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             logger.info("Settings saved successfully.");
             setTimeout(() => setSuccess(''), 3000);
         } catch (e) {
-            const msg = `Failed to save settings: ${e}`;
+            const msg = `Failed to save settings: ${translateError(e, t)}`;
             logger.error(msg);
             setError(msg);
         } finally {

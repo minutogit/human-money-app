@@ -154,6 +154,6 @@ describe('ProfileSettings Component', () => {
     const updateButton = screen.getByRole('button', { name: /Update Profile/i });
     await user.click(updateButton);
 
-    expect(await screen.findByText(/Failed to update profile: Error: Backend offline/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Failed to update profile: Backend offline/i)).toBeInTheDocument();
   });
 });

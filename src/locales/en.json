@@ -1,4 +1,5 @@
 {
+  "error.auth.deviceMismatch": "Security Protocol: Device Mismatch Detected.",
   "error.auth.passwordRequired": "Password required. Please use 'Remember Password' or enter your password.",
   "error.auth.sessionNotActive": "Session is not active. Password required.",
   "error.auth.sessionTimeout": "Session timed out. Please provide your password.",
