@@ -1,4 +1,4 @@
-use crate::models::{VoucherStandardInfo, MnemonicLanguage};
+use crate::models::{VoucherStandardInfo, MnemonicLanguage, FrontendError};
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
 use log::{error, info, warn};
 use std::fs;
@@ -6,17 +6,17 @@ use human_money_core::app_service::AppService;
 use tauri::Manager;
 
 #[tauri::command]
-pub fn generate_mnemonic(word_count: u32, language: MnemonicLanguage) -> Result<String, String> {
+pub fn generate_mnemonic(word_count: u32, language: MnemonicLanguage) -> Result<String, FrontendError> {
     info!("Generating a new {}-word mnemonic in language {:?}", word_count, language);
     let core_language = language.into();
-    AppService::generate_mnemonic(word_count, core_language)
+    AppService::generate_mnemonic(word_count, core_language).map_err(FrontendError::from)
 }
 
 #[tauri::command]
-pub fn validate_mnemonic(mnemonic: String, language: MnemonicLanguage) -> Result<(), String> {
+pub fn validate_mnemonic(mnemonic: String, language: MnemonicLanguage) -> Result<(), FrontendError> {
     info!("Validating mnemonic with language {:?}...", language);
     let core_language = language.into();
-    AppService::validate_mnemonic(&mnemonic, core_language)
+    AppService::validate_mnemonic(&mnemonic, core_language).map_err(FrontendError::from)
 }
 
 #[tauri::command]

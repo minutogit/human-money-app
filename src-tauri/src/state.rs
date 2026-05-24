@@ -2,7 +2,7 @@
 use std::sync::{Mutex, MutexGuard};
 use log::{info, error};
 use chrono::{Duration, Utc};
-use human_money_core::app_service::AppService;
+use human_money_core::app_service::{AppService, AppFacadeError};
 use crate::models::{TransactionRecord, FrontendAddressBook, FrontendContact};
 use crate::settings::{AppSettings, SETTINGS_KEY};
 
@@ -24,15 +24,15 @@ impl AppState {
     }
 
     // 2. Settings Helpers
-    pub fn get_cached_settings(&self) -> Result<AppSettings, String> {
+    pub fn get_cached_settings(&self) -> Result<AppSettings, AppFacadeError> {
         let cache = self.settings.lock().unwrap();
         cache
             .as_ref()
             .cloned()
-            .ok_or_else(|| "Settings not loaded".to_string())
+            .ok_or_else(|| AppFacadeError::Generic("Settings not loaded".to_string()))
     }
 
-    pub fn load_settings(&self, service: &mut AppService, password: Option<&str>) -> Result<AppSettings, String> {
+    pub fn load_settings(&self, service: &mut AppService, password: Option<&str>) -> Result<AppSettings, AppFacadeError> {
         let settings: AppSettings = match service.load_encrypted_data(SETTINGS_KEY, password) {
             Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
             Err(_) => {
@@ -41,7 +41,7 @@ impl AppState {
                 let bytes = serde_json::to_vec(&default_settings).unwrap();
                 service
                     .save_encrypted_data(SETTINGS_KEY, &bytes, password)
-                    .map_err(|e| format!("Failed to save default settings: {}", e))?;
+                    .map_err(|e| AppFacadeError::Generic(format!("Failed to save default settings: {}", e)))?;
                 default_settings
             }
         };
@@ -50,15 +50,15 @@ impl AppState {
         Ok(settings)
     }
 
-    pub fn save_settings(&self, service: &mut AppService, settings: AppSettings, password: Option<&str>) -> Result<(), String> {
-        let bytes = serde_json::to_vec(&settings).map_err(|e| e.to_string())?;
+    pub fn save_settings(&self, service: &mut AppService, settings: AppSettings, password: Option<&str>) -> Result<(), AppFacadeError> {
+        let bytes = serde_json::to_vec(&settings).map_err(|e| AppFacadeError::JsonError(e.to_string()))?;
         service.save_encrypted_data(SETTINGS_KEY, &bytes, password)?;
         *self.settings.lock().unwrap() = Some(settings);
         Ok(())
     }
 
     // 3. Contacts Helpers
-    pub fn get_cached_contacts(&self) -> Result<Vec<FrontendContact>, String> {
+    pub fn get_cached_contacts(&self) -> Result<Vec<FrontendContact>, AppFacadeError> {
         let cache = self.contacts.lock().unwrap();
         if let Some(book) = cache.as_ref() {
             let mut contacts: Vec<FrontendContact> = book.contacts.values().cloned().collect();
@@ -69,18 +69,18 @@ impl AppState {
             });
             Ok(contacts)
         } else {
-            Err("Contacts cache not initialized".to_string())
+            Err(AppFacadeError::Generic("Contacts cache not initialized".to_string()))
         }
     }
 
-    pub fn load_contacts(&self, service: &mut AppService, password: Option<&str>) -> Result<Vec<FrontendContact>, String> {
+    pub fn load_contacts(&self, service: &mut AppService, password: Option<&str>) -> Result<Vec<FrontendContact>, AppFacadeError> {
         info!("Fetching all contacts from address book from disk...");
         match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
             Ok(data) => {
                 let address_book: FrontendAddressBook = serde_json::from_slice(&data)
                     .map_err(|e| {
                         error!("Failed to parse address book: {}", e);
-                        format!("Failed to parse address book: {}", e)
+                        AppFacadeError::JsonError(format!("Failed to parse address book: {}", e))
                     })?;
 
                 *self.contacts.lock().unwrap() = Some(address_book.clone());
@@ -94,24 +94,27 @@ impl AppState {
                 Ok(contacts)
             }
             Err(e) => {
-                if e.contains("NotFound") || e.contains("not found") {
+                if matches!(&e, AppFacadeError::StorageError(msg) if msg.contains("NotFound") || msg.contains("not found")) {
                     info!("No address book found, returning empty list.");
                     let default_book = FrontendAddressBook::default();
                     *self.contacts.lock().unwrap() = Some(default_book);
                     Ok(vec![])
+                } else if matches!(&e, AppFacadeError::WalletLocked(_) | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                    error!("Error loading address book (locked/session issue): {:?}", e);
+                    Err(e)
                 } else {
-                    error!("Error loading address book: {}", e);
+                    error!("Error loading address book: {:?}", e);
                     Ok(vec![])
                 }
             }
         }
     }
 
-    pub fn save_contact(&self, service: &mut AppService, contact: FrontendContact, password: Option<&str>) -> Result<(), String> {
+    pub fn save_contact(&self, service: &mut AppService, contact: FrontendContact, password: Option<&str>) -> Result<(), AppFacadeError> {
         let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
             Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data).unwrap_or_default(),
             Err(e) => {
-                if e.contains("Password required") || e.contains("Session timed out") || e.contains("Wallet is locked") {
+                if matches!(&e, AppFacadeError::WalletLocked(_) | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
                     return Err(e);
                 }
                 FrontendAddressBook::default()
@@ -121,20 +124,20 @@ impl AppState {
         address_book.contacts.insert(contact.did.clone(), contact);
 
         let data = serde_json::to_vec(&address_book)
-            .map_err(|e| format!("Failed to serialize address book: {}", e))?;
+            .map_err(|e| AppFacadeError::JsonError(format!("Failed to serialize address book: {}", e)))?;
 
         service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
-            .map_err(|e| format!("Failed to save address book: {}", e))?;
+            .map_err(|e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)))?;
 
         *self.contacts.lock().unwrap() = Some(address_book);
         Ok(())
     }
 
-    pub fn delete_contact(&self, service: &mut AppService, did: &str, password: Option<&str>) -> Result<(), String> {
+    pub fn delete_contact(&self, service: &mut AppService, did: &str, password: Option<&str>) -> Result<(), AppFacadeError> {
         let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
             Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data).unwrap_or_default(),
             Err(e) => {
-                if e.contains("Password required") || e.contains("Session timed out") || e.contains("Wallet is locked") {
+                if matches!(&e, AppFacadeError::WalletLocked(_) | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
                     return Err(e);
                 }
                 return Ok(());
@@ -143,10 +146,10 @@ impl AppState {
 
         if address_book.contacts.remove(did).is_some() {
             let data = serde_json::to_vec(&address_book)
-                .map_err(|e| format!("Failed to serialize address book: {}", e))?;
+                .map_err(|e| AppFacadeError::JsonError(format!("Failed to serialize address book: {}", e)))?;
 
             service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
-                .map_err(|e| format!("Failed to save address book: {}", e))?;
+                .map_err(|e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)))?;
 
             *self.contacts.lock().unwrap() = Some(address_book);
         }
@@ -154,15 +157,15 @@ impl AppState {
     }
 
     // 4. History Helpers
-    pub fn get_cached_history(&self) -> Result<Vec<TransactionRecord>, String> {
+    pub fn get_cached_history(&self) -> Result<Vec<TransactionRecord>, AppFacadeError> {
         let cache = self.history.lock().unwrap();
         cache
             .as_ref()
             .cloned()
-            .ok_or_else(|| "History cache not initialized".to_string())
+            .ok_or_else(|| AppFacadeError::Generic("History cache not initialized".to_string()))
     }
 
-    pub fn load_history_from_disk(&self, service: &mut AppService, password: Option<&str>) -> Result<Vec<TransactionRecord>, String> {
+    pub fn load_history_from_disk(&self, service: &mut AppService, password: Option<&str>) -> Result<Vec<TransactionRecord>, AppFacadeError> {
         match service.load_encrypted_data(TRANSACTION_HISTORY_KEY, password) {
             Ok(data) => {
                 let records: Result<Vec<TransactionRecord>, _> = serde_json::from_slice(&data);
@@ -174,11 +177,14 @@ impl AppState {
                     Err(e) => {
                         let msg = format!("Failed to parse transaction history: {}", e);
                         error!("{}", msg);
-                        Err(msg)
+                        Err(AppFacadeError::JsonError(msg))
                     }
                 }
             }
-            Err(_) => {
+            Err(e) => {
+                if matches!(&e, AppFacadeError::WalletLocked(_) | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                    return Err(e);
+                }
                 info!("Keine Transaktionshistorie auf Festplatte gefunden. Erstelle neue.");
                 let empty = Vec::new();
                 *self.history.lock().unwrap() = Some(empty.clone());
@@ -187,21 +193,21 @@ impl AppState {
         }
     }
 
-    pub fn save_history(&self, service: &mut AppService, history: Vec<TransactionRecord>, password: Option<&str>) -> Result<(), String> {
-        let history_bytes = serde_json::to_vec(&history).map_err(|e| e.to_string())?;
+    pub fn save_history(&self, service: &mut AppService, history: Vec<TransactionRecord>, password: Option<&str>) -> Result<(), AppFacadeError> {
+        let history_bytes = serde_json::to_vec(&history).map_err(|e| AppFacadeError::JsonError(e.to_string()))?;
         service.save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, password)?;
         *self.history.lock().unwrap() = Some(history);
         Ok(())
     }
 
-    pub fn append_to_history(&self, service: &mut AppService, record: TransactionRecord, password: Option<&str>) -> Result<(), String> {
+    pub fn append_to_history(&self, service: &mut AppService, record: TransactionRecord, password: Option<&str>) -> Result<(), AppFacadeError> {
         let mut history = self.load_history_from_disk(service, password)?;
         history.push(record);
         self.save_history(service, history, password)
     }
 
     // 5. Events Helpers
-    pub fn refresh_events_cache(&self, service: &mut AppService, password: Option<&str>) -> Result<(), String> {
+    pub fn refresh_events_cache(&self, service: &mut AppService, password: Option<&str>) -> Result<(), AppFacadeError> {
         info!("Refreshing events cache...");
         let events = service.get_event_history(0, 50, password)?;
         *self.events.lock().unwrap() = Some(events);
@@ -223,7 +229,7 @@ impl AppState {
         &self,
         service: &mut AppService,
         password: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), AppFacadeError> {
         info!("Initializing profile session and member caches...");
 
         // 1. Load or create settings

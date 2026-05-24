@@ -25,6 +25,61 @@ impl From<String> for FrontendError {
     }
 }
 
+impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
+    fn from(error: human_money_core::app_service::AppFacadeError) -> Self {
+        let message = error.to_string();
+        let mut details = HashMap::new();
+        
+        let code = match &error {
+            human_money_core::app_service::AppFacadeError::WalletLocked(_) => "error.wallet.locked".to_string(),
+            human_money_core::app_service::AppFacadeError::SessionExpired(_) => "error.auth.sessionTimeout".to_string(),
+            human_money_core::app_service::AppFacadeError::SessionNotActive(_) => "error.auth.sessionNotActive".to_string(),
+            human_money_core::app_service::AppFacadeError::DoubleSpendAttemptBlocked(local_id) => {
+                details.insert("localInstanceId".to_string(), local_id.clone());
+                "error.conflict.doubleSpendBlocked".to_string()
+            }
+            human_money_core::app_service::AppFacadeError::RequiresSealRecovery(_) => "error.security.sealRecoveryRequired".to_string(),
+            human_money_core::app_service::AppFacadeError::StateRollbackDetected(_) => "error.security.rollbackDetected".to_string(),
+            human_money_core::app_service::AppFacadeError::WalletLockedDueToFork(_) => "error.security.walletLockedDueToFork".to_string(),
+            human_money_core::app_service::AppFacadeError::VoucherNotActive(status_msg) => {
+                if status_msg.contains("Quarantined") {
+                    "error.conflict.voucherQuarantined".to_string()
+                } else {
+                    "error.validation.voucherNotActive".to_string()
+                }
+            }
+            human_money_core::app_service::AppFacadeError::ValidationError(msg) => {
+                if msg.contains("Initial transaction amount must match") {
+                    if let Some((expected, found)) = extract_expected_found(msg) {
+                        details.insert("expected".into(), expected);
+                        details.insert("found".into(), found);
+                    }
+                    "error.validation.initAmountMismatch".to_string()
+                } else if msg.contains("Insufficient funds") {
+                    if let Some((needed, available)) = extract_two_labeled_values(msg, "Needed:", "Available:") {
+                        details.insert("needed".into(), needed);
+                        details.insert("available".into(), available);
+                    }
+                    "error.validation.insufficientFunds".to_string()
+                } else {
+                    "error.validation.generic".to_string()
+                }
+            }
+            _ => {
+                let (c, d) = classify_error(&message);
+                details = d;
+                c
+            }
+        };
+
+        FrontendError {
+            code,
+            message,
+            details,
+        }
+    }
+}
+
 /// Maps known error message prefixes to i18n codes and extracts interpolation variables.
 ///
 /// Uses stable prefixes from `thiserror` `#[error("...")]` macros in `human_money_core::error`.

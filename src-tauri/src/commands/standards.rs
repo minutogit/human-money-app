@@ -17,10 +17,10 @@ pub fn parse_standard_toml(
 pub fn get_allowed_signature_roles_from_standard(
     toml_content: String,
     state: tauri::State<AppState>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, FrontendError> {
     info!("Getting allowed signature roles from standard...");
     let service = state.service.lock().unwrap();
-    service.get_allowed_signature_roles_from_standard(&toml_content)
+    service.get_allowed_signature_roles_from_standard(&toml_content).map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -29,9 +29,9 @@ pub fn evaluate_signature_suitability(
     role: String,
     standard_toml_content: String,
     state: tauri::State<AppState>,
-) -> Result<FrontendSignatureImpact, String> {
+) -> Result<FrontendSignatureImpact, FrontendError> {
     info!("Evaluating signature suitability for role: {}", role);
     let service = state.service.lock().unwrap();
-    let impact = service.evaluate_signature_suitability(&voucher, &role, &standard_toml_content)?;
+    let impact = service.evaluate_signature_suitability(&voucher, &role, &standard_toml_content).map_err(FrontendError::from)?;
     Ok(impact.into())
 }

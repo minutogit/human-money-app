@@ -153,8 +153,8 @@ pub fn save_transaction_record(
 }
 
 #[tauri::command]
-pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<FrontendTransactionRecord>, String> {
+pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<FrontendTransactionRecord>, FrontendError> {
     info!("Loading transaction history...");
-    let history = state.get_cached_history()?;
+    let history = state.get_cached_history().map_err(FrontendError::from)?;
     Ok(history.iter().map(|r| r.into()).collect())
 }
