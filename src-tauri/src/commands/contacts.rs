@@ -1,11 +1,11 @@
 // src-tauri/src/commands/contacts.rs
-use crate::models::FrontendContact;
+use crate::models::{FrontendContact, FrontendError};
 use crate::AppState;
 use log::info;
 
 #[tauri::command]
-pub fn get_contacts(state: tauri::State<AppState>) -> Result<Vec<FrontendContact>, String> {
-    state.get_cached_contacts()
+pub fn get_contacts(state: tauri::State<AppState>) -> Result<Vec<FrontendContact>, FrontendError> {
+    state.get_cached_contacts().map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -13,10 +13,10 @@ pub fn save_contact(
     contact: FrontendContact,
     password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     info!("Saving contact for DID: {}", contact.did);
     let mut service = state.service.lock().unwrap();
-    state.save_contact(&mut service, contact, password.as_deref())
+    state.save_contact(&mut service, contact, password.as_deref()).map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -24,10 +24,10 @@ pub fn delete_contact(
     did: String,
     password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     info!("Deleting contact for DID: {}", did);
     let mut service = state.service.lock().unwrap();
-    state.delete_contact(&mut service, &did, password.as_deref())
+    state.delete_contact(&mut service, &did, password.as_deref()).map_err(FrontendError::from)
 }
 
 #[cfg(test)]

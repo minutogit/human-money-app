@@ -1,1 +1,16 @@
-{}
+{
+  "error.auth.passwordRequired": "Password required. Please use 'Remember Password' or enter your password.",
+  "error.auth.sessionTimeout": "Session timed out. Please provide your password.",
+  "error.conflict.doubleSpendBlocked": "Double spend attempt was blocked for this voucher.",
+  "error.conflict.voucherQuarantined": "This voucher is quarantined due to a detected double-spend conflict.",
+  "error.internal.unknown": "An unexpected error occurred.",
+  "error.security.rollbackDetected": "Critical: Wallet state manipulation or outdated backup detected.",
+  "error.security.sealRecoveryRequired": "Security Alert: No local security seal found. Recovery is required.",
+  "error.security.walletLockedDueToFork": "Security Lockdown: Wallet is locked due to a detected fork. Recovery required.",
+  "error.transfer.bundleRecoveryZone": "CRITICAL WARNING: This transaction is from the recovery tolerance zone. High double-spend risk.",
+  "error.transfer.bundleToleranceZone": "Warning: This transaction occurred shortly before the recent wallet recovery.",
+  "error.transfer.bundleTooOld": "Transaction rejected: This transaction is too old relative to the last wallet recovery.",
+  "error.validation.initAmountMismatch": "Initial transaction amount must match nominal value. Expected: {{expected}}, Found: {{found}}.",
+  "error.validation.insufficientFunds": "Insufficient funds. Needed: {{needed}}, Available: {{available}}.",
+  "error.wallet.locked": "Wallet is locked. Please log in first."
+}

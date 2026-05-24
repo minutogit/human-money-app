@@ -21,7 +21,8 @@ const VALID_DOMAINS = [
   'history',
   'conflict',
   'integrity',
-  'settings'
+  'settings',
+  'error'
 ];
 
 let enContent;
@@ -151,6 +152,24 @@ for (const file of files) {
         key,
         file: path.relative(process.cwd(), file),
         line: lineNo,
+      });
+    }
+  }
+}
+
+// --- NEW: Cross-language scan of Rust error mapping ---
+const rustErrorFile = path.resolve('src-tauri/src/models/error.rs');
+if (fs.existsSync(rustErrorFile)) {
+  const rustContent = fs.readFileSync(rustErrorFile, 'utf8');
+  const rustKeyRegex = /"(error\.[a-zA-Z0-9_.-]+)"/g;
+  let rustMatch;
+  while ((rustMatch = rustKeyRegex.exec(rustContent)) !== null) {
+    const key = rustMatch[1];
+    if (!enKeys.has(key)) {
+      missingKeys.push({
+        key,
+        file: path.relative(process.cwd(), rustErrorFile),
+        line: (rustContent.substring(0, rustMatch.index).match(/\n/g) || []).length + 1,
       });
     }
   }

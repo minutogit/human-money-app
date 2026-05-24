@@ -1,4 +1,4 @@
-use crate::models::{ProfileInfo, MnemonicLanguage};
+use crate::models::{ProfileInfo, MnemonicLanguage, FrontendError};
 use crate::settings::{AppSettings, SETTINGS_KEY};
 use crate::AppState;
 use chrono::{DateTime, Utc};
@@ -87,14 +87,14 @@ pub fn profile_exists(app: tauri::AppHandle) -> bool {
 }
 
 #[tauri::command]
-pub fn list_profiles(state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<Vec<ProfileInfo>, String> {
+pub fn list_profiles(state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<Vec<ProfileInfo>, FrontendError> {
     info!("Listing available profiles...");
     let service = state.service.lock().unwrap();
     
     // Load profile metadata for last_used timestamps
     let metadata = load_profile_metadata(&app).unwrap_or_default();
     
-    service.list_profiles().map(|profiles| {
+    service.list_profiles().map_err(FrontendError::from).map(|profiles| {
         let mut profile_infos: Vec<ProfileInfo> = profiles
             .into_iter()
             .map(|p| {
@@ -139,7 +139,7 @@ pub fn create_profile(
     language: MnemonicLanguage,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     info!("Attempting to create profile '{}' with language {:?}...", profile_name, language);
     let mut service = state.service.lock().unwrap();
     let core_language = language.into();
@@ -163,18 +163,18 @@ pub fn create_profile(
 
             // 1. Initialisiere und speichere Standard-Einstellungen für das neue Profil
             let default_settings = AppSettings::default();
-            let settings_bytes = serde_json::to_vec(&default_settings).map_err(|e| e.to_string())?;
+            let settings_bytes = serde_json::to_vec(&default_settings).map_err(|e| FrontendError::from(e.to_string()))?;
             
             service
                 .save_encrypted_data(SETTINGS_KEY, &settings_bytes, Some(&password))
-                .map_err(|e| format!("Failed to save default settings: {}", e))?;
+                .map_err(|e| FrontendError::from(format!("Failed to save default settings: {}", e)))?;
 
             // 2. Initialisiere die Session und den Cache (lädt Settings & leere History)
-            state.initialize_profile_session(&mut service, &password)
+            state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)
         }
         Err(e) => {
             error!("Profile creation failed: {}", e);
-            Err(e)
+            Err(FrontendError::from(e))
         }
     }
 }
@@ -188,7 +188,7 @@ pub fn login(
     local_instance_id: String,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     info!("Attempting to login...");
     let mut service = state.service.lock().unwrap();
     match service.login(&folder_name, &password, cleanup_on_login, local_instance_id) {
@@ -202,11 +202,11 @@ pub fn login(
             }
 
             // Initialisiere die Session und den Cache
-            state.initialize_profile_session(&mut service, &password)
+            state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)
         }
         Err(e) => {
             error!("Login failed: {}", e);
-            Err(e)
+            Err(FrontendError::from(e))
         }
     }
 }
@@ -220,7 +220,7 @@ pub fn recover_wallet_and_set_new_password(
     local_instance_id: String,
     language: MnemonicLanguage,
     state: tauri::State<AppState>,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     info!("Attempting to recover wallet and set new password with language {:?}...", language);
     let mut service = state.service.lock().unwrap();
     let core_language = language.into();
@@ -230,11 +230,11 @@ pub fn recover_wallet_and_set_new_password(
             
             // NEU: Nach der Recovery müssen wir die Session und den Cache ebenfalls initialisieren,
             // da der User im Frontend direkt ins Dashboard (logged_in) wechselt.
-            state.initialize_profile_session(&mut service, &new_password)
+            state.initialize_profile_session(&mut service, &new_password).map_err(FrontendError::from)
         }
         Err(e) => {
             error!("Wallet recovery failed: {}", e);
-            Err(e)
+            Err(FrontendError::from(e))
         }
     }
 }
@@ -246,7 +246,7 @@ pub fn handover_to_this_device(
     local_instance_id: String,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     info!("Attempting device handover for profile in folder '{}'...", folder_name);
     let mut service = state.service.lock().unwrap();
     match service.handover_to_this_device(&folder_name, &password, local_instance_id) {
@@ -259,11 +259,11 @@ pub fn handover_to_this_device(
             }
 
             // Initialisiere die Session und den Cache
-            state.initialize_profile_session(&mut service, &password)
+            state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)
         }
         Err(e) => {
             error!("Handover failed: {}", e);
-            Err(e)
+            Err(FrontendError::from(e))
         }
     }
 }
@@ -284,10 +284,10 @@ pub fn logout(state: tauri::State<AppState>) {
 // NEUE SESSION COMMANDS
 
 #[tauri::command]
-pub fn unlock_session(password: String, duration_seconds: u64, state: tauri::State<AppState>) -> Result<(), String> {
+pub fn unlock_session(password: String, duration_seconds: u64, state: tauri::State<AppState>) -> Result<(), FrontendError> {
     info!("Unlocking session for {} seconds...", duration_seconds);
     let mut service = state.service.lock().unwrap();
-    service.unlock_session(&password, duration_seconds)
+    service.unlock_session(&password, duration_seconds).map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -312,19 +312,19 @@ pub fn refresh_session_activity(state: tauri::State<AppState>) {
 }
 
 #[tauri::command]
-pub fn verify_profile_password(folder_name: String, password: String, state: tauri::State<AppState>) -> Result<String, String> {
+pub fn verify_profile_password(folder_name: String, password: String, state: tauri::State<AppState>) -> Result<String, FrontendError> {
     info!("Verifying password for profile in folder '{}'...", folder_name);
     let service = state.service.lock().unwrap();
-    service.get_profile_id_with_password(&folder_name, &password)
+    service.get_profile_id_with_password(&folder_name, &password).map_err(FrontendError::from)
 }
 
 #[tauri::command]
-pub fn delete_profile(folder_name: String, password: String, state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<(), String> {
+pub fn delete_profile(folder_name: String, password: String, state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<(), FrontendError> {
     info!("Attempting to delete profile in folder '{}'...", folder_name);
     
     // 1. Delete in Core (this also verifies password)
     let mut service = state.service.lock().unwrap();
-    service.delete_profile(&folder_name, &password)?;
+    service.delete_profile(&folder_name, &password).map_err(FrontendError::from)?;
     
     // 2. Remove metadata entry
     if let Ok(mut metadata) = load_profile_metadata(&app) {

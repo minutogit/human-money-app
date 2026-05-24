@@ -163,6 +163,12 @@ priority_tasks:
     priority: "medium"
     depends_on: []
     description: "Established i18n file structure, basic react-i18next runtime initialization, and custom prep and merge node utility scripts for translation workflow validation."
+  - id: "APP-026"
+    title: "Structured Error DTOs for i18n Localization"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-025"]
+    description: "Transition error handling from opaque strings to structured FrontendError DTOs allowing localized, interpolated error messages in React frontend."
 ---
 
 # Human Money App — Status
@@ -247,6 +253,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Redesigned Voucher Mode Selection (Replaced checkbox with a segmented switch selector and dynamic contextual descriptions for test vs real vouchers)
 - [x] i18n Localization Foundation (Dateistruktur, Prep/Merge-Scripts, react-i18next Setup) (APP-025)
 - [x] Structured Domain-Prefixes for i18n (Domain linter, multi-line parsing, en.json auto-sorting, and keySeparator option)
+- [x] Structured Error DTOs for i18n Localization (Transitioned error handling from opaque strings to FrontendError DTOs with variable interpolation support)
 
 ## Next Milestones
 

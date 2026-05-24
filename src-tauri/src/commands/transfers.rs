@@ -2,7 +2,7 @@
 use crate::{
     models::{
         CreateBundleResult, FrontendSourceTransfer, FrontendTransactionRecord,
-        ReceiveSuccessPayload, TransactionRecord,
+        ReceiveSuccessPayload, TransactionRecord, FrontendError,
     },
     AppState,
 };
@@ -26,7 +26,7 @@ pub fn create_transfer_bundle(
     use_privacy_mode: Option<bool>,
     password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<CreateBundleResult, String> {
+) -> Result<CreateBundleResult, FrontendError> {
     info!(
         "Attempting to create a transfer bundle for recipient: {}",
         recipient_id
@@ -63,7 +63,7 @@ pub fn create_transfer_bundle(
                 involved_sources_details: result.involved_sources_details.into_iter().map(|s| s.into()).collect(),
             })
         }
-        Err(e) => Err(e),
+        Err(e) => Err(FrontendError::from(e)),
     }
 }
 
@@ -74,7 +74,7 @@ pub fn receive_bundle(
     password: Option<String>,
     force_accept_tolerance_bundle: bool,
     state: tauri::State<AppState>,
-) -> Result<ReceiveSuccessPayload, String> {
+) -> Result<ReceiveSuccessPayload, FrontendError> {
     info!("Attempting to receive and process a transfer bundle...");
     let mut service = state.service.lock().unwrap();
     let archive: Option<&dyn VoucherArchive> = None;
@@ -103,7 +103,7 @@ pub fn receive_bundle(
             let record = TransactionRecord {
                 id: Uuid::new_v4().to_string(),
                 direction: "received".to_string(),
-                recipient_id: service.get_user_id()?,
+                recipient_id: service.get_user_id().map_err(FrontendError::from)?,
                 sender_id: result.header.sender_id.clone(),
                 timestamp: Utc::now().to_rfc3339(),
                 summable_amounts: transfer_summary.summable_amounts.clone(),
@@ -116,7 +116,7 @@ pub fn receive_bundle(
                 sender_profile_name: sender_profile_name.clone(),
             };
 
-            state.append_to_history(&mut service, record.clone(), password.as_deref())?;
+            state.append_to_history(&mut service, record.clone(), password.as_deref()).map_err(FrontendError::from)?;
 
             if let Err(e) = state.refresh_events_cache(&mut service, password.as_deref()) {
                 error!("Failed to refresh events cache after receive_bundle: {}", e);
@@ -130,12 +130,12 @@ pub fn receive_bundle(
                 involved_vouchers: involved_vouchers_ids,
                 involved_vouchers_details: involved_vouchers_details.into_iter().map(|d| d.into()).collect(),
                 verifiable_conflicts: result.check_result.verifiable_conflicts,
-                conflict_summaries: service.list_conflicts()?.into_iter().map(|s| s.into()).collect(),
+                conflict_summaries: service.list_conflicts().map_err(FrontendError::from)?.into_iter().map(|s| s.into()).collect(),
             })
         }
         Err(e) => {
             error!("Failed to process bundle: {}", e);
-            Err(e)
+            Err(FrontendError::from(e))
         }
     }
 }
@@ -145,11 +145,11 @@ pub fn save_transaction_record(
     record: FrontendTransactionRecord,
     password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     let record: TransactionRecord = record.into();
     info!("Saving new transaction record with id: {}", record.id);
     let mut service = state.service.lock().unwrap();
-    state.append_to_history(&mut service, record, password.as_deref())
+    state.append_to_history(&mut service, record, password.as_deref()).map_err(FrontendError::from)
 }
 
 #[tauri::command]

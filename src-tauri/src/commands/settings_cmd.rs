@@ -1,10 +1,10 @@
-use crate::{models::{FrontendUserProfile, SealUploadData}, AppState, settings::AppSettings};
+use crate::{models::{FrontendUserProfile, SealUploadData, FrontendError}, AppState, settings::AppSettings};
 use log::{info, error};
 
 #[tauri::command]
-pub fn get_app_settings(state: tauri::State<AppState>) -> Result<AppSettings, String> {
+pub fn get_app_settings(state: tauri::State<AppState>) -> Result<AppSettings, FrontendError> {
     info!("Getting app settings from cache...");
-    state.get_cached_settings()
+    state.get_cached_settings().map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -12,10 +12,10 @@ pub fn save_app_settings(
     settings: AppSettings,
     password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     info!("Saving app settings to disk...");
     let mut service = state.service.lock().unwrap();
-    state.save_settings(&mut service, settings, password.as_deref())
+    state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)
 }
 
 #[tauri::command]

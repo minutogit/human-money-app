@@ -1,5 +1,5 @@
 // src-tauri/src/commands/vouchers.rs
-use crate::{models::{FrontendNewVoucherData}, AppState};
+use crate::{models::{FrontendNewVoucherData, FrontendError}, AppState};
 use log::{info, error};
 use human_money_core::{
     models::voucher::Voucher,
@@ -13,11 +13,11 @@ pub fn create_new_voucher(
     data: FrontendNewVoucherData,
     password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<crate::models::FrontendVoucher, String> {
+) -> Result<crate::models::FrontendVoucher, FrontendError> {
     info!("Attempting to create a new voucher...");
     let mut service = state.service.lock().unwrap();
     let lang_preference = "en-US";
-    let user_id = service.get_user_id()?;
+    let user_id = service.get_user_id().map_err(FrontendError::from)?;
 
     let voucher_data = NewVoucherData {
         nominal_value: human_money_core::models::voucher::ValueDefinition {
@@ -61,7 +61,7 @@ pub fn create_new_voucher(
         non_redeemable_test_voucher: data.non_redeemable_test_voucher,
     };
 
-    let voucher = service.create_new_voucher(&standard_toml_content, lang_preference, voucher_data, password.as_deref())?;
+    let voucher = service.create_new_voucher(&standard_toml_content, lang_preference, voucher_data, password.as_deref()).map_err(FrontendError::from)?;
     
     if let Err(e) = state.refresh_events_cache(&mut service, password.as_deref()) {
         error!("Failed to refresh events cache after create_new_voucher: {}", e);
@@ -75,13 +75,13 @@ pub fn create_signing_request_bundle(
     local_instance_id: String,
     config: ContainerConfig,
     state: tauri::State<AppState>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, FrontendError> {
     info!(
         "Creating signing request bundle for voucher {} with config {:?}",
         local_instance_id, config
     );
     let service = state.service.lock().unwrap();
-    service.create_signing_request_bundle(&local_instance_id, config)
+    service.create_signing_request_bundle(&local_instance_id, config).map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -89,7 +89,7 @@ pub fn open_voucher_signing_request(
     container_bytes: Vec<u8>,
     password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<crate::models::FrontendVoucherDetails, String> {
+) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     info!("Opening voucher signing request bundle...");
     let service = state.service.lock().unwrap();
     match service.open_voucher_signing_request(&container_bytes, password.as_deref()) {
@@ -109,7 +109,7 @@ pub fn open_voucher_signing_request(
                 is_test_voucher,
             })
         }
-        Err(e) => Err(e)
+        Err(e) => Err(FrontendError::from(e))
     }
 }
 
@@ -121,7 +121,7 @@ pub fn create_detached_signature_response_bundle(
     config: ContainerConfig,
     password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, FrontendError> {
     info!(
         "Creating detached signature response for role {} with config {:?}",
         role, config
@@ -130,7 +130,7 @@ pub fn create_detached_signature_response_bundle(
     
     if !service.is_wallet_unlocked() {
         error!("SIGNING ERROR: AppService is in LOCKED state. No profile is currently loaded in the backend.");
-        return Err("Wallet is completely locked. Please log out and log in again to refresh your session.".to_string());
+        return Err(FrontendError::from("Wallet is completely locked. Please log out and log in again to refresh your session.".to_string()));
     }
 
     if let Some(ref pwd) = password {
@@ -140,6 +140,7 @@ pub fn create_detached_signature_response_bundle(
     }
 
     service.create_detached_signature_response_bundle(&voucher, &role, include_details, config, password.as_deref())
+        .map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -149,7 +150,7 @@ pub fn process_and_attach_signature(
     container_password: Option<String>,
     wallet_password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<String, String> {
+) -> Result<String, FrontendError> {
     info!("Processing and attaching signature from bundle...");
     let mut service = state.service.lock().unwrap();
     service.process_and_attach_signature(
@@ -157,7 +158,7 @@ pub fn process_and_attach_signature(
         &standard_toml_content,
         container_password.as_deref(),
         wallet_password.as_deref(),
-    )
+    ).map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -166,7 +167,7 @@ pub fn remove_voucher_signature(
     signature_id: String,
     password: Option<String>,
     state: tauri::State<AppState>,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     info!(
         "Removing signature {} from voucher {}...",
         signature_id, local_instance_id
@@ -176,5 +177,5 @@ pub fn remove_voucher_signature(
         &local_instance_id,
         &signature_id,
         password.as_deref(),
-    )
+    ).map_err(FrontendError::from)
 }

@@ -1,3 +1,4 @@
+pub mod error;
 pub mod voucher;
 pub mod wallet;
 pub mod profile;
@@ -5,6 +6,7 @@ pub mod events;
 pub mod conflicts;
 pub mod standards;
 
+pub use error::*;
 pub use voucher::*;
 pub use wallet::*;
 pub use profile::*;

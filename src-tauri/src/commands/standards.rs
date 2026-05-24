@@ -1,5 +1,5 @@
 use crate::AppState;
-use crate::models::{VoucherStandardDefinitionDto, FrontendSignatureImpact};
+use crate::models::{VoucherStandardDefinitionDto, FrontendSignatureImpact, FrontendError};
 use human_money_core::models::voucher::Voucher;
 use log::info;
 
@@ -7,9 +7,9 @@ use log::info;
 pub fn parse_standard_toml(
     toml_content: String,
     state: tauri::State<AppState>,
-) -> Result<VoucherStandardDefinitionDto, String> {
+) -> Result<VoucherStandardDefinitionDto, FrontendError> {
     let service = state.service.lock().unwrap();
-    let core_standard = service.parse_voucher_standard(&toml_content)?;
+    let core_standard = service.parse_voucher_standard(&toml_content).map_err(FrontendError::from)?;
     Ok(core_standard.into())
 }
 
