@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { Coins, Filter, CreditCard } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
@@ -33,11 +34,12 @@ export function AssetInventory({
   uuidToPrecisionMap,
   standardIdToUuidMap
 }: AssetInventoryProps) {
+  const { t } = useTranslation();
   return (
     <Card header={
       <div className="flex items-center gap-2">
         <Coins size={18} className="text-theme-primary"/>
-        <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Voucher Selection</span>
+        <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.voucherSelectionTitle')}</span>
       </div>
     }>
       <div className="space-y-6">
@@ -47,7 +49,7 @@ export function AssetInventory({
             onClick={() => onStandardSelect(null, null)} 
             className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-full border-2 transition-all ${selectedStandardId === null ? 'bg-theme-primary border-theme-primary text-white shadow-md' : 'border-slate-100 text-slate-400 hover:border-slate-200'}`}
           >
-            All
+            {t('transfer.all')}
           </button>
           {activeAssetClasses.map(group => {
             const standardId = [...standardIdToUuidMap.entries()].find(([, uuid]) => uuid === group.standardUuid)?.[0] || group.standardUuid;
@@ -68,7 +70,7 @@ export function AssetInventory({
 
         {selectedStandardId && (
           <div className="space-y-3 animate-in slide-in-from-top-2">
-            <label htmlFor="target-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Target Amount</label>
+            <label htmlFor="target-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.targetAmount')}</label>
             <div className="relative">
               <Input 
                 id="target-amount" 
@@ -82,15 +84,15 @@ export function AssetInventory({
                 {filteredVouchers[0]?.displayCurrency}
               </div>
             </div>
-            <p className="text-[10px] font-bold text-theme-light italic text-center">Automatic selection will prioritize optimal ledger fragmentation.</p>
+            <p className="text-[10px] font-bold text-theme-light italic text-center">{t('transfer.autoSelection')}</p>
           </div>
         )}
 
         <div className="space-y-3 pt-4 border-t border-theme-subtle/40">
           <div className="flex items-center justify-between">
-            <h3 className="text-[10px] font-black text-theme-light uppercase tracking-widest">Available Vouchers</h3>
+            <h3 className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.availableVouchers')}</h3>
             <button type="button" className="text-theme-primary hover:underline flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest">
-              <Filter size={10}/> Sort Optimal
+              <Filter size={10}/> {t('transfer.sortOptimal')}
             </button>
           </div>
           
@@ -116,7 +118,7 @@ export function AssetInventory({
             }) : (
               <div className="text-center py-10 bg-slate-50 rounded-[32px] border-2 border-dashed border-slate-200">
                 <CreditCard className="mx-auto text-slate-300 mb-2" size={32} />
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Inventory Depleted</p>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('transfer.inventoryDepleted')}</p>
               </div>
             )}
           </div>

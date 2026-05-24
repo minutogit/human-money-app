@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0-beta.15"
 phase: "beta"
 health: "green"
-last_updated: "2026-05-24"
+last_updated: "2026-05-25"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -262,6 +262,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Localized Transaction History and Activities components (Batch 7 i18n migration).
 - [x] Localized Conflict Management views (Batch 8 i18n migration).
 - [x] Localized Settings and Integrity Report Modal (Batch 9 i18n migration).
+- [x] Dynamic Language Detection & Manual Language Selector (Persisted client-side via localStorage).
 
 ## Next Milestones
 

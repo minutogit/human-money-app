@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { User, UserPlus, Search, X, AlertTriangle } from 'lucide-react';
 import Avatar from 'boring-avatars';
 import { Card } from '../ui/Card';
@@ -27,6 +28,7 @@ export function RecipientSelector({
   onShowContactPicker,
   onClearRecipient
 }: RecipientSelectorProps) {
+  const { t } = useTranslation();
   const [showSuggestions, setShowSuggestions] = useState(false);
   
   const suggestions = React.useMemo(() => {
@@ -45,15 +47,15 @@ export function RecipientSelector({
     <Card header={
       <div className="flex items-center gap-2">
         <User size={18} className="text-theme-primary"/>
-        <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Recipient</span>
+        <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.recipient')}</span>
       </div>
     }>
       <div className="space-y-6">
         <div className="space-y-3">
           <label htmlFor="recipientId" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
-            User ID (DID)
+            {t('transfer.userId')}
             <button type="button" onClick={onShowContactPicker} className="text-theme-primary hover:underline flex items-center gap-1.5 transition-colors">
-              <UserPlus size={12}/> Address Book
+              <UserPlus size={12}/> {t('contacts.addressBook')}
             </button>
           </label>
           
@@ -98,7 +100,7 @@ export function RecipientSelector({
                           <p className="text-sm font-black text-theme-secondary truncate">
                             {(contact.profile.firstName || contact.profile.lastName) 
                               ? `${contact.profile.firstName || ''} ${contact.profile.lastName || ''}`.trim() 
-                              : (contact.profile.organization || 'Anonymous')}
+                              : (contact.profile.organization || t('transfer.anonymous'))}
                           </p>
                           <p className="text-[9px] font-mono text-theme-light truncate">{contact.did}</p>
                         </div>
@@ -114,8 +116,8 @@ export function RecipientSelector({
             <div className="p-5 bg-rose-50 border border-rose-100 rounded-[32px] flex items-start gap-4 animate-in shake duration-500 shadow-sm">
               <AlertTriangle className="text-rose-500 shrink-0 mt-1" size={24} />
               <div>
-                <h4 className="text-sm font-black text-rose-900 uppercase tracking-widest mb-1">Reputation Alert</h4>
-                <p className="text-xs text-rose-800 font-medium leading-relaxed">This identity is associated with past ledger conflicts. Exercise extreme caution.</p>
+                <h4 className="text-sm font-black text-rose-900 uppercase tracking-widest mb-1">{t('transfer.reputationAlert')}</h4>
+                <p className="text-xs text-rose-800 font-medium leading-relaxed">{t('transfer.reputationAlertDesc')}</p>
               </div>
             </div>
           )}

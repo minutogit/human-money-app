@@ -1,5 +1,6 @@
 // src/components/voucher/VoucherFilterBar.tsx
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Filter, ChevronDown, History, X } from "lucide-react";
 import { Card } from "../ui/Card";
 
@@ -28,6 +29,7 @@ export function VoucherFilterBar({
     availableStatuses,
     availableStandards
 }: VoucherFilterBarProps) {
+    const { t } = useTranslation();
     const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
 
     return (
@@ -40,7 +42,7 @@ export function VoucherFilterBar({
                     <div className={`p-2 rounded-lg transition-colors ${activeFilterCount > 0 ? 'bg-theme-primary text-white' : 'bg-theme-subtle/50 text-theme-light'}`}>
                         <Filter size={16} />
                     </div>
-                    <span className="text-xs font-black text-theme-secondary uppercase tracking-[0.15em]">Filters</span>
+                    <span className="text-xs font-black text-theme-secondary uppercase tracking-[0.15em]">{t('voucher.filter.filters')}</span>
                     {activeFilterCount > 0 && (
                         <span className="bg-theme-primary text-white text-[10px] px-2 py-0.5 rounded-full font-bold">
                             {activeFilterCount}
@@ -54,7 +56,7 @@ export function VoucherFilterBar({
                 <div className="space-y-6 pt-4 border-t border-theme-subtle/30">
                     {/* Status Filter */}
                     <div className="space-y-3">
-                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-2">By Status</label>
+                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-2">{t('voucher.filter.byStatus')}</label>
                         <div className="flex flex-wrap gap-2">
                             {availableStatuses.map(status => {
                                 const isActive = statusFilters.includes(status);
@@ -82,7 +84,7 @@ export function VoucherFilterBar({
 
                     {/* Standard Filter */}
                     <div className="space-y-3">
-                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-2">By Standard</label>
+                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-2">{t('voucher.filter.byStandard')}</label>
                         <div className="flex flex-wrap gap-2">
                             {availableStandards.map(standard => {
                                 const isActive = standardFilters.includes(standard);
@@ -113,7 +115,7 @@ export function VoucherFilterBar({
                                 className="text-[10px] font-black text-rose-500 uppercase tracking-widest flex items-center gap-1.5 hover:underline px-2"
                             >
                                 <X size={12} />
-                                Reset Filters
+                                {t('voucher.filter.reset')}
                             </button>
                         </div>
                     )}

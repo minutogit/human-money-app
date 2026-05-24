@@ -1,5 +1,6 @@
 // src/components/voucher/VoucherBasicsForm.tsx
 
+import { useTranslation } from "react-i18next";
 import { Coins, AlertCircle, FlaskConical } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
@@ -40,17 +41,18 @@ export function VoucherBasicsForm({
     standardRef,
     amountRef
 }: VoucherBasicsFormProps) {
+    const { t } = useTranslation();
     return (
         <Card header={
             <div className="flex items-center gap-2">
                 <Coins size={18} className="text-theme-primary" />
-                <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Voucher Details</span>
+                <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('voucher.detailsHeader')}</span>
             </div>
         }>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="space-y-2">
-                        <label htmlFor="voucher-type" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Voucher Type</label>
+                        <label htmlFor="voucher-type" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.create.voucherType')}</label>
                         <select 
                             id="voucher-type"
                             ref={standardRef}
@@ -59,7 +61,7 @@ export function VoucherBasicsForm({
                             disabled={isLoading || standards.length === 0} 
                             className={`w-full bg-white border rounded-2xl px-4 py-3.5 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all ${errors.standard ? 'border-rose-500' : 'border-theme-subtle'}`}
                         >
-                            <option value="">Select Voucher Type...</option>
+                            <option value="">{t('voucher.basics.selectType')}</option>
                             {standards.map(s => (
                                 <option key={s.id} value={s.id}>{s.displayName}</option>
                             ))}
@@ -67,7 +69,7 @@ export function VoucherBasicsForm({
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
-                            <label htmlFor="voucher-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">Amount (e.g., 60)</label>
+                            <label htmlFor="voucher-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.basics.amountLabel')}</label>
                             <Input 
                                 id="voucher-amount"
                                 ref={amountRef}
@@ -79,7 +81,7 @@ export function VoucherBasicsForm({
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Validity Duration</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.basics.validityDuration')}</label>
                             <div className="flex gap-2">
                                 <Input 
                                     type="number" 
@@ -93,9 +95,9 @@ export function VoucherBasicsForm({
                                     onChange={(e) => onValidityUnitChange(e.target.value as "Y" | "M" | "D")}
                                     className="w-1/2 bg-white border border-theme-subtle rounded-xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
                                 >
-                                    <option value="Y">Years</option>
-                                    <option value="M">Months</option>
-                                    <option value="D">Days</option>
+                                    <option value="Y">{t('voucher.basics.years')}</option>
+                                    <option value="M">{t('voucher.basics.months')}</option>
+                                    <option value="D">{t('voucher.basics.days')}</option>
                                 </select>
                             </div>
                         </div>
@@ -103,7 +105,7 @@ export function VoucherBasicsForm({
                 </div>
                 
                 <div className="flex flex-col justify-center space-y-3">
-                    <span className="text-[10px] font-black text-theme-light uppercase tracking-widest pl-1">Voucher Mode</span>
+                    <span className="text-[10px] font-black text-theme-light uppercase tracking-widest pl-1">{t('voucher.basics.modeHeader')}</span>
                     
                     <div className="bg-theme-secondary/[0.04] border border-theme-subtle/50 p-1.5 rounded-[24px] flex gap-1 shadow-inner-soft">
                         <button
@@ -117,7 +119,7 @@ export function VoucherBasicsForm({
                             }`}
                         >
                             <FlaskConical size={14} />
-                            <span>Test</span>
+                            <span>{t('voucher.mode.test')}</span>
                         </button>
                         
                         <button
@@ -131,7 +133,7 @@ export function VoucherBasicsForm({
                             }`}
                         >
                             <AlertCircle size={14} />
-                            <span>Real</span>
+                            <span>{t('voucher.mode.real')}</span>
                         </button>
                     </div>
                     
@@ -143,19 +145,19 @@ export function VoucherBasicsForm({
                         {nonRedeemable ? (
                             <div className="space-y-1 animate-in fade-in duration-350">
                                 <p className="font-bold flex items-center gap-1.5 text-emerald-900">
-                                    <FlaskConical size={12} className="text-emerald-600" /> Test Voucher Mode
+                                    <FlaskConical size={12} className="text-emerald-600" /> {t('voucher.mode.testTitle')}
                                 </p>
                                 <p className="text-emerald-700/80 leading-normal text-[11px]">
-                                    Creates a safe demo asset. Recommended for sandbox testing to avoid real financial commitment.
+                                    {t('voucher.mode.testDescription')}
                                 </p>
                             </div>
                         ) : (
                             <div className="space-y-1 animate-in fade-in duration-350">
                                 <p className="font-bold flex items-center gap-1.5 text-rose-900">
-                                    <AlertCircle size={12} className="text-rose-600" /> Real Voucher Mode
+                                    <AlertCircle size={12} className="text-rose-600" /> {t('voucher.mode.realTitle')}
                                 </p>
                                 <p className="text-rose-700/80 leading-normal text-[11px]">
-                                    Creates a legally binding cryptographic promise.
+                                    {t('voucher.mode.realDescription')}
                                 </p>
                             </div>
                         )}

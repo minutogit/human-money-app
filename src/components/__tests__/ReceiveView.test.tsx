@@ -5,6 +5,51 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { VoucherStandardInfo, AppSettings } from '../../types';
 
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, params?: Record<string, string>) => {
+      const translations: Record<string, string> = {
+        'transfer.importFile.title': 'Import File',
+        'transfer.importFile.description': 'Securely process incoming files.',
+        'transfer.importFile.dropZone': 'Drop Transfer File',
+        'transfer.importFile.dropZoneHint': 'Support for .transfer, .ask, and .sig files received from trusted parties.',
+        'transfer.importFile.selectFile': 'Select File',
+        'transfer.importFile.fileDetected': 'File Detected',
+        'transfer.importFile.readyToImport': 'Ready to import',
+        'transfer.importFile.discard': 'Discard File',
+        'transfer.importFile.loading': 'Loading...',
+        'transfer.importFile.importButton': 'Import File',
+        'transfer.importFile.localProcessing': 'ALL PROCESSING IS PERFORMED LOCALLY ON THIS DEVICE',
+        'transfer.importFile.formatTransfer': 'Transfer',
+        'transfer.importFile.formatSignatureRequest': 'Signature Request',
+        'transfer.importFile.formatSignatureResponse': 'Signature Response',
+        'transfer.importFile.formatTransferDesc': 'Accept assets sent to you directly.',
+        'transfer.importFile.formatSigReqDesc': 'Sign an asset for a peer.',
+        'transfer.importFile.formatSigRespDesc': 'Attach a peer signature.',
+        'transfer.importFile.importModalTitleTransfer': 'Import Transfer',
+        'transfer.importFile.importModalTitleAsk': 'Import Signature Request',
+        'transfer.importFile.importModalTitleSig': 'Import Signature Response',
+        'transfer.importFile.typeLabel': `Type: ${params?.fileType || ''}`,
+        'transfer.importFile.passwordLabel': 'Payload Password (Optional)',
+        'transfer.importFile.passwordPlaceholder': 'Enter access password if required',
+        'transfer.importFile.passwordHint': 'Required only if the sender encrypted this specific payload with a password.',
+        'transfer.importFile.confirmImport': 'Import',
+        'transfer.importFile.syncFromBackup': 'Sync from Backup',
+        'transfer.importFile.criticalConflict': 'CRITICAL: Chronological Conflict',
+        'transfer.importFile.acceptResponsibility': 'I accept responsibility for potential double-spend conflicts.',
+        'transfer.importFile.mandatoryAffirmation': 'Mandatory Affirmation',
+        'transfer.importFile.typeToConfirm': 'TYPE "IMPORT" TO CONFIRM',
+        'transfer.importFile.importAnyway': 'Import Anyway',
+        'transfer.importFile.noPayload': 'No payload selected.',
+        'transfer.importFile.unknownFormat': 'Unknown payload format.',
+        'transfer.importFile.invalidFileType': 'Invalid file type dropped.',
+      };
+      return translations[key] || key;
+    },
+    i18n: { language: 'en' },
+  }),
+}));
+
 // Mock the Tauri API
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),

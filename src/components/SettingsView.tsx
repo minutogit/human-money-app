@@ -13,6 +13,7 @@ import { translateError } from '../utils/errorHelper';
 import { ProfileSettings } from './ProfileSettings';
 import { PageLayout } from './ui/PageLayout';
 import { authService } from '../services/authService';
+import { LanguageSelector } from './ui/LanguageSelector';
 import { 
     User, 
     Settings as SettingsIcon, 
@@ -23,7 +24,8 @@ import {
     Database,
     Save,
     CheckCircle2,
-    Fingerprint
+    Fingerprint,
+    Globe
 } from 'lucide-react';
 
 interface SettingsViewProps {
@@ -211,6 +213,22 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                         </label>
                                     ))}
                                 </div>
+                            </div>
+                        </Card>
+
+                        {/* Language Selector */}
+                        <Card 
+                            className="!overflow-visible"
+                            header={
+                                <div className="flex items-center gap-2">
+                                    <Globe size={18} className="text-theme-primary" />
+                                    <span className="font-black text-xs uppercase tracking-widest">{t('settings.languageTitle')}</span>
+                                </div>
+                            }
+                        >
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                <p className="text-xs text-theme-light font-medium">{t('settings.languageDescription')}</p>
+                                <LanguageSelector variant="compact" />
                             </div>
                         </Card>
 

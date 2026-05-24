@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { Shield, Lock, Eye, AlertTriangle, CheckCircle2, Info, ArrowRight } from 'lucide-react';
 import { Card } from '../ui/Card';
 
@@ -14,11 +15,12 @@ export function PrivacyToggle({
   privacyRules,
   privacyError
 }: PrivacyToggleProps) {
+  const { t } = useTranslation();
   return (
     <Card header={
       <div id="privacyMode" className="flex items-center gap-2">
         <Shield size={18} className="text-theme-primary"/>
-        <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Security & Privacy</span>
+        <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.securityPrivacy')}</span>
       </div>
     }>
       <div className="space-y-6">
@@ -30,9 +32,9 @@ export function PrivacyToggle({
               </div>
               <div>
                 <h4 className="text-sm font-black text-theme-secondary uppercase tracking-widest">
-                  {privacyRules.mode === 'Stealth' ? 'Stealth Execution' : 'Transparent Execution'}
+                  {privacyRules.mode === 'Stealth' ? t('transfer.stealthExecution') : t('transfer.transparentExecution')}
                 </h4>
-                <p className="text-[10px] font-bold text-theme-light uppercase tracking-widest">Mandatory for selected standard</p>
+                <p className="text-[10px] font-bold text-theme-light uppercase tracking-widest">{t('transfer.mandatoryStandard')}</p>
               </div>
             </div>
             <CheckCircle2 className="text-theme-primary" size={24} />
@@ -45,7 +47,7 @@ export function PrivacyToggle({
               className={`flex flex-col items-center gap-2 p-6 rounded-[32px] transition-all ${privacyMode === 'public' ? 'bg-white shadow-premium-lg border border-theme-subtle' : 'opacity-50 hover:opacity-80'}`}
             >
               <div className="p-3 bg-blue-50 text-blue-500 rounded-2xl"><Eye size={24}/></div>
-              <span className="text-xs font-black uppercase tracking-widest text-slate-900">Public</span>
+              <span className="text-xs font-black uppercase tracking-widest text-slate-900">{t('transfer.public')}</span>
             </button>
             <button 
               type="button" 
@@ -53,7 +55,7 @@ export function PrivacyToggle({
               className={`flex flex-col items-center gap-2 p-6 rounded-[32px] transition-all ${privacyMode === 'stealth' ? 'bg-white shadow-premium-lg border border-theme-subtle' : 'opacity-50 hover:opacity-80'}`}
             >
               <div className="p-3 bg-purple-50 text-purple-500 rounded-2xl"><Lock size={24}/></div>
-              <span className="text-xs font-black uppercase tracking-widest text-slate-900">Stealth</span>
+              <span className="text-xs font-black uppercase tracking-widest text-slate-900">{t('transfer.stealth')}</span>
             </button>
           </div>
         )}
@@ -61,22 +63,22 @@ export function PrivacyToggle({
         {privacyRules.mode === 'Incompatible' && (
           <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3">
             <AlertTriangle size={18} className="text-rose-500" />
-            <p className="text-xs font-bold text-rose-800">Privacy Conflict: Mixed privacy requirements in selection.</p>
+            <p className="text-xs font-bold text-rose-800">{t('transfer.privacyConflict')}</p>
           </div>
         )}
 
         <details className="group">
           <summary className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-theme-light cursor-pointer hover:text-theme-primary transition-colors list-none">
-            <Info size={14}/> Privacy Details <ArrowRight size={10} className="group-open:rotate-90 transition-transform" />
+            <Info size={14}/> {t('transfer.privacyDetails')} <ArrowRight size={10} className="group-open:rotate-90 transition-transform" />
           </summary>
           <div className="mt-4 p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-4 animate-in slide-in-from-top-2">
             <div className="space-y-1">
-              <h5 className="text-xs font-black text-slate-900">🔒 Stealth Mode</h5>
-              <p className="text-[11px] text-slate-600 leading-relaxed font-medium">Anonymizes your signature in the transaction chain. Prevents mass surveillance. Reveal occurs only upon double-spend detection.</p>
+              <h5 className="text-xs font-black text-slate-900">{t('transfer.stealthMode')}</h5>
+              <p className="text-[11px] text-slate-600 leading-relaxed font-medium">{t('transfer.stealthModeDesc')}</p>
             </div>
             <div className="space-y-1">
-              <h5 className="text-xs font-black text-slate-900">👁️ Public Mode</h5>
-              <p className="text-[11px] text-slate-600 leading-relaxed font-medium">Standard transparency. Builds high trust in closed networks and community circles.</p>
+              <h5 className="text-xs font-black text-slate-900">{t('transfer.publicMode')}</h5>
+              <p className="text-[11px] text-slate-600 leading-relaxed font-medium">{t('transfer.publicModeDesc')}</p>
             </div>
           </div>
         </details>

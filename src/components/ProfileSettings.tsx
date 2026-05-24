@@ -200,10 +200,10 @@ export function ProfileSettings() {
                                 onChange={(e) => setProfile({ ...profile, gender: e.target.value })}
                             >
                                 <option value="">{t('common.select')}</option>
-                                <option value="1">{t('profile.genderMale')}</option>
-                                <option value="2">{t('profile.genderFemale')}</option>
-                                <option value="0">{t('profile.genderOther')}</option>
-                                <option value="9">{t('profile.genderNa')}</option>
+                                <option value="1">{t('gender.male')}</option>
+                                <option value="2">{t('gender.female')}</option>
+                                <option value="0">{t('gender.notKnown')}</option>
+                                <option value="9">{t('gender.notApplicable')}</option>
                             </select>
                         </div>
                         <div className="grid grid-cols-2 gap-4">

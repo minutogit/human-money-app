@@ -57,7 +57,7 @@ export function CreatorSection({
               {creator.url && <a href={creator.url} target="_blank" rel="noopener noreferrer" className="text-theme-primary hover:underline block">{creator.url}</a>}
             </InfoRow>
             <InfoRow label={t('voucher.genderOrientationLabel')}>
-              {creator.gender === "1" ? t('profile.genderMale') : creator.gender === "2" ? t('profile.genderFemale') : creator.gender === "0" ? t('profile.genderOther') : creator.gender === "9" ? t('profile.genderNa') : t('common.unknown')}
+              {creator.gender === "1" ? t('gender.male') : creator.gender === "2" ? t('gender.female') : creator.gender === "0" ? t('gender.notKnown') : creator.gender === "9" ? t('gender.notApplicable') : t('common.unknown')}
             </InfoRow>
             <InfoRow label={t('voucher.reputationStatusLabel')}>
               {typeof trustStatus === 'object' && trustStatus !== null && 'knownOffender' in trustStatus ? (

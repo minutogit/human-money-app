@@ -1,5 +1,6 @@
 // src/components/voucher/ExportSigningRequestModal.tsx
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { voucherService, SigningRequestConfig } from "../../services/voucherService";
 import { settingsService } from "../../services/settingsService";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -25,6 +26,7 @@ export function ExportSigningRequestModal({
     protectAction,
     onSettingsRefresh
 }: ExportSigningRequestModalProps) {
+    const { t } = useTranslation();
     const [recipientId, setRecipientId] = useState("");
     const [encryptToDid, setEncryptToDid] = useState(true);
     const [protectWithPassword, setProtectWithPassword] = useState(false);
@@ -42,24 +44,24 @@ export function ExportSigningRequestModal({
             let config;
             if (encryptToDid) {
                 if (!recipientId.trim()) {
-                    setExportError("Please enter a recipient DID.");
+                    setExportError(t('voucher.errorEnterRecipientDid'));
                     setIsExporting(false);
                     return;
                 }
                 config = { type: "TargetDid", value: [recipientId.trim(), "TrialDecryption"] };
             } else if (protectWithPassword) {
                 if (!exportPassword) {
-                    setExportError("Please enter a password.");
+                    setExportError(t('voucher.errorEnterPassword'));
                     setIsExporting(false);
                     return;
                 }
                 if (!exportPasswordConfirm) {
-                    setExportError("Please confirm your password.");
+                    setExportError(t('voucher.export.errorNoConfirm'));
                     setIsExporting(false);
                     return;
                 }
                 if (exportPassword !== exportPasswordConfirm) {
-                    setExportError("Passwords do not match.");
+                    setExportError(t('voucher.export.errorPasswordMismatch'));
                     setIsExporting(false);
                     return;
                 }
@@ -75,8 +77,8 @@ export function ExportSigningRequestModal({
                     ? `${settings.lastUsedDirectory}/signature-request-${voucherId.slice(0, 8)}.ask`
                     : `signature-request-${voucherId.slice(0, 8)}.ask`,
                 filters: [
-                    { name: 'Signature Request (.ask)', extensions: ['ask'] },
-                    { name: 'All Files', extensions: ['*'] }
+                    { name: t('voucher.export.fileFilter'), extensions: ['ask'] },
+                    { name: t('voucher.export.allFiles'), extensions: ['*'] }
                 ]
             });
 
@@ -94,7 +96,7 @@ export function ExportSigningRequestModal({
                 resetAndClose();
             }
         } catch (e) {
-            const msg = `Failed to export signing request: ${e}`;
+            const msg = t('voucher.export.failed', { error: `${e}` });
             logger.error(msg);
             setExportError(msg);
         } finally {
@@ -113,7 +115,7 @@ export function ExportSigningRequestModal({
     return (
         <ConfirmationModal
             isOpen={isOpen}
-            title="Export Signature Request"
+            title={t('voucher.export.title')}
             description={
                 <div className="space-y-6 pt-2">
                     <div className="flex items-center gap-3 p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/20">
@@ -125,18 +127,18 @@ export function ExportSigningRequestModal({
                             className="h-5 w-5 rounded-lg border-theme-subtle text-theme-primary focus:ring-theme-primary transition-all"
                         />
                         <label htmlFor="wallet-encryptToDid" className="text-sm font-bold text-theme-secondary">
-                            Encrypt for a specific contact
+                            {t('voucher.export.encryptForContact')}
                         </label>
                     </div>
 
                     {encryptToDid ? (
                         <div className="space-y-2 animate-in slide-in-from-top-2 duration-300">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">Signer's DID</label>
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">{t('voucher.export.signerDid')}</label>
                             <input
                                 type="text"
                                 value={recipientId}
                                 onChange={(e) => setRecipientId(e.target.value)}
-                                placeholder="did:key:z..."
+                                placeholder={t('contacts.didPlaceholder')}
                                 className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 focus:border-theme-primary shadow-inner-soft transition-all"
                                 autoFocus
                             />
@@ -152,20 +154,20 @@ export function ExportSigningRequestModal({
                                     className="h-5 w-5 rounded-lg border-theme-subtle text-theme-accent focus:ring-theme-accent transition-all"
                                 />
                                 <label htmlFor="wallet-protectWithPassword" className="text-sm font-bold text-theme-secondary">
-                                    Protect with password
+                                    {t('voucher.export.protectWithPassword')}
                                 </label>
                             </div>
 
                             {protectWithPassword && (
                                 <div className="space-y-4 animate-in slide-in-from-top-2 duration-300">
                                     <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">Password</label>
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">{t('auth.password')}</label>
                                         <div className="relative">
                                             <input
                                                 type={showExportPassword ? "text" : "password"}
                                                 value={exportPassword}
                                                 onChange={(e) => { setExportPassword(e.target.value); setExportError(""); }}
-                                                placeholder="Enter password"
+                                                placeholder={t('voucher.export.passwordPlaceholder')}
                                                 className="w-full px-4 py-3 pr-20 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 focus:border-theme-primary shadow-inner-soft transition-all"
                                             />
                                             <button
@@ -173,17 +175,17 @@ export function ExportSigningRequestModal({
                                                 onClick={() => setShowExportPassword(!showExportPassword)}
                                                 className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-theme-light hover:text-theme-primary transition-colors"
                                             >
-                                                {showExportPassword ? "HIDE" : "SHOW"}
+                                                {showExportPassword ? t('voucher.export.hide') : t('voucher.export.show')}
                                             </button>
                                         </div>
                                     </div>
                                     <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">Confirm Password</label>
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">{t('auth.confirmPassword')}</label>
                                         <input
                                             type={showExportPassword ? "text" : "password"}
                                             value={exportPasswordConfirm}
                                             onChange={(e) => { setExportPasswordConfirm(e.target.value); setExportError(""); }}
-                                            placeholder="Confirm password"
+                                            placeholder={t('voucher.export.confirmPasswordPlaceholder')}
                                             className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 focus:border-theme-primary shadow-inner-soft transition-all"
                                         />
                                     </div>
@@ -198,7 +200,7 @@ export function ExportSigningRequestModal({
                     )}
                 </div>
             }
-            confirmText="Export Request"
+            confirmText={t('voucher.export.exportRequest')}
             onConfirm={handleExportSigningRequest}
             onCancel={resetAndClose}
             isProcessing={isExporting}

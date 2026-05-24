@@ -22,7 +22,8 @@ const VALID_DOMAINS = [
   'conflict',
   'integrity',
   'settings',
-  'error'
+  'error',
+  'gender'
 ];
 
 let enContent;

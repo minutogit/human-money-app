@@ -1,5 +1,6 @@
 // src/components/TransferSuccessView.tsx
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../utils/log';
@@ -25,6 +26,7 @@ interface TransferSuccessViewProps {
 }
 
 export function TransferSuccessView({ bundleData, recipientId, summary, onDone }: TransferSuccessViewProps) {
+    const { t } = useTranslation();
     const { protectAction } = useSession();
     const [feedback, setFeedback] = useState('');
     const [isSaving, setIsSaving] = useState(false);
@@ -53,12 +55,12 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
             const suggestedFilename = `${recipientName}_${dateTimePart}.transfer`;
 
             const filePath = await save({
-                title: 'Save Transfer File',
+                title: t('transfer.success.saveTitle'),
                 defaultPath: settings?.lastUsedDirectory 
                     ? `${settings.lastUsedDirectory}/${suggestedFilename}`
                     : suggestedFilename,
                 filters: [{
-                    name: 'Transfer File',
+                    name: t('transfer.success.fileFilter'),
                     extensions: ['transfer']
                 }]
             });
@@ -73,7 +75,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                         settingsService.getSettings().then(setSettings).catch(() => {});
                     });
                 }
-                setFeedback(`Wallet synchronized and file saved.`);
+                setFeedback(t('transfer.success.synced'));
             }
         } catch (e) {
             setFeedback(`Error: ${e}`);
@@ -96,8 +98,8 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                         </div>
                     </div>
                     <div className="space-y-1">
-                        <h1 className="text-3xl font-black text-theme-primary tracking-tight">Transfer Ready to Send</h1>
-                        <p className="text-theme-light font-medium">Your funds are securely packaged and ready for delivery.</p>
+                        <h1 className="text-3xl font-black text-theme-primary tracking-tight">{t('transfer.success.title')}</h1>
+                        <p className="text-theme-light font-medium">{t('transfer.success.description')}</p>
                     </div>
                 </div>
 
@@ -105,7 +107,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                 <div className="bg-white border border-theme-subtle rounded-[40px] p-8 shadow-premium space-y-8">
                     {/* Amount Hero */}
                     <div className="text-center space-y-2">
-                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">Total Amount</span>
+                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">{t('transfer.success.totalAmount')}</span>
                         <div className="text-4xl font-black text-theme-primary tracking-tighter">
                             {summary}
                         </div>
@@ -114,7 +116,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                     <div className="space-y-4">
                         <div className="space-y-2">
                             <span className="text-[9px] font-black uppercase tracking-widest text-theme-light flex items-center gap-1.5 px-1">
-                                <User size={10} /> Recipient ID
+                                <User size={10} /> {t('transfer.success.recipientId')}
                             </span>
                             <div className="p-4 bg-theme-subtle/10 rounded-2xl border border-theme-subtle/20">
                                 <p className="text-sm font-mono font-bold text-theme-secondary break-all">
@@ -128,9 +130,9 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                                 <Share2 size={20} />
                             </div>
                             <div className="space-y-1">
-                                <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest">Next Step</h4>
+                                <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest">{t('transfer.success.nextStep')}</h4>
                                 <p className="text-xs text-blue-800/80 font-medium leading-relaxed">
-                                    Save the transfer file and send it to your contact (e.g. via Signal, WhatsApp, or Email).
+                                    {t('transfer.success.nextStepDesc')}
                                 </p>
                             </div>
                         </div>
@@ -146,14 +148,14 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                         className="w-full max-w-sm py-4 rounded-3xl shadow-premium-lg text-lg gap-2"
                     >
                         {isSaving ? <Download className="animate-bounce" size={20} /> : <Download size={20} />}
-                        {isSaving ? 'Saving File...' : 'Save Transfer File'}
+                        {isSaving ? t('transfer.success.savingFile') : t('transfer.success.saveFile')}
                     </Button>
                     <Button 
                         variant="secondary" 
                         onClick={onDone} 
                         className="w-full max-w-sm py-3 rounded-2xl text-sm font-black uppercase tracking-widest"
                     >
-                        Finish & Back to Wallet
+                        {t('transfer.success.finish')}
                     </Button>
                     
                     {feedback && (

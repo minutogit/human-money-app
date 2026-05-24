@@ -1,9 +1,44 @@
+/* eslint-disable @typescript-eslint/no-require-imports, no-undef, @typescript-eslint/no-explicit-any */
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, vi, Mock, MockInstance } from 'vitest';
 import { SettingsView } from '../SettingsView';
 import { settingsService } from '../../services/settingsService';
 import { authService } from '../../services/authService';
+
+const { mockChangeLanguage } = vi.hoisted(() => ({
+  mockChangeLanguage: vi.fn(),
+}));
+
+vi.mock('react-i18next', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const enPath = path.resolve(process.cwd(), 'src/locales/en.json');
+  let enTranslations = {};
+  try {
+    enTranslations = JSON.parse(fs.readFileSync(enPath, 'utf-8'));
+  } catch (err) {
+    console.error(err);
+  }
+
+  const stableT = (key: string, options?: any) => {
+    let val = (enTranslations as Record<string, string>)[key] || key;
+    if (options && typeof options === 'object') {
+      for (const [k, v] of Object.entries(options)) {
+        val = val.replace(new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`, 'g'), String(v));
+      }
+    }
+    return val;
+  };
+
+  return {
+    useTranslation: () => ({
+      t: stableT,
+      i18n: { language: 'en', changeLanguage: mockChangeLanguage },
+      ready: true,
+    }),
+  };
+});
 
 // Mock dependencies
 vi.mock('../../services/settingsService', () => ({
@@ -48,6 +83,8 @@ describe('SettingsView Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockChangeLanguage.mockClear();
+    localStorage.clear();
     
     // Modern JSDOM has clipboard, but if it doesn't, ensure it exists
     if (!navigator.clipboard) {
@@ -183,5 +220,48 @@ describe('SettingsView Component', () => {
     await user.click(backButton);
 
     expect(mockOnBack).toHaveBeenCalled();
+  });
+
+  it('renders language selector card on Security & Ops tab and allows changing language', async () => {
+    const user = userEvent.setup();
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
+    render(<SettingsView onBack={mockOnBack} />);
+
+    await screen.findByText('Identity Profile');
+    const securityTab = screen.getByText('Security & Ops');
+    await user.click(securityTab);
+
+    // Verify Language Card elements are present
+    expect(screen.getByText('Language')).toBeInTheDocument();
+    expect(screen.getByText('Choose the language for the user interface.')).toBeInTheDocument();
+    
+    // Find dropdown toggle button and click it to open
+    const dropdownToggle = screen.getByRole('button', { name: /🇺🇸\s*English/i });
+    expect(dropdownToggle).toBeInTheDocument();
+    await user.click(dropdownToggle);
+
+    // Once open, options are visible
+    const englishBtnsBefore = screen.getAllByRole('button', { name: /🇺🇸\s*English/i });
+    const englishBtn = englishBtnsBefore[1]; // Index 1 is the menu option
+    const germanBtn = screen.getByRole('button', { name: /🇩🇪\s*Deutsch/i });
+    
+    expect(englishBtn).toBeInTheDocument();
+    expect(germanBtn).toBeInTheDocument();
+
+    // Click German language button
+    await user.click(germanBtn);
+
+    // Verify changeLanguage was called and localStorage was updated
+    expect(mockChangeLanguage).toHaveBeenCalledWith('de');
+    expect(setItemSpy).toHaveBeenCalledWith('app_language', 'de');
+
+    // Click English language button (must reopen the dropdown first)
+    await user.click(dropdownToggle);
+    const englishBtnsAfter = screen.getAllByRole('button', { name: /🇺🇸\s*English/i });
+    await user.click(englishBtnsAfter[1]);
+    expect(mockChangeLanguage).toHaveBeenCalledWith('en');
+    expect(setItemSpy).toHaveBeenCalledWith('app_language', 'en');
+    
+    setItemSpy.mockRestore();
   });
 });

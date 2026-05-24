@@ -1,4 +1,5 @@
 import { useState, FormEvent, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { voucherService } from "../services/voucherService";
 import { Button } from "./ui/Button";
 import { useSession } from "../context/SessionContext";
@@ -25,6 +26,7 @@ interface CreateVoucherProps {
 }
 
 export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps) {
+    const { t } = useTranslation();
     const { protectAction } = useSession();
     const {
         standards,
@@ -57,12 +59,11 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const [showConfirm, setShowConfirm] = useState(false);
     const [showTestVoucherWarning, setShowTestVoucherWarning] = useState(false);
 
-    // Mapping of error keys to human-readable labels
     const fieldLabels: Record<string, string> = {
-        standard: "Voucher Type",
-        amount: "Amount",
-        firstName: "First Name",
-        lastName: "Last Name"
+        standard: t('voucher.create.voucherType'),
+        amount: t('voucher.create.amount'),
+        firstName: t('voucher.create.firstName'),
+        lastName: t('voucher.create.lastName')
     };
 
     // Helper to generate missing field names string
@@ -115,10 +116,10 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             await protectAction(async (password) => {
                 await voucherService.create(selectedStandard.content, voucherData, password || undefined);
             });
-            setFeedback({type: 'success', msg: "Voucher created! Synchronizing ledger..."});
+            setFeedback({type: 'success', msg: t('voucher.create.success')});
             setTimeout(onVoucherCreated, 2000);
         } catch (e) {
-            setFeedback({type: 'error', msg: `Creation Failed: ${e}`});
+            setFeedback({type: 'error', msg: t('voucher.create.failed', { error: `${e}` })});
             setIsLoading(false);
             setShowConfirm(false);
         }
@@ -126,8 +127,8 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
 
     return (
         <PageLayout 
-            title="Create Voucher" 
-            description="Create a new voucher." 
+            title={t('voucher.create')} 
+            description={t('voucher.create.description')} 
             onBack={onCancel}
         >
             <div className="max-w-5xl mx-auto space-y-8 pb-20">
@@ -181,9 +182,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                             <Info size={24} />
                         </div>
                         <div>
-                            <h3 className="text-sm font-black text-amber-900 uppercase tracking-widest mb-1">Public Data Notice</h3>
+                            <h3 className="text-sm font-black text-amber-900 uppercase tracking-widest mb-1">{t('voucher.create.publicDataNotice')}</h3>
                             <p className="text-xs text-amber-800/80 font-medium leading-relaxed">
-                                The information embedded in this voucher serves as your cryptographic guarantee. All creator details will be permanently readable by anyone verifying this asset on the public ledger.
+                                {t('voucher.create.publicDataNoticeDesc')}
                             </p>
                         </div>
                     </div>
@@ -192,15 +193,15 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         {Object.values(errors).some(v => v) && (
                             <div className="flex items-center gap-2 text-rose-600 bg-rose-50 px-4 py-2 rounded-xl border border-rose-100 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                 <AlertCircle size={16} />
-                                <span className="text-xs font-bold">Missing: {getMissingFieldNames(errors)}</span>
+                                <span className="text-xs font-bold">{t('voucher.create.missingPrefix')}{getMissingFieldNames(errors)}</span>
                             </div>
                         )}
                         <Button type="submit" disabled={isLoading} className="min-w-[320px] py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
                             {isLoading ? <Clock className="animate-spin" size={24} /> : <PlusCircle size={24} />}
-                            {isLoading ? "Creating..." : "Create Voucher"}
+                            {isLoading ? t('voucher.create.creating') : t('voucher.create')}
                         </Button>
                             <p className="text-[10px] font-bold text-theme-light flex items-center gap-2">
-                                <Lock size={12} /> You will sign this voucher in the next step.
+                                <Lock size={12} /> {t('voucher.create.nextStepSign')}
                             </p>
                     </div>
                 </form>
@@ -208,28 +209,28 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
 
             <ConfirmationModal
                 isOpen={showConfirm}
-                title="Create Voucher?"
+                title={t('voucher.create.confirmTitle')}
                 description={
                     <div className="space-y-4 pt-2">
                         <div className="p-6 bg-theme-primary/5 rounded-[32px] border border-theme-primary/20 text-center">
-                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light mb-2">New Voucher</p>
+                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light mb-2">{t('voucher.create.confirmNewLabel')}</p>
                             <p className="text-3xl font-black text-theme-primary tracking-tighter">
                                 {(() => {
                                     if (!parsedStandard) return amount;
                                     const abbreviation = parsedStandard.immutable.identity.abbreviation;
                                     const unit = parsedStandard.immutable.blueprint.unit;
-                                    let displayUnit = abbreviation || unit || 'Units';
+                                    let displayUnit = abbreviation || unit || t('voucher.create.units');
                                     if (nonRedeemable && !displayUnit.startsWith("TEST-")) displayUnit = `TEST-${displayUnit}`;
                                     return `${amount} ${displayUnit}`;
                                 })()}
                             </p>
                         </div>
                         <p className="text-sm font-medium text-theme-secondary leading-relaxed">
-                            This action will cryptographically sign the asset with your private key. The voucher will be permanently attributed to your identity. Proceed?
+                            {t('voucher.create.confirmDescription')}
                         </p>
                     </div>
                 }
-                confirmText="Create Voucher"
+                confirmText={t('voucher.create')}
                 onConfirm={executeCreation}
                 onCancel={() => setShowConfirm(false)}
                 isProcessing={isLoading}
@@ -237,21 +238,21 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
 
             <ConfirmationModal
                 isOpen={showTestVoucherWarning}
-                title="Warning"
+                title={t('common.warning')}
                 confirmVariant="danger"
                 description={
                     <div className="space-y-4 pt-2">
                         <div className="p-5 bg-rose-50 border border-rose-100 rounded-3xl flex items-start gap-4">
                             <ShieldAlert size={24} className="text-rose-500 mt-1 shrink-0" />
                             <p className="text-sm font-medium text-rose-900 leading-relaxed">
-                                You are about to issue a <strong>real redeemable voucher</strong>. In this early development phase, we recommend using Test Assets to prevent potential asset loss.
+                                {t('voucher.create.testWarningDesc')}
                             </p>
                         </div>
-                        <p className="text-sm font-bold text-theme-secondary">Proceed with real cryptographic obligation?</p>
+                        <p className="text-sm font-bold text-theme-secondary">{t('voucher.create.testWarningProceed')}</p>
                     </div>
                 }
-                confirmText="Create Real Voucher"
-                cancelText="Back to Safety"
+                confirmText={t('voucher.create.createRealVoucher')}
+                cancelText={t('voucher.create.backToSafety')}
                 onConfirm={() => { setNonRedeemable(false); setShowTestVoucherWarning(false); }}
                 onCancel={() => { setNonRedeemable(true); setShowTestVoucherWarning(false); }}
             />

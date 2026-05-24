@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { Send } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
@@ -25,13 +26,14 @@ export function TransferSummaryBar({
   availableVouchers,
   uuidToPrecisionMap
 }: TransferSummaryBarProps) {
+  const { t } = useTranslation();
   return (
     <div className="sticky bottom-8 z-30 transform-gpu will-change-transform">
       <Card variant="none" className="shadow-premium-xl border-theme-primary/20 bg-theme-primary text-white overflow-hidden p-0 rounded-[40px]">
         <div className="p-8 space-y-6">
           <div className="flex justify-between items-center">
             <div className="space-y-1">
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60">Disbursement Summary</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60">{t('transfer.disbursementSummary')}</p>
               <h3 className="text-2xl font-black tracking-tighter">
                 {checkoutSummary.count > 0 ? (
                   <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -64,7 +66,7 @@ export function TransferSummaryBar({
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-white animate-pulse"></div>
               <span key={selectionSize} className="text-[9px] font-black uppercase tracking-widest animate-in fade-in duration-300">
-                {selectionSize} Vouchers Selected
+                {t('transfer.vouchersSelected', { count: selectionSize })}
               </span>
             </div>
             <Button 
@@ -72,7 +74,7 @@ export function TransferSummaryBar({
               disabled={isProcessing} 
               className="!bg-white !bg-none !text-theme-primary rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest shadow-lg hover:scale-105 active:scale-95 transition-all"
             >
-              {isProcessing ? "Sending..." : "Send Voucher"}
+              {isProcessing ? t('transfer.sending') : t('transfer.sendVoucher')}
             </Button>
           </div>
         </div>

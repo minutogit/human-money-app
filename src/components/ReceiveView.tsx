@@ -192,7 +192,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     setFeedbackMsg(translateError(error, t));
                 }
             } else {
-                setFeedbackMsg("Invalid file type dropped.");
+                setFeedbackMsg(t('transfer.importFile.invalidFileType'));
             }
         }
     };
@@ -200,11 +200,11 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     const handleProcessClick = (event: FormEvent) => {
         event.preventDefault();
         if ((!bundlePath) && !droppedFileContent) {
-            setFeedbackMsg("No payload selected.");
+            setFeedbackMsg(t('transfer.importFile.noPayload'));
             return;
         }
         if (!fileType) {
-            setFeedbackMsg("Unknown payload format.");
+            setFeedbackMsg(t('transfer.importFile.unknownFormat'));
             return;
         }
         setFeedbackMsg('');
@@ -256,9 +256,9 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 if (updatedInstanceId) {
                     setResultModal({
                         isOpen: true,
-                        title: "Transfer Complete",
-                        content: <p className="text-sm font-medium text-theme-secondary">The transfer has been successfully validated and added to your wallet.</p>,
-                        confirmText: "View Details",
+                        title: t('transfer.importFile.transferComplete'),
+                        content: <p className="text-sm font-medium text-theme-secondary">{t('transfer.importFile.transferCompleteDesc')}</p>,
+                        confirmText: t('transfer.importFile.viewDetails'),
                         voucherId: updatedInstanceId
                     });
                 }
@@ -279,9 +279,9 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 if (match) {
                     setResultModal({
                         isOpen: true,
-                        title: "Duplicate Signature",
-                        content: <p className="text-sm font-medium text-theme-secondary">This signature is already present on the selected asset.</p>,
-                        confirmText: "Go to Asset",
+                        title: t('transfer.importFile.duplicateSignature'),
+                        content: <p className="text-sm font-medium text-theme-secondary">{t('transfer.importFile.duplicateSignatureDesc')}</p>,
+                        confirmText: t('transfer.importFile.goToAsset'),
                         voucherId: match[1]
                     });
                     return;
@@ -335,8 +335,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
     return (
         <PageLayout 
-            title="Import File" 
-            description="Securely process incoming files." 
+            title={t('transfer.importFile.title')} 
+            description={t('transfer.importFile.description')} 
             onBack={onBack}
         >
             <div className="max-w-3xl mx-auto space-y-8">
@@ -373,13 +373,13 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                                     <FileCheck size={48} />
                                 </div>
                                 <div>
-                                    <h3 className="text-xl font-black text-theme-primary tracking-tight mb-2">File Detected</h3>
+                                    <h3 className="text-xl font-black text-theme-primary tracking-tight mb-2">{t('transfer.importFile.fileDetected')}</h3>
                                     <div className="flex flex-col items-center gap-1.5">
                                         <p className="text-xs font-mono font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">
                                             {bundleName}
                                         </p>
                                         <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mt-2">
-                                            Ready to import
+                                            {t('transfer.importFile.readyToImport')}
                                         </p>
                                     </div>
                                 </div>
@@ -389,7 +389,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                                         onClick={(e) => { e.stopPropagation(); clearSelection(); }}
                                         className="text-[10px] font-black uppercase tracking-widest text-theme-light hover:text-rose-500 transition-colors flex items-center gap-1 mx-auto"
                                     >
-                                        <X size={12} /> Discard File
+                                        <X size={12} /> {t('transfer.importFile.discard')}
                                     </button>
                                 </div>
                             </div>
@@ -399,14 +399,14 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                                     <UploadCloud size={36} />
                                 </div>
                                 <div className="space-y-2">
-                                    <h3 className="text-xl font-black text-theme-primary tracking-tight">Drop Transfer File</h3>
+                                    <h3 className="text-xl font-black text-theme-primary tracking-tight">{t('transfer.importFile.dropZone')}</h3>
                                     <p className="text-sm font-medium text-theme-light/60 max-w-[280px]">
-                                        Support for .transfer, .ask, and .sig files received from trusted parties.
+                                        {t('transfer.importFile.dropZoneHint')}
                                     </p>
                                 </div>
                                 <div className="pt-4">
                                     <Button type="button" onClick={(e) => { e.stopPropagation(); handleFileSelect(); }} variant="secondary" className="rounded-2xl px-8 shadow-premium group-hover:bg-theme-secondary group-hover:text-white transition-all">
-                                        Select File
+                                        {t('transfer.importFile.selectFile')}
                                     </Button>
                                 </div>
                             </div>
@@ -421,11 +421,11 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                             className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3 disabled:opacity-30 disabled:grayscale transition-all"
                         >
                             {isProcessing ? <ArrowRightLeft className="animate-spin" size={24} /> : <FileSignature size={24} />}
-                            {isProcessing ? 'Loading...' : 'Import File'}
+                            {isProcessing ? t('transfer.importFile.loading') : t('transfer.importFile.importButton')}
                         </Button>
                         <p className="text-[10px] font-bold text-theme-light text-center flex items-center justify-center gap-2">
                             <Lock size={12} />
-                            ALL PROCESSING IS PERFORMED LOCALLY ON THIS DEVICE
+                            {t('transfer.importFile.localProcessing')}
                         </p>
                     </div>
                 </form>
@@ -433,14 +433,14 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 {/* File Format Guide */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-10">
                     {[
-                        { icon: FileCheck, title: 'Transfer', desc: 'Accept assets sent to you directly.', ext: '.transfer' },
-                        { icon: FileSignature, title: 'Signature Request', desc: 'Sign an asset for a peer.', ext: '.ask' },
-                        { icon: CheckCircle2, title: 'Signature Response', desc: 'Attach a peer signature.', ext: '.sig' }
+                        { icon: FileCheck, titleKey: 'transfer.importFile.formatTransfer', descKey: 'transfer.importFile.formatTransferDesc', ext: '.transfer' },
+                        { icon: FileSignature, titleKey: 'transfer.importFile.formatSignatureRequest', descKey: 'transfer.importFile.formatSigReqDesc', ext: '.ask' },
+                        { icon: CheckCircle2, titleKey: 'transfer.importFile.formatSignatureResponse', descKey: 'transfer.importFile.formatSigRespDesc', ext: '.sig' }
                     ].map((item, i) => (
                         <div key={i} className="p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl flex flex-col items-center text-center">
                             <item.icon size={18} className="text-theme-light/60 mb-2" />
-                            <h4 className="text-[10px] font-black uppercase tracking-widest text-theme-secondary mb-1">{item.title}</h4>
-                            <p className="text-[10px] text-theme-light font-medium leading-tight">{item.desc}</p>
+                            <h4 className="text-[10px] font-black uppercase tracking-widest text-theme-secondary mb-1">{t(item.titleKey)}</h4>
+                            <p className="text-[10px] text-theme-light font-medium leading-tight">{t(item.descKey)}</p>
                             <span className="mt-2 text-[9px] font-mono font-bold bg-theme-subtle/20 px-2 py-0.5 rounded text-theme-light">{item.ext}</span>
                         </div>
                     ))}
@@ -450,7 +450,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             {/* Modals */}
             <ConfirmationModal
                 isOpen={showConfirm}
-                title={`Import ${fileType === 'transfer' ? 'Transfer' : fileType === 'ask' ? 'Signature Request' : 'Signature Response'}`}
+                title={fileType === 'transfer' ? t('transfer.importFile.importModalTitleTransfer') : fileType === 'ask' ? t('transfer.importFile.importModalTitleAsk') : t('transfer.importFile.importModalTitleSig')}
                 description={
                     <div className="space-y-6 pt-2">
                         <div className="p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/20 flex items-center gap-4">
@@ -459,29 +459,29 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                             </div>
                             <div>
                                 <p className="text-sm font-bold text-theme-secondary truncate max-w-[200px]">{bundleName}</p>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">Type: {fileType}</p>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">{t('transfer.importFile.typeLabel', { fileType })}</p>
                             </div>
                         </div>
 
                         {(fileType === 'ask' || fileType === 'sig') && (
                             <div className="space-y-3">
                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-2">
-                                    <Lock size={12} /> Payload Password (Optional)
+                                    <Lock size={12} /> {t('transfer.importFile.passwordLabel')}
                                 </label>
                                 <Input
                                     type="password"
                                     value={bundlePassword}
                                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBundlePassword(e.target.value)}
-                                    placeholder="Enter access password if required"
+                                    placeholder={t('transfer.importFile.passwordPlaceholder')}
                                 />
                                 <p className="text-[10px] text-theme-light font-medium italic">
-                                    Required only if the sender encrypted this specific payload with a password.
+                                    {t('transfer.importFile.passwordHint')}
                                 </p>
                             </div>
                         )}
                     </div>
                 }
-                confirmText="Import"
+                confirmText={t('transfer.importFile.confirmImport')}
                 onConfirm={executeReceive}
                 onCancel={() => { setShowConfirm(false); setBundlePassword(""); }}
                 isProcessing={isProcessing}
@@ -490,7 +490,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             {toleranceModal && (
                 <ConfirmationModal
                     isOpen={true}
-                    title={toleranceModal.type === 'Soft' ? "Sync from Backup" : "CRITICAL: Chronological Conflict"}
+                    title={toleranceModal.type === 'Soft' ? t('transfer.importFile.syncFromBackup') : t('transfer.importFile.criticalConflict')}
                     confirmVariant="danger"
                     description={
                         <div className="space-y-6 pt-2">
@@ -508,15 +508,15 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                                         onChange={(e) => setConfirmText(e.target.checked ? "checked" : "")}
                                     />
                                     <span className="text-sm font-bold text-theme-secondary select-none">
-                                        I accept responsibility for potential double-spend conflicts.
+                                        {t('transfer.importFile.acceptResponsibility')}
                                     </span>
                                 </label>
                             ) : (
                                 <div className="space-y-3">
-                                    <p className="text-[10px] font-black text-rose-500 uppercase tracking-[0.2em]">Mandatory Affirmation</p>
+                                    <p className="text-[10px] font-black text-rose-500 uppercase tracking-[0.2em]">{t('transfer.importFile.mandatoryAffirmation')}</p>
                                     <Input 
                                         className="border-2 border-rose-500/30 focus:border-rose-500 uppercase font-mono tracking-widest text-center py-4"
-                                        placeholder='TYPE "IMPORT" TO CONFIRM'
+                                        placeholder={t('transfer.importFile.typeToConfirm')}
                                         value={confirmText}
                                         onChange={(e) => setConfirmText(e.target.value)}
                                     />
@@ -524,7 +524,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                             )}
                         </div>
                     }
-                    confirmText="Import Anyway"
+                    confirmText={t('transfer.importFile.importAnyway')}
                     onConfirm={confirmToleranceImport}
                     onCancel={() => { setToleranceModal(null); setConfirmText(""); setIsProcessing(false); setShowConfirm(false); }}
                     isProcessing={isProcessing}
@@ -538,7 +538,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     title={resultModal.title}
                     description={resultModal.content}
                     confirmText={resultModal.confirmText}
-                    cancelText="Dismiss"
+                    cancelText={t('transfer.importFile.dismiss')}
                     onConfirm={() => {
                         if (resultModal.voucherId) {
                             onReceiveSuccess({

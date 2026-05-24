@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, FormEvent, useReducer } from "react";
+import { useTranslation } from 'react-i18next';
 import { voucherService } from "../services/voucherService";
 import { transferService, CreateBundleResult } from "../services/transferService";
 import { settingsService } from "../services/settingsService";
@@ -114,6 +115,7 @@ function getPrecision(content: string): number {
 }
 
 export function SendView() {
+    const { t } = useTranslation();
     const { protectAction, profileName } = useSession();
     const { navigate, goBack } = useNavigation();
     const [state, dispatch] = useReducer(reducer, initialState);
@@ -251,12 +253,12 @@ export function SendView() {
             return; 
         }
         if (selectedMap.size === 0) { 
-            dispatch({ type: 'SET_FEEDBACK', msg: "Asset selection required." }); 
+            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.assetSelectionRequired') }); 
             return; 
         }
         if (detectedPrivacy === 'flexible' && state.privacyMode === null) {
             dispatch({ type: 'SET_PRIVACY_ERROR', value: true });
-            dispatch({ type: 'SET_FEEDBACK', msg: "Privacy configuration required." });
+            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.privacyRequired') });
             document.getElementById('privacyMode')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             return;
         }
@@ -283,7 +285,7 @@ export function SendView() {
                     recipientId: state.recipientId,
                     sources,
                     notes: state.notes || null,
-                    senderProfileName: senderName || "Anonymous",
+                    senderProfileName: senderName || t('transfer.anonymous'),
                     standardDefinitionsToml,
                     usePrivacyMode: state.privacyMode === 'stealth',
                     password
@@ -325,17 +327,17 @@ export function SendView() {
                 .map(([displayCurrency, stat]) => `${formatAmount(stat.total.toString())} ${displayCurrency}`)
                 .join(', ');
 
-            dispatch({ type: 'SET_FEEDBACK', msg: "Transfer successful!" });
+            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferSuccess') });
             setTimeout(() => navigate({ view: 'transfer_success', bundleData: bundleResult.bundleData, recipientId: state.recipientId, summary: summaryString }), 1500);
         } catch (e) {
-            dispatch({ type: 'SET_FEEDBACK', msg: `Transfer failed: ${e}` });
+            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferFailed', { error: `${e}` }) });
             dispatch({ type: 'SET_PROCESSING', value: false });
             dispatch({ type: 'TOGGLE_CONFIRM', value: false });
         }
     };
 
     return (
-        <PageLayout title="Create Transfer" description="Prepare a cryptographic asset transfer." onBack={goBack}>
+        <PageLayout title={t('transfer.title')} description={t('transfer.description')} onBack={goBack}>
             <div className="max-w-5xl mx-auto space-y-8 pb-32">
                 {state.feedbackMsg && (
                     <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 animate-in slide-in-from-top-2">
@@ -357,11 +359,11 @@ export function SendView() {
                             onClearRecipient={() => dispatch({ type: 'SET_RECIPIENT', id: "" })}
                         />
 
-                        <Card header={<div className="flex items-center gap-2"><BookOpen size={18} className="text-theme-primary"/><span className="font-black text-xs uppercase tracking-widest text-theme-primary">Context</span></div>}>
+                        <Card header={<div className="flex items-center gap-2"><BookOpen size={18} className="text-theme-primary"/><span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.context')}</span></div>}>
                             <div className="space-y-6">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">Transaction Note</label>
-                                    <Textarea value={state.notes} onChange={(e) => dispatch({ type: 'SET_NOTES', notes: e.target.value })} placeholder="Internal or public context..." className="rounded-2xl min-h-[80px]" />
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">{t('transfer.transactionNote')}</label>
+                                    <Textarea value={state.notes} onChange={(e) => dispatch({ type: 'SET_NOTES', notes: e.target.value })} placeholder={t('transfer.notePlaceholder')} className="rounded-2xl min-h-[80px]" />
                                 </div>
 
                                 <div className="p-4 bg-slate-50 border border-slate-200 rounded-3xl space-y-4">
@@ -371,12 +373,12 @@ export function SendView() {
                                                 <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md ${state.sendProfileName ? 'left-5' : 'left-1'}`}></div>
                                                 <input type="checkbox" className="hidden" checked={state.sendProfileName} onChange={(e) => dispatch({ type: 'TOGGLE_PROFILE_NAME', value: e.target.checked })} />
                                             </div>
-                                            <span className="text-xs font-black text-slate-600 uppercase tracking-widest group-hover:text-theme-primary transition-colors">Disclose Identity</span>
+                                            <span className="text-xs font-black text-slate-600 uppercase tracking-widest group-hover:text-theme-primary transition-colors">{t('transfer.discloseIdentity')}</span>
                                         </label>
                                     </div>
                                     {state.sendProfileName && (
                                         <div className="space-y-2 animate-in slide-in-from-top-2">
-                                            <Input value={state.customSenderName} onChange={(e) => dispatch({ type: 'SET_SENDER_NAME', name: e.target.value })} placeholder="Display Name" className="bg-white border-slate-200 text-sm font-bold" />
+                                            <Input value={state.customSenderName} onChange={(e) => dispatch({ type: 'SET_SENDER_NAME', name: e.target.value })} placeholder={t('transfer.displayName')} className="bg-white border-slate-200 text-sm font-bold" />
                                         </div>
                                     )}
                                 </div>
@@ -425,18 +427,18 @@ export function SendView() {
 
             <ConfirmationModal 
                 isOpen={state.showConfirm}
-                title="Confirm Transfer"
+                title={t('transfer.confirmTitle')}
                 description={
                     <div className="space-y-4 pt-2 text-left">
                         <div className="flex items-center gap-3 p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/10">
                             <Avatar size={40} name={state.recipientId} variant="beam" />
                             <div className="min-w-0">
-                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">Recipient</p>
+                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.confirmRecipient')}</p>
                                 <p className="text-sm font-black text-theme-secondary truncate">{state.recipientId}</p>
                             </div>
                         </div>
                         <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                            <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-2">Assets</p>
+                            <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-2">{t('transfer.confirmAssets')}</p>
                             <div className="text-lg font-black tracking-tighter text-theme-primary">
                                 {Object.entries(selectionStats).map(([displayCurrency, stat]) => `${formatAmount(stat.total.toString())} ${displayCurrency}`).join(', ')}
                             </div>
@@ -444,12 +446,12 @@ export function SendView() {
                         <div className="flex items-center gap-2 px-1">
                             <Shield size={14} className={state.privacyMode === 'stealth' ? "text-purple-500" : "text-blue-500"}/>
                             <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">
-                                Privacy: <span className={state.privacyMode === 'stealth' ? "text-purple-600" : "text-blue-600"}>{state.privacyMode === 'stealth' ? 'Stealth' : 'Public'}</span>
+                                {t('transfer.confirmPrivacy')} <span className={state.privacyMode === 'stealth' ? "text-purple-600" : "text-blue-600"}>{state.privacyMode === 'stealth' ? t('transfer.stealth') : t('transfer.public')}</span>
                             </p>
                         </div>
                     </div>
                 }
-                confirmText="Execute"
+                confirmText={t('transfer.confirmExecute')}
                 onConfirm={executeTransfer}
                 onCancel={() => dispatch({ type: 'TOGGLE_CONFIRM', value: false })}
             />
