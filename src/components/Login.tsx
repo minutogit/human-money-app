@@ -407,31 +407,25 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     </form>
 
                     <div className="pt-4 border-t border-theme-subtle/40 flex flex-col items-center gap-1.5 text-center">
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                            <ShieldCheck size={12} /> {t('common.protocolVersion')}
-                        </p>
                         {localInstanceId && (
-                            <p className="text-[8px] font-bold font-mono text-slate-400/80 uppercase tracking-widest">
-                                {t('profile.deviceId')} {localInstanceId.slice(0, 12)}...
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em] flex items-center gap-2">
+                                <ShieldCheck size={12} /> {t('profile.deviceId')} <span className="font-mono">{localInstanceId.slice(0, 12)}...</span>
                             </p>
                         )}
-                        <p className="text-xs text-theme-light mt-2 max-w-md">
-                            {t('auth.supportTeaserPrefix')}{' '}
-                            <button
-                                type="button"
-                                onClick={async (e) => {
-                                    e.preventDefault();
-                                    try {
-                                        await openUrl('https://menschlich-miteinander.org');
-                                    } catch (err) {
-                                        logger.error(`Failed to open URL: ${err}`);
-                                    }
-                                }}
-                                className="text-theme-primary hover:underline focus:outline-none font-bold"
-                            >
-                                {t('auth.supportTeaserLink')}
-                            </button>
-                        </p>
+                        <button
+                            type="button"
+                            onClick={async (e) => {
+                                e.preventDefault();
+                                try {
+                                    await openUrl('https://menschlich-miteinander.org');
+                                } catch (err) {
+                                    logger.error(`Failed to open URL: ${err}`);
+                                }
+                            }}
+                            className="text-xs text-theme-light hover:text-theme-secondary hover:underline focus:outline-none mt-6 font-medium"
+                        >
+                            {t('auth.supportTeaserLink')}
+                        </button>
                     </div>
                 </>
             )}

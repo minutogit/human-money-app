@@ -450,16 +450,7 @@
     "source_text": "Session Locked"
   },
   "auth.supportTeaserLink": {
-    "source_text": "Help us develop this project further ↗",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated"
-    }
-  },
-  "auth.supportTeaserPrefix": {
-    "source_text": "Supported by the association Menschlich Miteinander.",
+    "source_text": "Support Menschlich Miteinander ↗",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",

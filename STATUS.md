@@ -283,6 +283,9 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Adjusted default Tauri window height from 600 to 720 to prevent content overflow at startup
 - [x] Localized voucher status/state labels and Test Voucher badge in VoucherCard and VoucherFilterBar UI components
 - [x] Integrated support view for 'Menschlich Miteinander' association, sidebar navigation, login page teaser, and tauri-plugin-opener handling (APP-028)
+- [x] Increased font size of advanced passphrase warning during profile creation to improve readability
+- [x] Updated login page footer to remove the protocol version and display the device ID with a shield icon prefix at 9px size
+
 
 
 
