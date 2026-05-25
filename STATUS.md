@@ -7,6 +7,12 @@ last_updated: "2026-05-25"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-028"
+    title: "Menschlich Miteinander Association Support Integration"
+    status: "completed"
+    priority: "medium"
+    depends_on: []
+    description: "Integrated support view, navigation item, login page teaser, secure external URL handling via tauri-plugin-opener, and fully localized UI strings."
   - id: "APP-001"
     title: "Encrypted Address Book"
     status: "completed"
@@ -276,6 +282,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Optimized Import UX (Auto-processing of selected/dropped files, trial decryption without password, and conditional file password prompt) (APP-027)
 - [x] Adjusted default Tauri window height from 600 to 720 to prevent content overflow at startup
 - [x] Localized voucher status/state labels and Test Voucher badge in VoucherCard and VoucherFilterBar UI components
+- [x] Integrated support view for 'Menschlich Miteinander' association, sidebar navigation, login page teaser, and tauri-plugin-opener handling (APP-028)
+
 
 
 ## Next Milestones

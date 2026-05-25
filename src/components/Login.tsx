@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import logo from "../assets/logo.png";
 
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { authService } from "../services/authService";
 import { AuthLayout } from "./AuthLayout";
 import { profileService } from "../services/profileService";
@@ -405,7 +406,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                         )}
                     </form>
 
-                    <div className="pt-4 border-t border-theme-subtle/40 flex flex-col items-center gap-1.5">
+                    <div className="pt-4 border-t border-theme-subtle/40 flex flex-col items-center gap-1.5 text-center">
                         <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em] flex items-center gap-2">
                             <ShieldCheck size={12} /> {t('common.protocolVersion')}
                         </p>
@@ -414,6 +415,23 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                 {t('profile.deviceId')} {localInstanceId.slice(0, 12)}...
                             </p>
                         )}
+                        <p className="text-xs text-theme-light mt-2 max-w-md">
+                            {t('auth.supportTeaserPrefix')}{' '}
+                            <button
+                                type="button"
+                                onClick={async (e) => {
+                                    e.preventDefault();
+                                    try {
+                                        await openUrl('https://menschlich-miteinander.org');
+                                    } catch (err) {
+                                        logger.error(`Failed to open URL: ${err}`);
+                                    }
+                                }}
+                                className="text-theme-primary hover:underline focus:outline-none font-bold"
+                            >
+                                {t('auth.supportTeaserLink')}
+                            </button>
+                        </p>
                     </div>
                 </>
             )}

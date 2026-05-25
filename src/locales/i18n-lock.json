@@ -449,6 +449,24 @@
     },
     "source_text": "Session Locked"
   },
+  "auth.supportTeaserLink": {
+    "source_text": "Help us develop this project further ↗",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "auth.supportTeaserPrefix": {
+    "source_text": "Supported by the association Menschlich Miteinander.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "auth.useSingleFields": {
     "ai_hint": "Toggle button label to switch to individual word input fields.",
     "status": {
@@ -857,6 +875,96 @@
       "it": "ai-translated"
     },
     "source_text": "Security"
+  },
+  "common.supportContributeDesc": {
+    "source_text": "Bring in your skills as a developer, designer, or organizer.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.supportContributeTitle": {
+    "source_text": "Participation",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.supportCtaButton": {
+    "source_text": "To the Association Website ↗",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.supportDescription": {
+    "source_text": "This app is supported by the association 'Menschlich Miteinander'. We promote the development of free tools for a decentralized and self-determined exchange. If you share our vision, you can support the project through a donation, membership, or active participation. You can find all details on our website.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.supportDonateDesc": {
+    "source_text": "Support the development financially through a direct contribution.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.supportDonateTitle": {
+    "source_text": "Donations",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.supportMemberDesc": {
+    "source_text": "Become part of our community and actively shape the future.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.supportMemberTitle": {
+    "source_text": "Membership",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.supportMenu": {
+    "source_text": "Support Us",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.supportTitle": {
+    "source_text": "Menschlich Miteinander",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "common.unknown": {
     "source_text": "Unknown",

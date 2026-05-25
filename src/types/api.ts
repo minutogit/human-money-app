@@ -55,6 +55,7 @@ export type AppState =
     | { view: "recreate_profile" }
     | { view: "needs_recovery" }
     | { view: "settings" }
+    | { view: "support" }
     | { view: "create_voucher"; previousView?: AppState }
     | { view: "voucher_details"; voucherId: string; previousView?: AppState }
     | { view: "send_vouchers" }

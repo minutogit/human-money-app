@@ -20,7 +20,8 @@ import {
   ShieldAlert, 
   Settings, 
   LogOut,
-  ChevronRight
+  ChevronRight,
+  Heart
 } from 'lucide-react';
 
 export const INTERNAL_VIEWS = [
@@ -38,7 +39,8 @@ export const INTERNAL_VIEWS = [
   'conflict_details',
   'receive_success',
   'transfer_success',
-  'sign_request'
+  'sign_request',
+  'support'
 ];
 
 export const Sidebar: React.FC = () => {
@@ -90,6 +92,7 @@ export const Sidebar: React.FC = () => {
       ]
     }
   ];
+
 
   const isActive = (itemId: string) => {
     if (itemId === 'logged_in' && currentView === 'logged_in') return true;
@@ -186,10 +189,29 @@ export const Sidebar: React.FC = () => {
               </div>
             </div>
           ))}
+          
+          {/* Support button as a secondary item at the end of the list */}
+          <div className="pt-4 border-t border-theme-subtle/50">
+            <button 
+              onClick={() => {
+                navigate({ view: 'support' });
+                setSidebarOpen(false);
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 ${
+                currentView === 'support' 
+                  ? "bg-theme-primary/10 text-theme-primary font-semibold shadow-sm" 
+                  : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
+              }`}
+            >
+              <Heart size={18} className={currentView === 'support' ? "text-theme-primary" : "text-theme-placeholder"} />
+              <span className="text-sm">{t('common.supportMenu')}</span>
+            </button>
+          </div>
         </div>
 
         {/* Footer Section */}
         <div className="p-4 mt-auto border-t border-theme-subtle bg-bg-app/10 space-y-2">
+
           <button 
             onClick={() => {
               navigate({ view: 'settings' });
