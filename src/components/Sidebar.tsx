@@ -21,7 +21,8 @@ import {
   Settings, 
   LogOut,
   ChevronRight,
-  Heart
+  Heart,
+  Bug
 } from 'lucide-react';
 
 export const INTERNAL_VIEWS = [
@@ -40,7 +41,8 @@ export const INTERNAL_VIEWS = [
   'receive_success',
   'transfer_success',
   'sign_request',
-  'support'
+  'support',
+  'bug_report'
 ];
 
 export const Sidebar: React.FC = () => {
@@ -190,8 +192,8 @@ export const Sidebar: React.FC = () => {
             </div>
           ))}
           
-          {/* Support button as a secondary item at the end of the list */}
-          <div className="pt-4 border-t border-theme-subtle/50">
+          {/* Support and Bug Report buttons as secondary items at the end of the list */}
+          <div className="pt-4 border-t border-theme-subtle/50 space-y-1">
             <button 
               onClick={() => {
                 navigate({ view: 'support' });
@@ -205,6 +207,20 @@ export const Sidebar: React.FC = () => {
             >
               <Heart size={18} className={currentView === 'support' ? "text-theme-primary" : "text-theme-placeholder"} />
               <span className="text-sm">{t('common.supportMenu')}</span>
+            </button>
+            <button 
+              onClick={() => {
+                navigate({ view: 'bug_report' });
+                setSidebarOpen(false);
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 ${
+                currentView === 'bug_report' 
+                  ? "bg-theme-primary/10 text-theme-primary font-semibold shadow-sm" 
+                  : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
+              }`}
+            >
+              <Bug size={18} className={currentView === 'bug_report' ? "text-theme-primary" : "text-theme-placeholder"} />
+              <span className="text-sm">{t('common.bugReportMenu')}</span>
             </button>
           </div>
         </div>

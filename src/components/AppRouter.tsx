@@ -22,6 +22,7 @@ import { ConflictListView } from './ConflictListView';
 import { useSession } from '../context/SessionContext';
 import { useNavigation } from '../context/NavigationContext';
 import { SupportView } from './SupportView';
+import { BugReportView } from './BugReportView';
 
 export const AppRouter: React.FC = () => {
     const { notifyLogin } = useSession();
@@ -67,6 +68,8 @@ export const AppRouter: React.FC = () => {
             return <SettingsView onBack={() => navigate({ view: "logged_in" })} />;
         case "support":
             return <SupportView />;
+        case "bug_report":
+            return <BugReportView onBack={goBack} />;
         case "needs_recovery":
             return <WalletRecovery 
                 onRecoverySuccess={() => {

@@ -182,3 +182,13 @@ pub fn get_local_instance_id(app: tauri::AppHandle) -> Result<String, String> {
     warn!("Device binding: Generated new fallback instance ID for sandboxed environment.");
     Ok(new_id)
 }
+
+#[tauri::command]
+pub fn get_latest_logs(app: tauri::AppHandle) -> Result<String, String> {
+    let log_dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    let log_file_path = log_dir.join("human_money_app.log");
+    if !log_file_path.exists() {
+        return Ok(String::new());
+    }
+    fs::read_to_string(&log_file_path).map_err(|e| format!("Failed to read log file: {}", e))
+}

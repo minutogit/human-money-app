@@ -518,6 +518,87 @@
     },
     "ai_hint": "Generic back navigation action."
   },
+  "common.bugReportCopyButton": {
+    "source_text": "Copy Logs",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.bugReportDescription": {
+    "source_text": "Inspect your local application log file, copy it to the clipboard, and report issues on GitHub.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.bugReportErrorTitle": {
+    "source_text": "Failed to load logs",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.bugReportLabel": {
+    "source_text": "Application Log File",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.bugReportMenu": {
+    "source_text": "Report a Bug",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.bugReportOpenIssue": {
+    "source_text": "Open GitHub Issue",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.bugReportTitle": {
+    "source_text": "Report a Bug",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.bugReportWarnDesc": {
+    "source_text": "Logs do not contain passwords or private keys, but they might contain file paths or usernames. Please review them before copying.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.bugReportWarnTitle": {
+    "source_text": "Privacy Warning",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "common.cancel": {
     "ai_hint": "Generic cancel button used in modals and dialogs.",
     "status": {

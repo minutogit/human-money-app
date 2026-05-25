@@ -1,12 +1,18 @@
 ---
 project: human-money-app
-version: "0.1.0-beta.15"
+version: "0.1.0-beta.16"
 phase: "beta"
 health: "green"
 last_updated: "2026-05-25"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-029"
+    title: "Bug Reporting (Fehler melden) MVP Feature"
+    status: "completed"
+    priority: "medium"
+    depends_on: []
+    description: "Implemented a transparent and privacy-compliant bug reporting view in the Tauri app. Allows inspecting the local log file, copying it, and opening a new GitHub issue."
   - id: "APP-028"
     title: "Menschlich Miteinander Association Support Integration"
     status: "completed"
@@ -286,6 +292,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Increased font size of advanced passphrase warning during profile creation to improve readability
 - [x] Updated login page footer to remove the protocol version and display the device ID with a shield icon prefix at 9px size
 - [x] Added minimum window dimensions (640x600) in tauri.conf.json to prevent layout breakdown on small screens
+- [x] Implemented Bug Reporting (Fehler melden) feature with monospace log viewer, clipboard copy, and GitHub issues redirection
 - [x] Improved profile deletion feedback on wrong password by displaying localized error messages directly inside the modals
 
 

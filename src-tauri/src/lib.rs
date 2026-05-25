@@ -133,7 +133,7 @@ pub fn run() {
             delete_profile, verify_profile_password,
             handover_to_this_device,
             unlock_session, lock_session, refresh_session_activity, is_session_active, // <--- NEU
-            generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic, get_local_instance_id,
+            generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic, get_local_instance_id, get_latest_logs,
             get_user_id, get_user_profile, get_total_balance_by_currency, get_voucher_summaries, get_voucher_details,
             get_active_asset_classes,
             create_new_voucher, create_transfer_bundle, receive_bundle, save_transaction_record,
