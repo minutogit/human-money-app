@@ -32,6 +32,25 @@ export function VoucherFilterBar({
     const { t } = useTranslation();
     const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
 
+    const getStatusLabel = (status: string) => {
+        switch (status.toLowerCase()) {
+            case 'active':
+                return t('voucher.statusActive');
+            case 'archived':
+                return t('voucher.statusArchived');
+            case 'endorsed':
+                return t('voucher.statusEndorsed');
+            case 'expired':
+                return t('voucher.statusExpired');
+            case 'incomplete':
+                return t('voucher.statusIncomplete');
+            case 'quarantined':
+                return t('voucher.statusQuarantined');
+            default:
+                return t('voucher.statusUnknown');
+        }
+    };
+
     return (
         <Card variant="glass" className="overflow-hidden border-none shadow-premium">
             <button 
@@ -72,7 +91,7 @@ export function VoucherFilterBar({
                                         }`}
                                     >
                                         <Icon size={14} className={isActive ? 'text-white' : 'text-theme-light'} />
-                                        <span className="capitalize">{status}</span>
+                                        <span>{getStatusLabel(status)}</span>
                                         <span className={`text-[10px] px-1.5 py-0.5 rounded-md ${isActive ? 'bg-white/20 text-white' : 'bg-theme-subtle/30 text-theme-light'}`}>
                                             {statusCounts[status] || 0}
                                         </span>

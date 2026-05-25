@@ -275,6 +275,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Fixed Voucher Signature Deserialization Error (Strict DTO pattern alignment for voucher signature requests and added static analysis gate for command parameter types).
 - [x] Optimized Import UX (Auto-processing of selected/dropped files, trial decryption without password, and conditional file password prompt) (APP-027)
 - [x] Adjusted default Tauri window height from 600 to 720 to prevent content overflow at startup
+- [x] Localized voucher status/state labels and Test Voucher badge in VoucherCard and VoucherFilterBar UI components
+
 
 ## Next Milestones
 

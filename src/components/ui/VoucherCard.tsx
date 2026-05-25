@@ -1,4 +1,5 @@
 import React, { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { 
     CheckCircle2, 
     Clock, 
@@ -62,7 +63,27 @@ export const VoucherCard = React.memo(({
     children,
     onRequestSignature
 }: VoucherCardProps) => {
+    const { t } = useTranslation();
     const { name: statusName, color, bgColor, icon: StatusIcon } = getVoucherStatus(voucher.status);
+
+    const getStatusLabel = (status: string) => {
+        switch (status.toLowerCase()) {
+            case 'active':
+                return t('voucher.statusActive');
+            case 'archived':
+                return t('voucher.statusArchived');
+            case 'endorsed':
+                return t('voucher.statusEndorsed');
+            case 'expired':
+                return t('voucher.statusExpired');
+            case 'incomplete':
+                return t('voucher.statusIncomplete');
+            case 'quarantined':
+                return t('voucher.statusQuarantined');
+            default:
+                return t('voucher.statusUnknown');
+        }
+    };
     
     const handleCardClick = useCallback(() => {
         if (mode === 'select' || mode === 'adjustable') {
@@ -107,7 +128,7 @@ export const VoucherCard = React.memo(({
                                 </span>
                                 {voucher.isTestVoucher && (
                                     <span className="text-[9px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">
-                                        Test Mode
+                                        {t('voucher.testVoucher')}
                                     </span>
                                 )}
                             </div>
@@ -115,7 +136,7 @@ export const VoucherCard = React.memo(({
                                 {showStatus && (
                                     <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-black uppercase ${bgColor} ${color}`}>
                                         <StatusIcon size={12} />
-                                        {statusName}
+                                        {getStatusLabel(statusName)}
                                     </div>
                                 )}
                                 {mode === 'view' && (
