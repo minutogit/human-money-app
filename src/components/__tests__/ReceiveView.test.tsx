@@ -153,18 +153,7 @@ amount_decimal_places = 4`,
     const selectButton = screen.getByRole('button', { name: /Select File/i });
     selectButton.click();
 
-    // 4. Wait for file to be "detected"
-    expect(await screen.findByText(/File Detected/i)).toBeInTheDocument();
-
-    // 5. Click Import File
-    const importButton = await screen.findByRole('button', { name: /Import File/i });
-    importButton.click();
-
-    // 6. Click Confirm in the modal
-    const confirmButton = await screen.findByRole('button', { name: /^Import$/ });
-    confirmButton.click();
-
-    // 7. Verify invoke call
+    // 4. Verify invoke call happens automatically
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('receive_bundle', expect.objectContaining({
         forceAcceptToleranceBundle: false,

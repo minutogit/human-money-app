@@ -169,6 +169,12 @@ priority_tasks:
     priority: "high"
     depends_on: ["APP-025"]
     description: "Transition error handling from opaque strings to structured FrontendError DTOs allowing localized, interpolated error messages in React frontend."
+  - id: "APP-027"
+    title: "Import UX Optimization"
+    status: "completed"
+    priority: "medium"
+    depends_on: []
+    description: "Streamlined the import/receive file flow by auto-processing selected files immediately and conditionally prompting for passwords only when required by encryption."
 ---
 
 # Human Money App — Status
@@ -267,7 +273,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Fixed signature request parsing error in SignRequestView (extracted roles via allowedSignatureRoles instead of obsolete signatureRules and updated test coverage).
 - [x] Localized SignRequestView component (Batch 10 i18n migration).
 - [x] Fixed Voucher Signature Deserialization Error (Strict DTO pattern alignment for voucher signature requests and added static analysis gate for command parameter types).
-
+- [x] Optimized Import UX (Auto-processing of selected/dropped files, trial decryption without password, and conditional file password prompt) (APP-027)
+- [x] Adjusted default Tauri window height from 600 to 720 to prevent content overflow at startup
 
 ## Next Milestones
 

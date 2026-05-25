@@ -1,5 +1,5 @@
 // src/components/ReceiveView.tsx
-import React, { useState, useEffect, FormEvent } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { transferService } from '../services/transferService';
 import { settingsService } from '../services/settingsService';
@@ -29,7 +29,6 @@ import {
     ArrowRightLeft, 
     Lock, 
     X,
-    FileJson,
     CheckCircle2,
     AlertCircle
 } from 'lucide-react';
@@ -48,7 +47,6 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     const [feedbackMsg, setFeedbackMsg] = useState('');
     const [showConfirm, setShowConfirm] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [fileType, setFileType] = useState<'transfer' | 'ask' | 'sig' | null>(null);
     const [bundlePassword, setBundlePassword] = useState("");
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [resultModal, setResultModal] = useState<{
@@ -63,6 +61,11 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         message: string;
     } | null>(null);
     const [confirmText, setConfirmText] = useState("");
+    const [pendingPasswordImport, setPendingPasswordImport] = useState<{
+        fileData: number[];
+        type: 'transfer' | 'ask' | 'sig';
+        name: string;
+    } | null>(null);
 
     useEffect(() => {
         async function fetchData() {
@@ -114,12 +117,20 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 const fileName = selectedPath.split(/[/\\]/).pop() || '';
                 setBundleName(fileName);
                 
+                let detectedType: 'transfer' | 'ask' | 'sig' | null = null;
                 if (fileName.endsWith('.transfer')) {
-                    setFileType('transfer');
+                    detectedType = 'transfer';
                 } else if (fileName.endsWith('.ask') || fileName.endsWith('.humocoreq')) {
-                    setFileType('ask');
+                    detectedType = 'ask';
                 } else if (fileName.endsWith('.sig') || fileName.endsWith('.humocosig')) {
-                    setFileType('sig');
+                    detectedType = 'sig';
+                }
+
+
+                if (detectedType) {
+                    const fileUint8Array = await readFile(selectedPath);
+                    const fileData = Array.from(fileUint8Array);
+                    executeReceiveDirectly(fileData, detectedType, fileName);
                 }
             }
         } catch (e) {
@@ -130,8 +141,9 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     const clearSelection = () => {
         setBundlePath(null);
         setBundleName(null);
-        setFileType(null);
+
         setDroppedFileContent(null);
+        setPendingPasswordImport(null);
     }
 
     const [isDragOver, setIsDragOver] = useState(false);
@@ -185,9 +197,15 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     setBundleName(file.name);
                     setDroppedFileContent(bundleData);
                     
-                    if (file.name.endsWith('.transfer')) setFileType('transfer');
-                    else if (file.name.endsWith('.ask') || file.name.endsWith('.humocoreq')) setFileType('ask');
-                    else if (file.name.endsWith('.sig') || file.name.endsWith('.humocosig')) setFileType('sig');
+                    let detectedType: 'transfer' | 'ask' | 'sig' | null = null;
+                    if (file.name.endsWith('.transfer')) detectedType = 'transfer';
+                    else if (file.name.endsWith('.ask') || file.name.endsWith('.humocoreq')) detectedType = 'ask';
+                    else if (file.name.endsWith('.sig') || file.name.endsWith('.humocosig')) detectedType = 'sig';
+
+
+                    if (detectedType) {
+                        executeReceiveDirectly(bundleData, detectedType, file.name);
+                    }
                 } catch (error) {
                     setFeedbackMsg(translateError(error, t));
                 }
@@ -197,51 +215,36 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         }
     };
 
-    const handleProcessClick = (event: FormEvent) => {
-        event.preventDefault();
-        if ((!bundlePath) && !droppedFileContent) {
-            setFeedbackMsg(t('transfer.importFile.noPayload'));
-            return;
-        }
-        if (!fileType) {
-            setFeedbackMsg(t('transfer.importFile.unknownFormat'));
-            return;
-        }
-        setFeedbackMsg('');
-        setShowConfirm(true);
-    };
-
-    async function executeReceive() {
+    async function executeReceiveDirectly(
+        fileData: number[],
+        type: 'transfer' | 'ask' | 'sig',
+        name: string,
+        password?: string
+    ) {
         setIsProcessing(true);
+        setFeedbackMsg('');
         try {
-            let fileData: number[];
-            if (droppedFileContent) fileData = droppedFileContent;
-            else if (bundlePath) {
-                const fileUint8Array = await readFile(bundlePath);
-                fileData = Array.from(fileUint8Array);
-            } else return;
-
-            if (fileType === 'transfer') {
+            if (type === 'transfer') {
                 const standardDefinitionsToml: Record<string, string> = {};
                 voucherStandards.forEach(standard => {
                     const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
                     if (uuidMatch && uuidMatch[1]) standardDefinitionsToml[uuidMatch[1]] = standard.content;
                 });
 
-                const payload = await protectAction(async (password) => {
+                const payload = await protectAction(async (walletPassword) => {
                     return await transferService.receiveBundle({
                         bundleData: fileData,
                         standardDefinitionsToml,
-                        password: password || undefined,
+                        password: password || walletPassword || undefined,
                         forceAcceptToleranceBundle: false
                     });
                 });
 
                 if (payload) onReceiveSuccess(payload);
-            } else if (fileType === 'ask') {
-                const openedVoucher = await voucherService.openSigningRequest(fileData, bundlePassword || undefined);
+            } else if (type === 'ask') {
+                const openedVoucher = await voucherService.openSigningRequest(fileData, password || undefined);
                 onReceiveSuccess(openedVoucher);
-            } else if (fileType === 'sig') {
+            } else if (type === 'sig') {
                 const standardDefinitionsToml: Record<string, string> = {};
                 voucherStandards.forEach(standard => {
                     const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
@@ -249,8 +252,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 });
                 
                 const standardTomlContent = Object.values(standardDefinitionsToml)[0];
-                const updatedInstanceId = await protectAction(async (password) => {
-                    return await voucherService.processAndAttachSignature(fileData, standardTomlContent, bundlePassword || undefined, password || undefined);
+                const updatedInstanceId = await protectAction(async (walletPassword) => {
+                    return await voucherService.processAndAttachSignature(fileData, standardTomlContent, password || undefined, walletPassword || undefined);
                 });
                 
                 if (updatedInstanceId) {
@@ -265,6 +268,21 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
             }
         } catch (e) {
             const errorStr = isBackendError(e) ? e.message : String(e);
+            
+            // Check if it's a password required error
+            const isPasswordRequired = errorStr.includes("Password required") || errorStr.toLowerCase().includes("decrypt") || errorStr.includes("SymmetricEncryption") || errorStr.includes("MacError");
+            
+            if (isPasswordRequired) {
+                // Show the password prompt modal
+                setPendingPasswordImport({
+                    fileData,
+                    type,
+                    name
+                });
+                setShowConfirm(true);
+                return;
+            }
+
             const isTolerance = (isBackendError(e) && (e.code === 'error.transfer.bundleRecoveryZone' || e.code === 'error.transfer.bundleToleranceZone')) || errorStr.includes("ToleranceZone");
             if (isTolerance) {
                 const isCritical = (isBackendError(e) && e.code === 'error.transfer.bundleRecoveryZone') || errorStr.includes("Extended");
@@ -288,13 +306,35 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 }
             }
             setFeedbackMsg(translateError(e, t));
+            clearSelection();
         } finally {
-            if (!toleranceModal) {
+            if (!toleranceModal && !pendingPasswordImport) {
                 setIsProcessing(false);
-                setShowConfirm(false);
             }
         }
     }
+
+    const handleConfirmPassword = async () => {
+        if (!pendingPasswordImport) return;
+        
+        const { fileData, type, name } = pendingPasswordImport;
+        // Keep processing flag active
+        setIsProcessing(true);
+        // Clear pending password import so next steps clean up
+        setPendingPasswordImport(null);
+        setShowConfirm(false);
+        
+        await executeReceiveDirectly(fileData, type, name, bundlePassword);
+        setBundlePassword("");
+    };
+
+    const handleCancelPassword = () => {
+        setPendingPasswordImport(null);
+        setShowConfirm(false);
+        setBundlePassword("");
+        setIsProcessing(false);
+        clearSelection();
+    };
 
     async function confirmToleranceImport() {
         if (!toleranceModal) return;
@@ -335,6 +375,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
     return (
         <PageLayout 
+
             title={t('transfer.importFile.title')} 
             description={t('transfer.importFile.description')} 
             onBack={onBack}
@@ -347,7 +388,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     </div>
                 )}
 
-                <form onSubmit={handleProcessClick} className="space-y-8">
+                <div className="space-y-8">
                     <div
                         id="bundle-drop-zone"
                         className={`relative group border-2 border-dashed rounded-[40px] p-12 transition-all flex flex-col items-center justify-center text-center overflow-hidden min-h-[340px] cursor-pointer ${
@@ -370,28 +411,32 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                         {bundleName ? (
                             <div className="relative animate-in zoom-in duration-300 space-y-6">
                                 <div className="mx-auto w-24 h-24 bg-emerald-500 rounded-[32px] flex items-center justify-center shadow-lg shadow-emerald-200 text-white">
-                                    <FileCheck size={48} />
+                                    {isProcessing ? <ArrowRightLeft className="animate-spin" size={48} /> : <FileCheck size={48} />}
                                 </div>
                                 <div>
-                                    <h3 className="text-xl font-black text-theme-primary tracking-tight mb-2">{t('transfer.importFile.fileDetected')}</h3>
+                                    <h3 className="text-xl font-black text-theme-primary tracking-tight mb-2">
+                                        {isProcessing ? t('transfer.importFile.loading') : t('transfer.importFile.fileDetected')}
+                                    </h3>
                                     <div className="flex flex-col items-center gap-1.5">
                                         <p className="text-xs font-mono font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">
                                             {bundleName}
                                         </p>
                                         <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mt-2">
-                                            {t('transfer.importFile.readyToImport')}
+                                            {isProcessing ? t('transfer.importFile.loading') : t('transfer.importFile.readyToImport')}
                                         </p>
                                     </div>
                                 </div>
-                                <div className="pt-4">
-                                    <button 
-                                        type="button" 
-                                        onClick={(e) => { e.stopPropagation(); clearSelection(); }}
-                                        className="text-[10px] font-black uppercase tracking-widest text-theme-light hover:text-rose-500 transition-colors flex items-center gap-1 mx-auto"
-                                    >
-                                        <X size={12} /> {t('transfer.importFile.discard')}
-                                    </button>
-                                </div>
+                                {!isProcessing && (
+                                    <div className="pt-4">
+                                        <button 
+                                            type="button" 
+                                            onClick={(e) => { e.stopPropagation(); clearSelection(); }}
+                                            className="text-[10px] font-black uppercase tracking-widest text-theme-light hover:text-rose-500 transition-colors flex items-center gap-1 mx-auto"
+                                        >
+                                            <X size={12} /> {t('transfer.importFile.discard')}
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         ) : (
                             <div className="relative space-y-6">
@@ -413,22 +458,13 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                         )}
                     </div>
 
-                    <div className="flex flex-col gap-4">
-                        <Button 
-                            size="lg" 
-                            type="submit" 
-                            disabled={(!bundlePath && !droppedFileContent) || isProcessing}
-                            className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3 disabled:opacity-30 disabled:grayscale transition-all"
-                        >
-                            {isProcessing ? <ArrowRightLeft className="animate-spin" size={24} /> : <FileSignature size={24} />}
-                            {isProcessing ? t('transfer.importFile.loading') : t('transfer.importFile.importButton')}
-                        </Button>
-                        <p className="text-[10px] font-bold text-theme-light text-center flex items-center justify-center gap-2">
+                    <div className="text-center">
+                        <p className="text-[10px] font-bold text-theme-light flex items-center justify-center gap-2">
                             <Lock size={12} />
                             {t('transfer.importFile.localProcessing')}
                         </p>
                     </div>
-                </form>
+                </div>
 
                 {/* File Format Guide */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-10">
@@ -449,41 +485,46 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
             {/* Modals */}
             <ConfirmationModal
-                isOpen={showConfirm}
-                title={fileType === 'transfer' ? t('transfer.importFile.importModalTitleTransfer') : fileType === 'ask' ? t('transfer.importFile.importModalTitleAsk') : t('transfer.importFile.importModalTitleSig')}
+                isOpen={showConfirm && !!pendingPasswordImport}
+                title={
+                    pendingPasswordImport?.type === 'transfer' 
+                        ? t('transfer.importFile.importModalTitleTransfer') 
+                        : pendingPasswordImport?.type === 'ask' 
+                            ? t('transfer.importFile.importModalTitleAsk') 
+                            : t('transfer.importFile.importModalTitleSig')
+                }
                 description={
                     <div className="space-y-6 pt-2">
-                        <div className="p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/20 flex items-center gap-4">
-                            <div className="p-2 bg-white rounded-xl shadow-sm text-theme-primary">
-                                <FileJson size={24} />
+                        <div className="p-4 bg-rose-500/5 rounded-2xl border border-rose-500/10 flex items-center gap-4">
+                            <div className="p-2 bg-white rounded-xl shadow-sm text-rose-500">
+                                <Lock size={24} />
                             </div>
                             <div>
-                                <p className="text-sm font-bold text-theme-secondary truncate max-w-[200px]">{bundleName}</p>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">{t('transfer.importFile.typeLabel', { fileType })}</p>
+                                <p className="text-sm font-bold text-theme-secondary truncate max-w-[200px]">{pendingPasswordImport?.name}</p>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">{t('transfer.importFile.typeLabel', { fileType: pendingPasswordImport?.type })}</p>
                             </div>
                         </div>
 
-                        {(fileType === 'ask' || fileType === 'sig') && (
-                            <div className="space-y-3">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-2">
-                                    <Lock size={12} /> {t('transfer.importFile.passwordLabel')}
-                                </label>
-                                <Input
-                                    type="password"
-                                    value={bundlePassword}
-                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBundlePassword(e.target.value)}
-                                    placeholder={t('transfer.importFile.passwordPlaceholder')}
-                                />
-                                <p className="text-[10px] text-theme-light font-medium italic">
-                                    {t('transfer.importFile.passwordHint')}
-                                </p>
-                            </div>
-                        )}
+                        <div className="space-y-3">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-2">
+                                <Lock size={12} /> {t('transfer.importFile.passwordLabel')}
+                            </label>
+                            <Input
+                                type="password"
+                                value={bundlePassword}
+                                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBundlePassword(e.target.value)}
+                                placeholder={t('transfer.importFile.passwordPlaceholder')}
+                                autoFocus
+                            />
+                            <p className="text-[10px] text-theme-light font-medium italic">
+                                {t('transfer.importFile.passwordHint')}
+                            </p>
+                        </div>
                     </div>
                 }
                 confirmText={t('transfer.importFile.confirmImport')}
-                onConfirm={executeReceive}
-                onCancel={() => { setShowConfirm(false); setBundlePassword(""); }}
+                onConfirm={handleConfirmPassword}
+                onCancel={handleCancelPassword}
                 isProcessing={isProcessing}
             />
 
