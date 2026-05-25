@@ -33,7 +33,7 @@ export const voucherService = {
 
     createSigningRequest: async (localInstanceId: string, config: SigningRequestConfig) => {
         return await invoke<number[]>("create_signing_request_bundle", { 
-            local_instance_id: localInstanceId, 
+            localInstanceId, 
             config 
         });
     },
@@ -46,7 +46,7 @@ export const voucherService = {
         return await invoke<number[]>("create_detached_signature_response_bundle", {
             voucher: args.voucher,
             role: args.role,
-            include_details: args.includeDetails,
+            includeDetails: args.includeDetails,
             config: args.config,
             password: args.password
         });

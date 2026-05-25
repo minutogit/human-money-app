@@ -85,7 +85,6 @@ amount_decimal_places = 4`,
             features: { allowPartialTransfers: true, balancesAreSummable: true, amountDecimalPlaces: 4, privacyMode: 'public', allowedTTypes: [] },
             issuance: { validityDurationRange: [], issuanceMinimumValidityDuration: 'P1Y', additionalSignaturesRange: [], allowedSignatureRoles: [] },
             customRules: {},
-            signatureRules: {},
           },
           mutable: {
             metadata: { issuerName: 'Human Money Project', keywords: [] },

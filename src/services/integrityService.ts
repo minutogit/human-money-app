@@ -15,9 +15,9 @@ export const integrityService = {
 
     setConflictLocalOverride: async (args: ConflictOverrideArgs) => {
         return await invoke<void>("set_conflict_local_override", {
-            proof_id: args.proofId,
-            is_overridden: args.isOverridden,
-            resolution_note: args.resolutionNote,
+            proofId: args.proofId,
+            value: args.isOverridden,
+            note: args.resolutionNote,
             password: args.password
         });
     },

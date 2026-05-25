@@ -1,6 +1,5 @@
 use crate::AppState;
 use crate::models::{VoucherStandardDefinitionDto, FrontendSignatureImpact, FrontendError};
-use human_money_core::models::voucher::Voucher;
 use log::info;
 
 #[tauri::command]
@@ -25,13 +24,14 @@ pub fn get_allowed_signature_roles_from_standard(
 
 #[tauri::command]
 pub fn evaluate_signature_suitability(
-    voucher: Voucher,
+    voucher: crate::models::FrontendVoucher,
     role: String,
     standard_toml_content: String,
     state: tauri::State<AppState>,
 ) -> Result<FrontendSignatureImpact, FrontendError> {
     info!("Evaluating signature suitability for role: {}", role);
     let service = state.service.lock().unwrap();
-    let impact = service.evaluate_signature_suitability(&voucher, &role, &standard_toml_content).map_err(FrontendError::from)?;
+    let core_voucher = human_money_core::models::voucher::Voucher::from(voucher);
+    let impact = service.evaluate_signature_suitability(&core_voucher, &role, &standard_toml_content).map_err(FrontendError::from)?;
     Ok(impact.into())
 }

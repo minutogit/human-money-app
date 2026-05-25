@@ -10,6 +10,7 @@ import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { PageLayout } from './ui/PageLayout';
+import { useTranslation } from 'react-i18next';
 import { useSession } from '../context/SessionContext';
 import { 
     PenTool, 
@@ -33,11 +34,13 @@ interface SignRequestViewProps {
 }
 
 export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
+    const { t } = useTranslation();
     const { protectAction } = useSession();
     const [allowedRoles, setAllowedRoles] = useState<string[]>([]);
     const [selectedRole, setSelectedRole] = useState<string>('');
     const [includeDetails, setIncludeDetails] = useState(true);
     const [feedbackMsg, setFeedbackMsg] = useState('');
+    const [feedbackType, setFeedbackType] = useState<'error' | 'success' | null>(null);
     const [isSigning, setIsSigning] = useState(false);
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [standardContent, setStandardContent] = useState<string | null>(null);
@@ -64,20 +67,22 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     try {
                         const parsed = await standardsService.parseStandard(matchingStandard.content);
                         
-                        // Extract roles from signatureRules keys
-                        const roles = Object.keys(parsed.immutable.signatureRules);
+                        // Extract roles from allowedSignatureRoles
+                        const roles = parsed.immutable.issuance?.allowedSignatureRoles || [];
                         setAllowedRoles(roles);
                         if (roles.length === 1) setSelectedRole(roles[0]);
                     } catch (e) {
-                        setFeedbackMsg(`Failed to parse standard: ${e}`);
+                        setFeedbackMsg(t('voucher.signRequest.parseFailed', { error: String(e) }));
+                        setFeedbackType('error');
                     }
                 }
             } catch (e) {
-                setFeedbackMsg(`Initialization Error: ${e}`);
+                setFeedbackMsg(t('voucher.signRequest.initError', { error: String(e) }));
+                setFeedbackType('error');
             }
         }
         fetchData();
-    }, [voucherData.voucher.voucherStandard.uuid]);
+    }, [voucherData.voucher.voucherStandard.uuid, t]);
 
     useEffect(() => {
         if (!selectedRole || !standardContent) {
@@ -106,12 +111,14 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
 
     async function handleSign() {
         if (!selectedRole) {
-            setFeedbackMsg("Please select a signature role.");
+            setFeedbackMsg(t('voucher.signRequest.pleaseSelectRole'));
+            setFeedbackType('error');
             return;
         }
 
         setIsSigning(true);
         setFeedbackMsg('');
+        setFeedbackType(null);
         try {
             const bundleBytes = await protectAction(async (password) => {
                 return await voucherService.createDetachedSignatureResponseBundle({
@@ -130,8 +137,8 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     ? `${settings.lastUsedDirectory}/signature-${voucherData.voucher.voucherId.slice(0, 8)}.sig`
                     : `signature-${voucherData.voucher.voucherId.slice(0, 8)}.sig`,
                 filters: [
-                    { name: 'Signature Response (.sig)', extensions: ['sig'] },
-                    { name: 'All Files', extensions: ['*'] }
+                    { name: t('voucher.signRequest.signatureResponseFilter'), extensions: ['sig'] },
+                    { name: t('voucher.export.allFiles'), extensions: ['*'] }
                 ]
             });
 
@@ -146,28 +153,30 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     });
                 }
 
-                setFeedbackMsg("Signature generated successfully!");
+                setFeedbackMsg(t('voucher.signRequest.signatureGenerated'));
+                setFeedbackType('success');
                 setTimeout(() => onBack(), 2000);
             }
         } catch (e) {
-            setFeedbackMsg(`Signing Failed: ${e}`);
+            setFeedbackMsg(t('voucher.signRequest.signFailed', { error: String(e) }));
+            setFeedbackType('error');
         } finally {
             setIsSigning(false);
         }
     }
 
-    const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
+    const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : t('common.na');
 
     return (
         <PageLayout 
-            title="Signature Request" 
-            description="Review and cryptographically sign the requested asset endorsement." 
+            title={t('voucher.signRequest.title')} 
+            description={t('voucher.signRequest.description')} 
             onBack={onBack}
         >
             <div className="max-w-4xl mx-auto space-y-8 pb-10">
                 {feedbackMsg && (
-                    <div className={`p-5 rounded-3xl flex items-start gap-3 border shadow-sm animate-in zoom-in duration-300 ${feedbackMsg.includes('Error') || feedbackMsg.includes('Failed') ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
-                        {feedbackMsg.includes('Failed') || feedbackMsg.includes('Error') ? <ShieldAlert className="shrink-0" size={20}/> : <CheckCircle2 className="shrink-0" size={20}/>}
+                    <div className={`p-5 rounded-3xl flex items-start gap-3 border shadow-sm animate-in zoom-in duration-300 ${feedbackType === 'error' ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
+                        {feedbackType === 'error' ? <ShieldAlert className="shrink-0" size={20}/> : <CheckCircle2 className="shrink-0" size={20}/>}
                         <p className="text-sm font-bold leading-tight">{feedbackMsg}</p>
                     </div>
                 )}
@@ -177,14 +186,14 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     <Card header={
                         <div className="flex items-center gap-2">
                             <FileText size={18} className="text-theme-primary" />
-                            <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Voucher Details</span>
+                            <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('voucher.detailsTitle')}</span>
                         </div>
                     }>
                         <div className="space-y-4">
                             <div className="p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/10">
                                 <div className="flex items-center justify-between mb-1">
-                                    <span className="text-[10px] font-black uppercase tracking-widest text-theme-light">Value</span>
-                                    <div className="bg-emerald-500 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest">Valid Asset</div>
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-theme-light">{t('voucher.signRequest.value')}</span>
+                                    <div className="bg-emerald-500 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest">{t('voucher.signRequest.validAsset')}</div>
                                 </div>
                                 <p className="text-2xl font-black text-theme-primary tracking-tight">
                                     {voucherData.voucher.nominalValue.amount} <span className="text-theme-secondary opacity-60 font-medium">{voucherData.displayCurrency}</span>
@@ -193,15 +202,15 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                             
                             <div className="space-y-3 px-1">
                                 <div className="flex items-center justify-between text-xs font-medium">
-                                    <span className="text-theme-light flex items-center gap-1.5"><ShieldCheck size={14}/> Standard</span>
+                                    <span className="text-theme-light flex items-center gap-1.5"><ShieldCheck size={14}/> {t('voucher.standardLabel')}</span>
                                     <span className="text-theme-secondary font-bold">{voucherData.displayStandardName}</span>
                                 </div>
                                 <div className="flex items-center justify-between text-xs font-medium">
-                                    <span className="text-theme-light flex items-center gap-1.5"><User size={14}/> Creator</span>
+                                    <span className="text-theme-light flex items-center gap-1.5"><User size={14}/> {t('voucher.creatorHeader')}</span>
                                     <span className="text-theme-secondary font-bold">{voucherData.voucher.creator.firstName} {voucherData.voucher.creator.lastName}</span>
                                 </div>
                                 <div className="flex items-center justify-between text-xs font-medium">
-                                    <span className="text-theme-light flex items-center gap-1.5"><Calendar size={14}/> Created</span>
+                                    <span className="text-theme-light flex items-center gap-1.5"><Calendar size={14}/> {t('voucher.signRequest.created')}</span>
                                     <span className="text-theme-secondary font-bold">{formatDateTime(voucherData.voucher.creationDate)}</span>
                                 </div>
                             </div>
@@ -212,12 +221,12 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     <Card header={
                         <div className="flex items-center gap-2">
                             <UserCheck size={18} className="text-theme-primary" />
-                            <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Signature Role</span>
+                            <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('voucher.signRequest.signatureRole')}</span>
                         </div>
                     }>
                         <div className="space-y-6">
                             <div className="space-y-3">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Select Authority Role</label>
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.signRequest.selectRole')}</label>
                                 {allowedRoles.length === 0 ? (
                                     <div className="py-2 animate-pulse flex items-center gap-2">
                                         <div className="h-4 w-4 bg-theme-subtle rounded-full"></div>
@@ -234,7 +243,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                         onChange={(e) => setSelectedRole(e.target.value)}
                                         className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
                                     >
-                                        <option value="">Choose Role...</option>
+                                        <option value="">{t('voucher.signRequest.chooseRole')}</option>
                                         {allowedRoles.map(role => <option key={role} value={role}>{role}</option>)}
                                     </select>
                                 )}
@@ -248,8 +257,8 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                     className="w-6 h-6 rounded-lg border-theme-subtle text-theme-primary focus:ring-theme-primary transition-all"
                                 />
                                 <div>
-                                    <span className="block text-sm font-bold text-theme-secondary group-hover:text-theme-primary transition-colors">Disclose Identity</span>
-                                    <span className="block text-[10px] text-theme-light font-medium">Embed your public profile data in the signature</span>
+                                    <span className="block text-sm font-bold text-theme-secondary group-hover:text-theme-primary transition-colors">{t('transfer.discloseIdentity')}</span>
+                                    <span className="block text-[10px] text-theme-light font-medium">{t('voucher.signRequest.embedProfileData')}</span>
                                 </div>
                             </label>
                         </div>
@@ -260,7 +269,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 <Card header={
                     <div className="flex items-center gap-2">
                         <PenTool size={18} className="text-theme-primary" />
-                        <span className="font-black text-xs uppercase tracking-widest text-theme-primary">Impact Evaluation</span>
+                        <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('voucher.signRequest.impactEvaluation')}</span>
                     </div>
                 }>
                     <div className="min-h-[120px] flex flex-col justify-center">
@@ -269,21 +278,21 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                 <div className="w-10 h-10 bg-theme-subtle/20 rounded-full border border-theme-subtle/30 flex items-center justify-center">
                                     <ArrowRight className="text-theme-light animate-bounce" size={20} />
                                 </div>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">Checking signature validity...</p>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">{t('voucher.signRequest.checkingValidity')}</p>
                             </div>
                         ) : impact ? (
                             <div className="space-y-4">
                                 {!impact.isAllowedRole && (
                                     <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-start gap-3">
                                         <XCircle size={20} className="text-rose-500 shrink-0" />
-                                        <p className="text-sm font-bold text-rose-800">Standard Violation: The specified role is not authorized for this asset.</p>
+                                        <p className="text-sm font-bold text-rose-800">{t('voucher.signRequest.standardViolation')}</p>
                                     </div>
                                 )}
                                 
                                 {impact.fatalConflicts.length > 0 && (
                                     <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl space-y-2">
                                         <div className="flex items-center gap-2 text-rose-600 font-black text-[10px] uppercase tracking-widest">
-                                            <ShieldAlert size={14} /> Profile Conflicts
+                                            <ShieldAlert size={14} /> {t('voucher.signRequest.profileConflicts')}
                                         </div>
                                         <ul className="space-y-1.5">
                                             {impact.fatalConflicts.map((conflict, i) => (
@@ -299,7 +308,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                 {impact.resolvedRules.length > 0 && (
                                     <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl space-y-2">
                                         <div className="flex items-center gap-2 text-emerald-600 font-black text-[10px] uppercase tracking-widest">
-                                            <CheckCircle2 size={14} /> Rules Fulfilled
+                                            <CheckCircle2 size={14} /> {t('voucher.signRequest.rulesFulfilled')}
                                         </div>
                                         <ul className="space-y-1.5">
                                             {impact.resolvedRules.map((rule, i) => (
@@ -326,17 +335,17 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                 {impact.isAllowedRole && impact.fatalConflicts.length === 0 && impact.resolvedRules.length === 0 && impact.gentleHints.length === 0 && (
                                     <div className="p-4 bg-gray-50 border border-gray-100 rounded-2xl flex items-start gap-3">
                                         <Info size={20} className="text-gray-400 shrink-0" />
-                                        <p className="text-sm font-bold text-gray-600">This signature is valid and ready for use.</p>
+                                        <p className="text-sm font-bold text-gray-600">{t('voucher.signRequest.signatureValid')}</p>
                                     </div>
                                 )}
                             </div>
                         ) : selectedRole ? (
                             <div className="text-center py-4">
-                                <p className="text-sm font-bold text-theme-light italic">Impact data unavailable for this role configuration.</p>
+                                <p className="text-sm font-bold text-theme-light italic">{t('voucher.signRequest.impactUnavailable')}</p>
                             </div>
                         ) : (
                             <div className="text-center py-4">
-                                <p className="text-sm font-bold text-theme-light/60 italic">Please select a role to evaluate the endorsement impact.</p>
+                                <p className="text-sm font-bold text-theme-light/60 italic">{t('voucher.signRequest.selectRoleForImpact')}</p>
                             </div>
                         )}
                     </div>
@@ -350,11 +359,11 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                         className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3 disabled:opacity-30 disabled:grayscale transition-all"
                     >
                         {isSigning ? <ShieldCheck className="animate-pulse" size={24} /> : <PenTool size={24} />}
-                        {isSigning ? 'Signing...' : 'Sign Now'}
+                        {isSigning ? t('voucher.signRequest.signing') : t('voucher.signRequest.signNow')}
                     </Button>
                     <p className="text-[10px] font-bold text-theme-light text-center flex items-center justify-center gap-2">
                         <Lock size={12} />
-                        SIGNATURE IS GENERATED LOCALLY AND NEVER EXPOSES YOUR PRIVATE KEY
+                        {t('voucher.signRequest.localSignatureNotice')}
                     </p>
                 </div>
             </div>

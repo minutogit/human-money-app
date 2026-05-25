@@ -30,6 +30,19 @@ impl From<human_money_core::models::voucher::Address> for FrontendAddressData {
     }
 }
 
+impl From<FrontendAddressData> for human_money_core::models::voucher::Address {
+    fn from(a: FrontendAddressData) -> Self {
+        Self {
+            street: a.street,
+            house_number: a.house_number,
+            zip_code: a.zip_code,
+            city: a.city,
+            country: a.country,
+            full_address: a.full_address,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendUserProfile {

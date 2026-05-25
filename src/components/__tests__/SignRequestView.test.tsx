@@ -75,7 +75,8 @@ describe('SignRequestView Component (Minuto Standard)', () => {
     {
       id: 'minuto_v1',
       displayName: 'Minuto Standard',
-      content: `name = "Minuto Standard"`,
+      content: `name = "Minuto Standard"
+uuid = "minuto-uuid-123"`,
     },
   ];
 
@@ -103,8 +104,21 @@ describe('SignRequestView Component (Minuto Standard)', () => {
       if (cmd === 'get_app_settings') {
         return Promise.resolve(mockSettings);
       }
-      if (cmd === 'get_allowed_signature_roles_from_standard') {
-        return Promise.resolve(['Guarantor', 'Endorser']);
+      if (cmd === 'parse_standard_toml') {
+        return Promise.resolve({
+          immutable: {
+            identity: { uuid: 'minuto-uuid-123', name: 'Minuto Standard', abbreviation: 'MIN' },
+            blueprint: { unit: 'Minutos', primaryRedemptionType: 'goodsOrServices', collateralType: 'personalGuarantee' },
+            features: { allowPartialTransfers: true, balancesAreSummable: true, amountDecimalPlaces: 0, privacyMode: 'flexible', allowedTTypes: ['init', 'transfer', 'split'] },
+            issuance: { validityDurationRange: ['P1Y', 'P10Y'], issuanceMinimumValidityDuration: 'P3Y', additionalSignaturesRange: [2, 2], allowedSignatureRoles: ['guarantor'] },
+            customRules: {},
+          },
+          mutable: {
+            metadata: { issuerName: 'Human Money Project', keywords: [] },
+            appConfig: { defaultValidityDuration: 'P5Y', roundUpValidityTo: 'P1Y', serverHistoryRetention: 'P3M' },
+            i18n: { descriptions: {}, footnotes: {}, collateralDescriptions: {} },
+          }
+        });
       }
       if (cmd === 'evaluate_signature_suitability') {
         return Promise.resolve(mockSignatureImpact);
@@ -121,6 +135,7 @@ describe('SignRequestView Component (Minuto Standard)', () => {
     await waitFor(() => {
       expect(screen.getByText(/Signature Request/i)).toBeInTheDocument();
       expect(screen.getByText(/Voucher Details/i)).toBeInTheDocument();
+      expect(screen.getByText(/guarantor/i)).toBeInTheDocument();
     });
   });
 });

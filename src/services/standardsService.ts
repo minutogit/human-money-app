@@ -20,7 +20,7 @@ export const standardsService = {
         return await invoke<SignatureImpact>("evaluate_signature_suitability", {
             voucher: args.voucher,
             role: args.role,
-            standard_toml_content: args.standardTomlContent
+            standardTomlContent: args.standardTomlContent
         });
     }
 };

@@ -4713,6 +4713,162 @@
       "de": "ai-translated"
     }
   },
+  "voucher.signRequest.checkingValidity": {
+    "source_text": "Checking signature validity...",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.chooseRole": {
+    "source_text": "Choose Role...",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.created": {
+    "source_text": "Created",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.description": {
+    "source_text": "Review and cryptographically sign the requested asset endorsement.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.embedProfileData": {
+    "source_text": "Embed your public profile data in the signature",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.impactEvaluation": {
+    "source_text": "Impact Evaluation",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.impactUnavailable": {
+    "source_text": "Impact data unavailable for this role configuration.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.initError": {
+    "source_text": "Initialization Error: {{error}}",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.localSignatureNotice": {
+    "source_text": "SIGNATURE IS GENERATED LOCALLY AND NEVER EXPOSES YOUR PRIVATE KEY",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.parseFailed": {
+    "source_text": "Failed to parse standard: {{error}}",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.pleaseSelectRole": {
+    "source_text": "Please select a signature role.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.profileConflicts": {
+    "source_text": "Profile Conflicts",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.rulesFulfilled": {
+    "source_text": "Rules Fulfilled",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.selectRole": {
+    "source_text": "Select Authority Role",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.selectRoleForImpact": {
+    "source_text": "Please select a role to evaluate the endorsement impact.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.signFailed": {
+    "source_text": "Signing Failed: {{error}}",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.signNow": {
+    "source_text": "Sign Now",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.signatureGenerated": {
+    "source_text": "Signature generated successfully!",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.signatureResponseFilter": {
+    "source_text": "Signature Response (.sig)",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.signatureRole": {
+    "source_text": "Signature Role",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.signatureValid": {
+    "source_text": "This signature is valid and ready for use.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.signing": {
+    "source_text": "Signing...",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.standardViolation": {
+    "source_text": "Standard Violation: The specified role is not authorized for this asset.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.title": {
+    "source_text": "Signature Request",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.validAsset": {
+    "source_text": "Valid Asset",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.signRequest.value": {
+    "source_text": "Value",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
   "voucher.signatureHint": {
     "source_text": "Signature Hint",
     "status": {

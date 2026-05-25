@@ -66,11 +66,6 @@ export interface DynamicRule {
     message: string;
 }
 
-export interface SignatureRule {
-    roleDescription: string;
-    weight: number;
-    validationRules: Record<string, DynamicRule>;
-}
 
 export interface ImmutableIdentity {
     uuid: string;
@@ -109,7 +104,6 @@ export interface ImmutableZone {
     features: ImmutableFeatures;
     issuance: ImmutableIssuance;
     customRules: Record<string, DynamicRule>;
-    signatureRules: Record<string, SignatureRule>;
 }
 
 export interface MutableMetadata {

@@ -263,6 +263,11 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Localized Conflict Management views (Batch 8 i18n migration).
 - [x] Localized Settings and Integrity Report Modal (Batch 9 i18n migration).
 - [x] Dynamic Language Detection & Manual Language Selector (Persisted client-side via localStorage).
+- [x] Tauri Command Argument Alignment & Static Analysis (Aligned frontend invoke payload keys with backend parameter names and added a static analysis regression test).
+- [x] Fixed signature request parsing error in SignRequestView (extracted roles via allowedSignatureRoles instead of obsolete signatureRules and updated test coverage).
+- [x] Localized SignRequestView component (Batch 10 i18n migration).
+- [x] Fixed Voucher Signature Deserialization Error (Strict DTO pattern alignment for voucher signature requests and added static analysis gate for command parameter types).
+
 
 ## Next Milestones
 

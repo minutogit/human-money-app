@@ -2,7 +2,6 @@
 use crate::{models::{FrontendNewVoucherData, FrontendError}, AppState};
 use log::{info, error};
 use human_money_core::{
-    models::voucher::Voucher,
     models::secure_container::ContainerConfig,
     services::voucher_manager::NewVoucherData,
 };
@@ -115,7 +114,7 @@ pub fn open_voucher_signing_request(
 
 #[tauri::command]
 pub fn create_detached_signature_response_bundle(
-    voucher: Voucher,
+    voucher: crate::models::FrontendVoucher,
     role: String,
     include_details: bool,
     config: ContainerConfig,
@@ -139,7 +138,8 @@ pub fn create_detached_signature_response_bundle(
         }
     }
 
-    service.create_detached_signature_response_bundle(&voucher, &role, include_details, config, password.as_deref())
+    let core_voucher = human_money_core::models::voucher::Voucher::from(voucher);
+    service.create_detached_signature_response_bundle(&core_voucher, &role, include_details, config, password.as_deref())
         .map_err(FrontendError::from)
 }
 

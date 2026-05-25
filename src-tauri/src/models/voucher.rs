@@ -21,6 +21,8 @@ pub struct FrontendCollateralData {
 #[serde(rename_all = "camelCase")]
 pub struct FrontendCreatorData {
     pub protocol_version: Option<String>,
+    #[serde(default)]
+    pub id: Option<String>,
     pub first_name: String,
     pub last_name: String,
     pub address: FrontendAddressData,
@@ -39,6 +41,7 @@ impl From<human_money_core::models::profile::PublicProfile> for FrontendCreatorD
     fn from(p: human_money_core::models::profile::PublicProfile) -> Self {
         Self {
             protocol_version: p.protocol_version,
+            id: p.id,
             first_name: p.first_name.unwrap_or_default(),
             last_name: p.last_name.unwrap_or_default(),
             address: p.address.map(|a| a.into()).unwrap_or_default(),
@@ -413,4 +416,141 @@ pub struct VoucherStandardInfo {
     pub id: String,
     pub display_name: String,
     pub content: String,
+}
+
+impl From<FrontendVoucherTemplateData> for human_money_core::models::voucher::VoucherTemplateData {
+    fn from(t: FrontendVoucherTemplateData) -> Self {
+        Self {
+            description: t.description,
+            primary_redemption_type: t.primary_redemption_type,
+            allow_partial_transfers: t.allow_partial_transfers,
+            issuance_minimum_validity_duration: t.issuance_minimum_validity_duration,
+            footnote: t.footnote,
+        }
+    }
+}
+
+impl From<FrontendVoucherStandard> for human_money_core::models::voucher::VoucherStandard {
+    fn from(s: FrontendVoucherStandard) -> Self {
+        Self {
+            name: s.name,
+            uuid: s.uuid,
+            standard_definition_hash: s.standard_definition_hash,
+            template: s.template.into(),
+        }
+    }
+}
+
+impl From<FrontendValueDefinition> for human_money_core::models::voucher::ValueDefinition {
+    fn from(v: FrontendValueDefinition) -> Self {
+        Self {
+            unit: v.unit,
+            amount: v.amount,
+            abbreviation: v.abbreviation,
+            description: v.description,
+        }
+    }
+}
+
+impl From<FrontendCollateral> for human_money_core::models::voucher::Collateral {
+    fn from(c: FrontendCollateral) -> Self {
+        Self {
+            value: human_money_core::models::voucher::ValueDefinition {
+                unit: c.unit,
+                amount: c.amount,
+                abbreviation: c.abbreviation,
+                description: c.description,
+            },
+            collateral_type: c.collateral_type,
+            redeem_condition: c.redeem_condition,
+        }
+    }
+}
+
+impl From<FrontendCreatorData> for human_money_core::models::profile::PublicProfile {
+    fn from(c: FrontendCreatorData) -> Self {
+        Self {
+            protocol_version: c.protocol_version,
+            id: c.id,
+            first_name: Some(c.first_name),
+            last_name: Some(c.last_name),
+            address: Some(c.address.into()),
+            organization: c.organization,
+            community: c.community,
+            phone: c.phone,
+            email: c.email,
+            url: c.url,
+            gender: Some(c.gender),
+            coordinates: Some(c.coordinates),
+            service_offer: c.service_offer,
+            needs: c.needs,
+            ..Default::default()
+        }
+    }
+}
+
+impl From<FrontendTrapData> for human_money_core::models::voucher::TrapData {
+    fn from(td: FrontendTrapData) -> Self {
+        Self {
+            ds_tag: td.ds_tag,
+            u: td.u,
+            blinded_id: td.blinded_id,
+            proof: td.proof,
+        }
+    }
+}
+
+impl From<FrontendTransaction> for human_money_core::models::voucher::Transaction {
+    fn from(t: FrontendTransaction) -> Self {
+        Self {
+            t_id: t.t_id,
+            t_type: t.t_type,
+            t_time: t.t_time,
+            prev_hash: t.prev_hash,
+            receiver_ephemeral_pub_hash: t.receiver_ephemeral_pub_hash,
+            sender_id: t.sender_id,
+            sender_identity_signature: t.sender_identity_signature,
+            recipient_id: t.recipient_id,
+            amount: t.amount,
+            sender_remaining_amount: t.sender_remaining_amount,
+            sender_ephemeral_pub: t.sender_ephemeral_pub,
+            change_ephemeral_pub_hash: t.change_ephemeral_pub_hash,
+            privacy_guard: t.privacy_guard,
+            trap_data: t.trap_data.map(|td| td.into()),
+            layer2_signature: t.layer2_signature,
+            deletable_at: t.deletable_at,
+        }
+    }
+}
+
+impl From<FrontendVoucherSignature> for human_money_core::models::voucher::VoucherSignature {
+    fn from(s: FrontendVoucherSignature) -> Self {
+        Self {
+            voucher_id: s.voucher_id,
+            signature_id: s.signature_id,
+            signer_id: s.signer_id,
+            signature: s.signature,
+            signature_time: s.signature_time,
+            role: s.role,
+            details: s.details.map(|d| d.into()),
+        }
+    }
+}
+
+impl From<FrontendVoucher> for human_money_core::models::voucher::Voucher {
+    fn from(v: FrontendVoucher) -> Self {
+        Self {
+            voucher_standard: v.voucher_standard.into(),
+            voucher_id: v.voucher_id,
+            voucher_nonce: v.voucher_nonce,
+            creation_date: v.creation_date,
+            valid_until: v.valid_until,
+            non_redeemable_test_voucher: v.non_redeemable_test_voucher,
+            nominal_value: v.nominal_value.into(),
+            collateral: v.collateral.map(|c| c.into()),
+            creator_profile: v.creator.into(),
+            transactions: v.transactions.into_iter().map(|t| t.into()).collect(),
+            signatures: v.signatures.into_iter().map(|s| s.into()).collect(),
+        }
+    }
 }
