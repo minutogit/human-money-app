@@ -139,4 +139,45 @@ describe('Login Component', () => {
       expect(mockOnLoginSuccess).toHaveBeenCalled();
     }, { timeout: 3000 });
   });
+
+  it('shows error message inside password prompt modal when verifyProfilePassword fails', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'list_profiles') {
+        return Promise.resolve(mockProfiles);
+      }
+      if (cmd === 'get_local_instance_id') {
+        return Promise.resolve('test-instance-id');
+      }
+      if (cmd === 'verify_profile_password') {
+        return Promise.reject(new Error('Invalid password'));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <Login
+        onLoginSuccess={mockOnLoginSuccess}
+        onSwitchToCreate={mockOnSwitchToCreate}
+        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToReset={mockOnSwitchToReset}
+      />
+    );
+
+    // Wait for trash button and click it to open delete password prompt modal
+    const trashButton = await screen.findByTitle(/Delete Profile/i);
+    fireEvent.click(trashButton);
+
+    // Modal is open, find the password input and the submit button
+    const passwordInput = await screen.findByLabelText(/Wallet Password/i);
+    const verifyButton = screen.getByRole('button', { name: /Verify/i });
+
+    // Enter incorrect password and click verify
+    fireEvent.change(passwordInput, { target: { value: 'wrong-password' } });
+    fireEvent.click(verifyButton);
+
+    // Verify error is shown inside the modal
+    await waitFor(() => {
+      expect(screen.getByText(/Authentication Error: Invalid password/i)).toBeInTheDocument();
+    });
+  });
 });

@@ -285,6 +285,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Integrated support view for 'Menschlich Miteinander' association, sidebar navigation, login page teaser, and tauri-plugin-opener handling (APP-028)
 - [x] Increased font size of advanced passphrase warning during profile creation to improve readability
 - [x] Updated login page footer to remove the protocol version and display the device ID with a shield icon prefix at 9px size
+- [x] Added minimum window dimensions (640x600) in tauri.conf.json to prevent layout breakdown on small screens
+- [x] Improved profile deletion feedback on wrong password by displaying localized error messages directly inside the modals
 
 
 

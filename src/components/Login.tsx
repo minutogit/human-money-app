@@ -54,6 +54,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     const [deleteUserId, setDeleteUserId] = useState("");
     const [isDeleting, setIsDeleting] = useState(false);
     const [isVerifyingDelete, setIsVerifyingDelete] = useState(false);
+    const [deleteError, setDeleteError] = useState("");
     
     const [localInstanceId, setLocalInstanceId] = useState("");
     
@@ -141,7 +142,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
 
     async function handleVerifyDeletePassword() {
         setIsVerifyingDelete(true);
-        setFeedbackMsg("");
+        setDeleteError("");
         try {
             const userId = await authService.verifyProfilePassword({
                 folderName: selectedProfile,
@@ -151,7 +152,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             setShowDeletePasswordPrompt(false);
             setShowDeleteConfirm(true);
         } catch (e) {
-            setFeedbackMsg(`${t('profile.authenticationError')}: ${translateError(e, t)}`);
+            setDeleteError(`${t('profile.authenticationError')}: ${translateError(e, t)}`);
         } finally {
             setIsVerifyingDelete(false);
         }
@@ -159,6 +160,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
 
     async function handleDeleteProfile() {
         setIsDeleting(true);
+        setDeleteError("");
         setFeedbackMsg(t('profile.deleting'));
         try {
             await authService.deleteProfile({
@@ -174,7 +176,9 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folderName);
             else onSwitchToCreate();
         } catch (e) {
-            setFeedbackMsg(`${t('profile.purgeFailure')}: ${translateError(e, t)}`);
+            const errorMsg = `${t('profile.purgeFailure')}: ${translateError(e, t)}`;
+            setDeleteError(errorMsg);
+            setFeedbackMsg(errorMsg);
         } finally {
             setIsDeleting(false);
         }
@@ -214,8 +218,15 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                             </p>
                         </div>
 
+                        {deleteError && (
+                            <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 animate-in shake duration-500">
+                                <AlertTriangle className="text-rose-500 shrink-0" size={18} />
+                                <p className="text-xs font-bold text-rose-800 leading-tight">{deleteError}</p>
+                            </div>
+                        )}
+
                         <div className="flex gap-4">
-                            <Button type="button" variant="secondary" onClick={() => setShowDeleteConfirm(false)} className="flex-1 rounded-2xl">{t('common.abort')}</Button>
+                            <Button type="button" variant="secondary" onClick={() => { setShowDeleteConfirm(false); setDeleteError(""); }} className="flex-1 rounded-2xl">{t('common.abort')}</Button>
                             <Button type="button" onClick={handleDeleteProfile} disabled={isDeleting} className="flex-1 rounded-3xl !bg-rose-600 hover:!bg-rose-700 shadow-premium-lg">
                                 {isDeleting ? t('profile.deleting') : t('profile.deleteProfile')}
                             </Button>
@@ -239,12 +250,29 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                         
                         <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleVerifyDeletePassword(); }}>
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('profile.walletPassword')}</label>
-                                <Input type="password" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} placeholder={t('common.required')} autoFocus />
+                                <label htmlFor="delete-password-input" className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('profile.walletPassword')}</label>
+                                <Input 
+                                    id="delete-password-input"
+                                    type="password" 
+                                    value={deletePassword} 
+                                    onChange={(e) => {
+                                        setDeletePassword(e.target.value);
+                                        if (deleteError) setDeleteError("");
+                                    }} 
+                                    placeholder={t('common.required')} 
+                                    autoFocus 
+                                />
                             </div>
 
+                            {deleteError && (
+                                <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 animate-in shake duration-500">
+                                    <AlertTriangle className="text-rose-500 shrink-0" size={18} />
+                                    <p className="text-xs font-bold text-rose-800 leading-tight">{deleteError}</p>
+                                </div>
+                            )}
+
                             <div className="flex gap-4">
-                                <Button type="button" variant="secondary" onClick={() => { setShowDeletePasswordPrompt(false); setDeletePassword(""); setFeedbackMsg(""); }} disabled={isVerifyingDelete} className="flex-1 rounded-2xl">{t('common.cancel')}</Button>
+                                <Button type="button" variant="secondary" onClick={() => { setShowDeletePasswordPrompt(false); setDeletePassword(""); setDeleteError(""); }} disabled={isVerifyingDelete} className="flex-1 rounded-2xl">{t('common.cancel')}</Button>
                                 <Button type="submit" disabled={isVerifyingDelete || !deletePassword} className="flex-1 rounded-3xl shadow-md">
                                     {isVerifyingDelete ? t('profile.verifying') : t('profile.verify')}
                                 </Button>
@@ -328,7 +356,11 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                     </div>
                                     <button 
                                         type="button"
-                                        onClick={() => setShowDeletePasswordPrompt(true)}
+                                        onClick={() => {
+                                            setShowDeletePasswordPrompt(true);
+                                            setDeletePassword("");
+                                            setDeleteError("");
+                                        }}
                                         className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-200 text-slate-400 hover:text-rose-500 hover:bg-rose-50 hover:border-rose-200 transition-all flex items-center justify-center shadow-sm"
                                         title={t('profile.deleteProfile')}
                                     >
