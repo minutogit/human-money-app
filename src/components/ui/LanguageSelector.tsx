@@ -13,10 +13,13 @@ export function LanguageSelector({ variant = 'compact' }: LanguageSelectorProps)
 
     const languages = [
         { code: 'en', label: 'English', flag: '🇺🇸' },
-        { code: 'de', label: 'Deutsch', flag: '🇩🇪' }
+        { code: 'de', label: 'Deutsch', flag: '🇩🇪' },
+        { code: 'fr', label: 'Français', flag: '🇫🇷' },
+        { code: 'es', label: 'Español', flag: '🇪🇸' },
+        { code: 'it', label: 'Italiano', flag: '🇮🇹' },
     ];
 
-    const currentLangCode = (i18n.language || '').startsWith('de') ? 'de' : 'en';
+    const currentLangCode = languages.some(l => l.code === i18n.language) ? i18n.language : 'en';
     const currentLang = languages.find(l => l.code === currentLangCode) || languages[0];
 
     useEffect(() => {
