@@ -294,10 +294,9 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Added minimum window dimensions (640x600) in tauri.conf.json to prevent layout breakdown on small screens
 - [x] Implemented Bug Reporting (Fehler melden) feature with monospace log viewer, clipboard copy, and GitHub issues redirection
 - [x] Improved profile deletion feedback on wrong password by displaying localized error messages directly inside the modals
-
-
-
-
+- [x] Fixed UI overflow bug in transaction audit log, activities, and dashboard lists by adding min-w-0 to flex layouts to ensure correct text truncation
+- [x] Localized signature hints and added dynamic Title Case formatting for custom/arbitrary field checks
+- [x] Stabilized ConfirmationModal button layout using grid-cols-2 and fixed width classes to prevent layout shifts and Cancel button deformation during state changes
 ## Next Milestones
 
 - [ ] Internationalization (i18n) - German/English (MVP)

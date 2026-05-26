@@ -41,6 +41,19 @@ export function TransactionHistoryView() {
     const [searchQuery, setSearchQuery] = useState('');
 
     useEffect(() => {
+        if (!expandedId) return;
+
+        function handleDocumentClick() {
+            setExpandedId(null);
+        }
+
+        document.addEventListener('click', handleDocumentClick);
+        return () => {
+            document.removeEventListener('click', handleDocumentClick);
+        };
+    }, [expandedId]);
+
+    useEffect(() => {
         async function fetchHistory() {
             logger.info("TransactionHistoryView: Loading history.");
             try {
@@ -101,7 +114,7 @@ export function TransactionHistoryView() {
 
     return (
         <PageLayout 
-            title={t('history.auditTitle')} 
+            title={t('history.transactionHistory')} 
             description={t('history.auditDescription')} 
             onBack={goBack}
         >
@@ -142,10 +155,13 @@ export function TransactionHistoryView() {
                                 <div key={record.id} className="group">
                                     <div 
                                         className={`p-4 bg-white border ${isExpanded ? 'border-theme-primary/30 ring-1 ring-theme-primary/5' : 'border-theme-subtle hover:border-theme-primary/20'} rounded-2xl transition-all cursor-pointer shadow-sm group-hover:shadow-md`}
-                                        onClick={() => setExpandedId(isExpanded ? null : record.id)}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setExpandedId(record.id);
+                                        }}
                                     >
                                         <div className="flex items-center justify-between gap-4">
-                                            <div className="flex items-center gap-4 flex-1">
+                                            <div className="flex items-center gap-4 flex-1 min-w-0">
                                                 <div className={`flex items-center justify-center h-12 w-12 rounded-2xl shrink-0 transition-transform group-hover:scale-105 ${isSent ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'}`}>
                                                     {isSent ? <ArrowUpRight size={24} /> : <ArrowDownLeft size={24} />}
                                                 </div>

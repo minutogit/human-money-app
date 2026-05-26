@@ -114,7 +114,7 @@ export function WalletView() {
             standard = Object.values(parsedStandards).find(s => s.immutable.identity.uuid === voucher.voucherStandardUuid);
         }
         if (!standard) return null;
-        return getMissingProfileHint(standard, userProfile);
+        return getMissingProfileHint(standard, userProfile, t);
     };
 
     const allStatusNames = ['active', 'incomplete', 'archived', 'quarantined'];

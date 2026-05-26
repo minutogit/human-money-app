@@ -34,11 +34,11 @@ export function ConfirmationModal({
             <div className="w-full max-w-md rounded-lg bg-bg-card border border-theme-subtle p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
                 <h2 className="text-xl font-bold text-theme-primary mb-2">{title}</h2>
                 <div className="text-sm text-theme-light mb-6">{description}</div>
-                <div className="flex justify-end gap-3">
-                    <Button variant="secondary" onClick={onCancel} disabled={isProcessing}>
+                <div className="grid grid-cols-2 gap-3">
+                    <Button variant="secondary" onClick={onCancel} disabled={isProcessing} className="w-full">
                         {cancelText || t('common.cancel')}
                     </Button>
-                    <Button variant={confirmVariant} onClick={onConfirm} disabled={isProcessing || confirmDisabled}>
+                    <Button variant={confirmVariant} onClick={onConfirm} disabled={isProcessing || confirmDisabled} className="w-full">
                         {isProcessing ? t('common.processing') : (confirmText || t('common.confirm'))}
                     </Button>
                 </div>

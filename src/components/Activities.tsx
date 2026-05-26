@@ -122,7 +122,7 @@ export function Activities() {
                                     className="w-full text-left group"
                                 >
                                     <div className="p-4 bg-white border border-theme-subtle rounded-2xl flex items-center justify-between group-hover:border-theme-primary/30 group-hover:shadow-premium transition-all">
-                                        <div className="flex items-center gap-4">
+                                        <div className="flex items-center gap-4 flex-1 min-w-0">
                                             <div className={`flex items-center justify-center h-12 w-12 rounded-xl shrink-0 transition-transform group-hover:scale-105 ${bgColor} ${color}`}>
                                                 <Icon size={24} />
                                             </div>

@@ -425,18 +425,18 @@ export function Dashboard() {
                                         }
                                     }}
                                 >
-                                    <div className="flex items-center gap-4">
-                                        <div className={`p-3 rounded-2xl ${bgColor} ${color} transition-transform group-hover:scale-110`}>
+                                    <div className="flex items-center gap-4 flex-1 min-w-0">
+                                        <div className={`p-3 rounded-2xl ${bgColor} ${color} transition-transform group-hover:scale-110 shrink-0`}>
                                             <Icon size={20} />
                                         </div>
-                                        <div>
-                                            <p className="font-bold text-sm text-theme-secondary">{label}</p>
+                                        <div className="min-w-0">
+                                            <p className="font-bold text-sm text-theme-secondary truncate">{label}</p>
                                             <p className="text-[10px] font-bold text-theme-light uppercase tracking-widest mt-0.5">
                                                 {event.bffData.displayCurrency && `${event.bffData.amount} ${event.bffData.displayCurrency}`}
                                             </p>
                                         </div>
                                     </div>
-                                    <div className="text-right">
+                                    <div className="text-right shrink-0">
                                         <span className="text-[10px] font-bold text-theme-placeholder uppercase tracking-widest">
                                             {formatTimestamp(event.timestamp)}
                                         </span>

@@ -165,7 +165,7 @@ export function VoucherDetailsView() {
         ? (() => {
             const targetUuid = voucher.voucherStandard.uuid;
             const standard = parsedStandards[targetUuid] || Object.values(parsedStandards).find(s => s.immutable.identity.uuid === targetUuid);
-            return standard ? getMissingProfileHint(standard, userProfile) : null;
+            return standard ? getMissingProfileHint(standard, userProfile, t) : null;
         })() : null;
 
     const handleExport = async (config: SigningRequestConfig) => {

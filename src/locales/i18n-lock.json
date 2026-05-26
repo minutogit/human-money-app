@@ -2592,12 +2592,12 @@
     "ai_hint": "Label or text in transaction history / activity log."
   },
   "history.assetStandard": {
-    "source_text": "Asset / Minuto Standard",
+    "source_text": "Asset / Standard",
     "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated"
+      "de": "human-reviewed",
+      "es": "human-reviewed",
+      "fr": "human-reviewed",
+      "it": "human-reviewed"
     },
     "ai_hint": "Label or text in transaction history / activity log."
   },
@@ -2610,16 +2610,6 @@
       "it": "ai-translated"
     },
     "ai_hint": "Descriptive paragraph text in transaction history / activity log."
-  },
-  "history.auditTitle": {
-    "source_text": "Transaction Audit Log",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated"
-    },
-    "ai_hint": "Title header for transaction history / activity log view."
   },
   "history.date": {
     "source_text": "Date",
@@ -2744,12 +2734,12 @@
   "history.involvedAssets": {
     "source_text": "Involved Vouchers & Assets ({{count}})",
     "status": {
-      "de": "ai-translated",
+      "de": "human-reviewed",
       "fr": "ai-translated",
       "es": "ai-translated",
       "it": "ai-translated"
     },
-    "ai_hint": "Label or text in transaction history / activity log. Contains variables: {{count}}."
+    "ai_hint": "Label or text in transaction history / activity log. ('Assets' = 'Werte' in German) Contains variables: {{count}}."
   },
   "history.loadActivitiesFailed": {
     "source_text": "Failed to load activity log.",
@@ -3613,6 +3603,96 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.field.address": {
+    "source_text": "Address",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.field.community": {
+    "source_text": "Community",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.field.coordinates": {
+    "source_text": "Coordinates",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.field.email": {
+    "source_text": "Email",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.field.gender": {
+    "source_text": "Gender",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.field.needs": {
+    "source_text": "Needs",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.field.organization": {
+    "source_text": "Organization",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.field.phone": {
+    "source_text": "Phone",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.field.serviceOffer": {
+    "source_text": "Service Offer",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.field.url": {
+    "source_text": "Website",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -6789,6 +6869,33 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.hint.connectorAnd": {
+    "source_text": " and ",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.hint.connectorComma": {
+    "source_text": ", ",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.hint.prefix": {
+    "source_text": "This standard likely checks for: ",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },

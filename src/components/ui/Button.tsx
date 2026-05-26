@@ -28,9 +28,9 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 
         // Combine base styles with variant, size, and any additional classes
         const finalClassName = [
-            'inline-flex items-center justify-center',
+            'inline-flex items-center justify-center shrink-0',
             'border',
-            'transition-all duration-300 ease-out',
+            'transition-[color,background-color,border-color,opacity,box-shadow,transform] duration-300 ease-out',
             'focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-bg-app',
             'disabled:cursor-not-allowed disabled:opacity-60',
             'active:scale-[0.98]',
