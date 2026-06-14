@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0-beta.17"
 phase: "beta"
 health: "green"
-last_updated: "2026-05-26"
+last_updated: "2026-06-14"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -297,6 +297,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Fixed UI overflow bug in transaction audit log, activities, and dashboard lists by adding min-w-0 to flex layouts to ensure correct text truncation
 - [x] Localized signature hints and added dynamic Title Case formatting for custom/arbitrary field checks
 - [x] Stabilized ConfirmationModal button layout using grid-cols-2 and fixed width classes to prevent layout shifts and Cancel button deformation during state changes
+- [x] Unified onboarding start screen with side-by-side tiles and enforced device prefix recovery compliant with SAI principles
 ## Next Milestones
 
 - [ ] Internationalization (i18n) - German/English (MVP)

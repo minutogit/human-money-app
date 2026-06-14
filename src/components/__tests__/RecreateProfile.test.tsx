@@ -485,7 +485,7 @@ describe('RecreateProfile Component', () => {
       });
     });
 
-    it('shows profile name, password, and user prefix fields', async () => {
+    it('shows password and user prefix fields', async () => {
       render(
         <RecreateProfile
           onProfileCreated={mockOnProfileCreated}
@@ -508,17 +508,9 @@ describe('RecreateProfile Component', () => {
       fireEvent.click(nextButton);
 
       await waitFor(() => {
-        expect(screen.getByLabelText(/Profile Name/i)).toBeInTheDocument();
+        expect(screen.getByLabelText(/Set local password for this device/i)).toBeInTheDocument();
         expect(screen.getByPlaceholderText('Minimum 8 characters')).toBeInTheDocument();
-        expect(screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i)).toBeInTheDocument();
-      });
-
-      // Toggle checkbox to reveal prefix input
-      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
-      fireEvent.click(checkbox);
-
-      await waitFor(() => {
-        expect(screen.getByLabelText(/Sub-Account Name \/ Device Prefix/i)).toBeInTheDocument();
+        expect(screen.getByLabelText(/Device Abbreviation/i)).toBeInTheDocument();
       });
     });
 
@@ -546,14 +538,6 @@ describe('RecreateProfile Component', () => {
       await waitFor(() => {
         expect(screen.getByText('Step 2: Secure Your Profile')).toBeInTheDocument();
       }, { timeout: 3000 });
-
-      // Fill form with mismatched passwords
-      const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
-      fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
-
-      // Toggle checkbox to reveal prefix input
-      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
-      fireEvent.click(checkbox);
 
       const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
@@ -596,13 +580,6 @@ describe('RecreateProfile Component', () => {
       await waitFor(() => {
         expect(screen.getByText('Step 2: Secure Your Profile')).toBeInTheDocument();
       }, { timeout: 3000 });
-
-      const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
-      fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
-
-      // Toggle checkbox to reveal prefix input
-      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
-      fireEvent.click(checkbox);
 
       const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
@@ -682,13 +659,6 @@ describe('RecreateProfile Component', () => {
         expect(screen.getByText('Step 2: Secure Your Profile')).toBeInTheDocument();
       }, { timeout: 3000 });
 
-      const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
-      fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
-
-      // Toggle checkbox to reveal prefix input
-      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
-      fireEvent.click(checkbox);
-
       const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
@@ -731,13 +701,6 @@ describe('RecreateProfile Component', () => {
       await waitFor(() => {
         expect(screen.getByText('Step 2: Secure Your Profile')).toBeInTheDocument();
       }, { timeout: 3000 });
-
-      const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
-      fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
-
-      // Toggle checkbox to reveal prefix input
-      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
-      fireEvent.click(checkbox);
 
       const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
@@ -788,14 +751,6 @@ describe('RecreateProfile Component', () => {
         expect(screen.getByText('Step 2: Secure Your Profile')).toBeInTheDocument();
       }, { timeout: 3000 });
 
-      // Fill form correctly
-      const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
-      fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
-
-      // Toggle checkbox to reveal prefix input
-      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
-      fireEvent.click(checkbox);
-
       const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
@@ -810,7 +765,7 @@ describe('RecreateProfile Component', () => {
 
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith('create_profile', {
-          profileName: 'Test Profile',
+          profileName: 'my_device',
           mnemonic: mockSeed12,
           passphrase: undefined,
           userPrefix: 'my_device',
@@ -865,14 +820,6 @@ describe('RecreateProfile Component', () => {
       await waitFor(() => {
         expect(screen.getByText('Step 2: Secure Your Profile')).toBeInTheDocument();
       }, { timeout: 3000 });
-
-      // Fill form correctly
-      const profileNameInput = screen.getByPlaceholderText(/e.g., 'My Main Wallet'/i);
-      fireEvent.change(profileNameInput, { target: { value: 'Test Profile' } });
-
-      // Toggle checkbox to reveal prefix input
-      const checkbox = screen.getByLabelText(/Set up as sub-account \/ for multiple devices/i);
-      fireEvent.click(checkbox);
 
       const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });

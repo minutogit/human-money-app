@@ -69,6 +69,18 @@
     },
     "source_text": "Confirm Password"
   },
+  "auth.createNewWalletSub": {
+    "source_text": "(Generates a new, random seed)",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "auth.createNewWalletTitle": {
+    "source_text": "[+] CREATE NEW WALLET",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
   "auth.dontHaveWallet": {
     "ai_hint": "Login screen prompt to navigate to the create profile wizard.",
     "status": {
@@ -178,6 +190,18 @@
       "it": "ai-translated"
     },
     "source_text": "All normal wallet functions are suspended until recovery is complete."
+  },
+  "auth.loadExistingWalletSub": {
+    "source_text": "(Creates a wallet from an existing seed)",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "auth.loadExistingWalletTitle": {
+    "source_text": "[→] CREATE FROM EXISTING WALLET",
+    "status": {
+      "de": "ai-translated"
+    }
   },
   "auth.loadingWallet": {
     "ai_hint": "Button loading text during wallet recovery submission.",
@@ -716,6 +740,12 @@
       "fr": "ai-translated",
       "es": "ai-translated",
       "it": "ai-translated"
+    }
+  },
+  "common.or": {
+    "source_text": "OR",
+    "status": {
+      "de": "ai-translated"
     }
   },
   "common.prefixInfoA1": {
@@ -3519,6 +3549,24 @@
     },
     "source_text": "Device:"
   },
+  "profile.devicePrefixExplanation": {
+    "source_text": "This abbreviation cleanly separates the balances on your devices from one another. If you enter an abbreviation that you already use on another device, that account will be loaded here. If you choose a new abbreviation, a fresh sub-account for this device is created.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "profile.devicePrefixLabel": {
+    "source_text": "Device Abbreviation (e.g. mobile, pc, tablet)",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "profile.devicePrefixRequired": {
+    "source_text": "Device abbreviation is required.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
   "profile.deviceSettings": {
     "ai_hint": "Card header title for the device settings section in profile creation.",
     "status": {
@@ -3907,6 +3955,12 @@
       "fr": "ai-translated",
       "es": "ai-translated",
       "it": "ai-translated"
+    }
+  },
+  "profile.localPasswordLabel": {
+    "source_text": "Set local password for this device",
+    "status": {
+      "de": "ai-translated"
     }
   },
   "profile.locating": {
@@ -4323,7 +4377,7 @@
       "es": "ai-translated",
       "it": "ai-translated"
     },
-    "source_text": "Recreate profile from seed"
+    "source_text": "Create profile from seed"
   },
   "profile.recreateFromSeedTitle": {
     "ai_hint": "Page subtitle on the recreate profile screen.",
@@ -4333,7 +4387,7 @@
       "es": "ai-translated",
       "it": "ai-translated"
     },
-    "source_text": "Recreate Profile from Seed"
+    "source_text": "Create Profile from Seed"
   },
   "profile.recreateHere": {
     "ai_hint": "Link text in CreateNewProfile to switch to recreate profile flow.",
@@ -4343,7 +4397,7 @@
       "es": "ai-translated",
       "it": "ai-translated"
     },
-    "source_text": "Recreate profile here"
+    "source_text": "Create profile here"
   },
   "profile.repeatPassword": {
     "ai_hint": "Placeholder for confirming the password in profile creation.",

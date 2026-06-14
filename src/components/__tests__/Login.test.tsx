@@ -103,8 +103,8 @@ describe('Login Component', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/Don't have a wallet\? Create one/i)).toBeInTheDocument();
-      expect(screen.getByText(/Recreate profile from seed/i)).toBeInTheDocument();
+      expect(screen.getByText(/\[\+\] CREATE NEW WALLET/i)).toBeInTheDocument();
+      expect(screen.getByText(/\[→\] CREATE FROM EXISTING WALLET/i)).toBeInTheDocument();
       expect(screen.getByText(/Forgot password\?/i)).toBeInTheDocument();
     });
   });

@@ -433,10 +433,10 @@ describe('CreateNewProfile Component', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText(/Recreate profile here/i)).toBeInTheDocument();
+        expect(screen.getByText(/Create profile here/i)).toBeInTheDocument();
       });
 
-      const recreateLink = screen.getByText(/Recreate profile here/i);
+      const recreateLink = screen.getByText(/Create profile here/i);
       fireEvent.click(recreateLink);
 
       expect(mockOnSwitchToRecreate).toHaveBeenCalled();

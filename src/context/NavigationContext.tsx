@@ -66,11 +66,11 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
                 logger.info("No active session found, checking available profiles.");
             }
 
-            const profiles = await authService.listProfiles();
-            setAppState({ view: profiles.length > 0 ? "needs_login" : "needs_profile" });
+            await authService.listProfiles();
+            setAppState({ view: "needs_login" });
         } catch (e) {
             error(`Failed to check if profile exists: ${e}`);
-            setAppState({ view: "needs_profile" });
+            setAppState({ view: "needs_login" });
         }
     }, []);
 

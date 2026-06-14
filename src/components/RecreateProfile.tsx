@@ -49,9 +49,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     // --- State for Profile Details Step ---
     const [passphrase, setPassphrase] = useState<string>("");
     const [confirmPassphrase, setConfirmPassphrase] = useState<string>("");
-    const [profileName, setProfileName] = useState("");
     const [userPrefix, setUserPrefix] = useState("");
-    const [isSubAccount, setIsSubAccount] = useState(false);
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
     const [showPrefixInfo, setShowPrefixInfo] = useState(false);
@@ -249,6 +247,11 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     // (Adapted from CreateProfile.tsx)
     async function handleCreateProfileSubmit(e: FormEvent) {
         e.preventDefault();
+        const cleanedPrefix = userPrefix.trim();
+        if (!cleanedPrefix) {
+            setFeedbackMsg(t('profile.devicePrefixRequired'));
+            return;
+        }
         if (password !== confirmPassword) {
             setFeedbackMsg(t('profile.passwordMismatch'));
             passwordInputRef.current?.focus();
@@ -264,7 +267,6 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
             passwordInputRef.current?.focus();
             return;
         }
-        // Prefix is now optional for Root-Accounts
 
         setIsLoading(true);
         setFeedbackMsg(""); // Clear any previous errors
@@ -275,10 +277,10 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
             try {
                 const localInstanceId = await authService.getLocalInstanceId();
                 await profileService.createProfile({
-                    profileName,
+                    profileName: cleanedPrefix,
                     mnemonic: mnemonicWords.join(' '), // Use the imported mnemonic
                     passphrase: passphrase || undefined,
-                    userPrefix: isSubAccount ? (userPrefix || undefined) : undefined,
+                    userPrefix: cleanedPrefix,
                     password,
                     localInstanceId,
                     language: selectedLanguage,
@@ -427,11 +429,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                         </div>
 
                         <div>
-                            <label htmlFor="profileName" className="block text-sm font-semibold text-theme-secondary mb-1">{t('profile.profileName')}</label>
-                            <Input id="profileName" data-testid="profile-name-input" type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder={t('profile.profileNamePlaceholder2')} required />
-                        </div>
-                        <div>
-                            <label htmlFor="password" className="block text-sm font-semibold text-theme-secondary mb-1">{t('auth.password')}</label>
+                            <label htmlFor="password" className="block text-sm font-semibold text-theme-secondary mb-1">{t('profile.localPasswordLabel')}</label>
                             <Input 
                                 id="password"
                                 type="password" 
@@ -467,54 +465,33 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                         </div>
 
                         <div className="border-t border-theme-light-border pt-5 space-y-4">
-                            <div className="flex items-start gap-2.5 py-1">
-                                <input
-                                    id="checkbox-sub-account"
-                                    type="checkbox"
-                                    checked={isSubAccount}
-                                    onChange={(e) => {
-                                        setIsSubAccount(e.target.checked);
-                                        if (!e.target.checked) {
-                                            setUserPrefix("");
-                                        }
-                                    }}
-                                    className="mt-1 h-4.5 w-4.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary/30 cursor-pointer"
-                                />
-                                <div className="flex flex-col">
-                                    <label htmlFor="checkbox-sub-account" className="text-xs font-bold text-theme-secondary cursor-pointer select-none">
-                                        {t('profile.subAccountOption')}
+                            <div className="space-y-2 animate-in fade-in duration-300">
+                                <div className="flex items-center justify-between mb-1">
+                                    <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary">
+                                        {t('profile.devicePrefixLabel')}
                                     </label>
-                                    <p className="text-[10px] font-medium text-theme-light leading-normal mt-0.5">
-                                        {t('profile.subAccountDescription')}
-                                    </p>
+                                    <button 
+                                        type="button" 
+                                        onClick={() => setShowPrefixInfo(true)}
+                                        className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 cursor-pointer"
+                                    >
+                                        <HelpCircle size={12} />
+                                        <span>{t('profile.readInstructions')}</span>
+                                    </button>
                                 </div>
+                                <Input 
+                                    id="userPrefix" 
+                                    data-testid="user-prefix-input" 
+                                    type="text" 
+                                    value={userPrefix} 
+                                    onChange={(e) => setUserPrefix(e.target.value)} 
+                                    placeholder={t('profile.prefixPlaceholder')}
+                                    required
+                                />
+                                <p className="text-[10px] font-medium text-theme-light leading-normal mt-1">
+                                    {t('profile.devicePrefixExplanation')}
+                                </p>
                             </div>
-
-                            {isSubAccount && (
-                                <div className="space-y-2 pt-2 border-t border-theme-light-border animate-in fade-in duration-300">
-                                    <div className="flex items-center justify-between mb-1">
-                                        <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary">
-                                            {t('profile.subAccountName')}
-                                        </label>
-                                        <button 
-                                            type="button" 
-                                            onClick={() => setShowPrefixInfo(true)}
-                                            className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20"
-                                        >
-                                            <HelpCircle size={12} />
-                                            <span>{t('profile.readInstructions')}</span>
-                                        </button>
-                                    </div>
-                                    <Input 
-                                        id="userPrefix" 
-                                        data-testid="user-prefix-input" 
-                                        type="text" 
-                                        value={userPrefix} 
-                                        onChange={(e) => setUserPrefix(e.target.value)} 
-                                        placeholder={t('profile.prefixPlaceholder')}
-                                    />
-                                </div>
-                            )}
 
                             <div className="space-y-1.5 p-3.5 bg-theme-subtle/20 border border-theme-subtle rounded-2xl">
                                 <p className="text-[10px] text-theme-secondary leading-relaxed">
@@ -542,7 +519,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                 <Button type="button" variant="secondary" onClick={() => setWizardStep("import_seed")} className="flex-1 py-4 rounded-2xl gap-2">
                                     <ArrowLeft size={18} /> {t('profile.back')}
                                 </Button>
-                                <Button type="submit" disabled={isLoading} className="flex-[2] py-4 rounded-2xl gap-2">
+                                <Button type="submit" disabled={isLoading || !userPrefix.trim() || !password || !confirmPassword} className="flex-[2] py-4 rounded-2xl gap-2">
                                     {isLoading ? <RefreshCw className="animate-spin" size={18} /> : <CheckCircle2 size={18} />}
                                     {isLoading ? t('profile.creating') : t('profile.createAndEncrypt')}
                                 </Button>

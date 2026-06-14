@@ -2328,7 +2328,7 @@ dependencies = [
 
 [[package]]
 name = "human_money_core"
-version = "0.2.18"
+version = "0.2.20"
 dependencies = [
  "anyhow",
  "argon2",

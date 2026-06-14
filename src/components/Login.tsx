@@ -328,12 +328,14 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                         />
                         <div className="text-left space-y-0 sm:space-y-0.5">
                             <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
-                            <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">{t('auth.loginToYourWallet')}</p>
+                            <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">
+                                {profiles.length > 0 ? t('auth.loginToYourWallet') : t('dashboard.welcomeTitle')}
+                            </p>
                         </div>
                     </div>
 
-                    <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
-                        {profiles.length > 0 && (
+                    {profiles.length > 0 ? (
+                        <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
                             <div className="space-y-3">
                                 <label htmlFor="profile-select" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><UserCircle size={12}/> {t('profile.selectProfile')}</label>
                                 <div className="flex gap-3">
@@ -361,82 +363,156 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                             setDeletePassword("");
                                             setDeleteError("");
                                         }}
-                                        className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-200 text-slate-400 hover:text-rose-500 hover:bg-rose-50 hover:border-rose-200 transition-all flex items-center justify-center shadow-sm"
+                                        className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-200 text-slate-400 hover:text-rose-500 hover:bg-rose-50 hover:border-rose-200 transition-all flex items-center justify-center shadow-sm cursor-pointer"
                                         title={t('profile.deleteProfile')}
                                     >
                                         <Trash2 size={22} />
                                     </button>
                                 </div>
                             </div>
-                        )}
 
-                        <div className="space-y-3">
-                            <label htmlFor="password-input" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={12}/> {t('auth.password')}</label>
-                            <Input 
-                                id="password-input"
-                                type="password" 
-                                value={password} 
-                                onChange={(e) => { setPassword(e.target.value); if (feedbackMsg.includes("Verification")) setFeedbackMsg(""); }} 
-                                placeholder={t('auth.enterAccessPassword')}
-                                ref={passwordInputRef}
-                                className="py-5 px-6 text-lg font-bold tracking-widest"
-                            />
-                        </div>
+                            <div className="space-y-3">
+                                <label htmlFor="password-input" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={12}/> {t('auth.password')}</label>
+                                <Input 
+                                    id="password-input"
+                                    type="password" 
+                                    value={password} 
+                                    onChange={(e) => { setPassword(e.target.value); if (feedbackMsg.includes("Verification")) setFeedbackMsg(""); }} 
+                                    placeholder={t('auth.enterAccessPassword')}
+                                    ref={passwordInputRef}
+                                    className="py-5 px-6 text-lg font-bold tracking-widest"
+                                />
+                            </div>
 
-                        <div className="space-y-6 pt-4">
-                            {showHandoverUI ? (
-                                <div className="space-y-4 animate-in slide-in-from-bottom-4">
-                                    <Button 
-                                        type="button" 
-                                        onClick={handleHandover} 
-                                        disabled={isLoggingIn} 
-                                        className="w-full py-5 rounded-3xl !bg-amber-600 hover:!bg-amber-700 shadow-premium-lg text-lg gap-3"
-                                    >
-                                        {isLoggingIn ? <RefreshCw className="animate-spin" /> : <ShieldAlert size={24} />}
-                                        {t('profile.performHandover')}
+                            <div className="space-y-6 pt-4">
+                                {showHandoverUI ? (
+                                    <div className="space-y-4 animate-in slide-in-from-bottom-4">
+                                        <Button 
+                                            type="button" 
+                                            onClick={handleHandover} 
+                                            disabled={isLoggingIn} 
+                                            className="w-full py-5 rounded-3xl !bg-amber-600 hover:!bg-amber-700 shadow-premium-lg text-lg gap-3"
+                                        >
+                                            {isLoggingIn ? <RefreshCw className="animate-spin" /> : <ShieldAlert size={24} />}
+                                            {t('profile.performHandover')}
+                                        </Button>
+                                        <button 
+                                            type="button" 
+                                            onClick={() => { setShowHandoverUI(false); setFeedbackMsg(""); }} 
+                                            disabled={isLoggingIn}
+                                            className="w-full text-center text-[10px] font-black uppercase tracking-widest text-theme-light hover:text-theme-primary transition-colors cursor-pointer"
+                                        >
+                                            {t('profile.cancelProtocol')}
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0 || !password || !selectedProfile} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
+                                        {isLoggingIn ? <RefreshCw className="animate-spin" size={24} /> : <LogIn size={24} />}
+                                        {isLoggingIn ? t('auth.authorizing') : t('auth.login')}
                                     </Button>
+                                )}
+
+                                <div className="relative flex items-center justify-center my-6">
+                                    <div className="absolute inset-0 flex items-center">
+                                        <div className="w-full border-t border-theme-light-border"></div>
+                                    </div>
+                                    <span className="relative px-3 bg-white text-[10px] font-black uppercase tracking-widest text-theme-light">
+                                        {t('common.or') || 'OR'}
+                                    </span>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-2">
                                     <button 
                                         type="button" 
-                                        onClick={() => { setShowHandoverUI(false); setFeedbackMsg(""); }} 
-                                        disabled={isLoggingIn}
-                                        className="w-full text-center text-[10px] font-black uppercase tracking-widest text-theme-light hover:text-theme-primary transition-colors"
+                                        onClick={onSwitchToCreate} 
+                                        className="p-6 bg-slate-50 border border-slate-200 hover:border-theme-primary/40 hover:bg-theme-primary/5 rounded-[28px] text-center group transition-all flex flex-col items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md"
                                     >
-                                        {t('profile.cancelProtocol')}
+                                        <div className="w-12 h-12 rounded-full bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-110 transition-transform">
+                                            <PlusCircle size={26} className="text-theme-primary" />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <h3 className="text-xs font-black uppercase tracking-wider text-theme-secondary group-hover:text-theme-primary">
+                                                {t('auth.createNewWalletTitle')}
+                                            </h3>
+                                            <p className="text-[10px] font-medium text-theme-light">
+                                                {t('auth.createNewWalletSub')}
+                                            </p>
+                                        </div>
+                                    </button>
+                                    <button 
+                                        type="button" 
+                                        onClick={onSwitchToRecreate} 
+                                        className="p-6 bg-slate-50 border border-slate-200 hover:border-theme-primary/40 hover:bg-theme-primary/5 rounded-[28px] text-center group transition-all flex flex-col items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md"
+                                    >
+                                        <div className="w-12 h-12 rounded-full bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-110 transition-transform">
+                                            <RefreshCw size={24} className="text-theme-primary" />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <h3 className="text-xs font-black uppercase tracking-wider text-theme-secondary group-hover:text-theme-primary">
+                                                {t('auth.loadExistingWalletTitle')}
+                                            </h3>
+                                            <p className="text-[10px] font-medium text-theme-light">
+                                                {t('auth.loadExistingWalletSub')}
+                                            </p>
+                                        </div>
                                     </button>
                                 </div>
-                            ) : (
-                                <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0 || !password || !selectedProfile} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
-                                    {isLoggingIn ? <RefreshCw className="animate-spin" size={24} /> : <LogIn size={24} />}
-                                    {isLoggingIn ? t('auth.authorizing') : t('auth.login')}
-                                </Button>
-                            )}
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <button type="button" onClick={onSwitchToCreate} className="p-4 bg-slate-50 border border-slate-200 rounded-[24px] text-center group hover:border-theme-primary/40 transition-all">
-                                    <PlusCircle size={20} className="mx-auto mb-2 text-slate-400 group-hover:text-theme-primary" />
-                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 group-hover:text-theme-primary">{t('auth.dontHaveWallet')}</p>
-                                </button>
-                                <button type="button" onClick={onSwitchToRecreate} className="p-4 bg-slate-50 border border-slate-200 rounded-[24px] text-center group hover:border-theme-primary/40 transition-all">
-                                    <RefreshCw size={20} className="mx-auto mb-2 text-slate-400 group-hover:text-theme-primary" />
-                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 group-hover:text-theme-primary">{t('profile.recreateFromSeed')}</p>
+                                <button type="button" onClick={onSwitchToReset} className="w-full text-center text-[10px] font-black uppercase tracking-[0.2em] text-theme-light hover:text-theme-primary transition-colors flex items-center justify-center gap-2 cursor-pointer mt-4">
+                                    <Key size={12} /> {t('auth.forgotPassword')}
                                 </button>
                             </div>
 
-                            <button type="button" onClick={onSwitchToReset} className="w-full text-center text-[10px] font-black uppercase tracking-[0.2em] text-theme-light hover:text-theme-primary transition-colors flex items-center justify-center gap-2">
-                                <Key size={12} /> {t('auth.forgotPassword')}
-                            </button>
-                        </div>
-
-                        {feedbackMsg && (
-                            <div className={`p-5 rounded-[32px] border flex items-center gap-4 animate-in slide-in-from-bottom-4 ${feedbackMsg.includes('Error') || feedbackMsg.includes('Failure') || feedbackMsg.includes('Mismatch') ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
-                                {feedbackMsg.includes('Error') || feedbackMsg.includes('Failure') || feedbackMsg.includes('Mismatch') ? <ShieldAlert size={20} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={20} className="text-emerald-500 shrink-0" />}
-                                <div>
-                                    <h4 className="text-[10px] font-black uppercase tracking-widest mb-1">{feedbackMsg.includes('Error') ? t('profile.verificationSystem') : t('profile.protocolAlert')}</h4>
-                                    <p className="text-sm font-bold leading-tight">{feedbackMsg}</p>
+                            {feedbackMsg && (
+                                <div className={`p-5 rounded-[32px] border flex items-center gap-4 animate-in slide-in-from-bottom-4 ${feedbackMsg.includes('Error') || feedbackMsg.includes('Failure') || feedbackMsg.includes('Mismatch') ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
+                                    {feedbackMsg.includes('Error') || feedbackMsg.includes('Failure') || feedbackMsg.includes('Mismatch') ? <ShieldAlert size={20} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={20} className="text-emerald-500 shrink-0" />}
+                                    <div>
+                                        <h4 className="text-[10px] font-black uppercase tracking-widest mb-1">{feedbackMsg.includes('Error') ? t('profile.verificationSystem') : t('profile.protocolAlert')}</h4>
+                                        <p className="text-sm font-bold leading-tight">{feedbackMsg}</p>
+                                    </div>
                                 </div>
+                            )}
+                        </form>
+                    ) : (
+                        <div className="space-y-6 pt-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-2">
+                                <button 
+                                    type="button" 
+                                    onClick={onSwitchToCreate} 
+                                    className="p-6 bg-slate-50 border border-slate-200 hover:border-theme-primary/40 hover:bg-theme-primary/5 rounded-[28px] text-center group transition-all flex flex-col items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md"
+                                >
+                                    <div className="w-12 h-12 rounded-full bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-110 transition-transform">
+                                        <PlusCircle size={26} className="text-theme-primary" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <h3 className="text-xs font-black uppercase tracking-wider text-theme-secondary group-hover:text-theme-primary">
+                                            {t('auth.createNewWalletTitle')}
+                                        </h3>
+                                        <p className="text-[10px] font-medium text-theme-light">
+                                            {t('auth.createNewWalletSub')}
+                                        </p>
+                                    </div>
+                                </button>
+                                <button 
+                                    type="button" 
+                                    onClick={onSwitchToRecreate} 
+                                    className="p-6 bg-slate-50 border border-slate-200 hover:border-theme-primary/40 hover:bg-theme-primary/5 rounded-[28px] text-center group transition-all flex flex-col items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md"
+                                >
+                                    <div className="w-12 h-12 rounded-full bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-110 transition-transform">
+                                        <RefreshCw size={24} className="text-theme-primary" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <h3 className="text-xs font-black uppercase tracking-wider text-theme-secondary group-hover:text-theme-primary">
+                                            {t('auth.loadExistingWalletTitle')}
+                                        </h3>
+                                        <p className="text-[10px] font-medium text-theme-light">
+                                            {t('auth.loadExistingWalletSub')}
+                                        </p>
+                                    </div>
+                                </button>
                             </div>
-                        )}
-                    </form>
+                        </div>
+                    )}
 
                     <div className="pt-4 border-t border-theme-subtle/40 flex flex-col items-center gap-1.5 text-center">
                         {localInstanceId && (
