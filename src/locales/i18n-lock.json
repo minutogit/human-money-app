@@ -191,6 +191,42 @@
     },
     "source_text": "All normal wallet functions are suspended until recovery is complete."
   },
+  "auth.helpHandoverLong": {
+    "source_text": "To guarantee the highest security for your balance, your wallet can only execute transactions actively on one device at a time. When switching to another device, you must perform a 'handover'. The previous device is then paused for new payments until you return the rights there as needed.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "auth.helpHandoverShort": {
+    "source_text": "Transfers active access rights to this device.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "auth.helpHandoverTitle": {
+    "source_text": "What is device handover?",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "auth.helpProfileLong": {
+    "source_text": "A profile stores your vouchers, contacts, and transaction history securely encrypted on this exact device. You can create multiple profiles to manage different digital identities separately.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "auth.helpProfileShort": {
+    "source_text": "Your local, encrypted vault for this device.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "auth.helpProfileTitle": {
+    "source_text": "What is a local profile?",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
   "auth.loadExistingWalletSub": {
     "source_text": "(Creates a wallet from an existing seed)",
     "status": {
@@ -474,12 +510,12 @@
     "source_text": "Session Locked"
   },
   "auth.supportTeaserLink": {
-    "source_text": "Support Menschlich Miteinander ↗",
+    "source_text": "Supported by Menschlich Miteinander ↗",
     "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated"
+      "de": "human-reviewed",
+      "es": "needs-translation",
+      "fr": "needs-translation",
+      "it": "needs-translation"
     }
   },
   "auth.useSingleFields": {
@@ -3872,6 +3908,60 @@
       "it": "ai-translated"
     },
     "source_text": "Handover Failure"
+  },
+  "profile.helpMnemonicLong": {
+    "source_text": "These 12 or 24 words form the irrevocable foundation of your account. Since the system is completely decentralized, there is no support team that can reset your password. If you lose these words, your digital identity and all your vouchers are lost forever. Keep the words offline and absolutely secure!",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "profile.helpMnemonicShort": {
+    "source_text": "The master key to your digital identity and wallet.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "profile.helpMnemonicTitle": {
+    "source_text": "What is the Seed Phrase?",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "profile.helpPassphraseLong": {
+    "source_text": "The passphrase serves as extra security. Even if someone steals your seed phrase, your wallet remains inaccessible without this passphrase. IMPORTANT: If you forget this passphrase, you cannot recover your wallet - not even with the correct seed phrase!",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "profile.helpPassphraseShort": {
+    "source_text": "Additional protection (like a 25th word) for your seed phrase.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "profile.helpPassphraseTitle": {
+    "source_text": "What is the optional Passphrase?",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "profile.helpSubaccountLong": {
+    "source_text": "If you want to use your identity on multiple devices (e.g. mobile and PC), each device needs its own identifier. This option adds a visible prefix to your public identity. This is particularly interesting for companies to prefix the company name, or privately to mark your own name or the respective device (e.g. 'Mobile'). This way, the system always knows which device an action comes from, and all your devices work together smoothly.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "profile.helpSubaccountShort": {
+    "source_text": "Secure use on multiple devices using a name identifier.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "profile.helpSubaccountTitle": {
+    "source_text": "What is the Sub-Account option (Prefix)?",
+    "status": {
+      "de": "ai-translated"
+    }
   },
   "profile.houseNumber": {
     "source_text": "Nr.",

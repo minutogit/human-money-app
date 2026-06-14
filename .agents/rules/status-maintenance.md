@@ -17,6 +17,10 @@ Update `STATUS.md` whenever:
 - The project phase changes (e.g., from "planning" to "active-development")
 - Dependencies on other HuMoCo projects change
 
+## When to Skip
+
+Do NOT update `STATUS.md` for minor or trivial changes (e.g., simple text/wording edits, removing unused UI elements, buttons, or links, formatting fixes).
+
 ## Format
 
 The file uses YAML frontmatter with these fields:

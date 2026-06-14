@@ -12,6 +12,7 @@ import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
 import { ProfileInfo } from "../types";
+import { HelpIcon } from "./ui/HelpIcon";
 import { translateError, isBackendError } from "../utils/errorHelper";
 import { 
     UserCircle, 
@@ -198,7 +199,10 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                 <UserX size={40} />
                             </div>
                             <div className="space-y-1">
-                                <h2 className="text-3xl font-black text-rose-900 tracking-tighter uppercase">{t('profile.deleteProfile')}</h2>
+                                <h2 className="text-3xl font-black text-rose-900 tracking-tighter uppercase flex items-center justify-center gap-2">
+                                    <span>{t('profile.deleteProfile')}</span>
+                                    <HelpIcon topic="profile" size={20} />
+                                </h2>
                                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-500">{t('profile.identity')} {activeProfileName}</p>
                             </div>
                         </div>
@@ -337,7 +341,13 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     {profiles.length > 0 ? (
                         <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
                             <div className="space-y-3">
-                                <label htmlFor="profile-select" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><UserCircle size={12}/> {t('profile.selectProfile')}</label>
+                                <div className="flex items-center gap-1.5">
+                                    <label htmlFor="profile-select" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1">
+                                        <UserCircle size={12}/> 
+                                        <span>{t('profile.selectProfile')}</span>
+                                    </label>
+                                    <HelpIcon topic="profile" size={12} />
+                                </div>
                                 <div className="flex gap-3">
                                     <div className="relative flex-1 group">
                                         <select
@@ -387,6 +397,13 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                             <div className="space-y-6 pt-4">
                                 {showHandoverUI ? (
                                     <div className="space-y-4 animate-in slide-in-from-bottom-4">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-[10px] font-black text-amber-600 uppercase tracking-widest flex items-center gap-1.5">
+                                                <ShieldAlert size={12} />
+                                                <span>{t('profile.performHandover')}</span>
+                                            </span>
+                                            <HelpIcon topic="handover" size={14} className="text-amber-600 animate-pulse" />
+                                        </div>
                                         <Button 
                                             type="button" 
                                             onClick={handleHandover} 

@@ -21,7 +21,6 @@ vi.mock('../../utils/log', () => ({
 
 describe('CreateNewProfile Component', () => {
   const mockOnProfileCreated = vi.fn();
-  const mockOnSwitchToRecreate = vi.fn();
   const mockOnSwitchToLogin = vi.fn();
 
   const mockSeed12 = 'apple banana cherry date elderberry fig grape honey iris jasmine kiwi lemon';
@@ -51,7 +50,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -65,7 +63,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -82,7 +79,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -99,7 +95,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -123,7 +118,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -149,7 +143,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -172,7 +165,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -199,7 +191,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -223,7 +214,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -260,7 +250,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -317,7 +306,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -346,7 +334,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -384,7 +371,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -423,30 +409,10 @@ describe('CreateNewProfile Component', () => {
   });
 
   describe('Navigation Buttons', () => {
-    it('calls onSwitchToRecreate when clicking recreate link', async () => {
-      render(
-        <CreateNewProfile
-          onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
-          onSwitchToLogin={mockOnSwitchToLogin}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText(/Create profile here/i)).toBeInTheDocument();
-      });
-
-      const recreateLink = screen.getByText(/Create profile here/i);
-      fireEvent.click(recreateLink);
-
-      expect(mockOnSwitchToRecreate).toHaveBeenCalled();
-    });
-
     it('calls onSwitchToLogin when clicking back button', async () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );
@@ -465,7 +431,6 @@ describe('CreateNewProfile Component', () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
-          onSwitchToRecreate={mockOnSwitchToRecreate}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
       );

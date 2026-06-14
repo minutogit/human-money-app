@@ -39,7 +39,7 @@ Read the code directly when you need current API signatures.
 
 ## Status Maintenance
 
-You are responsible for keeping `STATUS.md` in the project root up to date. See the `status-maintenance` rule for details.
+You are responsible for keeping `STATUS.md` in the project root up to date. For minor or trivial changes (e.g., simple text edits, deleting unused elements, formatting fixes), updating `STATUS.md` is not required.
 
 ## CI / GitHub Release Workflow
 
@@ -47,7 +47,7 @@ To ensure successful builds on GitHub:
 
 1.  **Dependency Handling:** NEVER include a `[patch]` block in `src-tauri/Cargo.toml`. Instead, use `src-tauri/.cargo/config.toml` for local overrides (this file is git-ignored).
 2.  **Cargo.lock Synchronization:** If you change core dependencies or local configurations, always run `cd src-tauri && cargo update -p human_money_core` to refresh the lock file, then commit the updated `Cargo.lock`.
-3.  **Verification Gate:** After ANY code changes, you MUST run `./run-tests.sh --quiet` (or with `--frontend-only`/`-f` or `--backend-only`/`-b` if changes are isolated) in the project root. This script performs comprehensive checks including Tauri version sync, TypeScript types (Frontend & Node), ESLint (Frontend), Vitest suite, Cargo Clippy (Backend hardening), and Cargo integration tests. The `--quiet` flag is essential to minimize token usage during agent execution. Ensure all checks are green before concluding your work.
+3.  **Verification Gate:** After ANY code changes (excluding pure documentation/status changes such as editing `STATUS.md`), you MUST run `./run-tests.sh --quiet` (or with `--frontend-only`/`-f` or `--backend-only`/`-b` if changes are isolated) in the project root. This script performs comprehensive checks including Tauri version sync, TypeScript types (Frontend & Node), ESLint (Frontend), Vitest suite, Cargo Clippy (Backend hardening), and Cargo integration tests. The `--quiet` flag is essential to minimize token usage during agent execution. Ensure all checks are green before concluding your work.
 4.  **Release Trigger:** Push a tag starting with `v` (e.g., `v0.1.0-alpha.3`) from any branch to trigger the production build and GitHub release.
 5.  **Core State:** Ensure the `master` branch of `human-money-core` is up-to-date before pushing the app tag.
 6.  **Tauri Version Synchronization:** Tauri 2 requires the Rust `tauri` crate and NPM `@tauri-apps/api`/`@tauri-apps/cli` packages to be on the same major/minor version. Always keep these synchronized. Run `./run-tests.sh --quiet` to verify synchronization and overall system health.

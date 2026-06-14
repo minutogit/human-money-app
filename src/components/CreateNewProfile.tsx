@@ -28,6 +28,7 @@ import {
     HelpCircle
 } from "lucide-react";
 import { PrefixInfoModal } from "./ui/PrefixInfoModal";
+import { HelpIcon } from "./ui/HelpIcon";
 
 type WizardStep = "display_seed" | "confirm_seed" | "set_password";
 
@@ -38,11 +39,10 @@ interface ConfirmationWord {
 
 interface CreateNewProfileProps {
     onProfileCreated: () => void;
-    onSwitchToRecreate: () => void;
     onSwitchToLogin?: () => void;
 }
 
-export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitchToLogin }: CreateNewProfileProps) {
+export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNewProfileProps) {
     const { t } = useTranslation();
     const [wizardStep, setWizardStep] = useState<WizardStep>("display_seed");
     const [generatedSeed, setGeneratedSeed] = useState<string[]>([]);
@@ -179,7 +179,10 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                 return (
                     <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-500">
                         <div className="text-center space-y-2">
-                            <h2 className="text-2xl font-black text-theme-primary tracking-tight">{t('profile.step1Title')}</h2>
+                            <h2 className="text-2xl font-black text-theme-primary tracking-tight flex items-center justify-center gap-2">
+                                <span>{t('profile.step1Title')}</span>
+                                <HelpIcon topic="mnemonic" size={20} />
+                            </h2>
                             <p className="text-sm font-medium text-theme-light">{t('profile.step1Subtitle')}</p>
                         </div>
 
@@ -230,7 +233,13 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
 
                         <div className="space-y-4 pt-4 border-t border-theme-primary/10">
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={10}/> {t('profile.optionalPassphrase', { ordinal: wordCount === 12 ? '13th' : '25th' })}</label>
+                                <div className="flex items-center gap-1.5">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1">
+                                        <Lock size={10}/> 
+                                        <span>{t('profile.optionalPassphrase', { ordinal: wordCount === 12 ? '13th' : '25th' })}</span>
+                                    </label>
+                                    <HelpIcon topic="passphrase" size={12} />
+                                </div>
                                 <Input 
                                     type="text" 
                                     value={passphrase} 
@@ -253,9 +262,6 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                             <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="w-full py-3 rounded-2xl shadow-sm text-sm gap-2">
                                 <ArrowLeft size={18} /> {t('auth.backToLogin')}
                             </Button>
-                            <button onClick={onSwitchToRecreate} className="text-[10px] font-black uppercase tracking-widest text-theme-light hover:text-theme-primary transition-colors flex items-center gap-2">
-                                <RefreshCw size={12} /> {t('profile.recreateHere')}
-                            </button>
                         </div>
                     </div>
                 );
@@ -376,9 +382,12 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                                             className="mt-1 h-4.5 w-4.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary/30 cursor-pointer"
                                         />
                                         <div className="flex flex-col">
-                                            <label htmlFor="checkbox-sub-account" className="text-xs font-bold text-theme-secondary cursor-pointer select-none">
-                                                {t('profile.subAccountOption')}
-                                            </label>
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="checkbox-sub-account" className="text-xs font-bold text-theme-secondary cursor-pointer select-none">
+                                                    {t('profile.subAccountOption')}
+                                                </label>
+                                                <HelpIcon topic="subaccount" size={12} />
+                                            </div>
                                             <p className="text-[10px] font-medium text-theme-light leading-normal mt-0.5">
                                                 {t('profile.subAccountDescription')}
                                             </p>

@@ -1,12 +1,18 @@
 ---
 project: human-money-app
-version: "0.1.0-beta.17"
+version: "0.1.0-beta.18"
 phase: "beta"
 health: "green"
-last_updated: "2026-06-14"
+last_updated: "2026-06-15"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-030"
+    title: "Global Context-Sensitive Help System"
+    status: "completed"
+    priority: "medium"
+    depends_on: []
+    description: "Implemented a context-sensitive onboarding help system. Includes reusable HelpIcon and HelpModal components, localized non-technical guidance for Mnemonic, Passphrase, Sub-account, and Handover topics, and full unit test coverage."
   - id: "APP-029"
     title: "Bug Reporting (Fehler melden) MVP Feature"
     status: "completed"
@@ -210,6 +216,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Recent Milestones
 
+- [x] Cleaned up profile creation UI by removing the duplicate recreate profile link
+- [x] Global context-sensitive onboarding help system (HelpIcon, HelpModal, translation keys, and view integrations)
 - [x] Multi-platform release workflow (CI)
 - [x] Bundle receive functionality
 - [x] Transaction history with detail views

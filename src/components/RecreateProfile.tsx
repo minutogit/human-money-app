@@ -15,6 +15,7 @@ import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
 import { ArrowLeft, ArrowRight, RefreshCw, CheckCircle2, HelpCircle, AlertTriangle } from "lucide-react";
 import { PrefixInfoModal } from "./ui/PrefixInfoModal";
+import { HelpIcon } from "./ui/HelpIcon";
 
 type WizardStep = "import_seed" | "set_details";
 type InputMode = "words" | "phrase";
@@ -308,7 +309,10 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                 return (
                     <form onSubmit={(e) => { e.preventDefault(); handleGoToDetails(); }}>
                         <div className="text-center">
-                            <h2 className="text-2xl font-bold text-theme-primary">{t('profile.recoverStep1Title')}</h2>
+                            <h2 className="text-2xl font-bold text-theme-primary flex items-center justify-center gap-2">
+                                <span>{t('profile.recoverStep1Title')}</span>
+                                <HelpIcon topic="mnemonic" size={20} />
+                            </h2>
                             <p className="text-theme-light mt-1">{t('profile.recoverStep1Subtitle')}</p>
                         </div>
 
@@ -384,7 +388,12 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
 
                             <div className="border-t border-theme-light-border pt-5 space-y-5">
                                 <div>
-                                    <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary mb-1">{t('profile.optionalPassphraseLabel')}</label>
+                                    <div className="flex items-center gap-1.5 mb-1">
+                                        <label htmlFor="passphrase" className="block text-sm font-semibold text-theme-secondary">
+                                            {t('profile.optionalPassphraseLabel')}
+                                        </label>
+                                        <HelpIcon topic="passphrase" size={12} />
+                                    </div>
                                     <Input 
                                         id="passphrase"
                                         type="password" 
@@ -467,9 +476,12 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                         <div className="border-t border-theme-light-border pt-5 space-y-4">
                             <div className="space-y-2 animate-in fade-in duration-300">
                                 <div className="flex items-center justify-between mb-1">
-                                    <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary">
-                                        {t('profile.devicePrefixLabel')}
-                                    </label>
+                                    <div className="flex items-center gap-1.5">
+                                        <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary">
+                                            {t('profile.devicePrefixLabel')}
+                                        </label>
+                                        <HelpIcon topic="subaccount" size={12} />
+                                    </div>
                                     <button 
                                         type="button" 
                                         onClick={() => setShowPrefixInfo(true)}

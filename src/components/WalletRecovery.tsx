@@ -11,6 +11,7 @@ import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
 import { ProfileInfo, MnemonicLanguage } from "../types";
 import { translateError } from "../utils/errorHelper";
+import { HelpIcon } from "./ui/HelpIcon";
 import {
     Key,
     Lock,
@@ -253,7 +254,9 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                     <Card header={
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
-                                <Key size={14}/><span className="font-black text-[10px] uppercase tracking-widest">{t('auth.enterMasterKey')}</span>
+                                <Key size={14}/>
+                                <span className="font-black text-[10px] uppercase tracking-widest">{t('auth.enterMasterKey')}</span>
+                                <HelpIcon topic="mnemonic" size={12} />
                             </div>
                             <button type="button" onClick={handleInputModeToggle} className="px-3 py-1 bg-theme-primary/5 border border-theme-primary/10 rounded-full text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-2">
                                 {inputMode === "words" ? <Type size={10}/> : <Grid size={10}/>}
@@ -319,7 +322,13 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                             )}
 
                             <div className="space-y-2 pt-4 border-t border-theme-primary/10">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={10}/> {t('auth.passphraseIfUsed')}</label>
+                                <div className="flex items-center gap-1.5">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1">
+                                        <Lock size={10}/> 
+                                        <span>{t('auth.passphraseIfUsed')}</span>
+                                    </label>
+                                    <HelpIcon topic="passphrase" size={12} />
+                                </div>
                                 <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder={t('auth.passphrasePlaceholder')} />
                             </div>
                         </div>

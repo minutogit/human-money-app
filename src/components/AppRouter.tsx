@@ -41,7 +41,6 @@ export const AppRouter: React.FC = () => {
                     notifyLogin();
                     navigate({ view: "logged_in" });
                 }}
-                onSwitchToRecreate={() => navigate({ view: "recreate_profile" })}
                 onSwitchToLogin={() => navigate({ view: "needs_login" })}
             />;
         case "needs_login":
