@@ -1,4 +1,4 @@
-import { useState, FormEvent, useRef } from "react";
+import { useState, useEffect, FormEvent, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { voucherService } from "../services/voucherService";
 import { Button } from "./ui/Button";
@@ -59,6 +59,16 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const [showConfirm, setShowConfirm] = useState(false);
     const [showTestVoucherWarning, setShowTestVoucherWarning] = useState(false);
 
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (timerRef.current) {
+                clearTimeout(timerRef.current);
+            }
+        };
+    }, []);
+
     const fieldLabels: Record<string, string> = {
         standard: t('voucher.create.voucherType'),
         amount: t('voucher.create.amount'),
@@ -117,7 +127,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                 await voucherService.create(selectedStandard.content, voucherData, password || undefined);
             });
             setFeedback({type: 'success', msg: t('voucher.create.success')});
-            setTimeout(onVoucherCreated, 2000);
+            timerRef.current = setTimeout(onVoucherCreated, 2000);
         } catch (e) {
             setFeedback({type: 'error', msg: t('voucher.create.failed', { error: `${e}` })});
             setIsLoading(false);

@@ -1,5 +1,4 @@
-// src/components/SignRequestView.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { voucherService } from '../services/voucherService';
 import { settingsService } from '../services/settingsService';
 import { standardsService } from '../services/standardsService';
@@ -46,6 +45,16 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
     const [standardContent, setStandardContent] = useState<string | null>(null);
     const [impact, setImpact] = useState<SignatureImpact | null>(null);
     const [isImpactLoading, setIsImpactLoading] = useState(false);
+
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (timerRef.current) {
+                clearTimeout(timerRef.current);
+            }
+        };
+    }, []);
 
     useEffect(() => {
         async function fetchData() {
@@ -155,7 +164,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
 
                 setFeedbackMsg(t('voucher.signRequest.signatureGenerated'));
                 setFeedbackType('success');
-                setTimeout(() => onBack(), 2000);
+                timerRef.current = setTimeout(() => onBack(), 2000);
             }
         } catch (e) {
             setFeedbackMsg(t('voucher.signRequest.signFailed', { error: String(e) }));

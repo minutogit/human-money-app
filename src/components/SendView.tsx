@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, FormEvent, useReducer } from "react";
+import { useState, useEffect, useMemo, FormEvent, useReducer, useRef } from "react";
 import { useTranslation } from 'react-i18next';
 import { voucherService } from "../services/voucherService";
 import { transferService, CreateBundleResult } from "../services/transferService";
@@ -121,6 +121,16 @@ export function SendView() {
     const { protectAction, profileName } = useSession();
     const { navigate, goBack } = useNavigation();
     const [state, dispatch] = useReducer(reducer, initialState);
+    
+    const navigationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (navigationTimerRef.current) {
+                clearTimeout(navigationTimerRef.current);
+            }
+        };
+    }, []);
     
     const [availableVouchers, setAvailableVouchers] = useState<VoucherSummary[]>([]);
     const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
@@ -351,7 +361,7 @@ export function SendView() {
                 .join(', ');
 
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferSuccess') });
-            setTimeout(() => navigate({ view: 'transfer_success', bundleData: bundleResult.bundleData, recipientId: state.recipientId, summary: summaryString }), 1500);
+            navigationTimerRef.current = setTimeout(() => navigate({ view: 'transfer_success', bundleData: bundleResult.bundleData, recipientId: state.recipientId, summary: summaryString }), 1500);
         } catch (e) {
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferFailed', { error: `${e}` }) });
             dispatch({ type: 'SET_PROCESSING', value: false });
