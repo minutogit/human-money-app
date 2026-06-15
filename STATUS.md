@@ -7,6 +7,12 @@ last_updated: "2026-06-15"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-031"
+    title: "Concept Documentation System"
+    status: "completed"
+    priority: "medium"
+    depends_on: []
+    description: "Integrated a two-tier onboarding and concept documentation system, presenting a swipe-screen Carousel/Short version and a detailed Accordion version. Fully accessible from the Login page (unauthenticated) and Sidebar menu (authenticated), with complete German/English translations."
   - id: "APP-030"
     title: "Global Context-Sensitive Help System"
     status: "completed"
@@ -216,6 +222,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Recent Milestones
 
+- [x] Integrated two-tier Concept Documentation System (carousel slideshow and detailed accordion view, accessible pre- and post-login)
 - [x] Cleaned up profile creation UI by removing the duplicate recreate profile link
 - [x] Global context-sensitive onboarding help system (HelpIcon, HelpModal, translation keys, and view integrations)
 - [x] Multi-platform release workflow (CI)

@@ -23,6 +23,7 @@ import { useSession } from '../context/SessionContext';
 import { useNavigation } from '../context/NavigationContext';
 import { SupportView } from './SupportView';
 import { BugReportView } from './BugReportView';
+import { ConceptView } from './ConceptView';
 
 export const AppRouter: React.FC = () => {
     const { notifyLogin } = useSession();
@@ -69,6 +70,8 @@ export const AppRouter: React.FC = () => {
             return <SupportView />;
         case "bug_report":
             return <BugReportView onBack={goBack} />;
+        case "concept":
+            return <ConceptView />;
         case "needs_recovery":
             return <WalletRecovery 
                 onRecoverySuccess={() => {

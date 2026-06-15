@@ -15,7 +15,7 @@ import { AppRouter } from "./components/AppRouter";
 
 function AppContent() {
     const { appState, navigate, setSidebarOpen } = useNavigation();
-    const { isForkLocked, isRecoveryRequired, clearLocks } = useSession();
+    const { isForkLocked, isRecoveryRequired, clearLocks, isSessionActive } = useSession();
 
     useEffect(() => {
         if (isForkLocked || isRecoveryRequired) {
@@ -28,7 +28,7 @@ function AppContent() {
                 <Sidebar />
 
                 <div className="flex flex-1 flex-col overflow-y-auto">
-                    {INTERNAL_VIEWS.includes(appState.view) && (
+                    {INTERNAL_VIEWS.includes(appState.view) && isSessionActive && (
                         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-theme-subtle bg-card px-4 shadow-sm md:hidden">
                             <button
                                 onClick={() => setSidebarOpen(true)}
@@ -47,7 +47,7 @@ function AppContent() {
                         </header>
                     )}
 
-                    <main className={`w-full flex-grow ${INTERNAL_VIEWS.includes(appState.view) ? 'p-4 md:p-6 lg:p-8' : ''}`}>
+                    <main className={`w-full flex-grow ${INTERNAL_VIEWS.includes(appState.view) && isSessionActive ? 'p-4 md:p-6 lg:p-8' : ''}`}>
                         <AppRouter />
                     </main>
                 </div>

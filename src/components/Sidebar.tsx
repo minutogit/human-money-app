@@ -22,7 +22,8 @@ import {
   LogOut,
   ChevronRight,
   Heart,
-  Bug
+  Bug,
+  BookOpen
 } from 'lucide-react';
 
 export const INTERNAL_VIEWS = [
@@ -42,7 +43,8 @@ export const INTERNAL_VIEWS = [
   'transfer_success',
   'sign_request',
   'support',
-  'bug_report'
+  'bug_report',
+  'concept'
 ];
 
 export const Sidebar: React.FC = () => {
@@ -51,8 +53,8 @@ export const Sidebar: React.FC = () => {
   const { appState, navigate, appVersion, isSidebarOpen, setSidebarOpen } = useNavigation();
   const currentView = appState.view;
 
-  // Only show sidebar for internal views
-  if (!INTERNAL_VIEWS.includes(currentView)) {
+  // Only show sidebar for internal views when a session is active
+  if (!INTERNAL_VIEWS.includes(currentView) || !isSessionActive) {
     return null;
   }
 
@@ -194,6 +196,20 @@ export const Sidebar: React.FC = () => {
           
           {/* Support and Bug Report buttons as secondary items at the end of the list */}
           <div className="pt-4 border-t border-theme-subtle/50 space-y-1">
+            <button 
+              onClick={() => {
+                navigate({ view: 'concept', previousView: appState });
+                setSidebarOpen(false);
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 ${
+                currentView === 'concept' 
+                  ? "bg-theme-primary/10 text-theme-primary font-semibold shadow-sm" 
+                  : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
+              }`}
+            >
+              <BookOpen size={18} className={currentView === 'concept' ? "text-theme-primary" : "text-theme-placeholder"} />
+              <span className="text-sm">{t('dashboard.conceptMenu')}</span>
+            </button>
             <button 
               onClick={() => {
                 navigate({ view: 'support' });

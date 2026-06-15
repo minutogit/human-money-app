@@ -69,4 +69,5 @@ export type AppState =
     | { view: "sign_request"; voucherData: VoucherDetails }
     | { view: "conflict_details"; proofId: string; previousView?: AppState }
     | { view: "conflict_list" }
-    | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string };
+    | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string }
+    | { view: "concept"; previousView?: AppState };

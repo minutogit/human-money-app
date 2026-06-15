@@ -2193,6 +2193,198 @@
     },
     "ai_hint": "Field label for User ID / Decentralized Identifier (DID)."
   },
+  "dashboard.conceptBackToLogin": {
+    "source_text": "Back to Login",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptDetailedText": {
+    "source_text": "We are used to using a global financial system that promises security and convenience. A look under the hood shows: when we take out a loan today, the bank creates new money from our promise to repay it. This created money then serves the general public as a means of payment. The principle of money creation from a trustworthy promise works exceptionally well. What if we transferred this principle to our direct, local level? This app enables exactly this paradigm shift. It is a tool with which you can digitally secure your own promises of performance (vouchers) and use them as currency. You perform a service or guarantee it, issue your voucher for it, and the recipient can simply pass it on digitally to third parties. This is how you make your own value creation liquid.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptDetailedTitle": {
+    "source_text": "From Promise of Payment to Digital Currency",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptFinish": {
+    "source_text": "Finish",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptFutureText": {
+    "source_text": "This system is currently in the testing phase. What you see here is the absolute foundation – the basis of a completely new paradigm. But the architecture is deliberately kept extremely flexible and opens the door to far-reaching possibilities. From the perspective of the individual user or an institution, this concept already offers enormous sovereignty and independence to actively shape economic coexistence. If the ecosystem continues to grow, potentially every person, every community, every initiative, or every economic circle is able to put their own decentralized currency into circulation or establish customized clearing systems. Especially in times of crisis, this enables the local economy to react extremely flexibly and keep vital economic cycles intact. This robustness is also shown in a very practical way: even in the event of major power outages, the offline capability ensures that payments run smoothly via battery-powered mobile devices. Possible fraud or conflicts can then simply be quickly detected and resolved during subsequent online reconciliation. The principle scales seamlessly: creation is designed for the individual person, but theoretically, states could also issue sovereign currencies on the same basis. In theory, the concept offers unprecedented data protection, since the essential transaction information lies directly in the files that are exchanged in encrypted form. At the same time, the system is designed in such a way that it can be extended in the future to include an anonymous online check in the form of a decentralized blocklist register. This additional support from servers then theoretically allows real-time payments, as we are used to today, as fraud by double-spending is immediately and preventively excluded. Once this point is reached, the required trust for a payment is reduced solely to the issuer of the value claim. If this issuer is then adequately secured by guarantors, insurance, municipalities, or states, a full-fledged, highly scalable payment system arises. One that is in no way inferior to today's in convenience – but is fundamentally more robust due to its decentralized character and never deprives people of their ability to act.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptFutureTitle": {
+    "source_text": "The Launch and Outlook: A Proof of Concept with Enormous Potential",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptIdentityText": {
+    "source_text": "Classical cryptocurrencies usually rely on anonymity. This system takes the opposite path: the path of human trust. In this app, you do not act via disposable addresses, but via a fixed, cryptographic identity (a so-called did:key). This identity is linked to you as an actor. Anyone who acts in the network and keeps their promises builds a measurable reputation over time – the most valuable asset in a decentralized economy. To give you full organizational freedom, you can create any number of 'sub-accounts' under your main identity. This allows you to neatly separate payments for your local craft, private neighborhood help, or voluntary projects, and thus use the core reputation built up in different contexts.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptIdentityTitle": {
+    "source_text": "Identity Instead of Anonymity: Your Reputation Counts",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptMenu": {
+    "source_text": "About the Concept",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptNext": {
+    "source_text": "Next",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptPrev": {
+    "source_text": "Previous",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptPrivacyText": {
+    "source_text": "One of the most important features of this system is real privacy. There is no central server and no global blockchain that permanently stores every one of your expenses in a public ledger. Each voucher is an isolated, self-contained file – a so-called container. This container carries its complete, cryptographically secured transaction history within itself. When you make a payment, you only transfer this file directly (peer-to-peer) to your counterpart. Only those who receive this container directly have insight into the transactions. Since no global network consensus is required, this even works offline. No one outside the transaction chain learns about this exchange.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptPrivacyTitle": {
+    "source_text": "Architecture and Radical Privacy",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptReadConceptLink": {
+    "source_text": "Read the Concept ➔",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptScreen1Text": {
+    "source_text": "In today's financial system, new money is created when loans are issued – so it is based on a promise of payment. This app uses exactly this proven principle, but puts it in your hands: you can create your own digital vouchers backed by your skills, your time, or tangible assets. Create promises of performance and use them as digital currency in your network.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptScreen1Title": {
+    "source_text": "Welcome to Local Economics",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptScreen2Text": {
+    "source_text": "In this system, you are not an anonymous account number. Your wallet uses a fixed, cryptographic identity (a so-called did:key). This means: every one of your vouchers is permanently linked to you. With every promise you redeem, you build real reputation in the network. For a better overview, you can flexibly create different sub-accounts under your main identity – for example, for private favors, your business, or special projects.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptScreen2Title": {
+    "source_text": "Your Reputation is Your Capital",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptScreen3Text": {
+    "source_text": "A voucher is only worth as much as the trust in its issuer. To give your vouchers more weight, you can add acquaintances: 'witnesses' merely confirm that they know you and that you are a real person. 'Guarantors' go a step further and are liable for your promise if you are ever unable to redeem it. This creates a decentralized, resilient network of trust.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptScreen3Title": {
+    "source_text": "Commitment Through Community",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptScreen4Text": {
+    "source_text": "Unlike many cryptocurrencies, there is no global blockchain that publicly stores all transactions forever. Your vouchers are small, self-contained files (containers). When you pay, you transfer this file directly to your counterpart – this even works offline! Your transactions remain a purely private matter between the involved parties.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptScreen4Title": {
+    "source_text": "Real Privacy & Autarky",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptScreen5Text": {
+    "source_text": "This app is a 'Proof of Concept' for a completely new paradigm. Since the system is highly private and operates offline, there is no central server to pre-verify and block transactions. Errors or intentional fraud (double-spending) are only detected after a delay due to the mathematics. The golden rule: take responsibility for your actions. Initially, only use the system in your trusted local environment or try out the mechanics completely risk-free with test vouchers.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptScreen5Title": {
+    "source_text": "Freedom and Responsibility (Proof of Concept)",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptSecurityText": {
+    "source_text": "Where there is great freedom, there is also personal responsibility. Since transactions take place offline and completely privately, there is (currently) no global guard to check at the same moment whether you spend a value twice, accidentally or intentionally (double-spending). However, the system is by no means defenseless. It uses advanced mathematics: every fraud attempt forces the perpetrator on a cryptographic level to trigger an 'identity trap'. The fraud leaves forge-proof evidence in the file that clearly reveals the identity of the perpetrator. The inevitable loss of reputation is far greater damage in this system than a short-term gain.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptSecurityTitle": {
+    "source_text": "Security: Fraud Detection Instead of Preventive Blocking",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptSubtitle": {
+    "source_text": "Learn how this app works, from voucher creation to privacy.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptTabDetailed": {
+    "source_text": "Detailed Version",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptTabShort": {
+    "source_text": "Quick Version (Swipe Screens)",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptTitle": {
+    "source_text": "The Concept",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptTrustText": {
+    "source_text": "A self-written voucher works wonderfully in the close neighborhood. But how is it accepted supra-regionally? The answer is: through social confirmation and clear standards. You can ask other people to digitally co-sign your voucher. A witness merely confirms your identity ('I know this person'). A guarantor, on the other hand, creates maximum commitment by guaranteeing: 'If this person does not deliver, I will stand in for the value.' In addition, the system offers unlimited flexibility through standards. A voucher does not necessarily have to mean '1 hour of work'. The true strength of the system lies in the fact that these standards are defined by the community itself. A standard defines the rules of the game – for example, what the value refers to and who must sign it for the voucher to be accepted as valid in the network. Currently, two test standards are integrated in the app for testing: FreeTaler: A simple standard with no real equivalent value. It serves primarily as an example to test the purely technical mechanics of sending 'Talers' safely. For simplicity, a FreeTaler does not require any additional signatures and can be used immediately. Minuto: This standard maps the concrete concept of human money (backed by qualitative life time). For this standard, the rules require the additional signature of guarantors for the voucher to become valid. Here, the concept of social commitment can be put to the test in practice. In the future, communities and institutions can define their own standards. Vouchers can be linked to precious metals, to existing currencies like the Euro, or to specific local goods. Institutions can act as trust anchors and certify certain standards. You decide which rules you submit to.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "dashboard.conceptTrustTitle": {
+    "source_text": "How Trust Scales: Witnesses, Guarantors, and Standards",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
   "dashboard.eventReceived": {
     "source_text": "Received from {{name}}",
     "status": {

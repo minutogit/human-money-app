@@ -4,6 +4,15 @@ import { Login } from '../Login';
 import { invoke } from '@tauri-apps/api/core';
 import { ProfileInfo } from '../../types';
 
+const mockNavigate = vi.fn();
+vi.mock('../../context/NavigationContext', () => ({
+  useNavigation: () => ({
+    navigate: mockNavigate,
+    goBack: vi.fn(),
+    appState: { view: 'needs_login' },
+  }),
+}));
+
 // Mock the Tauri API
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),

@@ -13,6 +13,7 @@ import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
 import { ProfileInfo } from "../types";
 import { HelpIcon } from "./ui/HelpIcon";
+import { useNavigation } from "../context/NavigationContext";
 import { translateError, isBackendError } from "../utils/errorHelper";
 import { 
     UserCircle, 
@@ -27,7 +28,8 @@ import {
     ArrowRight,
     PlusCircle,
     UserX,
-    ShieldCheck
+    ShieldCheck,
+    BookOpen
 } from "lucide-react";
 
 interface LoginProps {
@@ -39,6 +41,7 @@ interface LoginProps {
 
 export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, onSwitchToReset }: LoginProps) {
     const { t } = useTranslation();
+    const { navigate } = useNavigation();
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
     const [selectedProfile, setSelectedProfile] = useState<string>("");
     const [password, setPassword] = useState("");
@@ -539,6 +542,13 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                         )}
                         <button
                             type="button"
+                            onClick={() => navigate({ view: "concept" })}
+                            className="text-xs text-theme-primary hover:text-theme-primary/85 font-bold hover:underline focus:outline-none flex items-center gap-1.5 mt-4 cursor-pointer transition-colors"
+                        >
+                            <BookOpen size={14} /> {t('dashboard.conceptReadConceptLink')}
+                        </button>
+                        <button
+                            type="button"
                             onClick={async (e) => {
                                 e.preventDefault();
                                 try {
@@ -547,7 +557,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                     logger.error(`Failed to open URL: ${err}`);
                                 }
                             }}
-                            className="text-xs text-theme-light hover:text-theme-secondary hover:underline focus:outline-none mt-6 font-medium"
+                            className="text-xs text-theme-light hover:text-theme-secondary hover:underline focus:outline-none mt-2 font-medium cursor-pointer"
                         >
                             {t('auth.supportTeaserLink')}
                         </button>
