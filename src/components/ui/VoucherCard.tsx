@@ -166,7 +166,8 @@ export const VoucherCard = React.memo(({
                                 <div className="flex items-center gap-2 mt-1">
                                     <Avatar size={16} name={voucher.localInstanceId} variant="pixel" />
                                     <p className="text-xs font-bold text-theme-secondary flex items-center gap-2">
-                                        Issued by <span className="text-theme-primary">{voucher.creatorFirstName} {voucher.creatorLastName}</span>
+                                        {t('voucher.issuedBy')}{' '}
+                                        <span className="text-theme-primary">{voucher.creatorFirstName} {voucher.creatorLastName}</span>
                                     </p>
                                 </div>
                             </div>
@@ -174,7 +175,7 @@ export const VoucherCard = React.memo(({
                             {!isExpanded && (
                                 <div className="flex items-center gap-6">
                                     <div className="text-right">
-                                        <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-1">Expires</p>
+                                        <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-1">{t('voucher.validUntilLabel')}</p>
                                         <p className="text-xs font-bold text-theme-secondary">{formatDate(voucher.validUntil)}</p>
                                     </div>
                                     {statusName === 'incomplete' && onRequestSignature && (
@@ -186,7 +187,7 @@ export const VoucherCard = React.memo(({
                                                 onRequestSignature(voucher.localInstanceId, e);
                                             }}
                                         >
-                                            Request Signatures
+                                            {t('voucher.requestSignaturesBtn')}
                                         </Button>
                                     )}
                                     {mode === 'view' && (
@@ -200,7 +201,7 @@ export const VoucherCard = React.memo(({
                         {mode === 'adjustable' && isSelected && voucher.allowPartialTransfers && (
                             <div className="px-6 pb-6 animate-in fade-in slide-in-from-top-2" onClick={(e) => e.stopPropagation()}>
                                 <div className="pt-4 border-t border-theme-primary/10 flex items-center justify-between">
-                                    <span className="text-[9px] font-black text-theme-primary uppercase tracking-widest">Partial Send</span>
+                                    <span className="text-[9px] font-black text-theme-primary uppercase tracking-widest">{t('transfer.partialSend')}</span>
                                     <div className="flex items-center gap-2">
                                         <input 
                                             type="number" 

@@ -6270,6 +6270,12 @@
     },
     "ai_hint": "Placeholder for the transaction note textarea."
   },
+  "transfer.partialSend": {
+    "source_text": "Partial Send",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
   "transfer.privacyConflict": {
     "source_text": "Privacy Conflict: Mixed privacy requirements in selection.",
     "status": {
@@ -7712,6 +7718,12 @@
       "fr": "ai-translated",
       "es": "ai-translated",
       "it": "ai-translated"
+    }
+  },
+  "voucher.issuedBy": {
+    "source_text": "Issued by",
+    "status": {
+      "de": "ai-translated"
     }
   },
   "voucher.legalNameLabel": {
