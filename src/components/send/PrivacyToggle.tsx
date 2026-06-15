@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
-import { Shield, Lock, Eye, AlertTriangle, CheckCircle2, Info, ArrowRight } from 'lucide-react';
+import { Shield, Lock, Eye, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Card } from '../ui/Card';
+import { HelpIcon } from '../ui/HelpIcon';
 
 interface PrivacyToggleProps {
   privacyMode: 'public' | 'stealth' | null;
@@ -21,6 +22,7 @@ export function PrivacyToggle({
       <div id="privacyMode" className="flex items-center gap-2">
         <Shield size={18} className="text-theme-primary"/>
         <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.securityPrivacy')}</span>
+        <HelpIcon topic="privacy" size={14} />
       </div>
     }>
       <div className="space-y-6">
@@ -66,22 +68,6 @@ export function PrivacyToggle({
             <p className="text-xs font-bold text-rose-800">{t('transfer.privacyConflict')}</p>
           </div>
         )}
-
-        <details className="group">
-          <summary className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-theme-light cursor-pointer hover:text-theme-primary transition-colors list-none">
-            <Info size={14}/> {t('transfer.privacyDetails')} <ArrowRight size={10} className="group-open:rotate-90 transition-transform" />
-          </summary>
-          <div className="mt-4 p-5 bg-slate-50 rounded-3xl border border-slate-100 space-y-4 animate-in slide-in-from-top-2">
-            <div className="space-y-1">
-              <h5 className="text-xs font-black text-slate-900">{t('transfer.stealthMode')}</h5>
-              <p className="text-[11px] text-slate-600 leading-relaxed font-medium">{t('transfer.stealthModeDesc')}</p>
-            </div>
-            <div className="space-y-1">
-              <h5 className="text-xs font-black text-slate-900">{t('transfer.publicMode')}</h5>
-              <p className="text-[11px] text-slate-600 leading-relaxed font-medium">{t('transfer.publicModeDesc')}</p>
-            </div>
-          </div>
-        </details>
       </div>
     </Card>
   );

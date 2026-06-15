@@ -5811,6 +5811,33 @@
       "it": "ai-translated"
     }
   },
+  "transfer.helpPrivacyLong": {
+    "source_text": "**Stealth Mode:** Anonymizes your signature in the transaction chain. Prevents surveillance by potential spies in the transaction chain. Identity is only disclosed if a double-spend is detected.\n\n**Public Mode:** Standard transparency for maximum visibility. Builds trust in closed networks and local community circles.",
+    "status": {
+      "de": "ai-translated",
+      "fr": "ai-translated",
+      "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.helpPrivacyShort": {
+    "source_text": "Choose between Stealth (private) and Public (transparent) transaction execution.",
+    "status": {
+      "de": "ai-translated",
+      "fr": "ai-translated",
+      "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.helpPrivacyTitle": {
+    "source_text": "Security & Privacy",
+    "status": {
+      "de": "ai-translated",
+      "fr": "ai-translated",
+      "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.helpSenderNameLong": {
     "source_text": "When enabled, the direct recipient of this transfer will see this name in addition to your cryptographic address (did:key) – similar to the account holder name in a bank transfer. For subsequent recipients down the chain (e.g. in stealth mode), your identity remains hidden.",
     "status": {
@@ -6427,7 +6454,7 @@
     "ai_hint": "Heading for stealth mode description in privacy details."
   },
   "transfer.stealthModeDesc": {
-    "source_text": "Anonymizes your signature in the transaction chain. Prevents mass surveillance. Reveal occurs only upon double-spend detection.",
+    "source_text": "Anonymizes your signature in the transaction chain. Prevents surveillance by potential spies in the transaction chain. Reveal occurs only upon double-spend detection.",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",

@@ -30,7 +30,8 @@ import { formatAmount } from "../utils/format";
 import { 
     Shield, 
     BookOpen,
-    AlertTriangle
+    AlertTriangle,
+    UserCheck
 } from "lucide-react";
 import Avatar from "boring-avatars";
 
@@ -369,7 +370,68 @@ export function SendView() {
                 )}
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                    <div className="lg:col-span-7 space-y-8">
+                    <div className="lg:col-span-7 space-y-6">
+                        {/* Absender (From) */}
+                        <Card header={
+                            <div className="flex items-center gap-2">
+                                <UserCheck size={18} className="text-theme-primary"/>
+                                <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.from')}</span>
+                            </div>
+                        }>
+                            <div className="space-y-6">
+                                <div className="flex items-center justify-between p-4 bg-slate-50 border border-slate-200/60 rounded-3xl gap-4">
+                                    <div className="flex items-center gap-4 min-w-0">
+                                        <div className="relative shrink-0">
+                                            {state.sendProfileName ? (
+                                                <Avatar size={40} name={ownUserId || "anonymous"} variant="beam" />
+                                            ) : (
+                                                <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-400">
+                                                    <Shield size={20} />
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="min-w-0">
+                                            <h4 className="text-sm font-black text-slate-800 truncate">
+                                                {state.sendProfileName ? (state.customSenderName || t('transfer.anonymous')) : t('transfer.anonymous')}
+                                            </h4>
+                                            <p className="text-[9px] font-mono text-slate-400 truncate tracking-tight">{ownUserId || t('common.loading')}</p>
+                                        </div>
+                                    </div>
+                                    <div className="shrink-0 flex items-center gap-2">
+                                        <label className="flex items-center gap-3 cursor-pointer group">
+                                            <div className={`w-10 h-6 rounded-full transition-all relative ${state.sendProfileName ? 'bg-theme-primary shadow-inner' : 'bg-slate-300'}`}>
+                                                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md ${state.sendProfileName ? 'left-5' : 'left-1'}`}></div>
+                                                <input type="checkbox" className="hidden" checked={state.sendProfileName} onChange={(e) => dispatch({ type: 'TOGGLE_PROFILE_NAME', value: e.target.checked })} />
+                                            </div>
+                                        </label>
+                                        <HelpIcon topic="senderName" />
+                                    </div>
+                                </div>
+
+                                {state.sendProfileName && (
+                                    <div className="space-y-2 animate-in slide-in-from-top-2 duration-200">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.displayName')}</label>
+                                        <Input 
+                                            value={state.customSenderName} 
+                                            onChange={(e) => dispatch({ type: 'SET_SENDER_NAME', name: e.target.value })} 
+                                            placeholder={t('transfer.displayNamePlaceholder')} 
+                                            className="bg-white border-slate-200 text-sm font-bold rounded-2xl py-3 px-4" 
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        </Card>
+
+                        {/* Visual Flow Connector */}
+                        <div className="flex justify-center -my-3 relative z-10">
+                            <div className="w-0.5 h-6 border-l-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center">
+                                <div className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-400 rounded-full p-1 shadow-sm">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Empfänger (To) */}
                         <RecipientSelector 
                             recipientId={state.recipientId}
                             onRecipientChange={(e) => dispatch({ type: 'SET_RECIPIENT', id: e.target.value })}
@@ -381,33 +443,25 @@ export function SendView() {
                             onClearRecipient={() => dispatch({ type: 'SET_RECIPIENT', id: "" })}
                         />
 
-                        <Card header={<div className="flex items-center gap-2"><BookOpen size={18} className="text-theme-primary"/><span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.context')}</span></div>}>
-                            <div className="space-y-6">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">{t('transfer.transactionNote')}</label>
-                                    <Textarea value={state.notes} onChange={(e) => dispatch({ type: 'SET_NOTES', notes: e.target.value })} placeholder={t('transfer.notePlaceholder')} className="rounded-2xl min-h-[80px]" />
-                                </div>
-
-                                <div className="p-4 bg-slate-50 border border-slate-200 rounded-3xl space-y-4">
-                                    <div className="flex items-center justify-between">
-                                        <label className="flex items-center gap-3 cursor-pointer group">
-                                            <div className={`w-10 h-6 rounded-full transition-all relative ${state.sendProfileName ? 'bg-theme-primary shadow-inner' : 'bg-slate-300'}`}>
-                                                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md ${state.sendProfileName ? 'left-5' : 'left-1'}`}></div>
-                                                <input type="checkbox" className="hidden" checked={state.sendProfileName} onChange={(e) => dispatch({ type: 'TOGGLE_PROFILE_NAME', value: e.target.checked })} />
-                                            </div>
-                                            <span className="text-xs font-black text-slate-600 uppercase tracking-widest group-hover:text-theme-primary transition-colors">{t('transfer.discloseIdentity')}</span>
-                                        </label>
-                                        <HelpIcon topic="senderName" />
-                                    </div>
-                                    {state.sendProfileName && (
-                                        <div className="space-y-2 animate-in slide-in-from-top-2">
-                                            <Input value={state.customSenderName} onChange={(e) => dispatch({ type: 'SET_SENDER_NAME', name: e.target.value })} placeholder={t('transfer.displayNamePlaceholder')} className="bg-white border-slate-200 text-sm font-bold" />
-                                        </div>
-                                    )}
-                                </div>
+                        {/* Verwendungszweck (Note) */}
+                        <Card header={
+                            <div className="flex items-center gap-2">
+                                <BookOpen size={18} className="text-theme-primary"/>
+                                <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.context')}</span>
+                            </div>
+                        }>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">{t('transfer.transactionNote')}</label>
+                                <Textarea 
+                                    value={state.notes} 
+                                    onChange={(e) => dispatch({ type: 'SET_NOTES', notes: e.target.value })} 
+                                    placeholder={t('transfer.notePlaceholder')} 
+                                    className="rounded-2xl min-h-[80px]" 
+                                />
                             </div>
                         </Card>
 
+                        {/* Privatsphäre & Sicherheit */}
                         <PrivacyToggle 
                             privacyMode={state.privacyMode}
                             onPrivacyChange={(mode) => dispatch({ type: 'SET_PRIVACY', mode })}
@@ -431,6 +485,34 @@ export function SendView() {
                             uuidToPrecisionMap={uuidToPrecisionMap}
                             standardIdToUuidMap={standardIdToUuidMap}
                         />
+
+                        {selectedMap.size > 0 && (
+                            <Card className="p-5 bg-slate-50 border border-slate-200/60 rounded-[32px] space-y-4 animate-in fade-in duration-300">
+                                <h4 className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.confirmTitle')} - Vorschau</h4>
+                                <div className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
+                                    <div className="flex justify-between py-2.5">
+                                        <span className="text-slate-400">{t('transfer.from')}</span>
+                                        <span className="text-slate-900">{state.sendProfileName ? (state.customSenderName || t('transfer.anonymous')) : t('transfer.anonymous')}</span>
+                                    </div>
+                                    <div className="flex justify-between py-2.5">
+                                        <span className="text-slate-400">{t('transfer.recipient')}</span>
+                                        <span className="font-mono text-[10px] text-slate-900 truncate max-w-[200px]">
+                                            {state.recipientId ? (
+                                                contacts.find(c => c.did === state.recipientId)
+                                                    ? `${contacts.find(c => c.did === state.recipientId)?.profile.firstName || ''} ${contacts.find(c => c.did === state.recipientId)?.profile.lastName || ''}`.trim() || contacts.find(c => c.did === state.recipientId)?.profile.organization || state.recipientId.slice(0, 8) + "..." + state.recipientId.slice(-8)
+                                                    : state.recipientId.slice(0, 8) + "..." + state.recipientId.slice(-8)
+                                            ) : '-'}
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between py-2.5">
+                                        <span className="text-slate-400">{t('transfer.securityPrivacy')}</span>
+                                        <span className={state.privacyMode === 'stealth' ? 'text-purple-600' : 'text-blue-600'}>
+                                            {state.privacyMode === 'stealth' ? t('transfer.stealth') : (state.privacyMode === 'public' ? t('transfer.public') : '-')}
+                                        </span>
+                                    </div>
+                                </div>
+                            </Card>
+                        )}
 
                         <TransferSummaryBar 
                             checkoutSummary={{
