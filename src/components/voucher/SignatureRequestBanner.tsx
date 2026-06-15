@@ -2,6 +2,7 @@ import React from 'react';
 import { FileSignature } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
+import { HelpIcon } from '../ui/HelpIcon';
 import { useTranslation } from 'react-i18next';
 
 interface SignatureRequestBannerProps {
@@ -24,7 +25,10 @@ export const SignatureRequestBanner: React.FC<SignatureRequestBannerProps> = ({
                     </div>
                     <div>
                         <p className="text-[10px] font-black uppercase tracking-widest text-theme-accent">{t('auth.actionRequired')}</p>
-                        <p className="text-base font-bold text-theme-secondary">{t('voucher.needsMoreSignatures')}</p>
+                        <div className="flex items-center gap-1.5">
+                            <p className="text-base font-bold text-theme-secondary">{t('voucher.needsMoreSignatures')}</p>
+                            <HelpIcon topic="signatureRequest" size={14} />
+                        </div>
                     </div>
                 </div>
                 <Button 

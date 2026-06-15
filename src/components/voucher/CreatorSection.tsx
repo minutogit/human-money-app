@@ -2,6 +2,7 @@ import { User, UserPlus, MoreVertical, Shield, MapPin, Building2, ExternalLink, 
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { InfoRow } from '../ui/InfoRow';
+import { HelpIcon } from '../ui/HelpIcon';
 import { useTranslation } from 'react-i18next';
 import { PublicProfile, TrustStatus } from '../../types';
 
@@ -24,9 +25,10 @@ export function CreatorSection({
     <div className="space-y-6">
       <Card className="border-none shadow-premium" header={
         <div className="flex items-center justify-between w-full">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <User size={18} className="text-theme-primary" />
             <span className="font-black text-xs uppercase tracking-widest">{t('voucher.creatorHeader')}</span>
+            <HelpIcon topic="voucherCreator" size={13} />
           </div>
           <Button 
             variant="outline" 

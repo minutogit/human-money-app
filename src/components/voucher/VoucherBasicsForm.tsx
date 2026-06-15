@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Coins, AlertCircle, FlaskConical } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
+import { HelpIcon } from "../ui/HelpIcon";
 import { VoucherStandardInfo } from "../../types";
 
 interface VoucherBasicsFormProps {
@@ -105,7 +106,10 @@ export function VoucherBasicsForm({
                 </div>
                 
                 <div className="flex flex-col justify-center space-y-3">
-                    <span className="text-[10px] font-black text-theme-light uppercase tracking-widest pl-1">{t('voucher.basics.modeHeader')}</span>
+                    <div className="flex items-center gap-1.5 pl-1">
+                        <span className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.basics.modeHeader')}</span>
+                        <HelpIcon topic="voucherMode" size={13} />
+                    </div>
                     
                     <div className="bg-theme-secondary/[0.04] border border-theme-subtle/50 p-1.5 rounded-[24px] flex gap-1 shadow-inner-soft">
                         <button

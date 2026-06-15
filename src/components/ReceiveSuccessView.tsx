@@ -4,6 +4,7 @@ import { ReceiveSuccessPayload, TrustStatus } from "../types";
 import { Button } from "./ui/Button";
 import { logger } from '../utils/log';
 import { profileService } from "../services/profileService";
+import { useTranslation } from "react-i18next";
 import { 
     CheckCircle2, 
     ShieldAlert, 
@@ -22,22 +23,23 @@ interface ReceiveSuccessViewProps {
     onDone: () => void;
 }
 
-function formatAmount(amountStr: string): string {
-    const num = parseFloat(amountStr);
-    if (isNaN(num)) return amountStr;
-    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
 export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps) {
+    const { t } = useTranslation();
     const [trustStatus, setTrustStatus] = useState<TrustStatus>("clean");
+
+    function formatAmount(amountStr: string): string {
+        const num = parseFloat(amountStr);
+        if (isNaN(num)) return amountStr;
+        return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
 
     const summable = Object.entries(payload.transferSummary.summableAmounts)
         .map(([unit, total]) => `${formatAmount(total)} ${unit}`);
 
     const countable = Object.entries(payload.transferSummary.countableItems)
-        .map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`);
+        .map(([unit, total]) => t('transfer.receiveSuccess.countableItem', { count: total, unit }));
 
-    const summaryString = [...summable, ...countable].join(', ') || 'No assets detected';
+    const summaryString = [...summable, ...countable].join(', ') || t('transfer.receiveSuccess.noAssets');
 
     useEffect(() => {
         logger.info(`Receive success screen: ${summaryString}`);
@@ -71,14 +73,14 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                     </div>
                     <div className="space-y-1">
                         <h1 className="text-3xl font-black text-theme-primary tracking-tight">
-                            {isVictim ? 'Security Warning' : 'Transfer Complete'}
+                            {isVictim ? t('transfer.receiveSuccess.securityWarning') : t('transfer.receiveSuccess.transferComplete')}
                         </h1>
                         <p className="text-theme-light font-medium">
                             {isVictim 
-                                ? 'A security issue affects your new assets.' 
+                                ? t('transfer.receiveSuccess.securityIssueAffects') 
                                 : isWitnessOnly
-                                    ? 'Assets added. Your wallet also helped the network.'
-                                    : 'Assets have been added to your wallet.'}
+                                    ? t('transfer.receiveSuccess.witnessOnlyDesc')
+                                    : t('transfer.receiveSuccess.normalSuccessDesc')}
                         </p>
                     </div>
                 </div>
@@ -88,9 +90,9 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                     <div className="p-6 bg-rose-50 border-2 border-rose-100 rounded-[32px] flex items-start gap-4 shadow-sm animate-in shake duration-1000">
                         <AlertTriangle className="text-rose-500 shrink-0 mt-1" size={24} />
                         <div>
-                            <h3 className="text-sm font-black text-rose-900 uppercase tracking-widest mb-1">Security Warning: Problem with your Balance</h3>
+                            <h3 className="text-sm font-black text-rose-900 uppercase tracking-widest mb-1">{t('transfer.receiveSuccess.conflictTitle')}</h3>
                             <p className="text-xs text-rose-800 font-medium leading-relaxed">
-                                Our security system has detected that someone tried to spend the same money twice. One of the vouchers you just received is affected and has been safely 'quarantined' for your protection.
+                                {t('transfer.receiveSuccess.conflictDesc')}
                             </p>
                         </div>
                     </div>
@@ -100,10 +102,8 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                     <div className="p-6 bg-amber-50 border-2 border-amber-100 rounded-[32px] flex items-start gap-4 shadow-sm animate-in fade-in duration-700">
                         <Info className="text-amber-500 shrink-0 mt-1" size={24} />
                         <div>
-                            <h3 className="text-sm font-black text-amber-900 uppercase tracking-widest mb-1">Security Insight: Fraud Detected Elsewhere</h3>
-                            <p className="text-xs text-amber-800 font-medium leading-relaxed">
-                                Your own balance is <strong>completely safe and unaffected</strong>. However, while processing this transfer, your wallet discovered a fraud attempt happening elsewhere in the network. This information helps keep the community safe.
-                            </p>
+                            <h3 className="text-sm font-black text-amber-900 uppercase tracking-widest mb-1">{t('transfer.receiveSuccess.witnessTitle')}</h3>
+                            <p className="text-xs text-amber-800 font-medium leading-relaxed" dangerouslySetInnerHTML={{ __html: t('transfer.receiveSuccess.witnessDesc') }} />
                         </div>
                     </div>
                 )}
@@ -112,7 +112,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                 <div className="bg-white border border-theme-subtle rounded-[40px] p-8 shadow-premium space-y-8">
                     {/* Amount Hero */}
                     <div className="text-center space-y-2">
-                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">Total Received</span>
+                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-theme-light">{t('transfer.receiveSuccess.totalReceived')}</span>
                         <div className="text-4xl font-black text-theme-primary tracking-tighter">
                             {summaryString}
                         </div>
@@ -122,14 +122,14 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                         {/* Sender Info */}
                         <div className="space-y-3">
                             <span className="text-[9px] font-black uppercase tracking-widest text-theme-light flex items-center gap-1.5">
-                                <User size={10} /> Sender
+                                <User size={10} /> {t('transfer.receiveSuccess.sender')}
                             </span>
                             <div className="p-4 bg-theme-subtle/10 rounded-2xl border border-theme-subtle/20">
                                 <p className="text-sm font-black text-theme-primary truncate">
-                                    {payload.senderProfileName || 'Unknown Sender'}
+                                    {payload.senderProfileName || t('transfer.receiveSuccess.unknownSender')}
                                 </p>
                                 <p className="text-[10px] font-mono font-bold text-theme-light truncate mt-1">
-                                    {payload.senderId || 'No DID disclosed'}
+                                    {payload.senderId || t('transfer.receiveSuccess.noDidDisclosed')}
                                 </p>
                             </div>
                             
@@ -137,7 +137,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                             {typeof trustStatus === 'object' && 'knownOffender' in trustStatus && (
                                 <div className="flex items-center gap-2 px-3 py-2 bg-rose-50 rounded-xl border border-rose-100">
                                     <UserX size={14} className="text-rose-500" />
-                                    <span className="text-[10px] font-bold text-rose-700">Flagged for past conflicts</span>
+                                    <span className="text-[10px] font-bold text-rose-700">{t('transfer.receiveSuccess.flaggedPastConflicts')}</span>
                                 </div>
                             )}
                         </div>
@@ -145,11 +145,11 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                         {/* Notes Info */}
                         <div className="space-y-3">
                             <span className="text-[9px] font-black uppercase tracking-widest text-theme-light flex items-center gap-1.5">
-                                <MessageSquare size={10} /> Note
+                                <MessageSquare size={10} /> {t('transfer.receiveSuccess.note')}
                             </span>
                             <div className="p-4 bg-theme-subtle/10 rounded-2xl border border-theme-subtle/20 h-[72px] overflow-y-auto no-scrollbar">
                                 <p className="text-xs font-medium text-theme-secondary italic leading-relaxed">
-                                    {payload.notes ? `"${payload.notes}"` : 'No memo attached.'}
+                                    {payload.notes ? `"${payload.notes}"` : t('transfer.receiveSuccess.noMemo')}
                                 </p>
                             </div>
                         </div>
@@ -159,7 +159,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                     {payload.involvedVouchersDetails && payload.involvedVouchersDetails.length > 0 && (
                         <div className="space-y-3">
                             <span className="text-[9px] font-black uppercase tracking-widest text-theme-light flex items-center gap-1.5">
-                                <Layers size={10} /> Included Vouchers ({payload.involvedVouchersDetails.length})
+                                <Layers size={10} /> {t('transfer.receiveSuccess.includedVouchers', { count: payload.involvedVouchersDetails.length })}
                             </span>
                             <div className="grid grid-cols-1 gap-2">
                                 {payload.involvedVouchersDetails.map((detail, index) => (
@@ -185,12 +185,12 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                         onClick={onDone} 
                         className="w-full max-w-sm py-4 rounded-3xl shadow-premium-lg text-lg gap-2"
                     >
-                        Back to Dashboard
+                        {t('transfer.receiveSuccess.backToDashboard')}
                         <ArrowRight size={20} />
                     </Button>
                     <p className="text-[10px] font-black uppercase tracking-widest text-theme-light flex items-center gap-2">
                         <ShieldCheck size={12} />
-                        Wallet updated
+                        {t('transfer.receiveSuccess.walletUpdated')}
                     </p>
                 </div>
             </div>

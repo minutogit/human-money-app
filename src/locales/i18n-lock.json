@@ -9,6 +9,12 @@
     },
     "source_text": "Action Required"
   },
+  "auth.advancedOptions": {
+    "source_text": "Advanced Options",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
   "auth.authenticationRequired": {
     "ai_hint": "Modal title shown when wallet password is required to proceed with a sensitive operation.",
     "status": {
@@ -527,7 +533,7 @@
       "es": "ai-translated",
       "it": "ai-translated"
     },
-    "source_text": "Sequence Depth"
+    "source_text": "Word Count"
   },
   "auth.sessionLocked": {
     "ai_hint": "Status label shown in the sidebar when the session exists but the wallet is locked.",
@@ -1737,7 +1743,7 @@
     "ai_hint": "Label or status text in double-spend conflict resolver."
   },
   "conflict.title": {
-    "source_text": "Double-Spend Conflict Resolver",
+    "source_text": "Fraud Reports & Conflicts",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -2989,7 +2995,7 @@
     "ai_hint": "Label or text in transaction history / activity log."
   },
   "history.auditDescription": {
-    "source_text": "Comprehensive ledger showing signed inbound and outbound transfer bundles.",
+    "source_text": "Transaction history with signed inbound and outbound transfers.",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -3149,7 +3155,7 @@
     "ai_hint": "Error notification shown in transaction history / activities. Contains variables: {{error}}."
   },
   "history.loading": {
-    "source_text": "Decrypting Ledger...",
+    "source_text": "Loading history...",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -3359,7 +3365,7 @@
     "ai_hint": "Label or text in transaction history / activity log."
   },
   "history.verified": {
-    "source_text": "Verified Cryptographically",
+    "source_text": "Verified tamper-proof",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -5504,7 +5510,7 @@
     "ai_hint": "Descriptive helper text for settings configuration options."
   },
   "settings.privacyProtocolsDescription": {
-    "source_text": "Default visibility for flexible standard transactions:",
+    "source_text": "How visible are you when sending vouchers?",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -5514,7 +5520,7 @@
     "ai_hint": "Descriptive helper text for settings configuration options."
   },
   "settings.privacyProtocolsTitle": {
-    "source_text": "Privacy Protocols",
+    "source_text": "Privacy Settings",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -5754,7 +5760,7 @@
     "ai_hint": "Card header for the context/notes section in SendView."
   },
   "transfer.description": {
-    "source_text": "Prepare a cryptographic asset transfer.",
+    "source_text": "Send vouchers to a contact.",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -5764,7 +5770,7 @@
     "ai_hint": "Subtitle description for the create transfer page."
   },
   "transfer.disbursementSummary": {
-    "source_text": "Disbursement Summary",
+    "source_text": "Transfer Summary",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -5893,7 +5899,7 @@
     }
   },
   "transfer.importFile.description": {
-    "source_text": "Securely process incoming files.",
+    "source_text": "Receive vouchers or process signatures.",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6010,7 +6016,7 @@
     }
   },
   "transfer.importFile.formatTransferDesc": {
-    "source_text": "Accept assets sent to you directly.",
+    "source_text": "Vouchers sent to you.",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6109,7 +6115,7 @@
     }
   },
   "transfer.importFile.noPayload": {
-    "source_text": "No payload selected.",
+    "source_text": "No file selected",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6127,7 +6133,7 @@
     }
   },
   "transfer.importFile.passwordLabel": {
-    "source_text": "Payload Password (Optional)",
+    "source_text": "File password (optional)",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6217,7 +6223,7 @@
     }
   },
   "transfer.importFile.unknownFormat": {
-    "source_text": "Unknown payload format.",
+    "source_text": "Unknown file format",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6235,7 +6241,7 @@
     }
   },
   "transfer.inventoryDepleted": {
-    "source_text": "Inventory Depleted",
+    "source_text": "No available balance",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6334,14 +6340,136 @@
     }
   },
   "transfer.receiveProcess": {
-    "ai_hint": "Sidebar navigation item label for the Receive / Process page.",
+    "source_text": "Receive / Process",
     "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated"
-    },
-    "source_text": "Receive / Process"
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.backToDashboard": {
+    "source_text": "Back to Dashboard",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.conflictDesc": {
+    "source_text": "Our security system has detected that someone tried to spend the same money twice. One of the vouchers you just received is affected and has been safely 'quarantined' for your protection.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.conflictTitle": {
+    "source_text": "Security Warning: Problem with your Balance",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.countableItem": {
+    "source_text": "{{count}} {{unit}}",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.flaggedPastConflicts": {
+    "source_text": "Flagged trust status",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.includedVouchers": {
+    "source_text": "Included Vouchers ({{count}})",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.noAssets": {
+    "source_text": "No assets detected",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.noDidDisclosed": {
+    "source_text": "No DID disclosed",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.noMemo": {
+    "source_text": "No memo attached.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.normalSuccessDesc": {
+    "source_text": "Assets have been added to your wallet.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.note": {
+    "source_text": "Note",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.securityIssueAffects": {
+    "source_text": "A security issue affects your new assets.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.securityWarning": {
+    "source_text": "Security Warning",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.sender": {
+    "source_text": "Sender",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.totalReceived": {
+    "source_text": "Total Received",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.transferComplete": {
+    "source_text": "Transfer Complete",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.unknownSender": {
+    "source_text": "Unknown Sender",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.walletUpdated": {
+    "source_text": "Wallet updated",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.witnessDesc": {
+    "source_text": "Your own balance is <strong>completely safe and unaffected</strong>. However, while processing this transfer, your wallet discovered a fraud attempt happening elsewhere in the network. This information helps keep the community safe.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.witnessOnlyDesc": {
+    "source_text": "Assets added. Your wallet also helped the network.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "transfer.receiveSuccess.witnessTitle": {
+    "source_text": "Security Insight: Fraud Detected Elsewhere",
+    "status": {
+      "de": "ai-translated"
+    }
   },
   "transfer.recipient": {
     "source_text": "Recipient",
@@ -6354,7 +6482,7 @@
     "ai_hint": "Card header label for the recipient selector section."
   },
   "transfer.reputationAlert": {
-    "source_text": "Reputation Alert",
+    "source_text": "Trust Alert",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6364,7 +6492,7 @@
     "ai_hint": "Heading for the reputation warning banner."
   },
   "transfer.reputationAlertDesc": {
-    "source_text": "This identity is associated with past ledger conflicts. Exercise extreme caution.",
+    "source_text": "This identity has a flagged trust status. Exercise caution.",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6391,10 +6519,10 @@
       "es": "ai-translated",
       "it": "ai-translated"
     },
-    "source_text": "Send"
+    "source_text": "Send Vouchers"
   },
   "transfer.sendVoucher": {
-    "source_text": "Send Voucher",
+    "source_text": "Send Vouchers",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6434,7 +6562,7 @@
     "ai_hint": "Label for the stealth privacy mode option."
   },
   "transfer.stealthExecution": {
-    "source_text": "Stealth Execution",
+    "source_text": "Stealth Transfer (Private)",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6594,7 +6722,7 @@
     "ai_hint": "Label for the target amount input in asset inventory."
   },
   "transfer.title": {
-    "source_text": "Create Transfer",
+    "source_text": "Send Vouchers",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6634,7 +6762,7 @@
     "ai_hint": "Success feedback after a transfer completes."
   },
   "transfer.transparentExecution": {
-    "source_text": "Transparent Execution",
+    "source_text": "Public Transfer (Transparent)",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6755,7 +6883,7 @@
     }
   },
   "voucher.cleanReputation": {
-    "source_text": "Clean Reputation",
+    "source_text": "Trusted Account",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6827,7 +6955,7 @@
     }
   },
   "voucher.collateralLabel": {
-    "source_text": "Collateral",
+    "source_text": "Security / Collateral",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -7187,6 +7315,18 @@
       "it": "ai-translated"
     }
   },
+  "voucher.divisibleNo": {
+    "source_text": "Full transfer only",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.divisibleYes": {
+    "source_text": "Partial transfer allowed",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
   "voucher.errorEnterPassword": {
     "source_text": "Please enter a password.",
     "status": {
@@ -7421,6 +7561,78 @@
       "it": "ai-translated"
     }
   },
+  "voucher.helpCreatorLong": {
+    "source_text": "The creator is the person or institution who originally issued this voucher and guarantees its redemption. The ID (DID) is the unique digital address of the creator.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.helpCreatorShort": {
+    "source_text": "The creator is the person or institution who originally issued this voucher.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.helpCreatorTitle": {
+    "source_text": "Voucher Creator",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.helpModeLong": {
+    "source_text": "Test vouchers have no real value and are only used to try out app mechanics in a sandbox. Real vouchers represent a commitment to deliver real goods or services and are meant for live usage.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.helpModeShort": {
+    "source_text": "Test vouchers are for trying features; real vouchers represent a commitment.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.helpModeTitle": {
+    "source_text": "Voucher Mode",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.helpSignRequestLong": {
+    "source_text": "A voucher requires additional signatures from trusted co-signers (guarantors) to be accepted as a valid means of payment in the network. You can export a signing request and send it to your contacts.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.helpSignRequestShort": {
+    "source_text": "Co-signatures (guarantors) are required to make this voucher valid.",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.helpSignRequestTitle": {
+    "source_text": "Signature Requirements",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.helpSignaturesLong": {
+    "source_text": "A witness merely confirms the identity of the issuer ('I know this person'). A guarantor also guarantees the value of the voucher ('If the issuer does not deliver, I guarantee the value').",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.helpSignaturesShort": {
+    "source_text": "Signatures confirm the issuer's identity (witness) or guarantee the value (guarantor).",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
+  "voucher.helpSignaturesTitle": {
+    "source_text": "Voucher Signatures",
+    "status": {
+      "de": "ai-translated"
+    }
+  },
   "voucher.helpWithLabel": {
     "source_text": "I can help with...",
     "status": {
@@ -7431,7 +7643,7 @@
     }
   },
   "voucher.highRiskAccount": {
-    "source_text": "High Risk Account",
+    "source_text": "Flagged Account",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -7539,7 +7751,7 @@
     }
   },
   "voucher.mode.realDescription": {
-    "source_text": "Creates a legally binding cryptographic promise.",
+    "source_text": "Creates a real voucher. This represents a promise to deliver real goods or services.",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -7566,7 +7778,7 @@
     }
   },
   "voucher.mode.testDescription": {
-    "source_text": "Creates a safe demo asset. Recommended for sandbox testing to avoid real financial commitment.",
+    "source_text": "Test vouchers have no real value and only serve to try out the app mechanics. They cannot be redeemed for real goods or services.",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -7590,6 +7802,12 @@
       "fr": "ai-translated",
       "es": "ai-translated",
       "it": "ai-translated"
+    }
+  },
+  "voucher.noCollateral": {
+    "source_text": "No security provided",
+    "status": {
+      "de": "ai-translated"
     }
   },
   "voucher.noDescription": {
@@ -7665,7 +7883,7 @@
     }
   },
   "voucher.reputationStatusLabel": {
-    "source_text": "Reputation Status",
+    "source_text": "Trust Status",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",

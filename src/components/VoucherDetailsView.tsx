@@ -331,11 +331,11 @@ export function VoucherDetailsView() {
                                     <div className="pt-4 border-t border-theme-subtle/30 grid grid-cols-2 gap-4">
                                         <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
                                             <p className="text-[9px] font-black uppercase text-theme-light mb-1">{t('voucher.divisibleLabel')}</p>
-                                            <p className="text-xs font-bold">{voucher.voucherStandard.template.allowPartialTransfers ? t('common.yes') : t('common.no')}</p>
+                                            <p className="text-xs font-bold">{voucher.voucherStandard.template.allowPartialTransfers ? t('voucher.divisibleYes') : t('voucher.divisibleNo')}</p>
                                         </div>
                                         <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
                                             <p className="text-[9px] font-black uppercase text-theme-light mb-1">{t('voucher.collateralLabel')}</p>
-                                            <p className="text-xs font-bold">{voucher.collateral?.amount ? t('common.yes') : t('common.no')}</p>
+                                            <p className="text-xs font-bold">{voucher.collateral?.amount ? `${voucher.collateral.amount} ${voucher.collateral.abbreviation || voucher.collateral.unit}` : t('voucher.noCollateral')}</p>
                                         </div>
                                     </div>
                                 </div>

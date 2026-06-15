@@ -114,9 +114,9 @@ export const Sidebar: React.FC = () => {
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-72 transform bg-white dark:bg-gray-900 shadow-2xl transition-all duration-300 ease-in-out will-change-transform md:relative md:translate-x-0 ${
-          isSidebarOpen ? "translate-x-0" : "-translate-x-full"
-        } flex flex-col border-r border-theme-subtle`}
+        className={`fixed inset-y-0 left-0 z-40 w-72 transform bg-white dark:bg-gray-900 shadow-2xl transition-all duration-300 ease-in-out will-change-transform md:relative ${
+          isSidebarOpen ? "translate-x-0" : "max-md:-translate-x-full"
+        } md:translate-x-0 flex flex-col border-r border-theme-subtle`}
       >
         {/* Brand Header */}
         <div className="px-6 py-4 flex items-center gap-3 border-b border-theme-subtle/50">

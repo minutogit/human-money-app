@@ -1,5 +1,6 @@
 import { FileSignature, History, CheckCircle2, Trash2 } from 'lucide-react';
 import { Card } from '../ui/Card';
+import { HelpIcon } from '../ui/HelpIcon';
 import { useTranslation } from 'react-i18next';
 import { VoucherDetails, VoucherStatus } from '../../types';
 
@@ -24,9 +25,10 @@ export function TimelineSection({
   return (
     <div className="space-y-6">
       <Card className="border-none shadow-premium" header={
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <FileSignature size={18} className="text-theme-primary" />
           <span className="font-black text-xs uppercase tracking-widest">{t('voucher.signaturesHeader')}</span>
+          <HelpIcon topic="voucherSignatures" size={13} />
         </div>
       }>
         <div className="space-y-4">
@@ -57,6 +59,7 @@ export function TimelineSection({
                       <button 
                         className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-rose-50 text-rose-500 transition-all"
                         onClick={() => onRemoveSignature(sig.signatureId)}
+                        data-testid="remove-signature"
                       >
                         <Trash2 size={14} />
                       </button>

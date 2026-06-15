@@ -222,6 +222,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Recent Milestones
 
+- [x] Refined vocabulary (e.g. Trust Status, Trusted Account, Flagged Account, Sendeübersicht) and integrated interactive HelpIcons for voucher-related workflows (Mode, Creator, Signatures, and Signature Requests) with full German/English translations
 - [x] Refined Create Transfer privacy interface by integrating global HelpIcon and updating Stealth Mode descriptions across all supported languages (EN, DE, ES, FR, IT)
 - [x] Integrated two-tier Concept Documentation System (carousel slideshow and detailed accordion view, accessible pre- and post-login)
 - [x] Cleaned up profile creation UI by removing the duplicate recreate profile link

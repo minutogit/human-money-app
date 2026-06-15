@@ -47,11 +47,11 @@ describe('TimelineSection', () => {
             />
         );
 
-        // Find all buttons. The only button in each signature block is the remove signature button.
+        // Find all remove buttons by test ID.
         // There are 2 signatures: one creator, one guarantor.
         // The creator should NOT have a remove button. The guarantor SHOULD have one.
         // So we expect exactly 1 button to be rendered in total.
-        const buttons = screen.getAllByRole('button');
+        const buttons = screen.getAllByTestId('remove-signature');
         expect(buttons).toHaveLength(1);
 
         // Click the single available button and ensure it triggers the callback for the guarantor's signatureId
@@ -73,7 +73,7 @@ describe('TimelineSection', () => {
         );
 
         // No buttons should be rendered since status is active (i.e. not incomplete)
-        const buttons = screen.queryAllByRole('button');
+        const buttons = screen.queryAllByTestId('remove-signature');
         expect(buttons).toHaveLength(0);
     });
 
@@ -90,7 +90,7 @@ describe('TimelineSection', () => {
         );
 
         // No buttons should be rendered since status is endorsed
-        const buttons = screen.queryAllByRole('button');
+        const buttons = screen.queryAllByTestId('remove-signature');
         expect(buttons).toHaveLength(0);
     });
 });

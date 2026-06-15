@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { HelpCircle } from 'lucide-react';
 import { HelpModal } from './HelpModal';
 
-export type HelpTopic = 'mnemonic' | 'passphrase' | 'subaccount' | 'profile' | 'handover' | 'senderName' | 'privacy';
+export type HelpTopic = 'mnemonic' | 'passphrase' | 'subaccount' | 'profile' | 'handover' | 'senderName' | 'privacy' | 'voucherMode' | 'voucherCreator' | 'voucherSignatures' | 'signatureRequest';
 
 interface HelpIconProps {
     topic: HelpTopic;
@@ -63,6 +63,30 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
                     title: t('transfer.helpPrivacyTitle'),
                     short: t('transfer.helpPrivacyShort'),
                     long: t('transfer.helpPrivacyLong')
+                };
+            case 'voucherMode':
+                return {
+                    title: t('voucher.helpModeTitle'),
+                    short: t('voucher.helpModeShort'),
+                    long: t('voucher.helpModeLong')
+                };
+            case 'voucherCreator':
+                return {
+                    title: t('voucher.helpCreatorTitle'),
+                    short: t('voucher.helpCreatorShort'),
+                    long: t('voucher.helpCreatorLong')
+                };
+            case 'voucherSignatures':
+                return {
+                    title: t('voucher.helpSignaturesTitle'),
+                    short: t('voucher.helpSignaturesShort'),
+                    long: t('voucher.helpSignaturesLong')
+                };
+            case 'signatureRequest':
+                return {
+                    title: t('voucher.helpSignRequestTitle'),
+                    short: t('voucher.helpSignRequestShort'),
+                    long: t('voucher.helpSignRequestLong')
                 };
         }
     };
