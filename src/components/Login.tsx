@@ -60,8 +60,6 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     const [isVerifyingDelete, setIsVerifyingDelete] = useState(false);
     const [deleteError, setDeleteError] = useState("");
     
-    const [localInstanceId, setLocalInstanceId] = useState("");
-    
     const passwordInputRef = useRef<HTMLInputElement>(null);
 
     const refreshProfiles = useCallback(async () => {
@@ -82,9 +80,6 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     useEffect(() => {
         logger.info("Login component displayed");
         refreshProfiles();
-        authService.getLocalInstanceId()
-            .then(setLocalInstanceId)
-            .catch(err => logger.error(`Failed to load local instance ID: ${err}`));
     }, [refreshProfiles]);
 
     async function handleLogin() {
@@ -535,11 +530,6 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     )}
 
                     <div className="pt-4 border-t border-theme-subtle/40 flex flex-col items-center gap-1.5 text-center">
-                        {localInstanceId && (
-                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em] flex items-center gap-2">
-                                <ShieldCheck size={12} /> {t('profile.deviceId')} <span className="font-mono">{localInstanceId.slice(0, 12)}...</span>
-                            </p>
-                        )}
                         <button
                             type="button"
                             onClick={() => navigate({ view: "concept" })}

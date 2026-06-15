@@ -257,7 +257,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                     className="w-6 h-6 rounded-lg border-theme-subtle text-theme-primary focus:ring-theme-primary transition-all"
                                 />
                                 <div>
-                                    <span className="block text-sm font-bold text-theme-secondary group-hover:text-theme-primary transition-colors">{t('transfer.discloseIdentity')}</span>
+                                    <span className="block text-sm font-bold text-theme-secondary group-hover:text-theme-primary transition-colors">{t('voucher.signRequest.discloseIdentity')}</span>
                                     <span className="block text-[10px] text-theme-light font-medium">{t('voucher.signRequest.embedProfileData')}</span>
                                 </div>
                             </label>

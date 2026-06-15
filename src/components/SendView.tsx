@@ -22,6 +22,7 @@ import {
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
 import { Card } from "./ui/Card";
+import { HelpIcon } from "./ui/HelpIcon";
 import { useSession } from "../context/SessionContext";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { PageLayout } from "./ui/PageLayout";
@@ -156,12 +157,33 @@ export function SendView() {
                     return statusName.toLowerCase() === 'active';
                 });
 
+                let defaultName = "";
                 if (profile) {
-                    const defaultName = profile.organization || `${profile.firstName || ''} ${profile.lastName || ''}`.trim() || profileName || "";
-                    dispatch({ type: 'SET_SENDER_NAME', name: defaultName });
-                } else {
-                    dispatch({ type: 'SET_SENDER_NAME', name: profileName || "" });
+                    const nameParts = [];
+                    if (profile.firstName) nameParts.push(profile.firstName);
+                    if (profile.lastName) nameParts.push(profile.lastName);
+                    const fullName = nameParts.join(" ").trim();
+
+                    if (fullName) {
+                        defaultName = fullName;
+                    } else if (profile.organization) {
+                        defaultName = profile.organization;
+                    }
+
+                    if (profile.community) {
+                        if (defaultName) {
+                            defaultName = `${defaultName} (${profile.community})`;
+                        } else {
+                            defaultName = profile.community;
+                        }
+                    }
                 }
+
+                if (defaultName.startsWith("did:key:")) {
+                    defaultName = "";
+                }
+
+                dispatch({ type: 'SET_SENDER_NAME', name: defaultName });
 
                 const newIdMap = new Map<string, string>();
                 const newPrecisionMap = new Map<string, number>();
@@ -375,10 +397,11 @@ export function SendView() {
                                             </div>
                                             <span className="text-xs font-black text-slate-600 uppercase tracking-widest group-hover:text-theme-primary transition-colors">{t('transfer.discloseIdentity')}</span>
                                         </label>
+                                        <HelpIcon topic="senderName" />
                                     </div>
                                     {state.sendProfileName && (
                                         <div className="space-y-2 animate-in slide-in-from-top-2">
-                                            <Input value={state.customSenderName} onChange={(e) => dispatch({ type: 'SET_SENDER_NAME', name: e.target.value })} placeholder={t('transfer.displayName')} className="bg-white border-slate-200 text-sm font-bold" />
+                                            <Input value={state.customSenderName} onChange={(e) => dispatch({ type: 'SET_SENDER_NAME', name: e.target.value })} placeholder={t('transfer.displayNamePlaceholder')} className="bg-white border-slate-200 text-sm font-bold" />
                                         </div>
                                     )}
                                 </div>
