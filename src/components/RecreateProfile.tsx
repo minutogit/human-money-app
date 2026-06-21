@@ -33,6 +33,12 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     const { t } = useTranslation();
     const [wizardStep, setWizardStep] = useState<WizardStep>("import_seed");
     const [feedbackMsg, setFeedbackMsg] = useState("");
+    const [feedbackType, setFeedbackType] = useState<"error" | "success" | "info" | null>(null);
+
+    const setFeedback = (msg: string, type: "error" | "success" | "info" | null) => {
+        setFeedbackMsg(msg);
+        setFeedbackType(type);
+    };
     const [isLoading, setIsLoading] = useState(false);
 
     // --- State for Seed Import Step ---
@@ -176,17 +182,17 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                 try {
                     await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
                     setIsValidMnemonic(true);
-                    setFeedbackMsg(t('auth.seedPhraseValid'));
+                    setFeedback(t('auth.seedPhraseValid'), "success");
                 } catch (e) {
                     setIsValidMnemonic(false);
-                    setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(e, t)}`);
+                    setFeedback(`${t('profile.errorPrefix')}: ${translateError(e, t)}`, "error");
                 }
             } else {
                 setIsValidMnemonic(false);
                 if (nonEmptyWords.length > 0) {
-                    setFeedbackMsg(t('profile.awaitingValidSeed'));
+                    setFeedback(t('profile.awaitingValidSeed'), "info");
                 } else {
-                    setFeedbackMsg("");
+                    setFeedback("", null);
                 }
             }
         };
@@ -233,14 +239,14 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     // Handler for proceeding to step 2
     const handleGoToDetails = () => {
         if (!isValidMnemonic) {
-            setFeedbackMsg(t('auth.enterValidSeed'));
+            setFeedback(t('auth.enterValidSeed'), "error");
             return;
         }
         if (passphrase !== confirmPassphrase) {
-            setFeedbackMsg(t('profile.passphraseMismatch'));
+            setFeedback(t('profile.passphraseMismatch'), "error");
             return;
         }
-        setFeedbackMsg("");
+        setFeedback("", null);
         setWizardStep("set_details");
     };
 
@@ -250,27 +256,27 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
         e.preventDefault();
         const cleanedPrefix = userPrefix.trim();
         if (!cleanedPrefix) {
-            setFeedbackMsg(t('profile.devicePrefixRequired'));
+            setFeedback(t('profile.devicePrefixRequired'), "error");
             return;
         }
         if (password !== confirmPassword) {
-            setFeedbackMsg(t('profile.passwordMismatch'));
+            setFeedback(t('profile.passwordMismatch'), "error");
             passwordInputRef.current?.focus();
             return;
         }
         if (password.length < 8) {
-            setFeedbackMsg(t('profile.passwordMinLength'));
+            setFeedback(t('profile.passwordMinLength'), "error");
             passwordInputRef.current?.focus();
             return;
         }
         if (passphrase !== confirmPassphrase) {
-            setFeedbackMsg(t('profile.passphraseMismatch'));
+            setFeedback(t('profile.passphraseMismatch'), "error");
             passwordInputRef.current?.focus();
             return;
         }
 
         setIsLoading(true);
-        setFeedbackMsg(""); // Clear any previous errors
+        setFeedback("", null); // Clear any previous errors
         
         // Use a small delay to ensure React has finished the render cycle
         // and the browser has had a chance to paint the loading state
@@ -289,7 +295,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                 // Keep loading state true during transition, like Login
                 onProfileCreated();
             } catch (e) {
-                setFeedbackMsg(`${t('profile.errorCreatingProfile')}: ${translateError(e, t)}`);
+                setFeedback(`${t('profile.errorCreatingProfile')}: ${translateError(e, t)}`, "error");
                 error(`Frontend: Profile recreation failed: ${translateError(e, t)}`);
             } finally {
                 setIsLoading(false);
@@ -300,7 +306,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
 
     // --- Render Logic ---
 
-    const feedbackClass = feedbackMsg.includes("Error") ? "text-theme-error" : (isValidMnemonic ? "text-theme-success" : "text-theme-light");
+    const feedbackClass = feedbackType === "error" ? "text-theme-error" : (feedbackType === "success" ? "text-theme-success" : "text-theme-light");
 
     const renderContent = () => {
         switch (wizardStep) {

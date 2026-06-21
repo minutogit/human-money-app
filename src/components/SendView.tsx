@@ -449,7 +449,7 @@ export function SendView() {
                             contacts={contacts}
                             trustStatus={trustStatus}
                             recipientError={state.recipientError}
-                            onShowContactPicker={() => {}} // TODO
+                            onShowContactPicker={() => {}}
                             onClearRecipient={() => dispatch({ type: 'SET_RECIPIENT', id: "" })}
                         />
 
@@ -498,7 +498,7 @@ export function SendView() {
 
                         {selectedMap.size > 0 && (
                             <Card className="p-5 bg-slate-50 border border-slate-200/60 rounded-[32px] space-y-4 animate-in fade-in duration-300">
-                                <h4 className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.confirmTitle')} - Vorschau</h4>
+                                <h4 className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.confirmTitle')} - {t('common.preview')}</h4>
                                 <div className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
                                     <div className="flex justify-between py-2.5">
                                         <span className="text-slate-400">{t('transfer.from')}</span>

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import logo from './assets/logo.png';
 import "./App.css";
 import { ForkLockOverlay } from './components/ForkLockOverlay';
@@ -14,6 +15,7 @@ import { Sidebar, INTERNAL_VIEWS } from './components/Sidebar';
 import { AppRouter } from "./components/AppRouter";
 
 function AppContent() {
+    const { t } = useTranslation();
     const { appState, navigate, setSidebarOpen } = useNavigation();
     const { isForkLocked, isRecoveryRequired, clearLocks, isSessionActive } = useSession();
 
@@ -74,8 +76,8 @@ function AppContent() {
                 {isRecoveryRequired && !isForkLocked && (
                     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
                          <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl p-8 text-center shadow-xl">
-                            <h2 className="text-xl font-bold mb-4">Recovery Required</h2>
-                            <p className="text-theme-light mb-6">Your security seal has been lost. You must perform a recovery to continue using this wallet.</p>
+                            <h2 className="text-xl font-bold mb-4">{t('profile.recoveryRequiredTitle')}</h2>
+                            <p className="text-theme-light mb-6">{t('profile.recoveryRequiredDescription')}</p>
                             <Button 
                                 className="w-full"
                                 onClick={() => {
@@ -83,7 +85,7 @@ function AppContent() {
                                     navigate({ view: "needs_recovery" });
                                 }}
                             >
-                                Start Recovery
+                                {t('profile.startRecovery')}
                             </Button>
                         </div>
                     </div>

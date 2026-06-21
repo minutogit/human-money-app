@@ -46,6 +46,12 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     const [selectedProfile, setSelectedProfile] = useState<string>("");
     const [password, setPassword] = useState("");
     const [feedbackMsg, setFeedbackMsg] = useState("");
+    const [feedbackType, setFeedbackType] = useState<"error" | "success" | "info" | null>(null);
+
+    const setFeedback = (msg: string, type: "error" | "success" | "info" | null) => {
+        setFeedbackMsg(msg);
+        setFeedbackType(type);
+    };
     const [isLoading, setIsLoading] = useState(false);
     const [isLoggingIn, setIsLoggingIn] = useState(false);
     const [showHandoverUI, setShowHandoverUI] = useState(false);
@@ -71,7 +77,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 setSelectedProfile(availableProfiles[0].folderName);
             }
         } catch (e) {
-            setFeedbackMsg(`${t('profile.accessError')}: ${translateError(e, t)}`);
+            setFeedback(`${t('profile.accessError')}: ${translateError(e, t)}`, "error");
         } finally {
             setIsLoading(false);
         }
@@ -84,12 +90,12 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
 
     async function handleLogin() {
         if (!selectedProfile || !password) {
-            setFeedbackMsg(t('profile.loginSelectProfile'));
+            setFeedback(t('profile.loginSelectProfile'), "error");
             return;
         }
 
         setIsLoggingIn(true);
-        setFeedbackMsg("");
+        setFeedback("", null);
 
         setTimeout(async () => {
             try {
@@ -106,10 +112,10 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             } catch (e) {
                 const msg = isBackendError(e) ? e.message : String(e);
                 if ((isBackendError(e) && e.code === 'error.auth.deviceMismatch') || msg.includes("Device Mismatch") || msg.includes("different device")) {
-                    setFeedbackMsg(translateError(e, t));
+                    setFeedback(translateError(e, t), "error");
                     setShowHandoverUI(true);
                 } else {
-                    setFeedbackMsg(`${t('profile.verificationFailure')}: ${translateError(e, t)}`);
+                    setFeedback(`${t('profile.verificationFailure')}: ${translateError(e, t)}`, "error");
                 }
                 setIsLoggingIn(false);
                 setPassword("");
@@ -120,7 +126,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
 
     async function handleHandover() {
         setIsLoggingIn(true);
-        setFeedbackMsg(t('profile.linkingDevice'));
+        setFeedback(t('profile.linkingDevice'), "info");
         try {
             const localInstanceId = await authService.getLocalInstanceId();
             await authService.handoverToThisDevice({
@@ -134,7 +140,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             setShowPostHandoverWarning(true);
             setIsLoggingIn(false);
         } catch (e) {
-            setFeedbackMsg(`${t('profile.handoverFailure')}: ${translateError(e, t)}`);
+            setFeedback(`${t('profile.handoverFailure')}: ${translateError(e, t)}`, "error");
             setIsLoggingIn(false);
         }
     }
@@ -160,14 +166,14 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     async function handleDeleteProfile() {
         setIsDeleting(true);
         setDeleteError("");
-        setFeedbackMsg(t('profile.deleting'));
+        setFeedback(t('profile.deleting'), "info");
         try {
             await authService.deleteProfile({
                 folderName: selectedProfile,
                 password: deletePassword,
             });
             
-            setFeedbackMsg(t('profile.deletedSuccess'));
+            setFeedback(t('profile.deletedSuccess'), "success");
             setShowDeleteConfirm(false);
             setDeletePassword("");
             await refreshProfiles();
@@ -177,7 +183,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
         } catch (e) {
             const errorMsg = `${t('profile.purgeFailure')}: ${translateError(e, t)}`;
             setDeleteError(errorMsg);
-            setFeedbackMsg(errorMsg);
+            setFeedback(errorMsg, "error");
         } finally {
             setIsDeleting(false);
         }
@@ -351,7 +357,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                         <select
                                             id="profile-select"
                                             value={selectedProfile}
-                                            onChange={(e) => { setSelectedProfile(e.target.value); setShowHandoverUI(false); setFeedbackMsg(""); }}
+                                            onChange={(e) => { setSelectedProfile(e.target.value); setShowHandoverUI(false); setFeedback("", null); }}
                                             className="w-full bg-white border border-theme-subtle rounded-2xl px-5 py-4 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all group-hover:border-theme-primary/30"
                                         >
                                             {profiles.map((profile) => (
@@ -385,7 +391,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                     id="password-input"
                                     type="password" 
                                     value={password} 
-                                    onChange={(e) => { setPassword(e.target.value); if (feedbackMsg.includes("Verification")) setFeedbackMsg(""); }} 
+                                    onChange={(e) => { setPassword(e.target.value); if (feedbackType === 'error') setFeedback("", null); }} 
                                     placeholder={t('auth.enterAccessPassword')}
                                     ref={passwordInputRef}
                                     className="py-5 px-6 text-lg font-bold tracking-widest"
@@ -413,7 +419,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                         </Button>
                                         <button 
                                             type="button" 
-                                            onClick={() => { setShowHandoverUI(false); setFeedbackMsg(""); }} 
+                                            onClick={() => { setShowHandoverUI(false); setFeedback("", null); }} 
                                             disabled={isLoggingIn}
                                             className="w-full text-center text-[10px] font-black uppercase tracking-widest text-theme-light hover:text-theme-primary transition-colors cursor-pointer"
                                         >
@@ -479,10 +485,10 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                             </div>
 
                             {feedbackMsg && (
-                                <div className={`p-5 rounded-[32px] border flex items-center gap-4 animate-in slide-in-from-bottom-4 ${feedbackMsg.includes('Error') || feedbackMsg.includes('Failure') || feedbackMsg.includes('Mismatch') ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
-                                    {feedbackMsg.includes('Error') || feedbackMsg.includes('Failure') || feedbackMsg.includes('Mismatch') ? <ShieldAlert size={20} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={20} className="text-emerald-500 shrink-0" />}
+                                <div className={`p-5 rounded-[32px] border flex items-center gap-4 animate-in slide-in-from-bottom-4 ${feedbackType === 'error' ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
+                                    {feedbackType === 'error' ? <ShieldAlert size={20} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={20} className="text-emerald-500 shrink-0" />}
                                     <div>
-                                        <h4 className="text-[10px] font-black uppercase tracking-widest mb-1">{feedbackMsg.includes('Error') ? t('profile.verificationSystem') : t('profile.protocolAlert')}</h4>
+                                        <h4 className="text-[10px] font-black uppercase tracking-widest mb-1">{feedbackType === 'error' ? t('profile.verificationSystem') : t('profile.protocolAlert')}</h4>
                                         <p className="text-sm font-bold leading-tight">{feedbackMsg}</p>
                                     </div>
                                 </div>

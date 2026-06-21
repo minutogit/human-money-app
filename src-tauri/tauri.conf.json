@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "human_money_app",
+  "productName": "Human Money App",
   "version": "0.1.0-beta.18",
   "identifier": "human.money.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "human_money_app",
+        "title": "Human Money App",
         "width": 800,
         "height": 780,
         "minWidth": 640,

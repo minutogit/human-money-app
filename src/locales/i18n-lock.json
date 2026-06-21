@@ -12,7 +12,10 @@
   "auth.advancedOptions": {
     "source_text": "Advanced Options",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.authenticationRequired": {
@@ -79,18 +82,18 @@
     "source_text": "(Generates a new, random seed)",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.createNewWalletTitle": {
     "source_text": "[+] CREATE NEW WALLET",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.dontHaveWallet": {
@@ -207,72 +210,72 @@
     "source_text": "To guarantee the highest security for your balance, your wallet can only execute transactions actively on one device at a time. When switching to another device, you must perform a 'handover'. The previous device is then paused for new payments until you return the rights there as needed.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.helpHandoverShort": {
     "source_text": "Transfers active access rights to this device.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.helpHandoverTitle": {
     "source_text": "What is device handover?",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.helpProfileLong": {
     "source_text": "A profile stores your vouchers, contacts, and transaction history securely encrypted on this exact device. You can create multiple profiles to manage different digital identities separately.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.helpProfileShort": {
     "source_text": "Your local, encrypted vault for this device.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.helpProfileTitle": {
     "source_text": "What is a local profile?",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.loadExistingWalletSub": {
     "source_text": "(Creates a wallet from an existing seed)",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.loadExistingWalletTitle": {
     "source_text": "[→] CREATE FROM EXISTING WALLET",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.loadingWallet": {
@@ -549,9 +552,9 @@
     "source_text": "Supported by Menschlich Miteinander ↗",
     "status": {
       "de": "human-reviewed",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "auth.useSingleFields": {
@@ -818,9 +821,9 @@
     "source_text": "OR",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "common.prefixInfoA1": {
@@ -962,6 +965,15 @@
       "it": "ai-translated"
     },
     "source_text": "I Understand"
+  },
+  "common.preview": {
+    "source_text": "Preview",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "common.processing": {
     "ai_hint": "Loading/processing state text shown inside buttons while an async operation is in progress.",
@@ -2236,288 +2248,288 @@
     "source_text": "Back to Login",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptDetailedText": {
     "source_text": "We are used to using a global financial system that promises security and convenience. A look under the hood shows: when we take out a loan today, the bank creates new money from our promise to repay it. This created money then serves the general public as a means of payment. The principle of money creation from a trustworthy promise works exceptionally well. What if we transferred this principle to our direct, local level? This app enables exactly this paradigm shift. It is a tool with which you can digitally secure your own promises of performance (vouchers) and use them as currency. You perform a service or guarantee it, issue your voucher for it, and the recipient can simply pass it on digitally to third parties. This is how you make your own value creation liquid.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptDetailedTitle": {
     "source_text": "From Promise of Payment to Digital Currency",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptFinish": {
     "source_text": "Finish",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptFutureText": {
     "source_text": "This system is currently in the testing phase. What you see here is the absolute foundation – the basis of a completely new paradigm. But the architecture is deliberately kept extremely flexible and opens the door to far-reaching possibilities. From the perspective of the individual user or an institution, this concept already offers enormous sovereignty and independence to actively shape economic coexistence. If the ecosystem continues to grow, potentially every person, every community, every initiative, or every economic circle is able to put their own decentralized currency into circulation or establish customized clearing systems. Especially in times of crisis, this enables the local economy to react extremely flexibly and keep vital economic cycles intact. This robustness is also shown in a very practical way: even in the event of major power outages, the offline capability ensures that payments run smoothly via battery-powered mobile devices. Possible fraud or conflicts can then simply be quickly detected and resolved during subsequent online reconciliation. The principle scales seamlessly: creation is designed for the individual person, but theoretically, states could also issue sovereign currencies on the same basis. In theory, the concept offers unprecedented data protection, since the essential transaction information lies directly in the files that are exchanged in encrypted form. At the same time, the system is designed in such a way that it can be extended in the future to include an anonymous online check in the form of a decentralized blocklist register. This additional support from servers then theoretically allows real-time payments, as we are used to today, as fraud by double-spending is immediately and preventively excluded. Once this point is reached, the required trust for a payment is reduced solely to the issuer of the value claim. If this issuer is then adequately secured by guarantors, insurance, municipalities, or states, a full-fledged, highly scalable payment system arises. One that is in no way inferior to today's in convenience – but is fundamentally more robust due to its decentralized character and never deprives people of their ability to act.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptFutureTitle": {
     "source_text": "The Launch and Outlook: A Proof of Concept with Enormous Potential",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptIdentityText": {
     "source_text": "Classical cryptocurrencies usually rely on anonymity. This system takes the opposite path: the path of human trust. In this app, you do not act via disposable addresses, but via a fixed, cryptographic identity (a so-called did:key). This identity is linked to you as an actor. Anyone who acts in the network and keeps their promises builds a measurable reputation over time – the most valuable asset in a decentralized economy. To give you full organizational freedom, you can create any number of 'sub-accounts' under your main identity. This allows you to neatly separate payments for your local craft, private neighborhood help, or voluntary projects, and thus use the core reputation built up in different contexts.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptIdentityTitle": {
     "source_text": "Identity Instead of Anonymity: Your Reputation Counts",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptMenu": {
     "source_text": "About the Concept",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptNext": {
     "source_text": "Next",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptPrev": {
     "source_text": "Previous",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptPrivacyText": {
     "source_text": "One of the most important features of this system is real privacy. There is no central server and no global blockchain that permanently stores every one of your expenses in a public ledger. Each voucher is an isolated, self-contained file – a so-called container. This container carries its complete, cryptographically secured transaction history within itself. When you make a payment, you only transfer this file directly (peer-to-peer) to your counterpart. Only those who receive this container directly have insight into the transactions. Since no global network consensus is required, this even works offline. No one outside the transaction chain learns about this exchange.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptPrivacyTitle": {
     "source_text": "Architecture and Radical Privacy",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptReadConceptLink": {
     "source_text": "Read the Concept ➔",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptScreen1Text": {
     "source_text": "In today's financial system, new money is created when loans are issued – so it is based on a promise of payment. This app uses exactly this proven principle, but puts it in your hands: you can create your own digital vouchers backed by your skills, your time, or tangible assets. Create promises of performance and use them as digital currency in your network.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptScreen1Title": {
     "source_text": "Welcome to Local Economics",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptScreen2Text": {
     "source_text": "In this system, you are not an anonymous account number. Your wallet uses a fixed, cryptographic identity (a so-called did:key). This means: every one of your vouchers is permanently linked to you. With every promise you redeem, you build real reputation in the network. For a better overview, you can flexibly create different sub-accounts under your main identity – for example, for private favors, your business, or special projects.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptScreen2Title": {
     "source_text": "Your Reputation is Your Capital",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptScreen3Text": {
     "source_text": "A voucher is only worth as much as the trust in its issuer. To give your vouchers more weight, you can add acquaintances: 'witnesses' merely confirm that they know you and that you are a real person. 'Guarantors' go a step further and are liable for your promise if you are ever unable to redeem it. This creates a decentralized, resilient network of trust.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptScreen3Title": {
     "source_text": "Commitment Through Community",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptScreen4Text": {
     "source_text": "Unlike many cryptocurrencies, there is no global blockchain that publicly stores all transactions forever. Your vouchers are small, self-contained files (containers). When you pay, you transfer this file directly to your counterpart – this even works offline! Your transactions remain a purely private matter between the involved parties.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptScreen4Title": {
     "source_text": "Real Privacy & Autarky",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptScreen5Text": {
     "source_text": "This app is a 'Proof of Concept' for a completely new paradigm. Since the system is highly private and operates offline, there is no central server to pre-verify and block transactions. Errors or intentional fraud (double-spending) are only detected after a delay due to the mathematics. The golden rule: take responsibility for your actions. Initially, only use the system in your trusted local environment or try out the mechanics completely risk-free with test vouchers.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptScreen5Title": {
     "source_text": "Freedom and Responsibility (Proof of Concept)",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptSecurityText": {
     "source_text": "Where there is great freedom, there is also personal responsibility. Since transactions take place offline and completely privately, there is (currently) no global guard to check at the same moment whether you spend a value twice, accidentally or intentionally (double-spending). However, the system is by no means defenseless. It uses advanced mathematics: every fraud attempt forces the perpetrator on a cryptographic level to trigger an 'identity trap'. The fraud leaves forge-proof evidence in the file that clearly reveals the identity of the perpetrator. The inevitable loss of reputation is far greater damage in this system than a short-term gain.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptSecurityTitle": {
     "source_text": "Security: Fraud Detection Instead of Preventive Blocking",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptSubtitle": {
     "source_text": "Learn how this app works, from voucher creation to privacy.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptTabDetailed": {
     "source_text": "Detailed Version",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptTabShort": {
     "source_text": "Quick Version (Swipe Screens)",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptTitle": {
     "source_text": "The Concept",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptTrustText": {
     "source_text": "A self-written voucher works wonderfully in the close neighborhood. But how is it accepted supra-regionally? The answer is: through social confirmation and clear standards. You can ask other people to digitally co-sign your voucher. A witness merely confirms your identity ('I know this person'). A guarantor, on the other hand, creates maximum commitment by guaranteeing: 'If this person does not deliver, I will stand in for the value.' In addition, the system offers unlimited flexibility through standards. A voucher does not necessarily have to mean '1 hour of work'. The true strength of the system lies in the fact that these standards are defined by the community itself. A standard defines the rules of the game – for example, what the value refers to and who must sign it for the voucher to be accepted as valid in the network. Currently, two test standards are integrated in the app for testing: FreeTaler: A simple standard with no real equivalent value. It serves primarily as an example to test the purely technical mechanics of sending 'Talers' safely. For simplicity, a FreeTaler does not require any additional signatures and can be used immediately. Minuto: This standard maps the concrete concept of human money (backed by qualitative life time). For this standard, the rules require the additional signature of guarantors for the voucher to become valid. Here, the concept of social commitment can be put to the test in practice. In the future, communities and institutions can define their own standards. Vouchers can be linked to precious metals, to existing currencies like the Euro, or to specific local goods. Institutions can act as trust anchors and certify certain standards. You decide which rules you submit to.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.conceptTrustTitle": {
     "source_text": "How Trust Scales: Witnesses, Guarantors, and Standards",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "dashboard.eventReceived": {
@@ -3916,27 +3928,27 @@
     "source_text": "This abbreviation cleanly separates the balances on your devices from one another. If you enter an abbreviation that you already use on another device, that account will be loaded here. If you choose a new abbreviation, a fresh sub-account for this device is created.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.devicePrefixLabel": {
     "source_text": "Device Abbreviation (e.g. mobile, pc, tablet)",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.devicePrefixRequired": {
     "source_text": "Device abbreviation is required.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.deviceSettings": {
@@ -4249,81 +4261,81 @@
     "source_text": "These 12 or 24 words form the irrevocable foundation of your account. Since the system is completely decentralized, there is no support team that can reset your password. If you lose these words, your digital identity and all your vouchers are lost forever. Keep the words offline and absolutely secure!",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.helpMnemonicShort": {
     "source_text": "The master key to your digital identity and wallet.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.helpMnemonicTitle": {
     "source_text": "What is the Seed Phrase?",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.helpPassphraseLong": {
     "source_text": "The passphrase serves as extra security. Even if someone steals your seed phrase, your wallet remains inaccessible without this passphrase. IMPORTANT: If you forget this passphrase, you cannot recover your wallet - not even with the correct seed phrase!",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.helpPassphraseShort": {
     "source_text": "Additional protection (like a 25th word) for your seed phrase.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.helpPassphraseTitle": {
     "source_text": "What is the optional Passphrase?",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.helpSubaccountLong": {
     "source_text": "If you want to use your identity on multiple devices (e.g. mobile and PC), each device needs its own identifier. This option adds a visible prefix to your public identity. This is particularly interesting for companies to prefix the company name, or privately to mark your own name or the respective device (e.g. 'Mobile'). This way, the system always knows which device an action comes from, and all your devices work together smoothly.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.helpSubaccountShort": {
     "source_text": "Secure use on multiple devices using a name identifier.",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.helpSubaccountTitle": {
     "source_text": "What is the Sub-Account option (Prefix)?",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.houseNumber": {
@@ -4414,9 +4426,9 @@
     "source_text": "Set local password for this device",
     "status": {
       "de": "ai-translated",
-      "es": "needs-translation",
-      "fr": "needs-translation",
-      "it": "needs-translation"
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "profile.locating": {
@@ -4825,6 +4837,24 @@
     },
     "source_text": "Step 2: Secure Your Profile"
   },
+  "profile.recoveryRequiredDescription": {
+    "source_text": "Your security seal has been lost. You must perform a recovery to continue using this wallet.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.recoveryRequiredTitle": {
+    "source_text": "Recovery Required",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "profile.recreateFromSeed": {
     "ai_hint": "Login screen link to recreate a profile from an existing seed phrase.",
     "status": {
@@ -4960,6 +4990,15 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.startRecovery": {
+    "source_text": "Start Recovery",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -6273,7 +6312,10 @@
   "transfer.partialSend": {
     "source_text": "Partial Send",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.privacyConflict": {
@@ -6348,133 +6390,199 @@
   "transfer.receiveProcess": {
     "source_text": "Receive / Process",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.backToDashboard": {
     "source_text": "Back to Dashboard",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.conflictDesc": {
     "source_text": "Our security system has detected that someone tried to spend the same money twice. One of the vouchers you just received is affected and has been safely 'quarantined' for your protection.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.conflictTitle": {
     "source_text": "Security Warning: Problem with your Balance",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.countableItem": {
     "source_text": "{{count}} {{unit}}",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.flaggedPastConflicts": {
     "source_text": "Flagged trust status",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.includedVouchers": {
     "source_text": "Included Vouchers ({{count}})",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.noAssets": {
     "source_text": "No assets detected",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.noDidDisclosed": {
     "source_text": "No DID disclosed",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.noMemo": {
     "source_text": "No memo attached.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.normalSuccessDesc": {
     "source_text": "Assets have been added to your wallet.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.note": {
     "source_text": "Note",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.securityIssueAffects": {
     "source_text": "A security issue affects your new assets.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.securityWarning": {
     "source_text": "Security Warning",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.sender": {
     "source_text": "Sender",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.totalReceived": {
     "source_text": "Total Received",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.transferComplete": {
     "source_text": "Transfer Complete",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.unknownSender": {
     "source_text": "Unknown Sender",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.walletUpdated": {
     "source_text": "Wallet updated",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.witnessDesc": {
     "source_text": "Your own balance is <strong>completely safe and unaffected</strong>. However, while processing this transfer, your wallet discovered a fraud attempt happening elsewhere in the network. This information helps keep the community safe.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.witnessOnlyDesc": {
     "source_text": "Assets added. Your wallet also helped the network.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.receiveSuccess.witnessTitle": {
     "source_text": "Security Insight: Fraud Detected Elsewhere",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "transfer.recipient": {
@@ -7324,13 +7432,19 @@
   "voucher.divisibleNo": {
     "source_text": "Full transfer only",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.divisibleYes": {
     "source_text": "Partial transfer allowed",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.errorEnterPassword": {
@@ -7570,73 +7684,109 @@
   "voucher.helpCreatorLong": {
     "source_text": "The creator is the person or institution who originally issued this voucher and guarantees its redemption. The ID (DID) is the unique digital address of the creator.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpCreatorShort": {
     "source_text": "The creator is the person or institution who originally issued this voucher.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpCreatorTitle": {
     "source_text": "Voucher Creator",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpModeLong": {
     "source_text": "Test vouchers have no real value and are only used to try out app mechanics in a sandbox. Real vouchers represent a commitment to deliver real goods or services and are meant for live usage.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpModeShort": {
     "source_text": "Test vouchers are for trying features; real vouchers represent a commitment.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpModeTitle": {
     "source_text": "Voucher Mode",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpSignRequestLong": {
     "source_text": "A voucher requires additional signatures from trusted co-signers (guarantors) to be accepted as a valid means of payment in the network. You can export a signing request and send it to your contacts.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpSignRequestShort": {
     "source_text": "Co-signatures (guarantors) are required to make this voucher valid.",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpSignRequestTitle": {
     "source_text": "Signature Requirements",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpSignaturesLong": {
     "source_text": "A witness merely confirms the identity of the issuer ('I know this person'). A guarantor also guarantees the value of the voucher ('If the issuer does not deliver, I guarantee the value').",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpSignaturesShort": {
     "source_text": "Signatures confirm the issuer's identity (witness) or guarantee the value (guarantor).",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpSignaturesTitle": {
     "source_text": "Voucher Signatures",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.helpWithLabel": {
@@ -7723,7 +7873,10 @@
   "voucher.issuedBy": {
     "source_text": "Issued by",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.legalNameLabel": {
@@ -7819,7 +7972,10 @@
   "voucher.noCollateral": {
     "source_text": "No security provided",
     "status": {
-      "de": "ai-translated"
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.noDescription": {

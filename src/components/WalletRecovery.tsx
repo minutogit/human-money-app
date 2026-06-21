@@ -49,6 +49,12 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     const [confirmPassword, setConfirmPassword] = useState("");
 
     const [feedbackMsg, setFeedbackMsg] = useState("");
+    const [feedbackType, setFeedbackType] = useState<"error" | "success" | "info" | null>(null);
+
+    const setFeedback = (msg: string, type: "error" | "success" | "info" | null) => {
+        setFeedbackMsg(msg);
+        setFeedbackType(type);
+    };
     const [isLoading, setIsLoading] = useState(false);
     const [isValidMnemonic, setIsValidMnemonic] = useState(false);
 
@@ -77,9 +83,9 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 const availableProfiles = await authService.listProfiles();
                 setProfiles(availableProfiles);
                 if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folderName);
-                else                 setFeedbackMsg(t('auth.noProfilesToRecover'));
+                else                 setFeedback(t('auth.noProfilesToRecover'), "error");
             } catch (e) {
-                setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(e, t)}`);
+                setFeedback(`${t('profile.errorPrefix')}: ${translateError(e, t)}`, "error");
             } finally {
                 setIsLoading(false);
             }
@@ -151,14 +157,14 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 try {
                     await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
                     setIsValidMnemonic(true);
-                    setFeedbackMsg(t('auth.seedPhraseValid'));
+                    setFeedback(t('auth.seedPhraseValid'), "success");
                 } catch (e) {
                     setIsValidMnemonic(false);
-                    setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(e, t)}`);
+                    setFeedback(`${t('profile.errorPrefix')}: ${translateError(e, t)}`, "error");
                 }
             } else {
                 setIsValidMnemonic(false);
-                setFeedbackMsg(nonEmptyWords.length > 0 ? t('auth.awaitingSequence') : "");
+                setFeedback(nonEmptyWords.length > 0 ? t('auth.awaitingSequence') : "", nonEmptyWords.length > 0 ? "info" : null);
             }
         };
         validate();
@@ -186,13 +192,13 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     };
 
     async function handleRecovery() {
-        if (!selectedProfile) { setFeedbackMsg(t('auth.selectProfileToRecover')); return; }
-        if (!isValidMnemonic) { setFeedbackMsg(t('auth.seedPhraseInvalid')); return; }
-        if (newPassword !== confirmPassword) { setFeedbackMsg(t('auth.passwordsDontMatch')); return; }
-        if (newPassword.length < 8) { setFeedbackMsg(t('auth.passwordMinLength')); return; }
+        if (!selectedProfile) { setFeedback(t('auth.selectProfileToRecover'), "error"); return; }
+        if (!isValidMnemonic) { setFeedback(t('auth.seedPhraseInvalid'), "error"); return; }
+        if (newPassword !== confirmPassword) { setFeedback(t('auth.passwordsDontMatch'), "error"); return; }
+        if (newPassword.length < 8) { setFeedback(t('auth.passwordMinLength'), "error"); return; }
 
         setIsLoading(true);
-        setFeedbackMsg(t('auth.recoveringWallet'));
+        setFeedback(t('auth.recoveringWallet'), "info");
         try {
             const localInstanceId = await authService.getLocalInstanceId();
             await profileService.recoverWallet({
@@ -205,7 +211,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
             });
             onRecoverySuccess();
         } catch (e) {
-            setFeedbackMsg(`${t('auth.errorRecoveringWallet')}: ${translateError(e, t)}`);
+            setFeedback(`${t('auth.errorRecoveringWallet')}: ${translateError(e, t)}`, "error");
         } finally {
             setIsLoading(false);
         }
@@ -339,7 +345,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div className="space-y-2">
                                     <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('auth.newWalletPassword')}</label>
-                                    <Input type="password" value={newPassword} onChange={(e) => { setNewPassword(e.target.value); if (feedbackMsg.includes("match")) setFeedbackMsg(""); }} placeholder={t('auth.passwordMinChars')} onFocus={() => setFeedbackMsg("")} />
+                                    <Input type="password" value={newPassword} onChange={(e) => { setNewPassword(e.target.value); if (feedbackType === 'error') setFeedback("", null); }} placeholder={t('auth.passwordMinChars')} onFocus={() => setFeedback("", null)} />
                                 </div>
                                 <div className="space-y-2">
                                     <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('auth.confirmPassword')}</label>
@@ -360,8 +366,8 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                     </div>
 
                     {feedbackMsg && (
-                        <div data-testid="feedback-message" className={`p-4 rounded-2xl flex items-center gap-3 border animate-in slide-in-from-bottom-2 ${feedbackMsg.includes('Error') || feedbackMsg.includes('Failure') ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
-                            {feedbackMsg.includes('Error') || feedbackMsg.includes('Failure') ? <ShieldAlert size={18} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={18} className="text-emerald-500 shrink-0" />}
+                        <div data-testid="feedback-message" className={`p-4 rounded-2xl flex items-center gap-3 border animate-in slide-in-from-bottom-2 ${feedbackType === 'error' ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
+                            {feedbackType === 'error' ? <ShieldAlert size={18} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={18} className="text-emerald-500 shrink-0" />}
                             <p className="text-xs font-bold leading-tight">{feedbackMsg}</p>
                         </div>
                     )}
