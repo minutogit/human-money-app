@@ -5,6 +5,8 @@ description: Full architecture overview, component details, implemented features
 
 # Human Money App — Full Context
 
+Dieses Dokument dient als "Single Source of Truth" für alle Architekturentscheidungen und technologischen Vorgaben beim Bau des Tauri-basierten Wallet-Clients.
+
 **1. Projektziel & Umfang**
 
 * **Ziel:** Entwicklung eines plattformübergreifenden Desktop-Prototyps (Windows, macOS, Linux) für das dezentrale Gutschein-System.
@@ -25,9 +27,16 @@ Die Anwendung folgt einer strikten Trennung von Backend und Frontend.
   * `commands/auth.rs`: Authentifizierungsbezogene Befehle
   * `commands/queries.rs`: Abfragebezogene Befehle
   * `commands/actions.rs`: Aktionen wie Gutscheinerstellung und Transaktionen
+  * `commands/contacts.rs`: Adressbuch- und Kontaktverwaltung
+  * `commands/integrity.rs`: Sicherheitsprüfungen und Integritätsberichte
   * `commands/utils.rs`: Hilfsfunktionen und Logging
   * `settings.rs`: Konfigurations- und Einstellungsverwaltung
-* **Datenmodelle:** Zusätzliche Datenstrukturen in `models.rs` dienen zum Austausch zwischen Frontend und Backend.
+* **Datenmodelle:** Die Datenstrukturen in `src-tauri/src/models/` sind modularisiert:
+  * `models/voucher.rs`: Gutscheinbezogene DTOs
+  * `models/wallet.rs`: Wallet- und Guthaben-DTOs
+  * `models/profile.rs`: Profilbezogene DTOs
+  * `models/events.rs`: Event-Sourcing-bezogene DTOs
+  * `models/conflicts.rs`: Double-Spend-Konflikt-DTOs
 
 **Frontend (React - src)**
 
@@ -51,11 +60,10 @@ Die folgenden Funktionen der `human_money_core` sollen implementiert werden:
   * `login`
   * `recover_wallet_and_set_new_password`
   * `logout`
+  * `is_session_active` (neu für UI-Session-Status)
   * `generate_mnemonic`
   * `validate_mnemonic`
   * `list_profiles`
-  * `get_user_profile` (neu: ruft das verschlüsselte PublicProfile ab)
-  * `update_user_profile` (neu: aktualisiert das verschlüsselte PublicProfile)
 * **Dashboard-Anzeige:**
   * `get_user_id`
   * `get_total_balance_by_currency`
@@ -71,6 +79,14 @@ Die folgenden Funktionen der `human_money_core` sollen implementiert werden:
 * **Gutschein-Management:**
   * `create_new_voucher`
   * `get_voucher_standards`
+  * `remove_voucher_signature`
+* **Kontaktverwaltung:**
+  * `list_contacts`
+  * `save_contact`
+  * `delete_contact`
+* **Sicherheit & Integrität:**
+  * `get_integrity_report`
+  * `check_for_forks`
 * **Einstellungen:**
   * `get_app_settings`
   * `save_app_settings`
@@ -78,12 +94,6 @@ Die folgenden Funktionen der `human_money_core` sollen implementiert werden:
   * `get_bip39_wordlist`
   * `frontend_log`
   * `log_to_backend`
-* **Konflikt- & Reputationsmanagement (NEU):**
-  * `list_conflicts` / `get_double_spend_conflicts`
-  * `check_reputation` (Gedächtnis-basierter Web of Trust)
-  * `set_conflict_local_override` (Manuelle Beilegung)
-  * `import_proof_from_json` / `import_proof_from_container`
-  * VIP-Gossip-Priorisierung (im Core)
 
 **4. Datentypen & Fehlerbehandlung**
 
@@ -94,158 +104,41 @@ Die folgenden Funktionen der `human_money_core` sollen implementiert werden:
 Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 
 ```
+.
+├── .agents/
+├── .cargo/
+├── .github/
 ├── .dev/
-│   ├── llm-context-vouchercore-api.md
-│   ├── llm-context.md
-│   ├── projektplan.md
-│   └── voucher-example.json
-├── .gitignore
-├── .taurignore
-├── generate_tree.sh
-├── index.html
-├── package.json
-├── public
-│   ├── tauri.svg
-│   └── vite.svg
-├── README.md
-├── src
-│   ├── App.css
-│   ├── App.tsx
-│   ├── assets
-│   │   └── react.svg
-│   ├── components
+├── public/
+├── src/
+│   ├── assets/
+│   ├── components/
+│   │   ├── ui/                 ← Basis-UI-Komponenten (Button, Input, Card, etc.)
+│   │   ├── Activities.tsx      ← Transaktionsaktivitäten
+│   │   ├── AddressBook.tsx     ← Kontaktverwaltung
 │   │   ├── CreateNewProfile.tsx
 │   │   ├── CreateVoucher.tsx
 │   │   ├── Dashboard.tsx
+│   │   ├── IntegrityReportModal.tsx
 │   │   ├── Login.tsx
-│   │   ├── ReceiveSuccessView.tsx
 │   │   ├── ReceiveView.tsx
-│   │   ├── RecreateProfile.tsx
 │   │   ├── SendView.tsx
-│   │   ├── SettingsView.tsx
-│   │   ├── TransactionHistoryView.tsx
-│   │   ├── TransferSuccessView.tsx
-│   │   │   ├── ui
-│   │   │   │   ├── Button.tsx
-│   │   │   │   ├── Input.tsx
-│   │   │   │   └── Textarea.tsx
+│   │   ├── Sidebar.tsx
 │   │   ├── VoucherDetailsView.tsx
-│   │   └── WalletRecovery.tsx
-│   ├── main.tsx
-│   ├── types.ts
-│   ├── utils
-│   │   └── log.ts
-│   └── vite-env.d.ts
-├── src-tauri
-│   ├── build.rs
-│   ├── capabilities
-│   │   └── default.json
-│   ├── Cargo.lock
-│   ├── Cargo.toml
-│   ├── icons
-│   │   ├── 128x128.png
-│   │   ├── 128x128@2x.png
-│   │   ├── 32x32.png
-│   │   ├── icon.icns
-│   │   ├── icon.ico
-│   │   ├── icon.png
-│   │   ├── Square107x107Logo.png
-│   │   ├── Square142x142Logo.png
-│   │   ├── Square150x150Logo.png
-│   │   ├── Square284x284Logo.png
-│   │   ├── Square30x30Logo.png
-│   │   ├── Square310x310Logo.png
-│   │   ├── Square44x44Logo.png
-│   │   ├── Square71x71Logo.png
-│   │   ├── Square89x89Logo.png
-│   │   └── StoreLogo.png
-│   ├── src
-│   │   ├── commands
-│   │   │   ├── actions.rs
-│   │   │   ├── auth.rs
-│   │   │   ├── mod.rs
-│   │   │   ├── queries.rs
-│   │   │   └── utils.rs
-│   │   ├── lib.rs
-│   │   ├── main.rs
-│   │   ├── models.rs
-│   │   └── settings.rs
-│   ├── .gitignore
-│   └── tauri.conf.json
-├── start-dev.sh
-├── tailwind.config.js
-├── tsconfig.json
-├── tsconfig.node.json
-├── vite.config.ts
-└── voucher_standards
-    ├── minuto_v1
-    │   └── standard.toml
-    └── silver_v1
-        └── standard.toml
-
-```
-├── index.html
-├── package.json
-├── public
-│   ├── tauri.svg
-│   └── vite.svg
-├── README.md
-├── src
-│   ├── App.css
-│   ├── App.tsx
-│   ├── assets
-│   │   └── react.svg
-│   ├── components
-│   │   ├── CreateNewProfile.tsx
-│   │   ├── CreateVoucher.tsx
-│   │   ├── Dashboard.tsx
-│   │   ├── Login.tsx
-│   │   ├── ReceiveSuccessView.tsx
-│   │   ├── ReceiveView.tsx
-│   │   ├── RecreateProfile.tsx
-│   │   ├── SendView.tsx
-│   │   ├── SettingsView.tsx
-│   │   ├── TransactionHistoryView.tsx
-│   │   ├── TransferSuccessView.tsx
-│   │   ├── ui
-│   │   │   ├── Button.tsx
-│   │   │   ├── Input.tsx
-│   │   │   └── Textarea.tsx
-│   │   ├── VoucherDetailsView.tsx
-│   │   └── WalletRecovery.tsx
-│   ├── main.tsx
-│   ├── types.ts
-│   ├── utils
-│   │   └── log.ts
-│   └── vite-env.d.ts
-├── src-tauri
-│   ├── build.rs
-│   ├── Cargo.lock
-│   ├── Cargo.toml
-│   ├── src
-│   │   ├── commands
-│   │   │   ├── actions.rs
-│   │   │   ├── auth.rs
-│   │   │   ├── mod.rs
-│   │   │   ├── queries.rs
-│   │   │   └── utils.rs
-│   │   ├── lib.rs
-│   │   ├── main.rs
-│   │   ├── models.rs
-│   │   └── settings.rs
-│   └── tauri.conf.json
-├── start-dev.sh
-├── tailwind.config.js
-├── .taurignore
-├── tsconfig.json
-├── tsconfig.node.json
-├── vite.config.ts
-└── voucher_standards
-    ├── minuto_v1
-    │   └── standard.toml
-    └── silver_v1
-        └── standard.toml
-
+│   │   └── WalletView.tsx
+│   ├── context/               ← SessionContext & State
+│   ├── utils/                 ← Helfer (format, log, userIdHelper)
+│   ├── types.ts               ← Zentrale TypeScript-Interfaces
+│   └── App.tsx                ← Routing & Main Layout
+├── src-tauri/
+│   ├── src/
+│   │   ├── commands/          ← Tauri Command Handler
+│   │   ├── models/            ← Frontend-Backend DTOs (modular)
+│   │   ├── lib.rs             ← Tauri Setup
+│   │   └── settings.rs        ← App-Konfiguration
+│   └── Cargo.toml
+├── voucher_standards/         ← Standard-Definitionen (Minuto, FreeTaler)
+└── STATUS.md                  ← Aktueller Projektstatus
 ```
 
 **6. Implementierte Kernfunktionen**
@@ -257,28 +150,25 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
   * `components/Login.tsx`: Login-Formular mit Profilauswahl und Passwort-Eingabe
   * `components/VoucherDetailsView.tsx`: Detaillierte Ansicht für einen einzelnen Gutschein mit allen Eigenschaften, Transaktionshistorie und Signaturinformationen
   * `components/CreateVoucher.tsx`: Formular zur Erstellung neuer Gutscheine mit umfassenden Details zum Ersteller und zur Besicherung
-  * `components/RecreateProfile.tsx`: Formular zur Wiederherstellung von Profilen
+  * `components/WalletRecovery.tsx`: Formular zur Wiederherstellung des Wallets mit Profilauswahl und Mnemonic
   * `components/SendView.tsx`: Komponente zum Erstellen und Vorbereiten von Transfer-Bundles
-  * `components/ReceiveView.tsx`: Komponente zum Empfangen von Transfer-Bundles
-  * `components/ProfileSettings.tsx`: (neu) Editor für Benutzer-Metadaten (Name, Adresse, Koord., etc.)
-  * `components/SettingsView.tsx`: Ermöglicht die Konfiguration von Anwendungseinstellungen und Profilzugriff
+  * `components/ReceiveView.tsx`: Komponente zum Empfangen von Transfer-Bundles mit Datei-Dialog und Drag & Drop Unterstützung
   * `components/TransactionHistoryView.tsx`: Zeigt vergangene Sende-Transaktionen an
+  * `components/SettingsView.tsx`: Ermöglicht die Konfiguration von Anwendungseinstellungen wie Bundle-Retention-Period
   * `components/TransferSuccessView.tsx`: Zeigt Erfolgsmeldung nach erfolgreichem Versand und ermöglicht Bundle-Speicherung
   * `components/ReceiveSuccessView.tsx`: Zeigt Zusammenfassung nach erfolgreichem Empfang einer Transaktion
   * `types.ts`: TypeScript-Interfaces für `VoucherSummary`, `VoucherDetails`, `NewVoucherData`, `TransactionHistoryEntry`, `ProfileInfo` und andere komplexe Datentypen
-  * `utils/log.ts`: Frontend-Logging-Utility
-  * `utils/geoUtils.ts`: (neu) Normalisierung und Validierung von Geokoordinaten (Format: "lat, lon")
-  * `utils/settingsUtils.ts`: Hilfsfunktionen für Anwendungseinstellungen
+  * `utils/log.ts`: Frontend-Logging-Utility für konsistentes Logging ins Backend
 
 * **Backend (src-tauri/)**
-  * `src/lib.rs`: Hauptdatei mit allen Tauri-Befehlen, die die `human_money_core::AppService`-Fassade nutzen; erweitert um neue Befehle wie `get_bip39_wordlist`, `save_transaction_record`, `get_app_settings`, `save_app_settings`
-  * `src/main.rs`: Einstiegspunkt, der die `run()`-Funktion aus `lib.rs` aufruft
-  * `src/commands/actions.rs`: Implementierung von Voucher-Aktionen wie `create_new_voucher`, `create_transfer_bundle`, `receive_bundle`, `save_transaction_record`
-  * `src/commands/auth.rs`: Authentifizierungsbezogene Befehle wie `create_profile`, `login`, `logout`, `list_profiles`
-  * `src/commands/queries.rs`: Abfragebezogene Befehle wie `get_voucher_summaries`, `get_voucher_details`, `get_transaction_history`, `get_double_spend_conflicts`, `get_proof_of_double_spend`, `check_reputation`
-  * `src/commands/utils.rs`: Hilfsfunktionen wie `generate_mnemonic`, `get_voucher_standards`, `get_bip39_wordlist`, `frontend_log`, `log_to_backend`
-  * `src/models.rs`: Datenstrukturdefinitionen für den Austausch zwischen Frontend und Backend; neue Strukturen wie `NominalValueData`, `FrontendAddressData`, `FrontendCollateralData`, `FrontendCreatorData`, `FrontendNewVoucherData`, `ProofStoreEntry`, `ConflictRole`, `TrustStatus`
-  * `src/settings.rs`: Implementierung der Einstellungs- und Konfigurationsverwaltung mit Speicherung in verschlüsselter Datei; `AppSettings` mit `bundle_retention_days`
+  * `src/lib.rs`: Hauptdatei mit allen Tauri-Befehlen und Plugin-Registrierungen.
+  * `src/commands/actions.rs`: Gutschein-Aktionen (Create, Transfer, Receive).
+  * `src/commands/auth.rs`: Profil-Management und Authentifizierung.
+  * `src/commands/contacts.rs`: Adressbuch-Logik.
+  * `src/commands/integrity.rs`: Fork-Erkennung und Integritätsprüfung.
+  * `src/commands/queries.rs`: Abfragen für Dashboards und Details.
+  * `src/models/`: Modularisierte DTOs für die IPC-Kommunikation (camelCase serialisiert).
+  * `src/settings.rs`: Anwendungsweite Einstellungen.
 
 **7. Logging**
 
@@ -298,25 +188,7 @@ Dies ist der aktuelle Zustand des Projekts mit den implementierten Komponenten.
 
 **8. Weitere Features**
 
-* **Multi-Profile-Unterstützung:** Das System unterstützt nun mehrere Benutzerprofile, die über ein Auswahlinterface verwaltet werden können. Beim Erstellen eines Profils kann ein menschenlesbarer Profilname vergeben werden, und bei der Anmeldung erfolgt eine Profilauswahl.
-* **Bundle-Empfangsworkflow:** Neue Komponenten `ReceiveView` und `ReceiveSuccessView` ermöglichen den Empfang von Transfer-Bundles über Dateidialog oder Drag & Drop. Der `dragDropEnabled`-Parameter in `tauri.conf.json` wurde auf `false` gesetzt, um native Browser-Events zu ermöglichen.
-* **Send-Workflow und Transaktionshistorie:** Neue Komponenten `SendView`, `TransactionHistoryView` und `TransferSuccessView` implementieren den kompletten Workflow zum Versenden von Gutscheinen und zur Anzeige der Transaktionshistorie.
-* **In-Memory-Caching:** Die Transaktionshistorie und App-Einstellungen werden nach der Anmeldung einmal entschlüsselt und im Speicher gecached, um wiederholte Passwortabfragen zu vermeiden.
-* **Automatisches Bereinigen:** Beim Login werden automatisch abgelaufene Transfer-Bundle-Daten aus dem Verlauf gelöscht, basierend auf dem konfigurierten Aufbewahrungszeitraum.
-* **Log-Rotation:** Implementierung einer Log-Rotationsfunktion, die beim Start die Größe der Logdatei prüft und diese bei Überschreitung eines definierten Limits kürzt. Logging wird zusätzlich in eine Datei im Anwendungs-Log-Verzeichnis geschrieben.
-* **Erweiterte Logging-Utility:** Neue Frontend-Logging-Funktionen (`logger.info`, `logger.warn`, `logger.error`) senden Logs direkt ins Rust-Terminal für besseres Debugging.
-
-**9. Development & CI Workflow**
-
-Um eine reibungslose Entwicklung im Team und automatische Builds auf GitHub zu gewährleisten, müssen folgende Regeln beachtet werden:
-
-*   **Lokale Core-Entwicklung:**
-    *   Die `human_money_core` wird lokal oft parallel zur App entwickelt.
-    *   **Regel:** Verwende NIEMALS einen `[patch]`-Block in der `src-tauri/Cargo.toml`. Dies führt zu Fehlern auf GitHub, da der Pfad dort nicht existiert.
-    *   **Lösung:** Nutze stattdessen die Datei `src-tauri/.cargo/config.toml` (diese ist in der `.gitignore` enthalten). Dort wird der lokale Pfad für Cargo registriert, ohne das Repository für andere zu korrumpieren.
-*   **Cargo.lock Konsistenz:**
-    *   Wenn die Core-Abhängigkeiten geändert werden, muss die `src-tauri/Cargo.lock` synchronisiert werden.
-    *   **Befehl:** `cd src-tauri && cargo update -p human_money_core`. Dieser Befehl aktualisiert den Cache in der Lock-Datei auf die neue Quelle/den neuen Pfad. Ohne diesen Schritt schlägt der GitHub-Build mit "failed to load source" fehl.
-*   **GitHub Releases:**
-    *   Ein Release wird automatisch durch das Pushen eines Version-Tags ausgelöst (Format: `v*`, z. B. `v0.1.0-alpha.3`).
-    *   Voraussetzung: Der `master`-Zweig im `human-money-core` Repository muss auf dem Stand sein, den die App benötigt.
+* **Sicherheits-Banner & Integrität:** Die App prüft beim Login und bei Aktionen auf "Forks" (Double-Spending-Versuche). Bei Erkennung wird ein prominentes Banner angezeigt, das zu einem detaillierten Integritätsbericht führt.
+* **In-Memory-Caching:** Transaktions-Aktivitäten und Profileinstellungen werden im Speicher gehalten, um die UI-Reaktivität zu erhöhen.
+* **Address Book Integration:** Kontakte können gespeichert und direkt im Send-Flow ausgewählt werden.
+* **Voucher Card UI:** Eine zentrale Komponente zur konsistenten Darstellung von Gutscheinen in allen Listenansichten.

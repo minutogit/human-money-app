@@ -1,26 +1,43 @@
 // src/components/Dashboard.tsx
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useTranslation } from "react-i18next";
+import { voucherService } from "../services/voucherService";
+import { transferService } from "../services/transferService";
+import { profileService } from "../services/profileService";
+import { contactService } from "../services/contactService";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
-import { AggregatedBalance, TransactionRecord, VoucherSummary } from "../types";
+import { Card } from "./ui/Card";
+import { AggregatedBalance, VoucherSummary, WalletEvent } from "../types";
+import { useSession } from "../context/SessionContext";
+import { IntegrityReportModal } from "./IntegrityReportModal";
+import { PageLayout } from "./ui/PageLayout";
+import { 
+    Plus, 
+    ArrowUpRight, 
+    ArrowDownLeft, 
+    ShieldAlert, 
+    UserCircle,
+    Copy,
+    CheckCircle2,
+    Clock,
+    AlertCircle
+} from "lucide-react";
+import { truncateUserId } from "../utils/userIdHelper";
 
-interface DashboardProps {
-    onNavigateToCreateVoucher: () => void;
-    onNavigateToSend: () => void;
-    onNavigateToHistory: () => void;
-    onNavigateToReceive: () => void;
-    onNavigateToConflicts?: () => void;
-    onNavigateToWallet: (filter?: { status?: string }) => void;
-    onNavigateToSettings?: () => void;
-    profileName: string;
-}
+import { useNavigation } from "../context/NavigationContext";
+import { useContactResolver } from "../hooks/useContactResolver";
 
-export function Dashboard(props: DashboardProps) {
+export function Dashboard() {
+    const { t } = useTranslation();
+    const { navigate } = useNavigation();
+    const { profileName, integrityReport } = useSession();
+    const { resolveIdentity } = useContactResolver();
+
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<AggregatedBalance[]>([]);
-    const [recentTransactions, setRecentTransactions] = useState<TransactionRecord[]>([]);
+    const [recentEvents, setRecentEvents] = useState<WalletEvent[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [copied, setCopied] = useState(false);
     const [activeVouchersCount, setActiveVouchersCount] = useState(0);
@@ -28,41 +45,46 @@ export function Dashboard(props: DashboardProps) {
     const [quarantinedCount, setQuarantinedCount] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [isProfileComplete, setIsProfileComplete] = useState(true);
+    const [voucherCountsByStandard, setVoucherCountsByStandard] = useState<Record<string, number>>({});
+    const [showIntegrityModal, setShowIntegrityModal] = useState(false);
 
     useEffect(() => {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, history, voucherSummaries, userProfile] = await Promise.all([
-                    invoke<string>("get_user_id"),
-                    invoke<AggregatedBalance[]>("get_total_balance_by_currency"),
-                    invoke<TransactionRecord[]>("get_transaction_history").catch(() => []),
-                    invoke<VoucherSummary[]>("get_voucher_summaries").catch(() => []),
-                    invoke<any>("get_user_profile").catch(() => null)
+                const [id, balanceList, , voucherSummaries, userProfile, , eventHistory] = await Promise.all([
+                    profileService.getUserId(),
+                    voucherService.getTotalBalanceByCurrency(),
+                    transferService.getHistory().catch(() => []),
+                    voucherService.getSummaries().catch(() => []),
+                    profileService.getProfile().catch(() => null),
+                    contactService.getContacts().catch(() => []),
+                    transferService.getEventHistory(0, 5).catch(() => [])
                 ]);
                 setUserId(id);
                 setBalances(balanceList || []);
-                // Sort by timestamp, newest first, and take only the first 5
-                const sortedHistory = (history || [])
-                    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                    .slice(0, 5);
-                setRecentTransactions(sortedHistory);
+                setRecentEvents(eventHistory || []);
                 
-                // Calculate voucher counts
-                const activeCount = (voucherSummaries || []).filter(v => v.status === "Active").length;
-                const incompleteCount = (voucherSummaries || []).filter(v => {
-                    return typeof v.status === 'object' && 'Incomplete' in v.status;
-                }).length;
-                const quarantinedCount = (voucherSummaries || []).filter(v => {
-                    return typeof v.status === 'object' && 'Quarantined' in v.status;
-                }).length;
-                
+                const activeCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "active").length;
+                const incompleteCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "incomplete").length;
+                const quarantinedCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "quarantined").length;
+
+                const countsByStandard: Record<string, number> = {};
+                (voucherSummaries || [])
+                    .filter((v: VoucherSummary) => v.status === "active")
+                    .forEach((v: VoucherSummary) => {
+                        const standardUuid = v.voucherStandardUuid;
+                        if (standardUuid) {
+                            countsByStandard[standardUuid] = (countsByStandard[standardUuid] || 0) + 1;
+                        }
+                    });
+                setVoucherCountsByStandard(countsByStandard);
+
                 setActiveVouchersCount(activeCount);
                 setIncompleteCount(incompleteCount);
                 setQuarantinedCount(quarantinedCount);
 
-                // Check if profile is complete (requires first_name and last_name)
-                const profileComplete = userProfile && userProfile.first_name && userProfile.last_name;
+                const profileComplete = userProfile && userProfile.firstName && userProfile.lastName && userProfile.address?.city;
                 setIsProfileComplete(!!profileComplete);
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${e}`;
@@ -91,7 +113,7 @@ export function Dashboard(props: DashboardProps) {
     function formatAmount(amountStr: string): string {
         const num = parseFloat(amountStr);
         if (isNaN(num)) return amountStr;
-        return num.toString();
+        return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
     function formatTimestamp(isoString: string): string {
@@ -101,345 +123,343 @@ export function Dashboard(props: DashboardProps) {
         });
     }
 
-    function formatSummary(
-        summable: Record<string, string> | undefined,
-        countable: Record<string, number> | undefined
-    ): string {
-        const s = Object.entries(summable || {}).map(([unit, amount]) => `${amount} ${unit}`);
-        const c = Object.entries(countable || {}).map(([unit, total]) => `${total} ${unit}${total > 1 ? 's' : ''}`);
-        const all = [...s, ...c];
-        return all.length > 0 ? all.join(', ') : '0.00';
-    }
+    function getEventDetails(event: WalletEvent): { label: string; icon: React.ElementType; color: string; bgColor: string } {
+        const type = event.eventType;
+        const bff = event.bffData;
 
-    // Group balances by currency unit
-    const balancesByUnit = balances.reduce((acc, bal) => {
-        const unit = bal.unit;
-        if (!acc[unit]) {
-            acc[unit] = { total: 0, balances: [] };
+        if (typeof type === 'string') {
+            switch (type) {
+                case 'voucherCreated':
+                    return { label: t('dashboard.eventVoucherCreated'), icon: Plus, color: 'text-blue-600', bgColor: 'bg-blue-50' };
+                case 'transferSent': {
+                    const recipientName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
+                    return { label: t('dashboard.eventSent', { name: recipientName }), icon: ArrowUpRight, color: 'text-rose-600', bgColor: 'bg-rose-50' };
+                }
+                case 'transferReceived': {
+                    const senderName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
+                    return { label: t('dashboard.eventReceived', { name: senderName }), icon: ArrowDownLeft, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
+                }
+                case 'voucherQuarantined':
+                    return { label: t('dashboard.eventVoucherQuarantined'), icon: AlertCircle, color: 'text-amber-600', bgColor: 'bg-amber-50' };
+                case 'voucherActivated':
+                    return { label: t('dashboard.eventVoucherActivated'), icon: CheckCircle2, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
+                case 'voucherVoided':
+                    return { label: t('dashboard.eventVoucherVoided'), icon: AlertCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
+                case 'voucherExpired':
+                    return { label: t('dashboard.eventVoucherExpired'), icon: Clock, color: 'text-orange-600', bgColor: 'bg-orange-50' };
+            }
         }
-        acc[unit].total += parseFloat(bal.total_amount);
-        acc[unit].balances.push(bal);
-        return acc;
-    }, {} as Record<string, { total: number; balances: AggregatedBalance[] }>);
-
-    const uniqueUnits = Object.keys(balancesByUnit);
-    const singleCurrency = uniqueUnits.length === 1;
-    const primaryUnit = singleCurrency ? uniqueUnits[0] : '';
-
-    const truncatedUserId = userId ? `${userId.substring(0, 15)}...${userId.substring(userId.length - 8)}` : "Lade...";
+        return { label: t('dashboard.eventUnknown'), icon: AlertCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
+    }
+    const truncatedUserId = userId ? truncateUserId(userId) : t('common.loading');
 
     return (
-        <div className="flex flex-col h-full">
-            {/* Fixierte Kopfleiste */}
-            <header className="flex-shrink-0 border-b border-theme-subtle px-6 py-0.5 bg-bg-card">
-                <div className="flex items-center justify-between gap-3 text-xs text-theme-light">
-                    <div className="flex items-center gap-3">
-                        <span className="relative flex h-2 w-2">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                        </span>
-                        <div className="flex items-center gap-1">
-                            <span>Profile:</span>
-                            <span className="font-semibold text-theme-secondary">{props.profileName}</span>
+        <PageLayout 
+            customHeader={
+                <header className="flex-shrink-0 sticky top-0 z-30 px-6 py-2 glass-panel border-b-0 rounded-b-3xl mb-4">
+                    <div className="flex items-center justify-between gap-3 text-[10px] sm:text-xs font-bold text-theme-light">
+                        <div className="flex items-center gap-3">
+                            <span className="relative flex h-2 w-2">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                            </span>
+                            <div className="flex items-center gap-1.5 px-2 py-1 bg-white/50 rounded-full border border-theme-subtle/30 shadow-inner-soft">
+                                <UserCircle size={12} className="text-theme-primary" />
+                                <span className="text-theme-secondary">{profileName}</span>
+                            </div>
                         </div>
+                        
+                        <div className="flex items-center gap-2">
+                            <button 
+                                onClick={handleCopyUserId}
+                                className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-all duration-300 border ${
+                                    copied 
+                                    ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
+                                    : 'bg-white/50 text-theme-secondary border-theme-subtle/50 hover:border-theme-primary hover:bg-white hover:shadow-sm'
+                                }`}
+                            >
+                                <span className="font-mono text-[10px]">{copied ? t('common.copied') : truncatedUserId}</span>
+                                {copied ? <CheckCircle2 size={12} /> : <Copy size={12} className="opacity-50" />}
+                            </button>
+                        </div>
+                    </div>
+                </header>
+            }
+        >
+            <div className="max-w-5xl mx-auto space-y-8">
+                {/* Welcome Message */}
+                {balances.length === 0 && (
+                    <div className="px-2 pt-4 text-center">
+                        <h1 className="text-3xl font-black text-theme-primary tracking-tighter">{t('dashboard.welcomeTitle')}</h1>
+                        <p className="text-sm font-medium text-theme-light mt-1">{t('dashboard.welcomeSubtitle')}</p>
+                    </div>
+                )}
+
+                {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
+
+                {/* Warning Banners Section */}
+                <div className="space-y-3">
+                    {integrityReport && integrityReport.type !== 'valid' && (
+                        <Card 
+                            variant="glass" 
+                            className={`py-2 px-4 flex items-center justify-between cursor-pointer border-l-4 ${
+                                integrityReport.type === 'unknownItems' || integrityReport.type === 'missingIntegrityRecord'
+                                ? 'border-l-blue-500' : 'border-l-red-500'
+                            }`}
+                            onClick={() => setShowIntegrityModal(true)}
+                            hover
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className={`p-2 rounded-xl ${
+                                    integrityReport.type === 'unknownItems' || integrityReport.type === 'missingIntegrityRecord'
+                                    ? 'bg-blue-500 text-white' : 'bg-red-500 text-white'
+                                }`}>
+                                    <ShieldAlert size={20} />
+                                </div>
+                                <div>
+                                    <p className="font-bold text-sm text-theme-secondary">{t('dashboard.securityWarning')}</p>
+                                    <p className="text-xs opacity-70">{t('dashboard.securityWarningDesc')}</p>
+                                </div>
+                            </div>
+                            <ArrowUpRight size={18} className="opacity-30" />
+                        </Card>
+                    )}
+
+                    {!isProfileComplete && (
+                        <Card 
+                            variant="glass" 
+                            className="py-2 px-4 flex items-center justify-between border-l-4 border-l-amber-500"
+                            hover
+                            onClick={() => navigate({ view: 'settings' })}
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className="p-2 rounded-xl bg-amber-500 text-white">
+                                    <UserCircle size={20} />
+                                </div>
+                                <div>
+                                    <p className="font-bold text-sm text-theme-secondary">{t('dashboard.profileIncomplete')}</p>
+                                    <p className="text-xs opacity-70">{t('dashboard.profileIncompleteDesc')}</p>
+                                </div>
+                            </div>
+                            <Button variant="primary" size="xs" className="shadow-none">{t('dashboard.fixNow')}</Button>
+                        </Card>
+                    )}
+
+                    {quarantinedCount > 0 && (
+                        <Card 
+                            variant="glass" 
+                            className="py-2 px-4 flex items-center justify-between border-l-4 border-l-rose-500"
+                            hover
+                            onClick={() => navigate({ view: 'conflict_list' })}
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className="p-2 rounded-xl bg-rose-500 text-white">
+                                    <AlertCircle size={20} />
+                                </div>
+                                <div>
+                                    <p className="font-bold text-sm text-theme-secondary">{t('dashboard.quarantineLocked', { count: quarantinedCount })}</p>
+                                    <p className="text-xs opacity-70">{t('dashboard.quarantineDesc')}</p>
+                                </div>
+                            </div>
+                            <ArrowUpRight size={18} className="opacity-30" />
+                        </Card>
+                    )}
+                </div>
+
+                {/* Zone 2: Balances (Wallet Cards) */}
+                <section>
+                    <div className="flex items-center justify-between mb-4 px-2">
+                        <h2 className="text-xs font-black text-theme-light uppercase tracking-[0.2em]">{t('dashboard.yourBalances')}</h2>
                     </div>
                     
-                    <div className="flex items-center gap-2">
-                        <span className="font-semibold text-theme-secondary">Your ID:</span>
-                        <button 
-                            onClick={handleCopyUserId}
-                            title={copied ? "Copied!" : "Click to copy User ID"}
-                            className={`font-mono text-xs sm:text-sm font-medium transition-all duration-200 border px-3 py-1 rounded-md ${
-                                copied 
-                                ? 'bg-theme-success/10 text-theme-success border-theme-success/30 shadow-sm' 
-                                : 'bg-bg-card text-theme-primary border-theme-subtle hover:border-theme-primary hover:bg-theme-primary/5 hover:shadow-sm'
-                            }`}
+                    {isLoading ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {[1, 2].map(i => <div key={i} className="h-48 bg-white/50 animate-pulse rounded-3xl border border-theme-subtle/50"></div>)}
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {balances.map((balance, idx) => {
+                                const count = voucherCountsByStandard[balance.standardUuid] || 0;
+                                return (
+                                    <Card 
+                                        key={balance.standardUuid}
+                                        variant="default"
+                                        className={`relative overflow-hidden p-6 h-48 flex flex-col justify-between group ${
+                                            idx % 2 === 0 
+                                            ? 'bg-gradient-to-br from-slate-500 to-slate-700' 
+                                            : 'bg-gradient-to-br from-theme-primary to-theme-accent'
+                                        }`}
+                                        hover
+                                        onClick={() => navigate({ view: 'wallet', initialStandardFilter: balance.displayStandardName, initialStatusFilter: 'active' })}
+                                    >
+                                        {/* Decorative Circles */}
+                                        <div className="absolute -right-8 -top-8 w-32 h-32 bg-white/10 rounded-full blur-2xl group-hover:bg-white/20 transition-all duration-500"></div>
+                                        <div className="absolute -left-4 -bottom-4 w-24 h-24 bg-black/5 rounded-full blur-xl"></div>
+                                        
+                                        <div className="relative z-10 flex justify-between items-start">
+                                            <div className="flex flex-col">
+                                                <span className="text-[10px] font-black text-white/60 uppercase tracking-[0.15em] mb-1">
+                                                    {balance.displayStandardName}
+                                                </span>
+                                                <h3 className="text-xl font-bold text-white leading-tight">
+                                                    {balance.displayCurrency}
+                                                </h3>
+                                            </div>
+                                            <div className="px-2 py-1 bg-white/20 backdrop-blur-md rounded-lg border border-white/20 text-[10px] font-bold text-white">
+                                                {t('dashboard.vouchersCount', { count })}
+                                            </div>
+                                        </div>
+
+                                        <div className="relative z-10 flex items-baseline gap-2">
+                                            <span className="text-4xl font-black text-white tracking-tighter">
+                                                {formatAmount(balance.totalAmount)}
+                                            </span>
+                                        </div>
+
+                                        <div className="relative z-10 flex justify-end">
+                                            <div className="text-[10px] font-bold text-white/40 uppercase tracking-widest group-hover:text-white transition-colors">
+                                                {t('dashboard.viewDetails')}
+                                            </div>
+                                        </div>
+                                    </Card>
+                                );
+                            })}
+                            
+                            {/* Empty State / Add More Placeholder */}
+                            {balances.length < 2 && (
+                                <Card 
+                                    variant="none" 
+                                    className="border-2 border-dashed border-theme-subtle bg-transparent p-6 h-48 flex flex-col items-center justify-center text-theme-placeholder hover:border-theme-primary hover:text-theme-primary transition-all group"
+                                    hover
+                                    onClick={() => navigate({ view: 'create_voucher' })}
+                                >
+                                    <Plus size={32} className="mb-2 opacity-50 group-hover:scale-110 transition-transform" />
+                                    <span className="text-sm font-bold uppercase tracking-widest">{t('voucher.create')}</span>
+                                </Card>
+                            )}
+                        </div>
+                    )}
+                </section>
+
+                {/* Zone 3: Quick Actions */}
+                <section className="flex flex-wrap justify-center gap-4">
+                    <Button 
+                        onClick={() => navigate({ view: 'send_vouchers' })} 
+                        className="min-w-[140px] gap-2 shadow-premium"
+                        size="lg"
+                        disabled={activeVouchersCount === 0}
+                    >
+                        <ArrowUpRight size={20} />
+                        {t('transfer.send')}
+                    </Button>
+                    <Button 
+                        onClick={() => navigate({ view: 'receive_bundle' })} 
+                        className="min-w-[140px] gap-2 shadow-premium"
+                        variant="secondary"
+                        size="lg"
+                    >
+                        <ArrowDownLeft size={20} />
+                        {t('transfer.receive')}
+                    </Button>
+                    <Button 
+                        onClick={() => navigate({ view: 'create_voucher' })}
+                        className="min-w-[140px] gap-2 shadow-premium"
+                        variant="secondary"
+                        size="lg"
+                    >
+                        <Plus size={20} />
+                        {t('common.create')}
+                    </Button>
+                </section>
+
+                {/* Zone 4: Tasks / Pending */}
+                {incompleteCount > 0 && (
+                    <section>
+                        <Card 
+                            variant="accent" 
+                            className="p-5 flex items-center justify-between border-l-4 border-l-theme-accent"
+                            hover
+                            onClick={() => navigate({ view: 'wallet', initialStatusFilter: 'incomplete' })}
                         >
-                            {copied ? "✓ Copied!" : truncatedUserId}
+                            <div className="flex items-center gap-4">
+                                <div className="p-3 rounded-2xl bg-theme-accent text-white shadow-md">
+                                    <Clock size={24} />
+                                </div>
+                                <div>
+                                    <p className="font-black text-theme-secondary uppercase tracking-wider text-xs">{t('auth.actionRequired')}</p>
+                                    <p className="text-lg font-bold text-theme-primary">{t('dashboard.needSignatures', { count: incompleteCount })}</p>
+                                </div>
+                            </div>
+                            <Button variant="primary" size="sm" className="rounded-full px-6">{t('common.view')}</Button>
+                        </Card>
+                    </section>
+                )}
+
+                {/* Zone 5: Recent Activity */}
+                <section>
+                    <div className="flex items-center justify-between mb-6 px-2">
+                        <h2 className="text-xs font-black text-theme-light uppercase tracking-[0.2em]">{t('dashboard.recentActivity')}</h2>
+                        <button 
+                            onClick={() => navigate({ view: 'activities' })}
+                            className="text-[10px] font-black text-theme-accent uppercase tracking-widest hover:underline"
+                        >
+                            {t('dashboard.historyLink')}
                         </button>
                     </div>
-                </div>
-            </header>
 
-            {/* Main content area that is scrollable */}
-            <div className="flex-grow overflow-y-auto p-4 sm:p-6">
-                <div className="mx-auto max-w-4xl">
-                    {feedbackMsg && <p className="text-center text-red-500 mb-4">{feedbackMsg}</p>}
-
-                    {/* Profile Warning Banner */}
-                    {!isProfileComplete && (
-                        <div className="mb-6 bg-amber-50 border-l-4 border-amber-500 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center">
-                                    <div className="flex-shrink-0 text-amber-500 text-2xl">⚠️</div>
-                                    <div className="ml-3">
-                                        <p className="text-sm font-semibold text-amber-800">
-                                            Your profile is incomplete.
-                                        </p>
-                                        <p className="text-xs text-amber-700">
-                                            A complete profile is essential for building trust in the network.
-                                        </p>
-                                    </div>
-                                </div>
-                                {props.onNavigateToSettings && (
-                                    <Button
-                                        onClick={props.onNavigateToSettings}
-                                        variant="primary"
-                                        size="sm"
-                                        className="bg-amber-600 hover:bg-amber-700 text-white"
-                                    >
-                                        Complete Profile
-                                    </Button>
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Zone 1: Quarantine & Double Spends (Red Warning) */}
-                    {quarantinedCount > 0 && (
-                        <div 
-                            className="mb-6 bg-red-50 border-l-4 border-red-500 p-4 rounded-md shadow-sm animate-in fade-in slide-in-from-top-2 duration-500 cursor-pointer hover:bg-red-100 transition-colors"
-                            onClick={props.onNavigateToConflicts}
-                        >
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center">
-                                    <div className="flex-shrink-0 text-red-500 text-2xl">🚫</div>
-                                    <div className="ml-3">
-                                        <p className="text-sm font-bold text-red-800">
-                                            Quarantine Warning: {quarantinedCount} voucher{quarantinedCount > 1 ? 's' : ''} locked
-                                        </p>
-                                        <p className="text-xs text-red-700">
-                                            Double-spend detected. Please review the conflict resolution view.
-                                        </p>
-                                    </div>
-                                </div>
-                                <div className="text-red-500">
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                    </svg>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Zone 2: Kaufkraft & Inventar (Central) */}
-                    <section className="text-center mb-8">
-                        {isLoading ? (
-                            <div className="animate-pulse">
-                                <div className="h-20 bg-gray-200 rounded mx-auto w-48 mb-2"></div>
-                                <div className="h-4 bg-gray-200 rounded mx-auto w-32"></div>
-                            </div>
-                        ) : (
-                            <>
-                                <h1 className="text-sm font-semibold text-theme-light uppercase tracking-wider mb-2">Total Balance</h1>
-                                {singleCurrency && primaryUnit ? (
-                                    <div className="flex items-center justify-center">
-                                        <p className="text-6xl md:text-7xl font-bold text-theme-primary">
-                                            {formatAmount(balancesByUnit[primaryUnit].total.toString())}
-                                        </p>
-                                        <span className="text-3xl md:text-4xl font-normal text-theme-light ml-3">{primaryUnit}</span>
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-wrap justify-center gap-6">
-                                        {uniqueUnits.map(unit => (
-                                            <div key={unit} className="flex items-baseline">
-                                                <p className="text-5xl md:text-6xl font-bold text-theme-primary">
-                                                    {formatAmount(balancesByUnit[unit].total.toString())}
-                                                </p>
-                                                <span className="text-2xl md:text-3xl font-normal text-theme-light ml-2">{unit}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                                <p className="text-sm text-theme-light mt-2">
-                                    Consisting of {activeVouchersCount} active voucher{activeVouchersCount !== 1 ? 's' : ''}
-                                </p>
-                                {balances.length > 1 && (
-                                    <div className="mt-4 flex flex-wrap justify-center gap-4">
-                                        {balances.map((balance) => (
-                                            <div key={balance.standard_uuid} className="bg-bg-card-alternate rounded-lg px-4 py-2 border border-theme-subtle">
-                                                <p className="text-xs text-theme-light">{balance.standard_name}</p>
-                                                <p className="text-lg font-semibold text-theme-secondary">
-                                                    {formatAmount(balance.total_amount)} {balance.unit}
-                                                </p>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </>
-                        )}
-                    </section>
-
-                    {/* Zone 3: Dynamic Quick-Actions */}
-                    <section className="flex justify-center gap-4 mb-6">
-                        {activeVouchersCount === 0 ? (
-                            // Scenario A: 0 active vouchers - Create is primary
-                            <>
-                                <Button 
-                                    onClick={props.onNavigateToCreateVoucher}
-                                    className="px-8 py-4 text-lg"
-                                    variant="primary"
+                    <div className="space-y-3">
+                        {recentEvents.length > 0 ? recentEvents.map(event => {
+                            const { label, icon: Icon, color, bgColor } = getEventDetails(event);
+                            return (
+                                <Card 
+                                    key={event.eventId}
+                                    variant="default"
+                                    className="p-4 flex items-center justify-between group"
+                                    hover
+                                    onClick={() => {
+                                        const type = event.eventType;
+                                        if (type === 'transferSent' || type === 'transferReceived') {
+                                            navigate({ view: 'transaction_history' });
+                                        } else {
+                                            navigate({ view: 'voucher_details', voucherId: event.localInstanceId, previousView: { view: 'logged_in' } });
+                                        }
+                                    }}
                                 >
-                                    Create Voucher
-                                </Button>
-                                <Button 
-                                    onClick={props.onNavigateToReceive} 
-                                    className="px-8 py-4 text-lg"
-                                    variant="secondary"
-                                >
-                                    Receive
-                                </Button>
-                                <Button 
-                                    onClick={props.onNavigateToSend} 
-                                    className="px-8 py-4 text-lg"
-                                    variant="secondary"
-                                    disabled
-                                >
-                                    Send
-                                </Button>
-                            </>
-                        ) : (
-                            // Scenario B: >0 active vouchers - Send is primary
-                            <>
-                                <Button 
-                                    onClick={props.onNavigateToSend} 
-                                    className="px-8 py-4 text-lg"
-                                    variant="primary"
-                                >
-                                    Send
-                                </Button>
-                                <Button 
-                                    onClick={props.onNavigateToReceive} 
-                                    className="px-8 py-4 text-lg"
-                                    variant="secondary"
-                                >
-                                    Receive
-                                </Button>
-                                <Button 
-                                    onClick={props.onNavigateToCreateVoucher}
-                                    className="px-6 py-4 text-lg border border-theme-subtle text-theme-light hover:border-theme-primary hover:text-theme-primary"
-                                    variant="secondary"
-                                >
-                                    Create
-                                </Button>
-                            </>
-                        )}
-                    </section>
-
-                    {/* Zone 4: Action Area / To-Dos (Incomplete Vouchers) */}
-                    {incompleteCount > 0 && (
-                        <div 
-                            className="mb-6 bg-yellow-50 border-l-4 border-yellow-500 p-4 rounded-md shadow-sm cursor-pointer hover:bg-yellow-100 transition-colors"
-                            onClick={() => props.onNavigateToWallet({ status: 'incomplete' })}
-                        >
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center">
-                                    <div className="flex-shrink-0 text-yellow-500 text-2xl">⏳</div>
-                                    <div className="ml-3">
-                                        <p className="text-sm font-semibold text-yellow-800">
-                                            {incompleteCount} voucher{incompleteCount > 1 ? 's' : ''} incomplete
-                                        </p>
-                                        <p className="text-xs text-yellow-700">
-                                            Need more signatures. Click to view in wallet.
-                                        </p>
-                                    </div>
-                                </div>
-                                <div className="text-yellow-500">
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                    </svg>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Zone 5: Recent Activity & History Link OR Welcome Empty State */}
-                    {recentTransactions.length > 0 ? (
-                        <section className="mb-8">
-                            <div className="flex items-center justify-between mb-4">
-                                <h2 className="text-lg font-semibold text-theme-secondary">Recent Activity</h2>
-                                <button 
-                                    onClick={props.onNavigateToHistory}
-                                    className="text-sm text-theme-accent hover:underline"
-                                >
-                                    View All ➔
-                                </button>
-                            </div>
-                            <div className="space-y-3">
-                                {recentTransactions.map(record => (
-                                    <button 
-                                        key={record.id} 
-                                        onClick={props.onNavigateToHistory}
-                                        className="w-full bg-bg-card-alternate rounded-lg p-3 border border-theme-subtle flex items-center justify-between hover:border-theme-primary hover:shadow-sm transition-all text-left group"
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <div className={`flex items-center justify-center h-8 w-8 rounded-full transition-transform group-hover:scale-110 ${record.direction === 'sent' ? 'bg-red-200 text-red-800' : 'bg-green-200 text-green-800'}`}>
-                                                {record.direction === 'sent' ? '↑' : '↓'}
-                                            </div>
-                                            <div>
-                                                <p className="font-semibold text-sm text-theme-primary capitalize">
-                                                    {record.direction === 'sent' ? 'Sent' : 'Received'}
-                                                </p>
-                                                <p className="text-xs text-theme-light">
-                                                    {formatTimestamp(record.timestamp)}
-                                                </p>
-                                            </div>
+                                    <div className="flex items-center gap-4 flex-1 min-w-0">
+                                        <div className={`p-3 rounded-2xl ${bgColor} ${color} transition-transform group-hover:scale-110 shrink-0`}>
+                                            <Icon size={20} />
                                         </div>
-                                        <p className="font-semibold text-theme-secondary">
-                                            {formatSummary(record.summableAmounts, record.countableItems)}
-                                        </p>
-                                    </button>
-                                ))}
-                            </div>
-                        </section>
-                    ) : (
-                        // Welcome Empty State - shows when wallet is completely empty
-                        balances.length === 0 && activeVouchersCount === 0 && incompleteCount === 0 && (
-                            <section className="mb-8 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-8 shadow-sm animate-in fade-in slide-in-from-bottom-4 duration-500">
-                                <div className="text-center">
-                                    <h2 className="text-2xl font-bold text-theme-primary mb-4">👋 Welcome to your Wallet!</h2>
-                                    <p className="text-theme-secondary mb-6">Your balance is currently empty. You have two ways to get started:</p>
-                                    
-                                    <div className="grid md:grid-cols-2 gap-6 max-w-2xl mx-auto">
-                                        {/* Option 1: Receive */}
-                                        <div className="bg-white rounded-lg p-6 border border-theme-subtle shadow-sm hover:shadow-md transition-shadow">
-                                            <div className="text-3xl mb-3">📥</div>
-                                            <h3 className="text-lg font-semibold text-theme-primary mb-2">Receive Vouchers</h3>
-                                            <p className="text-sm text-theme-light mb-4">
-                                                Receive vouchers in exchange for goods or services. Simply share your ID or QR code with your partner.
+                                        <div className="min-w-0">
+                                            <p className="font-bold text-sm text-theme-secondary truncate">{label}</p>
+                                            <p className="text-[10px] font-bold text-theme-light uppercase tracking-widest mt-0.5">
+                                                {event.bffData.displayCurrency && `${event.bffData.amount} ${event.bffData.displayCurrency}`}
                                             </p>
-                                            <Button 
-                                                onClick={props.onNavigateToReceive}
-                                                variant="secondary"
-                                                className="w-full"
-                                            >
-                                                Receive
-                                            </Button>
-                                        </div>
-                                        
-                                        {/* Option 2: Create */}
-                                        <div className="bg-white rounded-lg p-6 border border-theme-subtle shadow-sm hover:shadow-md transition-shadow">
-                                            <div className="text-3xl mb-3">✨</div>
-                                            <h3 className="text-lg font-semibold text-theme-primary mb-2">Create Vouchers</h3>
-                                            <p className="text-sm text-theme-light mb-4">
-                                                Create your own vouchers to act as a medium of exchange within your trusted network.
-                                            </p>
-                                            <Button 
-                                                onClick={props.onNavigateToCreateVoucher}
-                                                variant="primary"
-                                                className="w-full"
-                                            >
-                                                Create
-                                            </Button>
                                         </div>
                                     </div>
-                                </div>
-                            </section>
-                        )
-                    )}
-                </div>
+                                    <div className="text-right shrink-0">
+                                        <span className="text-[10px] font-bold text-theme-placeholder uppercase tracking-widest">
+                                            {formatTimestamp(event.timestamp)}
+                                        </span>
+                                    </div>
+                                </Card>
+                            );
+                        }) : (
+                            <div className="text-center py-12 px-6">
+                                <Card variant="none" className="border-2 border-dashed border-theme-subtle p-8 opacity-50">
+                                    <p className="text-sm font-bold uppercase tracking-widest text-theme-placeholder">{t('dashboard.noRecentActivity')}</p>
+                                </Card>
+                            </div>
+                        )}
+                    </div>
+                </section>
             </div>
 
-        </div>
+            {showIntegrityModal && integrityReport && (
+                <IntegrityReportModal 
+                    report={integrityReport} 
+                    onClose={() => setShowIntegrityModal(false)} 
+                />
+            )}
+        </PageLayout>
     );
 }

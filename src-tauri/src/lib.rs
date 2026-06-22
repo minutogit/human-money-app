@@ -5,6 +5,9 @@
 pub mod commands;
 pub mod models;
 pub mod settings;
+pub mod state;
+
+pub use state::AppState;
 
 use chrono::Local;
 use std::fs;
@@ -19,9 +22,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{actions::*, auth::*, queries::*, utils::*, contacts::*};
-use crate::commands::actions::TransactionRecord;
-use crate::settings::AppSettings;
+use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*};
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
 
@@ -41,7 +42,7 @@ fn setup_log_rotation(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>>
 
     // Now that we know the file exists, read it and rotate if not empty.
     let lines: Vec<String> =
-        BufReader::new(File::open(&log_file_path)?).lines().filter_map(Result::ok).collect();
+        BufReader::new(File::open(&log_file_path)?).lines().map_while(Result::ok).collect();
 
     if !lines.is_empty() {
         let total_lines = lines.len();
@@ -56,18 +57,12 @@ fn setup_log_rotation(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-pub struct AppState {
-    pub service: Mutex<AppService>,
-    pub history: Mutex<Option<Vec<TransactionRecord>>>,
-    pub settings: Mutex<Option<AppSettings>>,
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             // Setup log rotation. Panicking here is acceptable because logging is a critical feature.
-            if let Err(e) = setup_log_rotation(&app.handle()) {
+            if let Err(e) = setup_log_rotation(app.handle()) {
                 // We can't use the logger here yet, so we'll panic with a detailed error.
                 panic!("Failed to setup log rotation: {}", e);
             }
@@ -78,9 +73,19 @@ pub fn run() {
                 .app_data_dir()
                 .expect("Failed to find app data directory");
 
+            // Proactively clean up legacy instance_id files to prevent core security panics on upgrade
+            let legacy_id_in_data = data_dir.join("instance_id");
+            if legacy_id_in_data.exists() {
+                let _ = fs::remove_file(&legacy_id_in_data);
+            }
+
             let wallet_path = data_dir.join("wallet_data");
             if !wallet_path.exists() {
                 fs::create_dir_all(&wallet_path).expect("Failed to create wallet data directory");
+            }
+            let legacy_id_in_wallet = wallet_path.join("instance_id");
+            if legacy_id_in_wallet.exists() {
+                let _ = fs::remove_file(&legacy_id_in_wallet);
             }
             info!("Using wallet data path: {}", wallet_path.display());
 
@@ -88,6 +93,8 @@ pub fn run() {
             app.manage(AppState {
                 service: Mutex::new(service),
                 history: Mutex::new(None),
+                events: Mutex::new(None),
+                contacts: Mutex::new(None),
                 settings: Mutex::new(None),
             });
 
@@ -123,22 +130,32 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             profile_exists, list_profiles, create_profile, login, recover_wallet_and_set_new_password, logout,
-            unlock_session, lock_session, refresh_session_activity, // <--- NEU
-            generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic,
+            delete_profile, verify_profile_password,
+            handover_to_this_device,
+            unlock_session, lock_session, refresh_session_activity, is_session_active, // <--- NEU
+            generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic, get_local_instance_id, get_latest_logs,
             get_user_id, get_user_profile, get_total_balance_by_currency, get_voucher_summaries, get_voucher_details,
+            get_active_asset_classes,
             create_new_voucher, create_transfer_bundle, receive_bundle, save_transaction_record,
             get_transaction_history,
             get_app_settings, save_app_settings,
             update_user_profile,
-            frontend_log, log_to_backend,
+            log_to_backend,
             // Multi-signature commands
             create_signing_request_bundle, open_voucher_signing_request, create_detached_signature_response_bundle,
             process_and_attach_signature, get_allowed_signature_roles_from_standard, evaluate_signature_suitability,
             remove_voucher_signature,
             get_double_spend_conflicts, get_proof_of_double_spend, get_proof_id_for_voucher,
+            get_voucher_source_sender,
             check_reputation, set_conflict_local_override,
+            get_event_history,
+            parse_standard_toml,
             // Address Book
-            get_contacts, save_contact, delete_contact
+            get_contacts, save_contact, delete_contact,
+            // WalletSeal / Sync
+            get_seal_sync_status, get_seal_for_upload, acknowledge_seal_sync,
+            // Integrity
+            check_wallet_integrity, repair_wallet_integrity
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

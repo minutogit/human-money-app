@@ -1,5 +1,5 @@
 // src/utils/settingsUtils.ts
-import { invoke } from "@tauri-apps/api/core";
+import { settingsService } from "../services/settingsService";
 import { AppSettings } from "../types";
 import { logger } from "./log";
 
@@ -27,16 +27,13 @@ export async function updateLastUsedDirectory(
     const newDir = getDirectoryFromPath(fullPath);
     if (!newDir) return;
 
-    if (currentSettings.last_used_directory === newDir) return;
+    if (currentSettings.lastUsedDirectory === newDir) return;
 
     try {
-        const updatedSettings = { ...currentSettings, last_used_directory: newDir };
+        const updatedSettings = { ...currentSettings, lastUsedDirectory: newDir };
         
         await protectAction(async (password) => {
-            await invoke("save_app_settings", { 
-                settings: updatedSettings,
-                password 
-            });
+            await settingsService.saveSettings(updatedSettings, password || undefined);
             logger.info(`Last used directory updated to: ${newDir}`);
             return true;
         });

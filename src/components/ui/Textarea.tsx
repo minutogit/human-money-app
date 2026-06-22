@@ -1,7 +1,7 @@
 // src/components/ui/Textarea.tsx
 import React from 'react';
 
-interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {}
+type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement>;
 
 export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
     ({ className, ...props }, ref) => {
@@ -14,3 +14,4 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
         );
     }
 );
+Textarea.displayName = 'Textarea';

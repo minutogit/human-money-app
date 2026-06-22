@@ -1,0 +1,199 @@
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
+import { CreateVoucher } from '../CreateVoucher';
+import { invoke } from '@tauri-apps/api/core';
+import { VoucherStandardInfo } from '../../types';
+
+// Mock the Tauri API
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/plugin-log', () => ({
+  info: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock('../../utils/log', () => ({
+  logger: {
+    info: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock('../../context/SessionContext', () => ({
+  useSession: () => ({
+    protectAction: vi.fn((callback) => callback('test-password')),
+  }),
+}));
+
+// Mock scrollIntoView as it's not implemented in JSDOM
+window.HTMLElement.prototype.scrollIntoView = vi.fn();
+
+describe('CreateVoucher Component', () => {
+  const mockStandards: VoucherStandardInfo[] = [
+    {
+      id: 'freetaler_v1',
+      displayName: 'FreeTaler',
+      content: `name = "FreeTaler"
+issuer_name = "Human Money Project"
+unit = "Taler"
+abbreviation = "Taler"
+default_validity_duration = "P1Y"
+amount_decimal_places = 4`,
+    },
+  ];
+
+  const mockOnVoucherCreated = vi.fn();
+  const mockOnCancel = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (invoke as Mock).mockImplementation((cmd: string, _args?: Record<string, unknown>) => {
+      if (cmd === 'get_voucher_standards') {
+        return Promise.resolve(mockStandards);
+      }
+      if (cmd === 'get_user_profile') {
+        return Promise.resolve({
+          firstName: 'John',
+          lastName: 'Doe',
+          organization: 'Test Org',
+          community: 'Test Community',
+          gender: '1',
+          email: 'john@example.com',
+          phone: '123456789',
+          url: 'https://example.com',
+          coordinates: '51.16, 10.45',
+          serviceOffer: 'Test services',
+          needs: 'Test needs',
+          address: {
+            street: 'Test Street',
+            houseNumber: '123',
+            zipCode: '12345',
+            city: 'Test City',
+            country: 'Germany',
+          },
+        });
+      }
+      if (cmd === 'parse_standard_toml') {
+        // Return a mocked VoucherStandardDefinition based on the tomlContent
+        return Promise.resolve({
+          immutable: {
+            identity: { uuid: 'freetaler-uuid', name: 'FreeTaler', abbreviation: 'Taler' },
+            blueprint: { unit: 'Taler', primaryRedemptionType: 'goodsOrServices', collateralType: 'personalGuarantee' },
+            features: { allowPartialTransfers: true, balancesAreSummable: true, amountDecimalPlaces: 4, privacyMode: 'public', allowedTTypes: [] },
+            issuance: { validityDurationRange: [], issuanceMinimumValidityDuration: 'P1Y', additionalSignaturesRange: [], allowedSignatureRoles: [] },
+            customRules: {},
+          },
+          mutable: {
+            metadata: { issuerName: 'Human Money Project', keywords: [] },
+            appConfig: { defaultValidityDuration: 'P1Y' },
+            i18n: { descriptions: {}, footnotes: {}, collateralDescriptions: {} },
+          }
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+  });
+
+  it('renders voucher type dropdown and form fields', async () => {
+    render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    expect(await screen.findByLabelText(/Voucher Type/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Amount \(e\.g\., 60\)/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/First Name \(Required\)/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Last Name \(Required\)/i)).toBeInTheDocument();
+  });
+
+  it('loads and displays voucher standards', async () => {
+    render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    // After refactor, it shows displayName in the dropdown
+    expect(await screen.findByText(/FreeTaler/i)).toBeInTheDocument();
+  });
+
+  it('validates required fields when form is submitted without data', async () => {
+    render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    const createButton = await screen.findByRole('button', { name: /Create Voucher/i });
+    await userEvent.click(createButton);
+
+    // Should not show confirmation modal (validation failed)
+    await waitFor(() => {
+      expect(screen.queryByText(/Create Voucher\?/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('focuses the first invalid field when form is submitted without data', async () => {
+    render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    const createButton = await screen.findByRole('button', { name: /Create Voucher/i });
+    await userEvent.click(createButton);
+
+    // First required field is "Voucher Type"
+    const voucherTypeSelect = await screen.findByLabelText(/Voucher Type/i);
+    expect(document.activeElement).toBe(voucherTypeSelect);
+    expect(voucherTypeSelect).toHaveClass('border-rose-500');
+
+    // Other required fields should also be highlighted
+    const amountInput = await screen.findByLabelText(/Amount \(e\.g\., 60\)/i);
+    const firstNameInput = await screen.findByLabelText(/First Name \(Required\)/i);
+    const lastNameInput = await screen.findByLabelText(/Last Name \(Required\)/i);
+
+    expect(amountInput).toHaveClass('border-rose-500');
+    expect(firstNameInput).toHaveClass('border-rose-500');
+    expect(lastNameInput).toHaveClass('border-rose-500');
+
+    // Bottom error message should be visible with specific field names
+    const errorMessages = await screen.findAllByText(/Missing:/i);
+    expect(errorMessages.length).toBeGreaterThanOrEqual(1);
+
+    // scrollIntoView should have been called
+    expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('updates validity duration when standard is selected', async () => {
+    render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    // Wait for standards to load
+    const select = await screen.findByLabelText(/Voucher Type/i) as HTMLSelectElement;
+    
+    // Initial validity is 3 years
+    const validityInput = screen.getByDisplayValue('3') as HTMLInputElement;
+    expect(validityInput).toBeInTheDocument();
+
+    // Select the standard
+    await userEvent.selectOptions(select, 'freetaler_v1');
+
+    // It should update to 1 year (from the mock parsed standard)
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('1')).toBeInTheDocument();
+    });
+  });
+
+  it('does not display empty "Missing:" text when selecting a standard before validation', async () => {
+    render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    // Wait for standards to load
+    const select = await screen.findByLabelText(/Voucher Type/i) as HTMLSelectElement;
+    
+    // Select standard (sets errors.standard = false)
+    await userEvent.selectOptions(select, 'freetaler_v1');
+
+    // The "Missing:" text should NOT be visible
+    expect(screen.queryByText(/Missing:/i)).not.toBeInTheDocument();
+  });
+});

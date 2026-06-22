@@ -108,6 +108,24 @@ jobs:
           echo "date=$DATE" >> $GITHUB_OUTPUT
           echo "Version detected: $VERSION, Date: $DATE"
 
+      - name: Determine Release Metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" != refs/tags/* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "title=## 🚧 Nightly Development Build" >> $GITHUB_OUTPUT
+            echo "desc=This is an automated snapshot from the current development branch. **Use with caution.**" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref_name }}" == *-* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "title=## 🧪 Beta / Prerelease" >> $GITHUB_OUTPUT
+            echo "desc=This is a pre-release version for testing and feedback." >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "title=## 🎉 Official Stable Release" >> $GITHUB_OUTPUT
+            echo "desc=This is a stable release of the Human Money App." >> $GITHUB_OUTPUT
+          fi
+
       # Lädt ALLE Dateien von Linux, Mac und Windows herunter
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -136,13 +154,13 @@ jobs:
           draft: false
           target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: true
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          prerelease: ${{ steps.meta.outputs.is_prerelease == 'true' }}
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
           files: release-assets/**/*
           body: |
-            ${{ startsWith(github.ref, 'refs/tags/') && '## 🎉 Official Release' || '## 🚧 Nightly Development Build' }}
+            ${{ steps.meta.outputs.title }}
             
-            ${{ startsWith(github.ref, 'refs/tags/') && 'This is a stable release of the Human Money App.' || 'This is an automated snapshot from the current development branch. **Use with caution.**' }}
+            ${{ steps.meta.outputs.desc }}
             
             **Build Details:**
             - ℹ️ Version: `${{ env.APP_VERSION }}`

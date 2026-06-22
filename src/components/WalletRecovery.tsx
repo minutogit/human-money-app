@@ -1,12 +1,32 @@
 // src/components/WalletRecovery.tsx
 import { useState, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { info, error } from "@tauri-apps/plugin-log";
+import { useTranslation } from "react-i18next";
+import logo from "../assets/logo.png";
+import { profileService } from "../services/profileService";
+import { authService } from "../services/authService";
+import { AuthLayout } from "./AuthLayout";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
-import { Textarea } from "./ui/Textarea";
+import { Card } from "./ui/Card";
 import { ProfileInfo, MnemonicLanguage } from "../types";
+import { translateError } from "../utils/errorHelper";
+import { HelpIcon } from "./ui/HelpIcon";
+import {
+    Key,
+    Lock,
+    Fingerprint,
+    Languages,
+    BookOpen,
+    CheckCircle2,
+    ArrowLeft,
+    RefreshCw,
+    ShieldAlert,
+    Info,
+    User,
+    Grid,
+    Type
+} from "lucide-react";
 
 interface WalletRecoveryProps {
     onRecoverySuccess: () => void;
@@ -15,142 +35,106 @@ interface WalletRecoveryProps {
 type InputMode = "words" | "phrase";
 
 export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRecoveryProps) {
+    const { t } = useTranslation();
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
     const [selectedProfile, setSelectedProfile] = useState<string>("");
 
-    // Core state
     const [wordCount, setWordCount] = useState<12 | 24>(12);
     const [selectedLanguage, setSelectedLanguage] = useState<MnemonicLanguage>("english");
     const [mnemonicWords, setMnemonicWords] = useState<string[]>(Array(12).fill(""));
     const [inputMode, setInputMode] = useState<InputMode>("words");
 
-    // Form state
     const [passphrase, setPassphrase] = useState("");
     const [newPassword, setNewPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
 
-    // UI state
     const [feedbackMsg, setFeedbackMsg] = useState("");
+    const [feedbackType, setFeedbackType] = useState<"error" | "success" | "info" | null>(null);
+
+    const setFeedback = (msg: string, type: "error" | "success" | "info" | null) => {
+        setFeedbackMsg(msg);
+        setFeedbackType(type);
+    };
     const [isLoading, setIsLoading] = useState(false);
     const [isValidMnemonic, setIsValidMnemonic] = useState(false);
 
-    // State and refs for the 'phrase' input mode
     const [rawPhrase, setRawPhrase] = useState("");
     const [bip39Wordlist, setBip39Wordlist] = useState<string[]>([]);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const prevRawPhraseRef = useRef("");
 
-    // Log when component is displayed
     useEffect(() => {
         logger.info("WalletRecovery component displayed");
-
-        // Detect system language for smart default
         const systemLang = navigator.language || "en";
         let detectedLanguage: MnemonicLanguage = "english";
-        if (systemLang.startsWith("de")) {
-            detectedLanguage = "german";
-        } else if (systemLang.startsWith("es")) {
-            detectedLanguage = "spanish";
-        } else if (systemLang.startsWith("fr")) {
-            detectedLanguage = "french";
-        } else if (systemLang.startsWith("it")) {
-            detectedLanguage = "italian";
-        } else if (systemLang.startsWith("ja")) {
-            detectedLanguage = "japanese";
-        } else if (systemLang.startsWith("ko")) {
-            detectedLanguage = "korean";
-        } else if (systemLang.startsWith("pt")) {
-            detectedLanguage = "portuguese";
-        } else if (systemLang.startsWith("cs")) {
-            detectedLanguage = "czech";
-        } else if (systemLang.startsWith("zh-CN")) {
-            detectedLanguage = "chineseSimplified";
-        } else if (systemLang.startsWith("zh-TW")) {
-            detectedLanguage = "chineseTraditional";
+        const langMap: Record<string, MnemonicLanguage> = {
+            "de": "german", "es": "spanish", "fr": "french", "it": "italian",
+            "ja": "japanese", "ko": "korean", "pt": "portuguese", "cs": "czech",
+            "zh-CN": "chineseSimplified", "zh-TW": "chineseTraditional"
+        };
+        for (const [key, val] of Object.entries(langMap)) {
+            if (systemLang.startsWith(key)) { detectedLanguage = val; break; }
         }
         setSelectedLanguage(detectedLanguage);
 
         async function fetchProfiles() {
             setIsLoading(true);
             try {
-                const availableProfiles = await invoke<ProfileInfo[]>("list_profiles");
+                const availableProfiles = await authService.listProfiles();
                 setProfiles(availableProfiles);
-                if (availableProfiles.length > 0) {
-                    setSelectedProfile(availableProfiles[0].folder_name);
-                } else {
-                    setFeedbackMsg("Error: No profiles found to recover.");
-                }
-                info(`Frontend: Found ${availableProfiles.length} profiles for recovery selection.`);
+                if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folderName);
+                else                 setFeedback(t('auth.noProfilesToRecover'), "error");
             } catch (e) {
-                const errorMsg = `Failed to fetch profiles: ${e}`;
-                setFeedbackMsg(`Error: ${errorMsg}`);
-                error(`Frontend: ${errorMsg}`);
+                setFeedback(`${t('profile.errorPrefix')}: ${translateError(e, t)}`, "error");
             } finally {
                 setIsLoading(false);
             }
         }
         fetchProfiles();
-    }, []);
+    }, [t]);
 
-    // Effect 1: Adjust mnemonicWords array size when wordCount changes
     useEffect(() => {
-        const currentWords = mnemonicWords.join(" ").split(" ").filter(Boolean);
-        const newMnemonicArray = Array(wordCount).fill("").map((_, i) => currentWords[i] || "");
-        setMnemonicWords(newMnemonicArray);
+        setMnemonicWords(prev => {
+            const currentWords = prev.join(" ").split(" ").filter(Boolean);
+            return Array(wordCount).fill("").map((_, i) => currentWords[i] || "");
+        });
     }, [wordCount]);
 
-    // Effect 2: Fetch BIP-39 wordlist on component mount
     useEffect(() => {
         async function fetchWordlist() {
             try {
-                const list = await invoke<string[]>("get_bip39_wordlist", { language: selectedLanguage });
+                const list = await profileService.getWordlist(selectedLanguage);
                 setBip39Wordlist(list);
-                info(`Successfully fetched BIP-39 wordlist for ${selectedLanguage} from backend.`);
             } catch (e) {
-                error(`Failed to fetch BIP-39 wordlist: ${e}`);
+                logger.error(`Failed to fetch BIP-39 wordlist: ${translateError(e, t)}`);
             }
         }
         fetchWordlist();
-    }, [selectedLanguage]);
+    }, [selectedLanguage, t]);
 
-    // Effect 3: Process the raw text from the textarea ('phrase' mode)
     useEffect(() => {
         if (inputMode !== 'phrase') return;
-
         const prevPhrase = prevRawPhraseRef.current;
-
-        // Step 1: Check if the raw input contains "dirty" characters that need aggressive cleaning.
         const needsCleaning = /[0-9]+\.|\n|\r/.test(rawPhrase);
 
         if (needsCleaning) {
             const singleLine = rawPhrase.replace(/(\r\n|\n|\r)/gm, " ");
             const cleaned = singleLine.replace(/[0-9]+\./g, '').trim().replace(/\s+/g, ' ').toLowerCase();
-            // If cleaning is needed and changes the string, update the rawPhrase state and stop.
-            // The effect will re-run with the clean text.
-            if (cleaned !== rawPhrase) {
-                setRawPhrase(cleaned);
-                return;
-            }
+            if (cleaned !== rawPhrase) { setRawPhrase(cleaned); return; }
         }
 
-        // Step 2: Derive words from the (now clean or naturally typed) phrase for state updates.
         const words = rawPhrase.trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
         setMnemonicWords(Array(wordCount).fill("").map((_, i) => words[i] || ""));
-        if (words.length === 12 || words.length === 24) {
-            setWordCount(words.length);
-        }
+        if (words.length === 12 || words.length === 24) setWordCount(words.length);
 
-        // Step 3: Handle auto-completion, which now runs on clean text.
         const lastWord = words[words.length - 1];
         if (rawPhrase.length > prevPhrase.length && lastWord && !rawPhrase.endsWith(' ') && bip39Wordlist.length > 0) {
             const filteredSuggestions = bip39Wordlist.filter(w => w.startsWith(lastWord.toLowerCase()));
-
             if (filteredSuggestions.length === 1 && filteredSuggestions[0] !== lastWord) {
                 const suggestion = filteredSuggestions[0];
                 const newWords = [...words];
                 newWords[words.length - 1] = suggestion;
                 const newPhrase = newWords.join(' ');
-
                 setRawPhrase(newPhrase);
                 setTimeout(() => {
                     const el = textareaRef.current;
@@ -165,232 +149,229 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
         prevRawPhraseRef.current = rawPhrase;
     }, [rawPhrase, inputMode, bip39Wordlist, wordCount]);
 
-    // Effect 4: Validate the mnemonic against the backend whenever it changes
     useEffect(() => {
         const validate = async () => {
-            // Only validate if there's a reasonable number of non-empty words
             const nonEmptyWords = mnemonicWords.filter(Boolean);
             if (nonEmptyWords.length > 0 && mnemonicWords.every(word => word && word.length > 1)) {
                 const fullMnemonic = mnemonicWords.join(" ");
                 try {
-                    await invoke("validate_mnemonic", { mnemonic: fullMnemonic, language: selectedLanguage });
+                    await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
                     setIsValidMnemonic(true);
-                    setFeedbackMsg("Seed phrase is valid.");
+                    setFeedback(t('auth.seedPhraseValid'), "success");
                 } catch (e) {
                     setIsValidMnemonic(false);
-                    setFeedbackMsg("Error: Seed phrase is not valid.");
+                    setFeedback(`${t('profile.errorPrefix')}: ${translateError(e, t)}`, "error");
                 }
             } else {
                 setIsValidMnemonic(false);
-                if (nonEmptyWords.length > 0) {
-                    setFeedbackMsg("Awaiting valid seed phrase...");
-                } else {
-                    setFeedbackMsg("");
-                }
+                setFeedback(nonEmptyWords.length > 0 ? t('auth.awaitingSequence') : "", nonEmptyWords.length > 0 ? "info" : null);
             }
         };
         validate();
-    }, [mnemonicWords, selectedLanguage]);
+    }, [mnemonicWords, selectedLanguage, wordCount, t]);
 
-    // Handler for the individual input fields ('words' mode)
     const handleWordChange = (index: number, value: string) => {
         const cleanedText = value.replace(/[0-9]+\.\s*/g, '');
         const pastedWords = cleanedText.trim().replace(/\s+/g, ' ').split(' ');
-
         const newWords = [...mnemonicWords];
         for (let i = 0; i < pastedWords.length; i++) {
             const targetIndex = index + i;
-            if (targetIndex < wordCount) {
-                newWords[targetIndex] = pastedWords[i].toLowerCase().trim();
-            }
+            if (targetIndex < wordCount) newWords[targetIndex] = pastedWords[i].toLowerCase().trim();
         }
         setMnemonicWords(newWords);
-
         if (pastedWords.length > 1) {
             const nextIndex = index + pastedWords.length;
-            if (nextIndex < wordCount) {
-                document.getElementById(`word-${nextIndex}`)?.focus();
-            }
+            if (nextIndex < wordCount) document.getElementById(`word-${nextIndex}`)?.focus();
         }
     };
 
-    // Handler to toggle between input modes
     const handleInputModeToggle = () => {
         const newMode = inputMode === "words" ? "phrase" : "words";
-        if (newMode === 'phrase') {
-            setRawPhrase(mnemonicWords.join(" ").trim());
-        }
+        if (newMode === 'phrase') setRawPhrase(mnemonicWords.join(" ").trim());
         setInputMode(newMode);
     };
 
-    // Handler for the final form submission
     async function handleRecovery() {
-        const el = textareaRef.current;
-        if (el) el.setSelectionRange(el.value.length, el.value.length);
-
-        if (!selectedProfile) {
-            setFeedbackMsg("Error: Please select a profile to recover.");
-            return;
-        }
-        if (!isValidMnemonic) {
-            setFeedbackMsg("Error: Please enter a valid seed phrase.");
-            return;
-        }
-        if (newPassword !== confirmPassword) {
-            setFeedbackMsg("Error: The passwords do not match.");
-            return;
-        }
-        if (newPassword.length < 8) {
-            setFeedbackMsg("Error: Password must be at least 8 characters long.");
-            return;
-        }
+        if (!selectedProfile) { setFeedback(t('auth.selectProfileToRecover'), "error"); return; }
+        if (!isValidMnemonic) { setFeedback(t('auth.seedPhraseInvalid'), "error"); return; }
+        if (newPassword !== confirmPassword) { setFeedback(t('auth.passwordsDontMatch'), "error"); return; }
+        if (newPassword.length < 8) { setFeedback(t('auth.passwordMinLength'), "error"); return; }
 
         setIsLoading(true);
-        setFeedbackMsg("Recovering wallet...");
+        setFeedback(t('auth.recoveringWallet'), "info");
         try {
-            await invoke("recover_wallet_and_set_new_password", {
+            const localInstanceId = await authService.getLocalInstanceId();
+            await profileService.recoverWallet({
                 folderName: selectedProfile,
                 mnemonic: mnemonicWords.join(" "),
                 passphrase: passphrase || undefined,
                 newPassword,
+                localInstanceId,
                 language: selectedLanguage,
             });
-            info("Frontend: Wallet successfully recovered. Logging in.");
             onRecoverySuccess();
         } catch (e) {
-            setFeedbackMsg(`Error recovering wallet: ${e}`);
-            error(`Frontend: Wallet recovery failed: ${e}`);
+            setFeedback(`${t('auth.errorRecoveringWallet')}: ${translateError(e, t)}`, "error");
         } finally {
             setIsLoading(false);
         }
     }
 
-    const feedbackClass = feedbackMsg.includes("Error") ? "text-theme-error" : (isValidMnemonic ? "text-theme-success" : "text-theme-light");
-
     return (
-        <div className="w-full h-full flex flex-col items-center justify-center">
-            <div className="w-full max-w-4xl bg-bg-card shadow-2xl rounded-2xl p-8 space-y-6 border border-theme-subtle">
-                <div className="text-center">
-                    <h1 className="text-4xl font-extrabold text-theme-primary">Human Money App</h1>
-                    <p className="text-lg text-theme-light mt-1">Recover Wallet</p>
+        <AuthLayout maxWidth="max-w-3xl">
+            <div className="flex items-center justify-center gap-3 sm:gap-6">
+                <img
+                    src={logo}
+                    alt="Human Money Logo"
+                    className="w-12 h-12 sm:w-20 sm:h-20 object-contain drop-shadow-sm"
+                />
+                <div className="text-left space-y-0 sm:space-y-0.5">
+                    <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
+                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">{t('auth.recoverWallet')}</p>
                 </div>
+            </div>
 
-                <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); handleRecovery(); }}>
-                    {profiles.length > 0 && (
-                         <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">1. Profile to Recover</label>
-                            <div className="max-w-md">
+            <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); handleRecovery(); }}>
+                    <Card header={<div className="flex items-center gap-2"><User size={14}/><label htmlFor="profile-select" className="font-black text-[10px] uppercase tracking-widest cursor-pointer">{t('profile.selectProfile')}</label></div>}>
+                        <div className="space-y-4">
+                            {profiles.length > 0 ? (
                                 <select
+                                    id="profile-select"
                                     value={selectedProfile}
                                     onChange={(e) => setSelectedProfile(e.target.value)}
-                                    className="w-full px-3 py-2 border rounded-md bg-bg-input border-theme-subtle text-theme-light focus:ring-2 focus:ring-theme-primary"
+                                    data-testid="profile-select"
+                                    className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3.5 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
                                 >
                                     {profiles.map((profile) => (
-                                        <option key={profile.folder_name} value={profile.folder_name}>
-                                            {profile.profile_name}
+                                        <option key={profile.folderName} value={profile.folderName}>
+                                            {profile.profileName}
                                         </option>
                                     ))}
                                 </select>
-                            </div>
-                        </div>
-                    )}
-
-                    <div>
-                        <div className="flex flex-col gap-3 mb-2">
-                            <div className="flex justify-between items-center">
-                                <label className="text-sm font-semibold text-theme-secondary">2. Your Seed Phrase</label>
-                                <select 
-                                    value={selectedLanguage} 
-                                    onChange={(e) => setSelectedLanguage(e.target.value as MnemonicLanguage)} 
-                                    className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary"
-                                >
-                                    <option value="english">English</option>
-                                    <option value="german">Deutsch</option>
-                                    <option value="spanish">Español</option>
-                                    <option value="french">Français</option>
-                                    <option value="italian">Italiano</option>
-                                    <option value="japanese">日本語</option>
-                                    <option value="korean">한국어</option>
-                                    <option value="portuguese">Português</option>
-                                    <option value="czech">Čeština</option>
-                                    <option value="chineseSimplified">简体中文</option>
-                                    <option value="chineseTraditional">繁體中文</option>
-                                </select>
-                            </div>
-                            <div className="flex justify-between items-center">
-                                <div className="flex items-center gap-4">
-                                    <button type="button" onClick={handleInputModeToggle} className="text-xs text-theme-primary hover:underline">
-                                        {inputMode === "words" ? "Enter full phrase" : "Use single fields"}
-                                    </button>
+                            ) : (
+                                <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3">
+                                    <ShieldAlert size={20} className="text-rose-500" />
+                                    <p className="text-xs font-bold text-rose-800">{t('auth.noProfilesToRecover')}</p>
                                 </div>
-                                <select value={wordCount} onChange={(e) => setWordCount(Number(e.target.value) as 12 | 24)} className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary">
-                                    <option value={12}>12 Words</option>
-                                    <option value={24}>24 Words</option>
-                                </select>
+                            )}
+                        </div>
+                    </Card>
+
+                    <Card header={
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <Key size={14}/>
+                                <span className="font-black text-[10px] uppercase tracking-widest">{t('auth.enterMasterKey')}</span>
+                                <HelpIcon topic="mnemonic" size={12} />
                             </div>
-                        </div>
-
-                        {inputMode === 'words' ? (
-                            <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-                                {mnemonicWords.map((word, index) => (
-                                    <div key={index} className="relative">
-                                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-theme-light">{index + 1}.</span>
-                                        <Input
-                                            id={`word-${index}`}
-                                            type="text"
-                                            value={word}
-                                            onChange={(e) => handleWordChange(index, e.target.value)}
-                                            className="pl-6 font-mono"
-                                            autoComplete="off"
-                                        />
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="relative">
-                                <Textarea
-                                    ref={textareaRef}
-                                    id="phrase-input"
-                                    value={rawPhrase}
-                                    onChange={(e) => { setRawPhrase(e.target.value); }}
-                                    placeholder="Enter your 12 or 24 word seed phrase here..."
-                                    rows={4}
-                                    className="font-mono"
-                                />
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="border-t border-theme-light-border pt-5 space-y-5">
-                        <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">3. Optional Passphrase</label>
-                            <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Enter if you used one during profile creation" />
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">4. New Password</label>
-                            <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Minimum 8 characters" required />
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">5. Confirm New Password</label>
-                            <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repeat your new password" required />
-                        </div>
-                    </div>
-
-                    <div className="pt-3 text-center">
-                        {feedbackMsg && <p className={`text-center text-sm font-medium mb-4 ${feedbackClass}`}>{feedbackMsg}</p>}
-                        <div className="flex flex-col items-center gap-4">
-                            <Button type="submit" disabled={isLoading || !isValidMnemonic || profiles.length === 0}>
-                                {isLoading ? "Recovering..." : "Recover Wallet & Login"}
-                            </Button>
-                            <button type="button" onClick={onSwitchToLogin} className="text-sm text-theme-primary hover:underline">
-                                Back to Login
+                            <button type="button" onClick={handleInputModeToggle} className="px-3 py-1 bg-theme-primary/5 border border-theme-primary/10 rounded-full text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-2">
+                                {inputMode === "words" ? <Type size={10}/> : <Grid size={10}/>}
+                                {inputMode === "words" ? t('auth.enterFullPhrase') : t('auth.useSingleFields')}
                             </button>
                         </div>
+                    }>
+                        <div className="space-y-6">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Languages size={10}/> {t('common.dictionary')}</label>
+                                    <select value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value as MnemonicLanguage)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-2.5 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
+                                        <option value="english">English</option>
+                                        <option value="german">Deutsch</option>
+                                        <option value="spanish">Español</option>
+                                        <option value="french">Français</option>
+                                        <option value="italian">Italiano</option>
+                                        <option value="japanese">日本語</option>
+                                        <option value="korean">한국어</option>
+                                        <option value="portuguese">Português</option>
+                                        <option value="czech">Čeština</option>
+                                        <option value="chineseSimplified">简体中文</option>
+                                        <option value="chineseTraditional">繁體中文</option>
+                                    </select>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><BookOpen size={10}/> {t('auth.sequenceDepth')}</label>
+                                    <select value={wordCount} onChange={(e) => setWordCount(parseInt(e.target.value, 10) as 12 | 24)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-2.5 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
+                                        <option value={12}>{t('profile.wordCount12')}</option>
+                                        <option value={24}>{t('profile.wordCount24')}</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            {inputMode === 'words' ? (
+                                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                                    {mnemonicWords.map((word, index) => (
+                                        <div key={index} className="relative group">
+                                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[9px] font-black text-theme-primary/30 w-4">{index + 1}</span>
+                                            <Input
+                                                id={`word-${index}`}
+                                                data-testid={`word-input-${index}`}
+                                                value={word}
+                                                onChange={(e) => handleWordChange(index, e.target.value)}
+                                                className="pl-7 font-mono font-bold text-xs py-2.5 group-hover:border-theme-primary/30"
+                                                autoComplete="off"
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    <textarea
+                                        ref={textareaRef}
+                                        value={rawPhrase}
+                                        onChange={(e) => setRawPhrase(e.target.value)}
+                                        placeholder={t('auth.seedPhrasePlaceholder')}
+                                        className="w-full h-32 px-4 py-3 bg-white border border-theme-subtle rounded-2xl text-theme-primary font-mono text-sm focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all"
+                                        rows={4}
+                                    />
+                                    <p className="text-[9px] font-bold text-theme-light italic flex items-center gap-1.5"><Info size={10}/> {t('auth.autoCleaned')}</p>
+                                </div>
+                            )}
+
+                            <div className="space-y-2 pt-4 border-t border-theme-primary/10">
+                                <div className="flex items-center gap-1.5">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1">
+                                        <Lock size={10}/> 
+                                        <span>{t('auth.passphraseIfUsed')}</span>
+                                    </label>
+                                    <HelpIcon topic="passphrase" size={12} />
+                                </div>
+                                <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder={t('auth.passphrasePlaceholder')} />
+                            </div>
+                        </div>
+                    </Card>
+
+                    <Card header={<div className="flex items-center gap-2"><Lock size={14}/><span className="font-black text-[10px] uppercase tracking-widest">{t('auth.reEncryptionCredentials')}</span></div>}>
+                        <div className="space-y-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('auth.newWalletPassword')}</label>
+                                    <Input type="password" value={newPassword} onChange={(e) => { setNewPassword(e.target.value); if (feedbackType === 'error') setFeedback("", null); }} placeholder={t('auth.passwordMinChars')} onFocus={() => setFeedback("", null)} />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('auth.confirmPassword')}</label>
+                                    <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder={t('auth.repeatPassword')} />
+                                </div>
+                            </div>
+                        </div>
+                    </Card>
+
+                    <div className="flex flex-col items-center gap-4 pt-4">
+                        <Button type="submit" disabled={isLoading || !isValidMnemonic || profiles.length === 0} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
+                            {isLoading ? <RefreshCw className="animate-spin" size={24} /> : <Fingerprint size={24} />}
+                            {isLoading ? t('auth.loadingWallet') : t('auth.recoverWalletAndLogin')}
+                        </Button>
+                        <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="w-full py-4 rounded-2xl shadow-sm gap-2">
+                            <ArrowLeft size={18} /> {t('auth.backToLogin')}
+                        </Button>
                     </div>
+
+                    {feedbackMsg && (
+                        <div data-testid="feedback-message" className={`p-4 rounded-2xl flex items-center gap-3 border animate-in slide-in-from-bottom-2 ${feedbackType === 'error' ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
+                            {feedbackType === 'error' ? <ShieldAlert size={18} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={18} className="text-emerald-500 shrink-0" />}
+                            <p className="text-xs font-bold leading-tight">{feedbackMsg}</p>
+                        </div>
+                    )}
                 </form>
-            </div>
-        </div>
+        </AuthLayout>
     );
 }

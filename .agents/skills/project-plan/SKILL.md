@@ -3,34 +3,45 @@ name: project-plan
 description: 4-phase MVP project plan for the Human Money App, from core transaction to full-scale deployment.
 ---
 
-# Human Money App — Project Plan
+# Human Money App MVP - Projektplan
 
-## Phase 1: Core Transaction (End-to-End)
+Dieser Plan strukturiert die Entwicklung der Human Money Desktop-App. Er priorisiert den Nutzwert und baut inkrementell auf der `human_money_core` auf.
 
-**Goal:** Ensure the basic ability: Create voucher → Send → Receive.
+## ✅ Phase 1: Die Kern-Transaktion (Abgeschlossen)
+**Ziel:** Grundlegende Funktionsfähigkeit: Erstellen, Senden und Empfangen von Gutscheinen.
 
-1. **UI Foundation & Responsiveness** — Tailwind CSS layout, mobile-ready from start ✅
-2. **Voucher Creation** — `CreateVoucher.tsx` + `create_new_voucher` command ✅
-3. **Send & Receive** — `SendView.tsx` + `ReceiveView.tsx` with QR/file transfer ✅
+- [x] **UI-Grundgerüst:** Responsive Layout mit React 19, Tailwind CSS v4 und Vite.
+- [x] **Gutschein-Erstellung:** `CreateVoucher.tsx` integriert mit `create_new_voucher`.
+- [x] **Transaktions-Kern:** `SendView.tsx` und `ReceiveView.tsx` für Transfer-Bundles.
+- [x] **Multi-Profil & Auth:** Login-System mit Mnemonic-Wiederherstellung und Passwort-Schutz.
 
-## Phase 2: Usability & Management
+## ✅ Phase 2: Verwaltung & Sicherheit (Abgeschlossen)
+**Ziel:** Die App nutzbar und sicher machen.
 
-**Goal:** Make the app actually usable.
+- [x] **Dashboard & Details:** Übersichtliche Liste (`WalletView`) und detaillierte Gutscheinansicht (`VoucherDetailsView`).
+- [x] **Kontaktverwaltung:** `AddressBook.tsx` zur Speicherung von Empfängern (DID -> Name).
+- [x] **Sicherheitshärtung:**
+    - [x] **Wallet Seal & Device Binding:** Schutz vor Klonen und Rollbacks.
+    - [x] **Integrity Reports:** Automatischer Check auf Double-Spending/Forks beim Login.
+    - [x] **Session Management:** "Passwort merken" mit Sliding-Expiration.
+- [x] **Aktivitäten-Historie:** `Activities.tsx` zur Anzeige vergangener Transaktionen (Event-Sourcing).
 
-1. **Enhanced Voucher Overview** — Dashboard with summaries + `VoucherDetailsView.tsx` ✅
-2. **Contact Management (Address Book)** — Simple UI for contacts (Name + User-ID), stored via `save/load_encrypted_data` 🔜 (APP-001)
+## 🏃 Phase 3: Vertrauensnetz & Bürgschaften
+**Ziel:** Implementierung des Guarantor-Flows und sozialer Validierung.
 
-## Phase 3: Extended Functionality
+- [ ] **Bürge-Funktionalität (Guarantor-Flow):**
+    - [ ] Signaturanfragen empfangen und anzeigen.
+    - [ ] Detached Signatures erstellen (`create_detached_signature_response_bundle`).
+    - [ ] Signaturen an bestehende Gutscheine anhängen (`process_and_attach_signature`).
+- [ ] **Erweiterte Profil-Metadaten:** Integration von `PublicProfile` (Name, Organisation, Community) zur besseren Identifizierung von Bürgen.
+- [ ] **Standard-Explorer:** Ansicht der verfügbaren Gutschein-Standards (Minuto, FreeTaler) und deren Regeln.
 
-1. **Guarantor Flow** — Signing request UI + detached signature response ⬜
-2. **Trust Integration** — Trust badges, WoT display (depends on WOT specs + CORE-001) ⬜
+## 📅 Phase 4: Politur & Skalierbarkeit
+**Ziel:** Vorbereitung auf den produktiven Einsatz.
 
-## Phase 4: Scaling & Polish
-
-1. **Internationalization (i18n)** — `i18next` integration ⬜
-2. **Dynamic Voucher Standard UI** — Form fields generated from TOML definition ⬜
-3. **Performance** — Optional SQLite, pagination, lazy loading ⬜
-
-## Current Status
-
-Phases 1 is complete. Phase 2 is in progress (address book is the priority). See `STATUS.md` for current task tracking.
+- [ ] **Internationalisierung (i18n):** Integration von `i18next` für Multi-Language Support.
+- [ ] **Dynamisches UI für Standards:** Dynamische Formular-Generierung basierend auf TOML-Standarddefinitionen.
+- [ ] **Performance-Optimierung:** 
+    - [ ] Lazy Loading für große Historien.
+    - [ ] Optimierung der IPC-Payloads (DTO-Pattern Verfeinerung).
+- [ ] **Backup-Strategien:** Geführte Export-Workflows für Wallet-Daten und Mnemonic.

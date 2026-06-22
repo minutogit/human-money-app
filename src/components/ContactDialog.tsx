@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Contact, PublicProfile } from '../types';
 import Avatar from 'boring-avatars';
+import { translateError } from '../utils/errorHelper';
 
 interface ContactDialogProps {
     isOpen: boolean;
@@ -19,6 +21,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     initialProfile,
     initialDid
 }) => {
+    const { t } = useTranslation();
     const [did, setDid] = useState(initialDid || '');
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
@@ -27,20 +30,22 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [notes, setNotes] = useState('');
     const [newTag, setNewTag] = useState('');
     const [isSaving, setIsSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
-    const availableTags = ["Friends", "Business", "Favorites", "Trusted"];
+    const predefinedTags = ["Friends", "Business", "Favorites", "Trusted"];
+    const availableTags = Array.from(new Set([...predefinedTags, ...tags]));
 
     useEffect(() => {
         if (existingContact) {
             setDid(existingContact.did);
-            setFirstName(existingContact.profile.first_name || '');
-            setLastName(existingContact.profile.last_name || '');
+            setFirstName(existingContact.profile.firstName || '');
+            setLastName(existingContact.profile.lastName || '');
             setOrganization(existingContact.profile.organization || '');
             setTags(existingContact.tags);
             setNotes(existingContact.notes || '');
         } else if (initialProfile) {
-            setFirstName(initialProfile.first_name || '');
-            setLastName(initialProfile.last_name || '');
+            setFirstName(initialProfile.firstName || '');
+            setLastName(initialProfile.lastName || '');
             setOrganization(initialProfile.organization || '');
             if (initialDid) setDid(initialDid);
         } else {
@@ -60,23 +65,25 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         if (!did.trim()) return;
         
         setIsSaving(true);
+        setError(null);
         try {
             const contact: Contact = {
                 did: did.trim(),
                 profile: {
                     id: did.trim(),
-                    first_name: firstName.trim() || undefined,
-                    last_name: lastName.trim() || undefined,
+                    firstName: firstName.trim() || undefined,
+                    lastName: lastName.trim() || undefined,
                     organization: organization.trim() || undefined,
                 },
                 tags,
                 notes: notes.trim() || undefined,
-                added_at: existingContact?.added_at || new Date().toISOString(),
+                addedAt: existingContact?.addedAt || new Date().toISOString(),
             };
             await onSave(contact);
             onClose();
-        } catch (error) {
-            console.error("Failed to save contact:", error);
+        } catch (e: unknown) {
+            console.error("Failed to save contact:", e);
+            setError(translateError(e, t));
         } finally {
             setIsSaving(false);
         }
@@ -90,8 +97,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         }
     };
 
-    const handleAddNewTag = (e: React.FormEvent) => {
-        e.preventDefault();
+    const handleAddNewTag = () => {
         if (newTag.trim() && !tags.includes(newTag.trim())) {
             setTags([...tags, newTag.trim()]);
             setNewTag('');
@@ -112,63 +118,63 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                     </div>
                     <div>
                         <h2 className="text-xl font-extrabold text-theme-secondary">
-                            {existingContact ? 'Edit Contact' : 'Add New Contact'}
+                            {existingContact ? t('contacts.editContact') : t('contacts.addNewContact')}
                         </h2>
                         <p className="text-theme-light text-sm font-mono truncate max-w-[280px]">
-                            {did || 'Enter DID below'}
+                            {did || t('contacts.enterDidBelow')}
                         </p>
                     </div>
                 </div>
 
                 <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
                     <div>
-                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">DID (Address)</label>
+                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.userId')}</label>
                         <input
                             type="text"
                             value={did}
                             onChange={(e) => setDid(e.target.value)}
                             disabled={!!existingContact}
-                            placeholder="did:key:z..."
+                            placeholder={t('contacts.didPlaceholder')}
                             className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 disabled:opacity-50 font-mono text-sm shadow-sm"
                         />
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">First Name</label>
+                            <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.firstName')}</label>
                             <input
                                 type="text"
                                 value={firstName}
                                 onChange={(e) => setFirstName(e.target.value)}
-                                placeholder="e.g. Alice"
+                                placeholder={t('contacts.firstNamePlaceholder')}
                                 className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm"
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">Last Name</label>
+                            <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.lastName')}</label>
                             <input
                                 type="text"
                                 value={lastName}
                                 onChange={(e) => setLastName(e.target.value)}
-                                placeholder="e.g. Smith"
+                                placeholder={t('contacts.lastNamePlaceholder')}
                                 className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm"
                             />
                         </div>
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">Organization / Community</label>
+                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.organizationCommunity')}</label>
                         <input
                             type="text"
                             value={organization}
                             onChange={(e) => setOrganization(e.target.value)}
-                            placeholder="e.g. Green Valley Inc."
+                            placeholder={t('contacts.organizationPlaceholder')}
                             className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm"
                         />
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">Tags</label>
+                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.tags')}</label>
                         <div className="flex flex-wrap gap-2 mb-3">
                             {availableTags.map(tag => (
                                 <button
@@ -184,35 +190,47 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                 </button>
                             ))}
                         </div>
-                        <form onSubmit={handleAddNewTag} className="flex gap-2">
+                        <div className="flex gap-2">
                             <input
                                 type="text"
                                 value={newTag}
                                 onChange={(e) => setNewTag(e.target.value)}
-                                placeholder="Add custom tag..."
+                                placeholder={t('contacts.addCustomTagPlaceholder')}
                                 className="flex-1 bg-white border border-theme-subtle rounded-lg px-3 py-1.5 text-xs text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-1 focus:ring-theme-primary/30 shadow-sm"
                             />
                             <button
-                                type="submit"
+                                type="button"
+                                onClick={handleAddNewTag}
                                 className="bg-theme-light hover:bg-theme-secondary-accent text-white p-1.5 rounded-lg transition-colors shadow-sm"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                                 </svg>
                             </button>
-                        </form>
+                        </div>
                     </div>
 
                     <div>
-                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">Notes</label>
+                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.notes')}</label>
                         <textarea
                             value={notes}
                             onChange={(e) => setNotes(e.target.value)}
-                            placeholder="Internal notes about this contact..."
+                            placeholder={t('contacts.notesPlaceholder')}
                             rows={3}
                             className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 resize-none shadow-sm"
                         />
                     </div>
+
+                    {error && (
+                        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-3 animate-in slide-in-from-top-1">
+                            <div className="bg-rose-500 rounded-full p-1 text-white shrink-0 mt-0.5">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                </svg>
+                            </div>
+                            <p className="text-xs font-bold text-rose-600 leading-tight">{error}</p>
+                        </div>
+                    )}
                 </div>
 
                 <div className="p-6 bg-white border-t border-theme-subtle flex gap-3">
@@ -220,14 +238,14 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                         onClick={onClose}
                         className="flex-1 py-3 px-4 rounded-xl border border-theme-subtle text-theme-light font-bold hover:bg-bg-app transition-colors"
                     >
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                     <button
                         onClick={handleSave}
                         disabled={isSaving || !did.trim()}
                         className="flex-[2] py-3 px-4 rounded-xl bg-theme-primary text-white font-bold hover:bg-theme-accent disabled:opacity-50 disabled:hover:bg-theme-primary transition-all shadow-lg shadow-theme-primary/20 active:scale-[0.98]"
                     >
-                        {isSaving ? 'Saving...' : (existingContact ? 'Update Contact' : 'Save Contact')}
+                        {isSaving ? t('contacts.saving') : (existingContact ? t('contacts.updateContact') : t('contacts.saveContact'))}
                     </button>
                 </div>
             </div>

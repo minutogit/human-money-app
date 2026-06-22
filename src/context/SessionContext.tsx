@@ -1,14 +1,28 @@
 // src/context/SessionContext.tsx
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { authService } from '../services/authService';
+import { settingsService } from '../services/settingsService';
 import { logger } from '../utils/log';
 import { AuthModal } from '../components/ui/AuthModal';
-import { AppSettings } from '../types';
+// AppSettings import removed as unused
 
-interface SessionContextType {
+import { startSealSyncLoop, stopSealSyncLoop } from '../utils/sealSync';
+import { useWindowTitleSync } from '../hooks/useWindowTitleSync';
+import { useIntegrityCheck } from '../hooks/useIntegrityCheck';
+import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
+
+export interface SessionContextType {
     protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>;
     isSessionActive: boolean;
-    notifyLogin: () => void;
+    profileName: string;
+    setProfileName: (name: string) => void;
+    notifyLogin: (name?: string) => void;
+    notifyLogout: () => void;
+    isForkLocked: boolean;
+    isRecoveryRequired: boolean;
+    integrityReport: import('../types').IntegrityReport | null;
+    checkIntegrity: () => Promise<void>;
+    clearLocks: () => void;
 }
 
 const SessionContext = createContext<SessionContextType | null>(null);
@@ -22,70 +36,65 @@ export function useSession() {
 export function SessionProvider({ children }: { children: ReactNode }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSessionActive, setIsSessionActive] = useState(false);
+    const [profileName, setProfileName] = useState<string>("");
+    const [isForkLocked, setIsForkLocked] = useState(false);
+    const [isRecoveryRequired, setIsRecoveryRequired] = useState(false);
 
-    // Ref für aktuellen Status (um Stale Closures zu vermeiden)
-    const isSessionActiveRef = useRef(false);
-    // Ref für Throttling der Heartbeats (Drosselung auf alle 2s)
+    // Refs für Throttling und Status
     const lastHeartbeatRef = useRef(0);
+    const isSessionActiveRef = useRef(false);
 
-    // Sync State -> Ref
+    // Hooks für Side-Effects
+    useWindowTitleSync(profileName);
+    
+    const onSessionExpired = useCallback(() => {
+        setIsSessionActive(false);
+        isSessionActiveRef.current = false;
+        setProfileName("");
+    }, []);
+
+    useSessionHeartbeat(isSessionActive, onSessionExpired, lastHeartbeatRef);
+
+    const { integrityReport, checkIntegrity } = useIntegrityCheck();
+
+    // Sync State -> Ref (needed for protectAction which uses the ref)
     useEffect(() => {
         isSessionActiveRef.current = isSessionActive;
     }, [isSessionActive]);
 
     const [pendingAction, setPendingAction] = useState<{
-        resolve: (value: any) => void;
-        reject: (reason: any) => void;
-        action: (password: string | null) => Promise<any>;
+        resolve: (value: unknown) => void;
+        reject: (reason: unknown) => void;
+        action: (password: string | null) => Promise<unknown>;
     } | null>(null);
 
-    // Globaler Activity Listener
-    useEffect(() => {
-        const handleActivity = () => {
-            // Nur wenn Session aktiv ist
-            if (isSessionActiveRef.current) {
-                const now = Date.now();
-                // Throttling: Nur senden, wenn seit dem letzten Mal > 2000ms vergangen sind
-                if (now - lastHeartbeatRef.current > 2000) {
-                    lastHeartbeatRef.current = now;
-                    // Fire and forget refresh
-                    invoke("refresh_session_activity").catch((e) => logger.warn(`Heartbeat failed: ${e}`));
-                }
-            }
-        };
-
-        window.addEventListener('mousemove', handleActivity);
-        window.addEventListener('keydown', handleActivity);
-        window.addEventListener('click', handleActivity);
-
-        return () => {
-            window.removeEventListener('mousemove', handleActivity);
-            window.removeEventListener('keydown', handleActivity);
-            window.removeEventListener('click', handleActivity);
-        };
-    }, []); // Empty dependency array -> Event Listeners only attached once
-
     // Hilfsfunktion zum Aktivieren der Session
-    // Setzt Status auf True und resettet den Heartbeat-Timer
     const activateSession = useCallback(() => {
         setIsSessionActive(true);
         isSessionActiveRef.current = true;
-        // WICHTIG: Wir setzen den Heartbeat-Timer auf "Jetzt",
-        // damit nicht sofort beim ersten Mauswackler ein Request rausgeht.
-        // Das gibt dem Backend Zeit und verhindert Race Conditions.
         lastHeartbeatRef.current = Date.now();
     }, []);
 
     // Wird von App.tsx nach Login aufgerufen
-    const notifyLogin = useCallback(() => {
+    const notifyLogin = useCallback((name?: string) => {
+        if (name) setProfileName(name);
         activateSession();
-    }, [activateSession]);
+        startSealSyncLoop();
+        checkIntegrity();
+    }, [activateSession, checkIntegrity]);
+
+    const notifyLogout = useCallback(() => {
+        setIsSessionActive(false);
+        isSessionActiveRef.current = false;
+        setProfileName("");
+        stopSealSyncLoop();
+    }, []);
 
     const protectAction = useCallback(async <T,>(action: (password: string | null) => Promise<T>): Promise<T | void> => {
         const executeWithSessionCheck = async (pwd: string | null): Promise<T> => {
             try {
                 return await action(pwd);
-            } catch (error: any) {
+            } catch (error) {
                 const errMsg = String(error);
                 // Prüfen auf typische Backend-Fehler bei abgelaufener Session
                 if (errMsg.includes("Password required") || errMsg.includes("Session timed out") || errMsg.includes("Wallet is locked")) {
@@ -94,18 +103,30 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     isSessionActiveRef.current = false;
                     throw new Error("SESSION_EXPIRED_RETRY");
                 }
+                if (errMsg.includes("WalletLockedDueToFork") || errMsg.includes("SealForkDetected") || errMsg.includes("Security Lockdown")) {
+                    logger.error("CRITICAL: Wallet is locked due to a fork.");
+                    setIsForkLocked(true);
+                }
+                if (errMsg.includes("RequiresSealRecovery") || errMsg.includes("No local security seal found")) {
+                    logger.error("CRITICAL: Wallet requires seal recovery.");
+                    setIsRecoveryRequired(true);
+                }
                 throw error;
             }
         };
 
         try {
-            const settings = await invoke<AppSettings>('get_app_settings');
-            const timeout = settings.session_timeout_seconds;
+            const settings = await settingsService.getSettings();
+            const timeout = settings.sessionTimeoutSeconds;
 
             // MODUS A: Immer Passwort fragen (Timeout = 0)
             if (timeout === 0) {
                 return new Promise<T>((resolve, reject) => {
-                    setPendingAction({ resolve, reject, action });
+                    setPendingAction({ 
+                        resolve: resolve as (value: unknown) => void, 
+                        reject, 
+                        action: action as (password: string | null) => Promise<unknown> 
+                    });
                     setIsModalOpen(true);
                 });
             }
@@ -114,11 +135,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             if (isSessionActiveRef.current) {
                 try {
                     return await executeWithSessionCheck(null);
-                } catch (e: any) {
-                    if (e.message === "SESSION_EXPIRED_RETRY") {
+                } catch (e) {
+                    if (e instanceof Error && e.message === "SESSION_EXPIRED_RETRY") {
                         // Session war im Backend abgelaufen -> Modal öffnen
                         return new Promise<T>((resolve, reject) => {
-                            setPendingAction({ resolve, reject, action });
+                            setPendingAction({ 
+                                resolve: resolve as (value: unknown) => void, 
+                                reject, 
+                                action: action as (password: string | null) => Promise<unknown> 
+                            });
                             setIsModalOpen(true);
                         });
                     }
@@ -127,7 +152,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             } else {
                 // Session noch nicht aktiv -> Modal öffnen
                 return new Promise<T>((resolve, reject) => {
-                    setPendingAction({ resolve, reject, action });
+                    setPendingAction({ 
+                        resolve: resolve as (value: unknown) => void, 
+                        reject, 
+                        action: action as (password: string | null) => Promise<unknown> 
+                    });
                     setIsModalOpen(true);
                 });
             }
@@ -141,12 +170,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (!pendingAction) return;
 
         try {
-            const settings = await invoke<AppSettings>('get_app_settings');
-            const timeout = settings.session_timeout_seconds;
+            const settings = await settingsService.getSettings();
+            const timeout = settings.sessionTimeoutSeconds;
 
             if (timeout > 0) {
                 // Session im Backend starten
-                await invoke("unlock_session", { password, durationSeconds: timeout });
+                await authService.unlockSession(password, timeout);
 
                 // Frontend Status synchronisieren (via Helper)
                 activateSession();
@@ -176,8 +205,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setPendingAction(null);
     };
 
+    const clearLocks = useCallback(() => {
+        setIsForkLocked(false);
+        setIsRecoveryRequired(false);
+    }, []);
+
     return (
-        <SessionContext.Provider value={{ protectAction, isSessionActive, notifyLogin }}>
+        <SessionContext.Provider value={{ protectAction, isSessionActive, profileName, setProfileName, notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks }}>
             {children}
             <AuthModal
                 isOpen={isModalOpen}

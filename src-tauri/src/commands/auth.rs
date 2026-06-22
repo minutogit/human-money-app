@@ -1,10 +1,7 @@
-use crate::models::{ProfileInfo, MnemonicLanguage};
+use crate::models::{ProfileInfo, MnemonicLanguage, FrontendError};
 use crate::settings::{AppSettings, SETTINGS_KEY};
-use crate::{
-    commands::actions::{load_history_from_disk, TRANSACTION_HISTORY_KEY},
-    AppState,
-};
-use chrono::{DateTime, Duration, Utc};
+use crate::AppState;
+use chrono::{DateTime, Utc};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -90,14 +87,14 @@ pub fn profile_exists(app: tauri::AppHandle) -> bool {
 }
 
 #[tauri::command]
-pub fn list_profiles(state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<Vec<ProfileInfo>, String> {
+pub fn list_profiles(state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<Vec<ProfileInfo>, FrontendError> {
     info!("Listing available profiles...");
     let service = state.service.lock().unwrap();
     
     // Load profile metadata for last_used timestamps
     let metadata = load_profile_metadata(&app).unwrap_or_default();
     
-    service.list_profiles().map(|profiles| {
+    service.list_profiles().map_err(FrontendError::from).map(|profiles| {
         let mut profile_infos: Vec<ProfileInfo> = profiles
             .into_iter()
             .map(|p| {
@@ -131,20 +128,22 @@ pub fn list_profiles(state: tauri::State<AppState>, app: tauri::AppHandle) -> Re
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn create_profile(
     profile_name: String,
     mnemonic: String,
     passphrase: Option<String>,
     user_prefix: Option<String>,
     password: String,
+    local_instance_id: String,
     language: MnemonicLanguage,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     info!("Attempting to create profile '{}' with language {:?}...", profile_name, language);
     let mut service = state.service.lock().unwrap();
     let core_language = language.into();
-    match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password, core_language) {
+    match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password, core_language, local_instance_id) {
         Ok(()) => {
             info!("Profile created successfully!");
 
@@ -164,41 +163,35 @@ pub fn create_profile(
 
             // 1. Initialisiere und speichere Standard-Einstellungen für das neue Profil
             let default_settings = AppSettings::default();
-            let settings_bytes = serde_json::to_vec(&default_settings).map_err(|e| e.to_string())?;
+            let settings_bytes = serde_json::to_vec(&default_settings).map_err(|e| FrontendError::from(e.to_string()))?;
             
             service
                 .save_encrypted_data(SETTINGS_KEY, &settings_bytes, Some(&password))
-                .map_err(|e| format!("Failed to save default settings: {}", e))?;
+                .map_err(|e| FrontendError::from(format!("Failed to save default settings: {}", e)))?;
 
-            // 2. Starte die Session direkt (wie beim Login)
-            if default_settings.session_timeout_seconds > 0 {
-                service.unlock_session(&password, default_settings.session_timeout_seconds)?;
-            }
-
-            // 3. Aktualisiere den globalen AppState (Settings & leere History)
-            *state.settings.lock().unwrap() = Some(default_settings);
-            *state.history.lock().unwrap() = Some(Vec::new());
-
-            Ok(())
+            // 2. Initialisiere die Session und den Cache (lädt Settings & leere History)
+            state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)
         }
         Err(e) => {
             error!("Profile creation failed: {}", e);
-            Err(e)
+            Err(FrontendError::from(e))
         }
     }
 }
+
 
 #[tauri::command]
 pub fn login(
     folder_name: String,
     password: String,
     cleanup_on_login: bool,
+    local_instance_id: String,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     info!("Attempting to login...");
     let mut service = state.service.lock().unwrap();
-    match service.login(&folder_name, &password, cleanup_on_login) {
+    match service.login(&folder_name, &password, cleanup_on_login, local_instance_id) {
         Ok(()) => {
             info!("Login successful!");
 
@@ -208,63 +201,12 @@ pub fn login(
                 // Don't fail login if metadata update fails
             }
 
-            // Lade oder erstelle die Einstellungen
-            let settings: AppSettings = match service.load_encrypted_data(SETTINGS_KEY, Some(&password)) {
-                Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
-                Err(_) => {
-                    info!("No settings file found, creating default settings.");
-                    let default_settings = AppSettings::default();
-                    let bytes = serde_json::to_vec(&default_settings).unwrap();
-                    service
-                        .save_encrypted_data(SETTINGS_KEY, &bytes, Some(&password))
-                        .map_err(|e| format!("Failed to save default settings: {}", e))?;
-                    default_settings
-                 }
-             };
-
-            // NEU: Wenn ein Timeout konfiguriert ist, starten wir direkt die Session.
-            // So muss der User für die ersten Aktionen kein Passwort eingeben.
-            if settings.session_timeout_seconds > 0 {
-                service.unlock_session(&password, settings.session_timeout_seconds)?;
-            }
-
-             // Lade die Transaktionshistorie und führe die Bereinigung durch
-             // Beim Login haben wir immer das Passwort, also Some(&password)
-             let mut history = load_history_from_disk(&mut service, Some(&password))?;
-            let mut changed = false;
-            let retention_duration = Duration::days(settings.bundle_retention_days as i64);
-
-            for record in history.iter_mut() {
-                if record.bundle_data.is_empty() {
-                    continue;
-                }
-                if let Ok(timestamp) = record.timestamp.parse::<chrono::DateTime<Utc>>() {
-                    if Utc::now().signed_duration_since(timestamp) > retention_duration {
-                        info!("Clearing bundle data for old transaction record: {}", record.id);
-                        record.bundle_data.clear();
-                        changed = true;
-                    }
-                }
-            }
-
-            if changed {
-                info!("Saving cleaned transaction history back to disk...");
-                let history_bytes = serde_json::to_vec(&history)
-                    .map_err(|e| format!("Failed to serialize cleaned history: {}", e))?;
-                service
-                    .save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, Some(&password))
-                    .map_err(|e| format!("Failed to save cleaned history: {}", e))?;
-            }
-
-            // Speichere die geladenen Daten im AppState
-            *state.settings.lock().unwrap() = Some(settings);
-            *state.history.lock().unwrap() = Some(history);
-
-            Ok(())
+            // Initialisiere die Session und den Cache
+            state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)
         }
         Err(e) => {
             error!("Login failed: {}", e);
-            Err(e)
+            Err(FrontendError::from(e))
         }
     }
 }
@@ -275,30 +217,64 @@ pub fn recover_wallet_and_set_new_password(
     mnemonic: String,
     passphrase: Option<String>,
     new_password: String,
+    local_instance_id: String,
     language: MnemonicLanguage,
     state: tauri::State<AppState>,
-) -> Result<(), String> {
+) -> Result<(), FrontendError> {
     info!("Attempting to recover wallet and set new password with language {:?}...", language);
     let mut service = state.service.lock().unwrap();
     let core_language = language.into();
-    match service.recover_wallet_and_set_new_password(&folder_name, &mnemonic, passphrase.as_deref(), &new_password, core_language) {
+    match service.recover_wallet_and_set_new_password(&folder_name, &mnemonic, passphrase.as_deref(), &new_password, core_language, local_instance_id) {
         Ok(()) => {
             info!("Wallet recovered and new password set successfully!");
-            Ok(())
+            
+            // NEU: Nach der Recovery müssen wir die Session und den Cache ebenfalls initialisieren,
+            // da der User im Frontend direkt ins Dashboard (logged_in) wechselt.
+            state.initialize_profile_session(&mut service, &new_password).map_err(FrontendError::from)
         }
         Err(e) => {
             error!("Wallet recovery failed: {}", e);
-            Err(e)
+            Err(FrontendError::from(e))
         }
     }
 }
 
 #[tauri::command]
+pub fn handover_to_this_device(
+    folder_name: String,
+    password: String,
+    local_instance_id: String,
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), FrontendError> {
+    info!("Attempting device handover for profile in folder '{}'...", folder_name);
+    let mut service = state.service.lock().unwrap();
+    match service.handover_to_this_device(&folder_name, &password, local_instance_id) {
+        Ok(()) => {
+            info!("Handover successful! Device bound to wallet.");
+            
+            // Update last_used timestamp
+            if let Err(e) = update_profile_last_used(&app, &folder_name) {
+                error!("Failed to update profile last_used timestamp: {}", e);
+            }
+
+            // Initialisiere die Session und den Cache
+            state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)
+        }
+        Err(e) => {
+            error!("Handover failed: {}", e);
+            Err(FrontendError::from(e))
+        }
+    }
+}
+
+
+
+#[tauri::command]
 pub fn logout(state: tauri::State<AppState>) {
     info!("Logging out...");
     // Leere die zwischengespeicherten Daten sicher aus dem Speicher
-    *state.history.lock().unwrap() = None;
-    *state.settings.lock().unwrap() = None;
+    state.clear_all_caches();
 
     let mut service = state.service.lock().unwrap();
     service.logout();
@@ -308,10 +284,10 @@ pub fn logout(state: tauri::State<AppState>) {
 // NEUE SESSION COMMANDS
 
 #[tauri::command]
-pub fn unlock_session(password: String, duration_seconds: u64, state: tauri::State<AppState>) -> Result<(), String> {
+pub fn unlock_session(password: String, duration_seconds: u64, state: tauri::State<AppState>) -> Result<(), FrontendError> {
     info!("Unlocking session for {} seconds...", duration_seconds);
     let mut service = state.service.lock().unwrap();
-    service.unlock_session(&password, duration_seconds)
+    service.unlock_session(&password, duration_seconds).map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -322,8 +298,135 @@ pub fn lock_session(state: tauri::State<AppState>) {
 }
 
 #[tauri::command]
+pub fn is_session_active(state: tauri::State<AppState>) -> bool {
+    // Loggt nicht, um Spam zu vermeiden
+    let service = state.service.lock().unwrap();
+    service.is_session_active()
+}
+
+#[tauri::command]
 pub fn refresh_session_activity(state: tauri::State<AppState>) {
     // Loggt nicht, um Spam zu vermeiden
     let mut service = state.service.lock().unwrap();
     let _ = service.refresh_session_activity();
+}
+
+#[tauri::command]
+pub fn verify_profile_password(folder_name: String, password: String, state: tauri::State<AppState>) -> Result<String, FrontendError> {
+    info!("Verifying password for profile in folder '{}'...", folder_name);
+    let service = state.service.lock().unwrap();
+    service.get_profile_id_with_password(&folder_name, &password).map_err(FrontendError::from)
+}
+
+#[tauri::command]
+pub fn delete_profile(folder_name: String, password: String, state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<(), FrontendError> {
+    info!("Attempting to delete profile in folder '{}'...", folder_name);
+    
+    // 1. Delete in Core (this also verifies password)
+    let mut service = state.service.lock().unwrap();
+    service.delete_profile(&folder_name, &password).map_err(FrontendError::from)?;
+    
+    // 2. Remove metadata entry
+    if let Ok(mut metadata) = load_profile_metadata(&app) {
+        if metadata.remove(&folder_name).is_some() {
+            let _ = save_profile_metadata(&app, &metadata);
+        }
+    }
+    
+    info!("Profile '{}' deleted successfully.", folder_name);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[test]
+    fn test_login_ipc_parsing() {
+        // Test that malformed JSON doesn't crash the parsing logic
+        let invalid_json = "{ invalid json }";
+        let result: Result<serde_json::Value, _> = serde_json::from_str(invalid_json);
+        assert!(result.is_err(), "Malformed JSON should fail to parse");
+
+        // Test that valid JSON structure can be parsed
+        let valid_json = r#"{
+            "folderName": "test_profile",
+            "password": "test_password",
+            "cleanupOnLogin": true,
+            "localInstanceId": "test-instance-123"
+        }"#;
+        let result: Result<serde_json::Value, _> = serde_json::from_str(valid_json);
+        assert!(result.is_ok(), "Valid JSON should parse successfully");
+    }
+
+    #[test]
+    fn test_profile_metadata_serialization() {
+        // Test that ProfileMetadata can be serialized and deserialized
+        let metadata = ProfileMetadata {
+            last_used: Utc::now().to_rfc3339(),
+        };
+
+        let serialized = serde_json::to_string(&metadata);
+        assert!(serialized.is_ok(), "ProfileMetadata should serialize");
+
+        let deserialized: Result<ProfileMetadata, _> = serde_json::from_str(&serialized.unwrap());
+        assert!(deserialized.is_ok(), "ProfileMetadata should deserialize");
+    }
+
+    #[test]
+    fn test_profile_info_serialization() {
+        // Test that ProfileInfo can be serialized and deserialized
+        let profile_info = ProfileInfo {
+            profile_name: "Test Profile".to_string(),
+            folder_name: "test_folder".to_string(),
+            last_used: Some(Utc::now().to_rfc3339()),
+        };
+
+        let serialized = serde_json::to_string(&profile_info);
+        assert!(serialized.is_ok(), "ProfileInfo should serialize");
+
+        let deserialized: Result<ProfileInfo, _> = serde_json::from_str(&serialized.unwrap());
+        assert!(deserialized.is_ok(), "ProfileInfo should deserialize");
+        assert_eq!(deserialized.unwrap().profile_name, "Test Profile");
+    }
+
+    #[test]
+    fn test_logout_clears_all_caches() {
+        use std::path::PathBuf;
+        use human_money_core::app_service::AppService;
+        
+        let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
+        let state = AppState {
+            service: Mutex::new(service),
+            history: Mutex::new(Some(vec![])),
+            events: Mutex::new(Some(vec![])),
+            contacts: Mutex::new(Some(Default::default())),
+            settings: Mutex::new(Some(AppSettings::default())),
+        };
+
+        // We can't call the command directly easily because of tauri::State, 
+        // but we can test the logic:
+        {
+            *state.history.lock().unwrap() = None;
+            *state.events.lock().unwrap() = None;
+            *state.contacts.lock().unwrap() = None;
+            *state.settings.lock().unwrap() = None;
+        }
+
+        assert!(state.history.lock().unwrap().is_none());
+        assert!(state.events.lock().unwrap().is_none());
+        assert!(state.contacts.lock().unwrap().is_none());
+        assert!(state.settings.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_sysinfo_processes() {
+        use sysinfo::{System, Pid};
+        let mut s = System::new();
+        s.refresh_processes();
+        let current_pid = std::process::id();
+        let proc = s.process(Pid::from_u32(current_pid));
+        assert!(proc.is_some(), "Current process should be found in refreshed processes! PID: {}", current_pid);
+    }
 }

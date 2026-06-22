@@ -31,10 +31,26 @@ export default {
                 // Border colors
                 'theme-subtle': '#E9D8C0', // Subtile Cream-Braun-Mischung für Ränder
                 'theme-light-border': '#8E7C68', // Hellbraun für Ränder
+                
+                // Surface colors for premium cards
+                'surface': {
+                    'primary': '#FFFFFF',
+                    'secondary': '#FDFCFB',
+                    'accent': '#FFF9F5',
+                },
+            },
+            boxShadow: {
+                'premium': '0 10px 30px -10px rgba(43, 27, 23, 0.1), 0 4px 10px -5px rgba(43, 27, 23, 0.04)',
+                'premium-hover': '0 20px 40px -15px rgba(43, 27, 23, 0.15), 0 8px 20px -10px rgba(43, 27, 23, 0.08)',
+                'inner-soft': 'inset 0 2px 4px 0 rgba(0, 0, 0, 0.02)',
             },
             fontFamily: {
-                sans: ['Inter', 'sans-serif'], // Optional: Eine modernere Schriftart (müsste importiert werden)
+                sans: ['Inter', 'system-ui', 'sans-serif'], // Optional: Eine modernere Schriftart (müsste importiert werden)
                 mono: ['Menlo', 'Consolas', 'monospace'],
+            },
+            borderRadius: {
+                '2xl': '1.25rem',
+                '3xl': '1.75rem',
             },
         },
     },

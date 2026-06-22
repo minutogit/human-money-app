@@ -1,15 +1,17 @@
+import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
 
 interface ConfirmationModalProps {
     isOpen: boolean;
     title: string;
-    description: React.ReactNode; // ReactNode erlaubt auch HTML/JSX im Text
+    description: React.ReactNode;
     confirmVariant?: "primary" | "secondary" | "outline" | "danger";
     confirmText?: string;
     cancelText?: string;
     onConfirm: () => void;
     onCancel: () => void;
     isProcessing?: boolean;
+    confirmDisabled?: boolean;
 }
 
 export function ConfirmationModal({ 
@@ -17,12 +19,14 @@ export function ConfirmationModal({
     title, 
     description, 
     confirmVariant = "primary",
-    confirmText = "Confirm", 
-    cancelText = "Cancel", 
+    confirmText, 
+    cancelText, 
     onConfirm, 
     onCancel,
-    isProcessing = false
+    isProcessing = false,
+    confirmDisabled = false
 }: ConfirmationModalProps) {
+    const { t } = useTranslation();
     if (!isOpen) return null;
 
     return (
@@ -30,12 +34,12 @@ export function ConfirmationModal({
             <div className="w-full max-w-md rounded-lg bg-bg-card border border-theme-subtle p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
                 <h2 className="text-xl font-bold text-theme-primary mb-2">{title}</h2>
                 <div className="text-sm text-theme-light mb-6">{description}</div>
-                <div className="flex justify-end gap-3">
-                    <Button variant="secondary" onClick={onCancel} disabled={isProcessing}>
-                        {cancelText}
+                <div className="grid grid-cols-2 gap-3">
+                    <Button variant="secondary" onClick={onCancel} disabled={isProcessing} className="w-full">
+                        {cancelText || t('common.cancel')}
                     </Button>
-                    <Button variant={confirmVariant} onClick={onConfirm} disabled={isProcessing}>
-                        {isProcessing ? "Processing..." : confirmText}
+                    <Button variant={confirmVariant} onClick={onConfirm} disabled={isProcessing || confirmDisabled} className="w-full">
+                        {isProcessing ? t('common.processing') : (confirmText || t('common.confirm'))}
                     </Button>
                 </div>
             </div>

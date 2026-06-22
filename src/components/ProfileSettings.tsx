@@ -1,14 +1,30 @@
 // src/components/ProfileSettings.tsx
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { useTranslation } from 'react-i18next';
+import { profileService } from '../services/profileService';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
+import { Card } from './ui/Card';
 import { Input } from './ui/Input';
 import { PublicProfile, Address } from '../types';
 import { useSession } from '../context/SessionContext';
-import { normalizeCoordinates } from '../utils/geoUtils';
+import { normalizeCoordinates, geocodeAddress, getCurrentLocation } from '../utils/geoUtils';
+import { translateError } from '../utils/errorHelper';
+import { 
+    User, 
+    MapPin, 
+    Globe, 
+    Mail, 
+    Phone, 
+    Briefcase, 
+    Heart, 
+    Lock,
+    Save,
+    CheckCircle2
+} from 'lucide-react';
 
 export function ProfileSettings() {
+    const { t } = useTranslation();
     const { protectAction } = useSession();
     const [profile, setProfile] = useState<PublicProfile | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -16,15 +32,62 @@ export function ProfileSettings() {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [coordWarning, setCoordWarning] = useState('');
+    const [isLocating, setIsLocating] = useState(false);
+    const [isGeocoding, setIsGeocoding] = useState(false);
+    const [geoFeedback, setGeoFeedback] = useState('');
+    const [geoFeedbackError, setGeoFeedbackError] = useState(false);
+
+    const handleUseGPS = async () => {
+        setIsLocating(true);
+        setGeoFeedback(t('profile.locating'));
+        setGeoFeedbackError(false);
+        try {
+            const coords = await getCurrentLocation();
+            if (profile) {
+                setProfile({ ...profile, coordinates: coords });
+            }
+            setCoordWarning('');
+            setGeoFeedback(t('profile.locationDetected'));
+            setTimeout(() => setGeoFeedback(''), 3000);
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : t('profile.gpsFailed');
+            setGeoFeedback(msg);
+            setGeoFeedbackError(true);
+            setTimeout(() => setGeoFeedback(''), 5000);
+        } finally {
+            setIsLocating(false);
+        }
+    };
+
+    const handleGeocodeAddress = async () => {
+        if (!profile?.address) return;
+        setIsGeocoding(true);
+        setGeoFeedback(t('profile.geocodingAddress'));
+        setGeoFeedbackError(false);
+        try {
+            const coords = await geocodeAddress(profile.address);
+            setProfile({ ...profile, coordinates: coords });
+            setCoordWarning('');
+            setGeoFeedback(t('profile.coordinatesResolved'));
+            setTimeout(() => setGeoFeedback(''), 3000);
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : t('profile.lookupFailed');
+            setGeoFeedback(msg);
+            setGeoFeedbackError(true);
+            setTimeout(() => setGeoFeedback(''), 5000);
+        } finally {
+            setIsGeocoding(false);
+        }
+    };
 
     useEffect(() => {
         async function fetchProfile() {
             try {
                 logger.info("ProfileSettings: Fetching current profile.");
-                const currentProfile = await invoke<PublicProfile>('get_user_profile');
+                const currentProfile = await profileService.getProfile();
                 setProfile(currentProfile);
             } catch (e) {
-                const msg = `Failed to load profile: ${e}`;
+                const msg = `${t('profile.errorLoading')}: ${translateError(e, t)}`;
                 logger.error(msg);
                 setError(msg);
             } finally {
@@ -32,42 +95,37 @@ export function ProfileSettings() {
             }
         }
         fetchProfile();
-    }, []);
+    }, [t]);
 
     const handleCoordBlur = () => {
         if (!profile?.coordinates) {
             setCoordWarning('');
             return;
         }
-        
         const normalized = normalizeCoordinates(profile.coordinates);
         if (normalized) {
             setProfile({ ...profile, coordinates: normalized });
             setCoordWarning('');
         } else {
-            setCoordWarning('Invalid format. Please use "Latitude, Longitude" (e.g. 51.16, 10.45)');
+            setCoordWarning(t('profile.invalidCoordinateFormat'));
         }
     };
 
     const handleSave = async () => {
         if (!profile) return;
-
         setIsSaving(true);
         setError('');
         setSuccess('');
-
         try {
             logger.info("Attempting to save profile...");
             await protectAction(async (password) => {
-                await invoke('update_user_profile', { profile, password });
+                await profileService.saveProfile(profile, password || undefined);
             });
-            setSuccess("Profile updated successfully!");
+            setSuccess(t('profile.updatedSuccess'));
             logger.info("Profile updated successfully.");
             setTimeout(() => setSuccess(''), 3000);
         } catch (e) {
-            const msg = `Failed to update profile: ${e}`;
-            logger.error(msg);
-            setError(msg);
+            setError(`${t('profile.errorUpdating')}: ${translateError(e, t)}`);
         } finally {
             setIsSaving(false);
         }
@@ -77,246 +135,281 @@ export function ProfileSettings() {
         setProfile(prev => {
             if (!prev) return null;
             const newAddress = { ...(prev.address || {}), [field]: value };
-            
-            // Auto-generate full address
-            const parts = [
-                newAddress.street,
-                newAddress.house_number,
-                newAddress.zip_code,
-                newAddress.city,
-                newAddress.country
-            ].filter(Boolean);
-            newAddress.full_address = parts.join(', ');
-            
+            const parts = [newAddress.street, newAddress.houseNumber, newAddress.zipCode, newAddress.city, newAddress.country].filter(Boolean);
+            newAddress.fullAddress = parts.join(', ');
             return { ...prev, address: newAddress };
         });
     };
 
-    if (isLoading) {
-        return <p className="text-center py-4">Loading profile data...</p>;
-    }
-
-    if (!profile) {
-        return <p className="text-red-500 text-center py-4">Error: Profile not loaded. {error}</p>;
-    }
+    if (isLoading) return <div className="py-20 text-center animate-pulse text-theme-light font-black uppercase tracking-[0.2em]">{t('profile.loadingProfile')}</div>;
+    if (!profile) return <div className="p-8 text-center text-rose-500 font-bold">{t('profile.notFound')}</div>;
 
     return (
-        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {/* Privacy Guarantee Info Box */}
-            <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-md shadow-sm">
-                <div className="flex items-start gap-3">
-                    <div className="flex-shrink-0 text-green-600 text-2xl">🔒</div>
-                    <div>
-                        <p className="text-sm font-semibold text-green-800">
-                            Privacy Guarantee
-                        </p>
-                        <p className="text-xs text-green-700 mt-1">
-                            Your profile data is securely encrypted and never leaves your local device. It is only shared when you explicitly sign or create a voucher.
-                        </p>
-                    </div>
+        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20">
+            {/* Privacy Shield */}
+            <div className="bg-emerald-500/10 border border-emerald-500/20 p-6 rounded-[32px] flex items-start gap-5 shadow-sm">
+                <div className="p-3 bg-white rounded-2xl shadow-sm text-emerald-600">
+                    <Lock size={24} />
+                </div>
+                <div>
+                    <h3 className="text-sm font-black text-emerald-900 uppercase tracking-widest mb-1">{t('profile.walletSecurity')}</h3>
+                    <p className="text-xs text-emerald-800/80 font-medium leading-relaxed">
+                        {t('profile.walletSecurityDesc')}
+                    </p>
                 </div>
             </div>
 
-            <section className="bg-bg-card border border-theme-subtle rounded-xl overflow-hidden shadow-lg">
-                <div className="bg-theme-primary/5 px-6 py-4 border-b border-theme-subtle">
-                    <h2 className="text-lg font-semibold text-theme-primary">Identity & Role</h2>
-                    <p className="text-xs text-theme-light">Basic identification data for your wallet.</p>
-                </div>
-                <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div>
-                        <label className="block text-sm font-medium text-theme-light mb-1.5">First Name</label>
-                        <Input
-                            value={profile.first_name || ''}
-                            onChange={(e) => setProfile({ ...profile, first_name: e.target.value })}
-                            placeholder="John"
-                        />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Basic ID */}
+                <Card header={
+                    <div className="flex items-center gap-2">
+                        <User size={18} className="text-theme-primary" />
+                        <span className="font-black text-xs uppercase tracking-widest">{t('profile.profileDetails')}</span>
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-theme-light mb-1.5">Last Name</label>
-                        <Input
-                            value={profile.last_name || ''}
-                            onChange={(e) => setProfile({ ...profile, last_name: e.target.value })}
-                            placeholder="Doe"
-                        />
+                }>
+                    <div className="space-y-6 p-2">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
+                                    {t('profile.firstName')}
+                                    <span className="text-theme-accent text-[8px]">({t('common.required')})</span>
+                                </label>
+                                <Input
+                                    value={profile.firstName || ''}
+                                    onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
+                                    placeholder={t('profile.firstNamePlaceholder')}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
+                                    {t('profile.lastName')}
+                                    <span className="text-theme-accent text-[8px]">({t('common.required')})</span>
+                                </label>
+                                <Input
+                                    value={profile.lastName || ''}
+                                    onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
+                                    placeholder={t('profile.lastNamePlaceholder')}
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.gender')}</label>
+                            <select
+                                className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
+                                value={profile.gender || ''}
+                                onChange={(e) => setProfile({ ...profile, gender: e.target.value })}
+                            >
+                                <option value="">{t('common.select')}</option>
+                                <option value="1">{t('gender.male')}</option>
+                                <option value="2">{t('gender.female')}</option>
+                                <option value="0">{t('gender.notKnown')}</option>
+                                <option value="9">{t('gender.notApplicable')}</option>
+                            </select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.organizationCompany')}</label>
+                                <Input
+                                    value={profile.organization || ''}
+                                    onChange={(e) => setProfile({ ...profile, organization: e.target.value })}
+                                    placeholder={t('profile.organizationPlaceholder')}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.community')}</label>
+                                <Input
+                                    value={profile.community || ''}
+                                    onChange={(e) => setProfile({ ...profile, community: e.target.value })}
+                                    placeholder={t('profile.communityPlaceholder')}
+                                />
+                            </div>
+                        </div>
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-theme-light mb-1.5">Gender</label>
-                        <select
-                            className="w-full bg-bg-input border border-theme-subtle rounded-lg px-3 py-2 text-theme-main focus:ring-2 focus:ring-theme-primary outline-none"
-                            value={profile.gender || ''}
-                            onChange={(e) => setProfile({ ...profile, gender: e.target.value })}
-                        >
-                            <option value="">Select...</option>
-                            <option value="1">Male</option>
-                            <option value="2">Female</option>
-                            <option value="0">Other/Not Known</option>
-                            <option value="9">Not Applicable</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-theme-light mb-1.5">Organization</label>
-                        <Input
-                            value={profile.organization || ''}
-                            onChange={(e) => setProfile({ ...profile, organization: e.target.value })}
-                            placeholder="My Co-op"
-                        />
-                    </div>
-                    <div className="md:col-span-2">
-                        <label className="block text-sm font-medium text-theme-light mb-1.5">Community / Group</label>
-                        <Input
-                            value={profile.community || ''}
-                            onChange={(e) => setProfile({ ...profile, community: e.target.value })}
-                            placeholder="Local Exchange Network"
-                        />
-                    </div>
-                </div>
-            </section>
+                </Card>
 
-            <section className="bg-bg-card border border-theme-subtle rounded-xl overflow-hidden shadow-lg">
-                <div className="bg-theme-secondary/5 px-6 py-4 border-b border-theme-subtle">
-                    <h2 className="text-lg font-semibold text-theme-secondary">Service Offers & Needs</h2>
-                    <p className="text-xs text-theme-light">Describe what you offer and what you are looking for.</p>
-                </div>
-                <div className="p-6 space-y-6">
-                    <div>
-                        <label className="block text-sm font-medium text-theme-light mb-1.5">Service Offers</label>
-                        <textarea
-                            className="w-full bg-bg-input border border-theme-subtle rounded-lg px-3 py-2 text-theme-main focus:ring-2 focus:ring-theme-primary outline-none min-h-[100px]"
-                            value={profile.service_offer || ''}
-                            onChange={(e) => setProfile({ ...profile, service_offer: e.target.value })}
-                            placeholder="List the services or goods you provide..."
-                        />
+                {/* Location */}
+                <Card header={
+                    <div className="flex items-center gap-2">
+                        <MapPin size={18} className="text-theme-primary" />
+                        <span className="font-black text-xs uppercase tracking-widest">{t('profile.location')}</span>
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-theme-light mb-1.5">Current Needs</label>
-                        <textarea
-                            className="w-full bg-bg-input border border-theme-subtle rounded-lg px-3 py-2 text-theme-main focus:ring-2 focus:ring-theme-primary outline-none min-h-[100px]"
-                            value={profile.needs || ''}
-                            onChange={(e) => setProfile({ ...profile, needs: e.target.value })}
-                            placeholder="List what you currently need or are looking for..."
-                        />
-                    </div>
-                </div>
-            </section>
-
-            <section className="bg-bg-card border border-theme-subtle rounded-xl overflow-hidden shadow-lg">
-                <div className="bg-theme-accent/5 px-6 py-4 border-b border-theme-subtle">
-                    <h2 className="text-lg font-semibold text-theme-accent">Contact & Social</h2>
-                    <p className="text-xs text-theme-light">Public contact information.</p>
-                </div>
-                <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div>
-                        <label className="block text-sm font-medium text-theme-light mb-1.5">Email</label>
-                        <Input
-                            type="email"
-                            value={profile.email || ''}
-                            onChange={(e) => setProfile({ ...profile, email: e.target.value })}
-                            placeholder="john@example.com"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-theme-light mb-1.5">Phone</label>
-                        <Input
-                            type="tel"
-                            value={profile.phone || ''}
-                            onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
-                            placeholder="+49 123 456789"
-                        />
-                    </div>
-                    <div className="md:col-span-2">
-                        <label className="block text-sm font-medium text-theme-light mb-1.5">Website / URL</label>
-                        <Input
-                            value={profile.url || ''}
-                            onChange={(e) => setProfile({ ...profile, url: e.target.value })}
-                            placeholder="https://example.com"
-                        />
-                    </div>
-                </div>
-            </section>
-
-            <section className="bg-bg-card border border-theme-subtle rounded-xl overflow-hidden shadow-lg">
-                <div className="bg-theme-main/5 px-6 py-4 border-b border-theme-subtle">
-                    <h2 className="text-lg font-semibold text-theme-main">Location</h2>
-                    <p className="text-xs text-theme-light">Physical address for voucher verification.</p>
-                </div>
-                <div className="p-6 space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="md:col-span-2">
-                            <label className="block text-sm font-medium text-theme-light mb-1.5">Street</label>
-                            <Input
-                                value={profile.address?.street || ''}
-                                onChange={(e) => updateAddress('street', e.target.value)}
-                                placeholder="Main St"
-                            />
+                }>
+                    <div className="space-y-6 p-2">
+                        <div className="grid grid-cols-4 gap-4">
+                            <div className="col-span-3 space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.street')}</label>
+                                <Input
+                                    value={profile.address?.street || ''}
+                                    onChange={(e) => updateAddress('street', e.target.value)}
+                                    placeholder={t('profile.streetPlaceholder')}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.houseNumber')}</label>
+                                <Input
+                                    value={profile.address?.houseNumber || ''}
+                                    onChange={(e) => updateAddress('houseNumber', e.target.value)}
+                                    placeholder={t('profile.houseNumberPlaceholder')}
+                                />
+                            </div>
                         </div>
-                        <div>
-                            <label className="block text-sm font-medium text-theme-light mb-1.5">House No.</label>
-                            <Input
-                                value={profile.address?.house_number || ''}
-                                onChange={(e) => updateAddress('house_number', e.target.value)}
-                                placeholder="123"
-                            />
+                        <div className="grid grid-cols-3 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.zipCode')}</label>
+                                <Input
+                                    value={profile.address?.zipCode || ''}
+                                    onChange={(e) => updateAddress('zipCode', e.target.value)}
+                                    placeholder="12345"
+                                />
+                            </div>
+                            <div className="col-span-2 space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
+                                    {t('profile.city')}
+                                    <span className="text-theme-accent text-[8px]">({t('common.required')})</span>
+                                </label>
+                                <Input
+                                    value={profile.address?.city || ''}
+                                    onChange={(e) => updateAddress('city', e.target.value)}
+                                    placeholder={t('profile.cityPlaceholder')}
+                                />
+                            </div>
                         </div>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div>
-                            <label className="block text-sm font-medium text-theme-light mb-1.5">ZIP Code</label>
-                            <Input
-                                value={profile.address?.zip_code || ''}
-                                onChange={(e) => updateAddress('zip_code', e.target.value)}
-                                placeholder="12345"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-theme-light mb-1.5">City</label>
-                            <Input
-                                value={profile.address?.city || ''}
-                                onChange={(e) => updateAddress('city', e.target.value)}
-                                placeholder="Metropolis"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-theme-light mb-1.5">Country</label>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.country')}</label>
                             <Input
                                 value={profile.address?.country || ''}
                                 onChange={(e) => updateAddress('country', e.target.value)}
-                                placeholder="Earth"
+                                placeholder={t('profile.countryPlaceholder')}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.coordinates')}</label>
+                                <div className="flex gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleUseGPS}
+                                        disabled={isLocating || isGeocoding}
+                                        className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
+                                        title={t('profile.gpsTooltip')}
+                                    >
+                                        {isLocating ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "📍"}
+                                        <span>{t('profile.gpsButton')}</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleGeocodeAddress}
+                                        disabled={isLocating || isGeocoding || !profile.address?.city}
+                                        className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20 disabled:opacity-50 cursor-pointer"
+                                        title={t('profile.autoAddressTooltip')}
+                                    >
+                                        {isGeocoding ? <span className="w-2.5 h-2.5 border border-theme-primary border-t-transparent rounded-full animate-spin inline-block"></span> : "🔍"}
+                                        <span>{t('profile.autoAddressButton')}</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <Input
+                                value={profile.coordinates || ''}
+                                onChange={(e) => {
+                                    setProfile({ ...profile, coordinates: e.target.value });
+                                    if (coordWarning) setCoordWarning('');
+                                }}
+                                onBlur={handleCoordBlur}
+                                className={coordWarning ? 'border-rose-500 focus:ring-rose-500' : ''}
+                                placeholder={t('profile.coordinatesPlaceholder')}
+                            />
+                            {coordWarning && <p className="text-[10px] text-rose-500 font-bold">{coordWarning}</p>}
+                            {geoFeedback && (
+                                <p className={`text-[10px] font-bold ${geoFeedbackError ? 'text-rose-500 animate-pulse' : 'text-emerald-500'}`}>
+                                    {geoFeedback}
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                </Card>
+
+                {/* Social & Web */}
+                <Card header={
+                    <div className="flex items-center gap-2">
+                        <Globe size={18} className="text-theme-primary" />
+                        <span className="font-black text-xs uppercase tracking-widest">{t('profile.contactLinks')}</span>
+                    </div>
+                }>
+                    <div className="space-y-6 p-2">
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Mail size={10}/> {t('profile.publicEmail')}</label>
+                            <Input
+                                type="email"
+                                value={profile.email || ''}
+                                onChange={(e) => setProfile({ ...profile, email: e.target.value })}
+                                placeholder={t('profile.emailPlaceholder')}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Phone size={10}/> {t('profile.publicPhone')}</label>
+                            <Input
+                                type="tel"
+                                value={profile.phone || ''}
+                                onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
+                                placeholder={t('profile.phonePlaceholder')}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Globe size={10}/> {t('profile.website')}</label>
+                            <Input
+                                value={profile.url || ''}
+                                onChange={(e) => setProfile({ ...profile, url: e.target.value })}
+                                placeholder={t('profile.websitePlaceholder')}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><User size={10}/> {t('profile.pictureUrl')}</label>
+                            <Input
+                                value={profile.pictureUrl || ''}
+                                onChange={(e) => setProfile({ ...profile, pictureUrl: e.target.value })}
+                                placeholder={t('profile.pictureUrlPlaceholder')}
                             />
                         </div>
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-theme-light mb-1.5">Coordinates (Latitude, Longitude)</label>
-                        <Input
-                            value={profile.coordinates || ''}
-                            onChange={(e) => {
-                                setProfile({ ...profile, coordinates: e.target.value });
-                                if (coordWarning) setCoordWarning(''); // Clear warning while typing
-                            }}
-                            onBlur={handleCoordBlur}
-                            className={coordWarning ? 'border-red-500 focus:ring-red-500' : ''}
-                            placeholder="e.g. 51.16, 10.45"
-                        />
-                        {coordWarning ? (
-                            <p className="text-[10px] text-red-500 mt-1 font-medium">{coordWarning}</p>
-                        ) : (
-                            <p className="text-[10px] text-theme-light mt-1 italic">Format: Decimal degrees. Used for map-based voucher discovery.</p>
-                        )}
-                    </div>
-                </div>
-            </section>
+                </Card>
 
-            <div className="flex flex-col items-center gap-4 py-8">
-                <Button 
-                    variant="primary" 
-                    size="lg" 
-                    onClick={handleSave} 
-                    disabled={isSaving}
-                    className="min-w-[200px] shadow-lg shadow-theme-primary/20"
-                >
-                    {isSaving ? 'Updating Profile...' : 'Save Profile Changes'}
+                {/* Offerings */}
+                <Card header={
+                    <div className="flex items-center gap-2">
+                        <Briefcase size={18} className="text-theme-primary" />
+                        <span className="font-black text-xs uppercase tracking-widest">{t('profile.community')}</span>
+                    </div>
+                }>
+                    <div className="space-y-6 p-2">
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> {t('profile.serviceOffer')}</label>
+                            <textarea
+                                className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[140px]"
+                                value={profile.serviceOffer || ''}
+                                onChange={(e) => setProfile({ ...profile, serviceOffer: e.target.value })}
+                                placeholder={t('profile.serviceOfferPlaceholder')}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Heart size={10}/> {t('profile.needs')}</label>
+                            <textarea
+                                className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[140px]"
+                                value={profile.needs || ''}
+                                onChange={(e) => setProfile({ ...profile, needs: e.target.value })}
+                                placeholder={t('profile.needsPlaceholder')}
+                            />
+                        </div>
+                    </div>
+                </Card>
+            </div>
+
+            <div className="pt-6 flex flex-col items-center gap-4">
+                <Button onClick={handleSave} disabled={isSaving} className="min-w-[240px] gap-2 rounded-2xl py-4 shadow-lg shadow-theme-primary/20">
+                    {isSaving ? <CheckCircle2 className="animate-pulse" size={18} /> : <Save size={18} />}
+                    {isSaving ? t('profile.updating') : t('profile.updateProfile')}
                 </Button>
-                {error && <p className="text-sm text-red-500 animate-bounce">{error}</p>}
-                {success && <p className="text-sm text-green-500 font-medium">{success}</p>}
+                {error && <p className="text-sm font-bold text-rose-500 animate-bounce">{error}</p>}
+                {success && <p className="text-sm font-bold text-emerald-500 flex items-center gap-2"><CheckCircle2 size={16}/> {success}</p>}
             </div>
         </div>
     );

@@ -1,4 +1,4 @@
-use crate::models::{VoucherStandardInfo, MnemonicLanguage};
+use crate::models::{VoucherStandardInfo, MnemonicLanguage, FrontendError};
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
 use log::{error, info, warn};
 use std::fs;
@@ -6,17 +6,17 @@ use human_money_core::app_service::AppService;
 use tauri::Manager;
 
 #[tauri::command]
-pub fn generate_mnemonic(word_count: u32, language: MnemonicLanguage) -> Result<String, String> {
+pub fn generate_mnemonic(word_count: u32, language: MnemonicLanguage) -> Result<String, FrontendError> {
     info!("Generating a new {}-word mnemonic in language {:?}", word_count, language);
     let core_language = language.into();
-    AppService::generate_mnemonic(word_count, core_language)
+    AppService::generate_mnemonic(word_count, core_language).map_err(FrontendError::from)
 }
 
 #[tauri::command]
-pub fn validate_mnemonic(mnemonic: String, language: MnemonicLanguage) -> Result<(), String> {
+pub fn validate_mnemonic(mnemonic: String, language: MnemonicLanguage) -> Result<(), FrontendError> {
     info!("Validating mnemonic with language {:?}...", language);
     let core_language = language.into();
-    AppService::validate_mnemonic(&mnemonic, core_language)
+    AppService::validate_mnemonic(&mnemonic, core_language).map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -79,24 +79,32 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
     let mut standards = Vec::new();
     match fs::read_dir(&standards_dir_in_data) {
         Ok(entries) => {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    info!("[Debug] Found entry in standards directory: {}", path.display());
-                    if path.is_dir() {
-                        let standard_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                        info!("[Debug] Found potential standard directory with ID: '{}'", standard_id);
-                        let toml_path = path.join("standard.toml");
-                        info!("[Debug] Checking for standard file at: {}", toml_path.display());
-                        if toml_path.exists() {
-                             let content = fs::read_to_string(&toml_path)
-                                .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
-                            info!("[Debug] Successfully read '{}', adding to list.", toml_path.display());
-                            standards.push(VoucherStandardInfo {
-                                id: standard_id,
-                                content,
-                            });
-                        }
+            for entry in entries.flatten() {
+                let path = entry.path();
+                info!("[Debug] Found entry in standards directory: {}", path.display());
+                if path.is_dir() {
+                    let standard_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    info!("[Debug] Found potential standard directory with ID: '{}'", standard_id);
+                    let toml_path = path.join("standard.toml");
+                    info!("[Debug] Checking for standard file at: {}", toml_path.display());
+                    if toml_path.exists() {
+                         let content = fs::read_to_string(&toml_path)
+                            .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
+                        info!("[Debug] Successfully read '{}', parsing for display name.", toml_path.display());
+                        
+                        let display_name = match human_money_core::services::standard_manager::verify_and_parse_standard(&content) {
+                            Ok((def, _)) => def.immutable.identity.name.clone(),
+                            Err(e) => {
+                                warn!("Failed to parse standard TOML for {}: {}. Falling back to ID.", standard_id, e);
+                                standard_id.clone()
+                            }
+                        };
+
+                        standards.push(VoucherStandardInfo {
+                            id: standard_id,
+                            display_name,
+                            content,
+                        });
                     }
                 }
             }
@@ -122,11 +130,6 @@ pub fn get_bip39_wordlist(language: MnemonicLanguage) -> Vec<&'static str> {
     AppService::get_mnemonic_wordlist(core_language)
 }
 
-#[tauri::command]
-pub fn frontend_log(message: String) {
-    info!("[Frontend]: {}", message);
-}
-
 
 #[tauri::command]
 pub async fn log_to_backend(level: String, message: String) -> Result<(), String> {
@@ -137,4 +140,55 @@ pub async fn log_to_backend(level: String, message: String) -> Result<(), String
         _ => info!("[Frontend, {level}]: {}", message),
     }
     Ok(())
+}
+#[tauri::command]
+pub fn get_local_instance_id(app: tauri::AppHandle) -> Result<String, String> {
+    // 1. Primary: OS-level Machine ID (clone-resistant) - only on Desktop
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+    {
+        match machine_uid::get() {
+            Ok(id) if !id.trim().is_empty() => {
+                info!("Device binding: Using OS Machine ID.");
+                return Ok(id.trim().to_string());
+            }
+            Ok(_) => {
+                warn!("OS Machine ID returned empty. Falling back to file-based ID.");
+            }
+            Err(e) => {
+                warn!("Failed to read OS Machine ID: {}. Falling back to file-based ID.", e);
+            }
+        }
+    }
+
+    // 2. Fallback: File-based UUID for sandboxed/restricted environments
+    let app_config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let fallback_path = app_config_dir.join("instance_id_fallback");
+
+    if fallback_path.exists() {
+        let id = std::fs::read_to_string(&fallback_path).map_err(|e| e.to_string())?;
+        let trimmed = id.trim().to_string();
+        if !trimmed.is_empty() {
+            info!("Device binding: Using fallback file-based ID.");
+            return Ok(trimmed);
+        }
+    }
+
+    // 3. Generate new fallback (first run in sandboxed environment)
+    if !app_config_dir.exists() {
+        std::fs::create_dir_all(&app_config_dir).map_err(|e| e.to_string())?;
+    }
+    let new_id = uuid::Uuid::new_v4().to_string();
+    std::fs::write(&fallback_path, &new_id).map_err(|e| e.to_string())?;
+    warn!("Device binding: Generated new fallback instance ID for sandboxed environment.");
+    Ok(new_id)
+}
+
+#[tauri::command]
+pub fn get_latest_logs(app: tauri::AppHandle) -> Result<String, String> {
+    let log_dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    let log_file_path = log_dir.join("human_money_app.log");
+    if !log_file_path.exists() {
+        return Ok(String::new());
+    }
+    fs::read_to_string(&log_file_path).map_err(|e| format!("Failed to read log file: {}", e))
 }

@@ -1,5 +1,5 @@
-// src/utils/signatureHints.ts
-import { PublicProfile } from "../types";
+import { TFunction } from "i18next";
+import { PublicProfile, VoucherStandardDefinition } from "../types";
 
 /**
  * Mapping of CEL field references to human-readable display names
@@ -15,7 +15,7 @@ export const PROFILE_FIELD_MAPPINGS: Record<string, { label: string; checkFn: (p
         checkFn: (profile) => !!profile.address && (
             !!profile.address.street?.trim() ||
             !!profile.address.city?.trim() ||
-            !!profile.address.zip_code?.trim()
+            !!profile.address.zipCode?.trim()
         )
     },
     'coordinates': {
@@ -42,15 +42,29 @@ export const PROFILE_FIELD_MAPPINGS: Record<string, { label: string; checkFn: (p
         label: 'Website',
         checkFn: (profile) => !!profile.url && profile.url.trim() !== ''
     },
-    'service_offer': {
+    'serviceOffer': {
         label: 'Service Offer',
-        checkFn: (profile) => !!profile.service_offer && profile.service_offer.trim() !== ''
+        checkFn: (profile) => !!profile.serviceOffer && profile.serviceOffer.trim() !== ''
     },
     'needs': {
         label: 'Needs',
         checkFn: (profile) => !!profile.needs && profile.needs.trim() !== ''
     }
 };
+
+/**
+ * Format field name to Title Case (e.g. someCustomField -> Some Custom Field)
+ */
+export function formatFieldName(field: string): string {
+    const result = field
+        .replace(/([A-Z])/g, ' $1') // insert a space before all caps
+        .replace(/[_-]+/g, ' ')     // replace underscores/hyphens with spaces
+        .trim();
+    return result
+        .split(/\s+/)
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+}
 
 /**
  * Extracts CEL field references from a custom rule expression.
@@ -77,88 +91,53 @@ function extractFieldReferences(expression: string): string[] {
 }
 
 /**
- * Parses TOML content to extract custom_rules expressions.
- * This is a simple string-based parser that finds [immutable.custom_rules.*] sections.
- */
-function extractCustomRules(tomlContent: string): Array<{ name: string; expression: string }> {
-    const rules: Array<{ name: string; expression: string }> = [];
-    const lines = tomlContent.split('\n');
-    let currentRule: { name: string; expression?: string } | null = null;
-    
-    for (const line of lines) {
-        // Check for rule section header: [immutable.custom_rules.rule_name] or [mutable.custom_rules.rule_name]
-        const sectionMatch = line.match(/^\[(?:immutable|mutable)\.custom_rules\.([^\]]+)\]/);
-        if (sectionMatch) {
-            // Save previous rule if it has an expression
-            if (currentRule && currentRule.expression) {
-                rules.push({ name: currentRule.name, expression: currentRule.expression });
-            }
-            currentRule = { name: sectionMatch[1] };
-            continue;
-        }
-        
-        // Check for expression line within a rule section
-        if (currentRule && line.trim().startsWith('expression')) {
-            // Find the first and last quote on the line to be more robust
-            const firstQuoteIdx = line.indexOf('"');
-            const lastQuoteIdx = line.lastIndexOf('"');
-            
-            if (firstQuoteIdx !== -1 && lastQuoteIdx !== -1 && firstQuoteIdx !== lastQuoteIdx) {
-                currentRule.expression = line.substring(firstQuoteIdx + 1, lastQuoteIdx);
-            } else {
-                // Try single quotes if double quotes failed
-                const firstSQuoteIdx = line.indexOf("'");
-                const lastSQuoteIdx = line.lastIndexOf("'");
-                if (firstSQuoteIdx !== -1 && lastSQuoteIdx !== -1 && firstSQuoteIdx !== lastSQuoteIdx) {
-                    currentRule.expression = line.substring(firstSQuoteIdx + 1, lastSQuoteIdx);
-                }
-            }
-        }
-    }
-    
-    // Save the last rule
-    if (currentRule && currentRule.expression) {
-        rules.push({ name: currentRule.name, expression: currentRule.expression });
-    }
-    
-    return rules;
-}
-
-/**
  * Main function to generate a profile hint based on voucher standard content.
  * 
- * @param standardContent - The TOML content of the voucher standard
+ * @param standard - The parsed voucher standard definition
  * @param currentProfile - The user's current PublicProfile
+ * @param t - The translation function
  * @returns A compact hint string describing missing profile fields, or null if no hints
  */
 export function getMissingProfileHint(
-    standardContent: string,
-    currentProfile: PublicProfile | null
+    standard: VoucherStandardDefinition,
+    currentProfile: PublicProfile | null,
+    t: TFunction
 ): string | null {
     if (!currentProfile) {
         return null; // Return null instead of a message to avoid noise when no profile is loaded
     }
     
-    // Extract custom rules from the standard
-    const customRules = extractCustomRules(standardContent);
-    
-    if (customRules.length === 0) {
-        return null; // No custom rules, no hints needed
-    }
-    
     // Collect all field references from all rules
     const allFields = new Set<string>();
-    for (const rule of customRules) {
-        const fields = extractFieldReferences(rule.expression);
-        fields.forEach(f => allFields.add(f));
+    
+    // Check custom rules in immutable zone
+    if (standard.immutable.customRules) {
+        for (const rule of Object.values(standard.immutable.customRules)) {
+            const fields = extractFieldReferences(rule.expression);
+            fields.forEach(f => allFields.add(f));
+        }
     }
     
     // Check which fields are missing or empty in the profile
     const missingFields: string[] = [];
     for (const field of allFields) {
         const mapping = PROFILE_FIELD_MAPPINGS[field];
-        if (mapping && !mapping.checkFn(currentProfile)) {
-            missingFields.push(mapping.label);
+        let isMissing = false;
+        
+        if (mapping) {
+            isMissing = !mapping.checkFn(currentProfile);
+        } else {
+            // Fallback for custom fields
+            const value = (currentProfile as unknown as Record<string, unknown>)[field];
+            isMissing = value === undefined || value === null || (
+                typeof value === 'string' ? value.trim() === '' : !value
+            );
+        }
+        
+        if (isMissing) {
+            const fallbackLabel = formatFieldName(field);
+            const translatedLabel = t(`profile.field.${field}`, { defaultValue: fallbackLabel });
+            missingFields.push(translatedLabel);
         }
     }
     
@@ -167,13 +146,16 @@ export function getMissingProfileHint(
     }
     
     // Generate a compact hint string
-    const prefix = "This standard likely checks for: ";
+    const prefix = t('voucher.hint.prefix', { defaultValue: "This standard likely checks for: " });
+    const andStr = t('voucher.hint.connectorAnd', { defaultValue: " and " });
+    const commaStr = t('voucher.hint.connectorComma', { defaultValue: ", " });
+    
     if (missingFields.length === 1) {
         return `${prefix}${missingFields[0]}`;
     } else if (missingFields.length === 2) {
-        return `${prefix}${missingFields[0]} and ${missingFields[1]}`;
+        return `${prefix}${missingFields[0]}${andStr}${missingFields[1]}`;
     } else {
         const lastField = missingFields.pop();
-        return `${prefix}${missingFields.join(', ')} and ${lastField}`;
+        return `${prefix}${missingFields.join(commaStr)}${andStr}${lastField}`;
     }
 }

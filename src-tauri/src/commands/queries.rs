@@ -1,21 +1,26 @@
-use crate::{AppState, models::{FrontendUserProfile, FrontendAddressData}};
-use human_money_core::{
-    wallet::{AggregatedBalance, VoucherSummary, VoucherDetails, ProofOfDoubleSpendSummary},
-};
+use crate::AppState;
+use crate::models::FrontendError;
 
 #[tauri::command]
-pub fn get_user_profile(state: tauri::State<AppState>) -> Result<FrontendUserProfile, String> {
+pub fn get_active_asset_classes(state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendAssetClassSummary>, FrontendError> {
     let service = state.service.lock().unwrap();
-    let profile = service.get_public_profile()?;
+    let asset_classes = service.get_active_asset_classes().map_err(FrontendError::from)?;
+    Ok(asset_classes.into_iter().map(|s| s.into()).collect())
+}
+
+#[tauri::command]
+pub fn get_user_profile(state: tauri::State<AppState>) -> Result<crate::models::FrontendUserProfile, FrontendError> {
+    let service = state.service.lock().unwrap();
+    let profile = service.get_public_profile().map_err(FrontendError::from)?;
     
-    Ok(FrontendUserProfile {
+    Ok(crate::models::FrontendUserProfile {
         protocol_version: profile.protocol_version,
         id: profile.id,
         first_name: profile.first_name,
         last_name: profile.last_name,
         organization: profile.organization,
         community: profile.community,
-        address: profile.address.map(|a| FrontendAddressData {
+        address: profile.address.map(|a| crate::models::FrontendAddressData {
             street: a.street,
             house_number: a.house_number,
             zip_code: a.zip_code,
@@ -31,139 +36,137 @@ pub fn get_user_profile(state: tauri::State<AppState>) -> Result<FrontendUserPro
         service_offer: profile.service_offer,
         needs: profile.needs,
         picture_url: profile.picture_url,
-        ..Default::default()
     })
 }
 
 #[tauri::command]
-pub fn get_user_id(state: tauri::State<AppState>) -> Result<String, String> {
+pub fn get_user_id(state: tauri::State<AppState>) -> Result<String, FrontendError> {
     let service = state.service.lock().unwrap();
-    service.get_user_id()
+    service.get_user_id().map_err(FrontendError::from)
 }
 
 #[tauri::command]
-pub fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<Vec<AggregatedBalance>, String> {
+pub fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendAggregatedBalance>, FrontendError> {
     let service = state.service.lock().unwrap();
-    service.get_total_balance_by_currency()
+    let balances = service.get_total_balance_by_currency().map_err(FrontendError::from)?;
+    Ok(balances.into_iter().map(|b| b.into()).collect())
 }
 
 #[tauri::command]
-pub fn get_voucher_summaries(state: tauri::State<AppState>) -> Result<Vec<VoucherSummary>, String> {
+pub fn get_voucher_summaries(test_filter: Option<bool>, state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendVoucherSummary>, FrontendError> {
     let service = state.service.lock().unwrap();
-    // The robust filtering is handled in the frontend; the backend's job is to fetch all summaries.
-    service.get_voucher_summaries(None, None)
+    // Use the optional test_filter provided by the frontend.
+    let summaries = service.get_voucher_summaries(None, None, test_filter).map_err(FrontendError::from)?;
+    Ok(summaries.into_iter().map(|s| s.into()).collect())
 }
 
 #[tauri::command]
-pub fn get_voucher_details(local_id: String, state: tauri::State<AppState>) -> Result<VoucherDetails, String> {
+pub fn get_voucher_details(local_id: String, state: tauri::State<AppState>) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     let service = state.service.lock().unwrap();
-    service.get_voucher_details(&local_id)
+    let details = service.get_voucher_details(&local_id).map_err(FrontendError::from)?;
+    Ok(details.into())
 }
 
 #[tauri::command]
-pub fn get_double_spend_conflicts(state: tauri::State<AppState>) -> Result<Vec<ProofOfDoubleSpendSummary>, String> {
+pub fn get_voucher_source_sender(local_id: String, state: tauri::State<AppState>) -> Result<Option<String>, FrontendError> {
     let service = state.service.lock().unwrap();
-    service.list_conflicts()
+    service.get_voucher_source_sender(&local_id).map_err(FrontendError::from)
 }
 
 #[tauri::command]
-pub fn get_proof_of_double_spend(proof_id: String, state: tauri::State<AppState>) -> Result<crate::models::FullProofDetails, String> {
+pub fn get_double_spend_conflicts(state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendProofOfDoubleSpendSummary>, FrontendError> {
     let service = state.service.lock().unwrap();
-    let summaries = service.list_conflicts()?;
+    let conflicts = service.list_conflicts().map_err(FrontendError::from)?;
+    Ok(conflicts.into_iter().map(|s| s.into()).collect())
+}
+
+#[tauri::command]
+pub fn get_proof_of_double_spend(proof_id: String, state: tauri::State<AppState>) -> Result<crate::models::FullProofDetails, FrontendError> {
+    let service = state.service.lock().unwrap();
+    let summaries = service.list_conflicts().map_err(FrontendError::from)?;
     let summary = summaries.into_iter().find(|s| s.proof_id == proof_id)
-        .ok_or_else(|| format!("Conflict proof {} not found", proof_id))?;
+        .ok_or_else(|| FrontendError::from(format!("Conflict proof {} not found", proof_id)))?;
     
-    let proof = service.get_proof_of_double_spend(&proof_id)?;
+    let proof = service.get_proof_of_double_spend(&proof_id).map_err(FrontendError::from)?;
+    
+    let conflict_role = match summary.conflict_role {
+        human_money_core::models::conflict::ConflictRole::Victim => "Victim",
+        human_money_core::models::conflict::ConflictRole::Witness => "Witness",
+    };
     
     Ok(crate::models::FullProofDetails {
-        proof,
+        proof: proof.into(),
         local_override: summary.local_override,
         local_note: summary.local_note,
-        conflict_role: summary.conflict_role,
+        conflict_role: conflict_role.to_string(),
     })
 }
 
 #[tauri::command]
-pub fn get_proof_id_for_voucher(local_id: String, state: tauri::State<AppState>) -> Result<Option<String>, String> {
+pub fn get_proof_id_for_voucher(local_id: String, state: tauri::State<AppState>) -> Result<Option<String>, FrontendError> {
     let service = state.service.lock().unwrap();
-    let conflicts = service.list_conflicts()?;
-    let details = service.get_voucher_details(&local_id)?;
-    
-
-    for conflict in &conflicts {
-        let proof = service.get_proof_of_double_spend(&conflict.proof_id)?;
-        
-        
-        // Match 1: Direct transaction ID match (Checks all transactions in the voucher)
-        let has_tx_match = proof.conflicting_transactions.iter().any(|tx| {
-            details.voucher.transactions.iter().any(|vtx| vtx.t_id == tx.t_id)
-        });
-        if has_tx_match { 
-            log::info!("  ✅ Match 1 (t_id) found!");
-            return Ok(Some(conflict.proof_id.clone())); 
-        }
-
-        // Match 2: DS-Tag match (Very robust)
-        let proof_ds_tags: Vec<&str> = proof.conflicting_transactions.iter()
-            .filter_map(|tx| tx.trap_data.as_ref().map(|td| td.ds_tag.as_str()))
-            .collect();
-            
-        let has_ds_tag_match = details.voucher.transactions.iter().any(|vtx| {
-            vtx.trap_data.as_ref().map(|td| proof_ds_tags.contains(&td.ds_tag.as_str())).unwrap_or(false)
-        });
-        if has_ds_tag_match { 
-            log::info!("  ✅ Match 2 (ds_tag) found!");
-            return Ok(Some(conflict.proof_id.clone())); 
-        }
-
-        // Match 3: Deep Fork Point match (Scans entire chain)
-        let has_deep_fork_match = details.voucher.transactions.iter().any(|vtx| {
-            vtx.prev_hash == proof.fork_point_prev_hash || vtx.t_id == proof.fork_point_prev_hash
-        });
-        // Ergänzung: Falls der Fork-Point irgendwo in der Historie des Vouchers war.
-        let has_any_history_match = details.voucher.transactions.iter().any(|vtx| {
-             // In einem Proof ist die fork_point_prev_hash die t_id des Elter-Vouchers.
-             vtx.prev_hash == proof.fork_point_prev_hash
-        });
-
-        if has_deep_fork_match || has_any_history_match { 
-            log::info!("  ✅ Match 3 (fork_point) found!");
-            return Ok(Some(conflict.proof_id.clone())); 
-        }
-
-        // Match 4: Offender & Chain Link (The most aggressive fallback)
-        // If the offender is the sender of ANY transaction in this voucher,
-        // and we are in quarantine, it's highly likely this is the right proof.
-        let is_offender_involved = details.voucher.transactions.iter().any(|vtx| {
-            vtx.sender_id.as_deref() == Some(proof.offender_id.as_str())
-        });
-        if is_offender_involved {
-            log::info!("  ✅ Match 4 (offender involvement) found!");
-            return Ok(Some(conflict.proof_id.clone()));
-        }
-
-        // Match 5: Recipient match (Targeted at the victim)
-        let voucher_last_recipient = details.voucher.transactions.last()
-            .map(|tx| tx.recipient_id.as_str());
-        let has_recipient_match = proof.conflicting_transactions.iter().any(|tx| {
-            voucher_last_recipient == Some(tx.recipient_id.as_str())
-        });
-        if has_recipient_match { 
-            log::info!("  ✅ Match 5 (recipient_id) found!");
-            return Ok(Some(conflict.proof_id.clone())); 
-        }
-    }
-    
-    log::warn!("=== No proof found for quarantined voucher {} after checking {} conflicts ===", local_id, conflicts.len());
-    Ok(None)
+    service.get_proof_id_for_voucher(&local_id).map_err(FrontendError::from)
 }
 
 #[tauri::command]
 pub fn check_reputation(
     offender_id: String,
     state: tauri::State<AppState>,
-) -> Result<human_money_core::models::conflict::TrustStatus, String> {
+) -> Result<crate::models::FrontendTrustStatus, FrontendError> {
     log::info!("Checking reputation for offender: {}", offender_id);
     let service = state.service.lock().unwrap();
-    service.check_reputation(&offender_id)
+    let status = service.check_reputation(&offender_id).map_err(FrontendError::from)?;
+    Ok(status.into())
+}
+#[tauri::command]
+pub fn get_event_history(
+    offset: usize,
+    limit: usize,
+    state: tauri::State<AppState>,
+) -> Result<Vec<crate::models::FrontendWalletEvent>, FrontendError> {
+    let events_cache = state.events.lock().unwrap();
+    if let Some(events) = events_cache.as_ref() {
+        let start = offset.min(events.len());
+        let end = (offset + limit).min(events.len());
+        Ok(events[start..end].iter().map(|e| e.clone().into()).collect())
+    } else {
+        Err(FrontendError::from("Events cache not initialized".to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use human_money_core::app_service::AppService;
+    use human_money_core::models::wallet_event::{WalletEvent, WalletEventType};
+    use chrono::Utc;
+
+    #[test]
+    fn test_get_event_history_uses_cache() {
+        use std::path::PathBuf;
+        // Mock AppState
+        let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
+        let state_raw = AppState {
+            service: Mutex::new(service),
+            history: Mutex::new(None),
+            events: Mutex::new(Some(vec![
+                WalletEvent {
+                    event_id: "test_event_1".to_string(),
+                    event_type: WalletEventType::VoucherActivated,
+                    timestamp: Utc::now(),
+                    local_instance_id: "voucher_1".to_string(),
+                    voucher_id: "vid_1".to_string(),
+                    bff_data: Default::default(),
+                }
+            ])),
+            contacts: Mutex::new(None),
+            settings: Mutex::new(None),
+        };
+        
+        let events = state_raw.events.lock().unwrap();
+        assert!(events.is_some());
+        assert_eq!(events.as_ref().unwrap().len(), 1);
+        assert_eq!(events.as_ref().unwrap()[0].event_id, "test_event_1");
+    }
 }

@@ -1,17 +1,37 @@
 // src/components/CreateNewProfile.tsx
-import { useState, useEffect, ChangeEvent, FormEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { info, error } from "@tauri-apps/plugin-log";
+import { useState, useEffect, useRef, FormEvent } from "react";
+import { useTranslation } from "react-i18next";
+import logo from "../assets/logo.png";
+import { profileService } from "../services/profileService";
+import { authService } from "../services/authService";
+import { AuthLayout } from "./AuthLayout";
 import { logger } from "../utils/log";
 import { MnemonicLanguage } from "../types";
-
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
+import { Card } from "./ui/Card";
+import { translateError } from "../utils/errorHelper";
+import {
+    ShieldCheck,
+    Lock,
+    Fingerprint,
+    Languages,
+    BookOpen,
+    AlertTriangle,
+    CheckCircle2,
+    ArrowRight,
+    ArrowLeft,
+    RefreshCw,
+    ShieldAlert,
+    Info,
+    User,
+    HelpCircle
+} from "lucide-react";
+import { PrefixInfoModal } from "./ui/PrefixInfoModal";
+import { HelpIcon } from "./ui/HelpIcon";
 
-// Define the steps for the wizard
 type WizardStep = "display_seed" | "confirm_seed" | "set_password";
 
-// Define the structure for the confirmation words
 interface ConfirmationWord {
     index: number;
     value: string;
@@ -19,11 +39,11 @@ interface ConfirmationWord {
 
 interface CreateNewProfileProps {
     onProfileCreated: () => void;
-    onSwitchToRecreate: () => void;
     onSwitchToLogin?: () => void;
 }
 
-export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitchToLogin }: CreateNewProfileProps) {
+export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNewProfileProps) {
+    const { t } = useTranslation();
     const [wizardStep, setWizardStep] = useState<WizardStep>("display_seed");
     const [generatedSeed, setGeneratedSeed] = useState<string[]>([]);
     const [wordCount, setWordCount] = useState<12 | 24>(12);
@@ -31,239 +51,164 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
 
-    // State for seed confirmation step
     const [confirmationWords, setConfirmationWords] = useState<ConfirmationWord[]>([]);
     const [userConfirmationInput, setUserConfirmationInput] = useState<{ [key: number]: string }>({});
     const [isBulkMode, setIsBulkMode] = useState(false);
     const [bulkSeedInput, setBulkSeedInput] = useState("");
 
-    // State for password step
     const [passphrase, setPassphrase] = useState<string>("");
     const [confirmPassphrase, setConfirmPassphrase] = useState<string>("");
     const [profileName, setProfileName] = useState("");
     const [userPrefix, setUserPrefix] = useState("");
+    const [isSubAccount, setIsSubAccount] = useState(false);
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
-
-    // --- Effects ---
+    const [showPrefixInfo, setShowPrefixInfo] = useState(false);
+    const passwordInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-        // Log when component is displayed
         logger.info("CreateNewProfile component displayed");
-
-        // Detect system language for smart default
         const systemLang = navigator.language || "en";
         let detectedLanguage: MnemonicLanguage = "english";
-        if (systemLang.startsWith("de")) {
-            detectedLanguage = "german";
-        } else if (systemLang.startsWith("es")) {
-            detectedLanguage = "spanish";
-        } else if (systemLang.startsWith("fr")) {
-            detectedLanguage = "french";
-        } else if (systemLang.startsWith("it")) {
-            detectedLanguage = "italian";
-        } else if (systemLang.startsWith("ja")) {
-            detectedLanguage = "japanese";
-        } else if (systemLang.startsWith("ko")) {
-            detectedLanguage = "korean";
-        } else if (systemLang.startsWith("pt")) {
-            detectedLanguage = "portuguese";
-        } else if (systemLang.startsWith("cs")) {
-            detectedLanguage = "czech";
-        } else if (systemLang.startsWith("zh-CN")) {
-            detectedLanguage = "chineseSimplified";
-        } else if (systemLang.startsWith("zh-TW")) {
-            detectedLanguage = "chineseTraditional";
+        const langMap: Record<string, MnemonicLanguage> = {
+            "de": "german", "es": "spanish", "fr": "french", "it": "italian",
+            "ja": "japanese", "ko": "korean", "pt": "portuguese", "cs": "czech",
+            "zh-CN": "chineseSimplified", "zh-TW": "chineseTraditional"
+        };
+        for (const [key, val] of Object.entries(langMap)) {
+            if (systemLang.startsWith(key)) { detectedLanguage = val; break; }
         }
         setSelectedLanguage(detectedLanguage);
     }, []);
 
     useEffect(() => {
-        // Generate a new seed phrase when the component mounts or word count or language changes.
         async function generateNewSeed() {
             setIsLoading(true);
-            setFeedbackMsg("Generating new secure seed phrase...");
             try {
-                const newSeed: string = await invoke("generate_mnemonic", { wordCount, language: selectedLanguage });
+                const newSeed: string = await profileService.generateMnemonic(wordCount, selectedLanguage);
                 setGeneratedSeed(newSeed.split(' '));
-                setFeedbackMsg("");
-                info("Frontend: A new seed phrase was generated.");
             } catch (e) {
-                const errorMsg = `Failed to generate seed phrase: ${e}`;
-                setFeedbackMsg(`Error: ${errorMsg}`);
-                error(errorMsg);
+                setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(e, t)}`);
             } finally {
                 setIsLoading(false);
             }
         }
         generateNewSeed();
-    }, [wordCount, selectedLanguage]);
+    }, [wordCount, selectedLanguage, t]);
 
-    // Auto-clean bulk seed input (same logic as RecreateProfile)
     useEffect(() => {
         if (!isBulkMode) return;
-
-        const cleanSeedText = (text: string) => {
-            return text
-                .toLowerCase()
-                .replace(/[0-9.,\-:]/g, ' ') // Remove digits and punctuation
-                .replace(/[\r\n\t]/g, ' ')      // Replace tabs and newlines with space
-                .replace(/\s+/g, ' ')          // Collapse multiple spaces
-                .trim();
-        };
-
+        const cleanSeedText = (text: string) => text.toLowerCase().replace(/[0-9.,\-:]/g, ' ').replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim();
         const cleaned = cleanSeedText(bulkSeedInput);
-        if (cleaned !== bulkSeedInput && bulkSeedInput.length > 0) {
-            // Auto-apply cleaning if there are numbers or multiple spaces
-            if (/[0-9.,\-:]/.test(bulkSeedInput) || /\s\s/.test(bulkSeedInput)) {
-                setBulkSeedInput(cleaned);
-            }
-        }
+        if ((/[0-9.,\-:]/.test(bulkSeedInput) || /\s\s/.test(bulkSeedInput)) && cleaned !== bulkSeedInput) setBulkSeedInput(cleaned);
     }, [bulkSeedInput, isBulkMode]);
 
-
-    // --- Helper Functions ---
-
-    // Prepares the confirmation step by selecting random words
     const prepareConfirmationStep = () => {
         const shuffled = [...generatedSeed].map((word, index) => ({ word, index }));
-        shuffled.sort(() => 0.5 - Math.random()); // Shuffle indices
+        shuffled.sort(() => 0.5 - Math.random());
         const selected = shuffled.slice(0, 3).map(item => ({ index: item.index, value: "" }));
-        selected.sort((a, b) => a.index - b.index); // Sort by index for user-friendly display
+        selected.sort((a, b) => a.index - b.index);
         setConfirmationWords(selected);
-        setUserConfirmationInput({}); // Reset input
+        setUserConfirmationInput({});
         setBulkSeedInput("");
         setIsBulkMode(false);
         setFeedbackMsg("");
         setWizardStep("confirm_seed");
     };
 
-    const cleanSeedText = (text: string) => {
-        return text
-            .toLowerCase()
-            .replace(/[0-9.,\-:]/g, ' ') // Remove digits and punctuation
-            .replace(/[\r\n\t]/g, ' ')      // Replace tabs and newlines with space
-            .replace(/\s+/g, ' ')          // Collapse multiple spaces
-            .trim();
-    };
-
-    // --- Event Handlers ---
-
-    async function handleWordCountChange(event: ChangeEvent<HTMLSelectElement>) {
-        const newWordCount = parseInt(event.target.value, 10) as 12 | 24;
-        setWordCount(newWordCount);
-    }
-
-    async function handleLanguageChange(event: ChangeEvent<HTMLSelectElement>) {
-        const newLanguage = event.target.value as MnemonicLanguage;
-        setSelectedLanguage(newLanguage);
-    }
-
-    const handleConfirmationInputChange = (index: number, value: string) => {
-        setUserConfirmationInput(prev => ({ ...prev, [index]: value.trim().toLowerCase() }));
-    };
+    const cleanSeedText = (text: string) => text.toLowerCase().replace(/[0-9.,\-:]/g, ' ').replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim();
 
     const handleConfirmSeedSubmit = (e: FormEvent) => {
         e.preventDefault();
         
+        // Passphrase confirmation
+        if (passphrase !== confirmPassphrase) {
+            setFeedbackMsg(t('profile.passphraseMismatch'));
+            return;
+        }
+
         if (isBulkMode) {
-            const cleanedInput = cleanSeedText(bulkSeedInput);
-            const targetSeed = generatedSeed.join(' ');
-            if (cleanedInput !== targetSeed) {
-                setFeedbackMsg("Error: The phrase does not match your generated seed. Please check for typos or missing words.");
+            if (cleanSeedText(bulkSeedInput) !== generatedSeed.join(' ')) {
+                setFeedbackMsg(t('profile.seedMismatch'));
                 return;
             }
         } else {
             for (const word of confirmationWords) {
                 if (userConfirmationInput[word.index] !== generatedSeed[word.index]) {
-                    setFeedbackMsg("Error: One or more words are incorrect. Please check your saved seed phrase.");
+                    setFeedbackMsg(t('profile.seedWordsIncorrect'));
                     return;
                 }
             }
         }
-
-        setFeedbackMsg("Seed phrase confirmed successfully!");
-        setTimeout(() => {
-            setFeedbackMsg("");
-            setWizardStep("set_password");
-        }, 1500);
+        setFeedbackMsg(t('profile.seedConfirmed'));
+        setTimeout(() => { setFeedbackMsg(""); setWizardStep("set_password"); }, 1000);
     };
 
     async function handleCreateProfileSubmit(e: FormEvent) {
         e.preventDefault();
-        if (password !== confirmPassword) {
-            setFeedbackMsg("Error: The passwords do not match.");
-            return;
-        }
-        if (password.length < 8) {
-            setFeedbackMsg("Error: Password must be at least 8 characters long.");
-            return;
-        }
-        if (passphrase !== confirmPassphrase) {
-            setFeedbackMsg("Error: The passphrases do not match.");
-            return;
-        }
+        if (password !== confirmPassword) { setFeedbackMsg(t('profile.passwordMismatch')); return; }
+        if (password.length < 8) { setFeedbackMsg(t('profile.passwordMinLength')); return; }
+        if (passphrase !== confirmPassphrase) { setFeedbackMsg(t('profile.passphraseMismatch')); return; }
 
         setIsLoading(true);
-        setFeedbackMsg("Creating profile, please wait...");
-        try {
-            await invoke("create_profile", {
-                profileName,
-                mnemonic: generatedSeed.join(' '),
-                passphrase: passphrase || undefined,
-                userPrefix: userPrefix || undefined,
-                password,
-                language: selectedLanguage,
-            });
-            setFeedbackMsg("Profile successfully created!");
-            onProfileCreated();
-        } catch (e) {
-            setFeedbackMsg(`Error creating profile: ${e}`);
-            error(`Frontend: Profile creation failed: ${e}`);
-        } finally {
-            setIsLoading(false);
-        }
+        setFeedbackMsg(t('profile.creatingProgress'));
+        setTimeout(async () => {
+            try {
+                const localInstanceId = await authService.getLocalInstanceId();
+                await profileService.createProfile({
+                    profileName,
+                    mnemonic: generatedSeed.join(' '),
+                    passphrase: passphrase || undefined,
+                    userPrefix: isSubAccount ? (userPrefix || undefined) : undefined,
+                    password,
+                    localInstanceId,
+                    language: selectedLanguage,
+                });
+                onProfileCreated();
+            } catch (e) {
+                setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(e, t)}`);
+            } finally {
+                setIsLoading(false);
+            }
+        }, 150);
     }
-
-
-    // --- Render Logic ---
-
-    const feedbackClass = feedbackMsg.includes("Error") ? "text-theme-error" : "text-theme-success";
 
     const renderContent = () => {
         switch (wizardStep) {
-            // STEP 1: Display Seed Phrase
             case "display_seed":
                 return (
-                    <>
-                        <div className="text-center">
-                            <h2 className="text-2xl font-bold text-theme-primary">Step 1: Your Secret Seed Phrase</h2>
-                            <p className="text-theme-light mt-1">Write these words down in order and store them in a secure, offline location. This is the only way to recover your wallet.</p>
-                            <p className="text-theme-light mt-2 text-sm">
-                                Already have a seed phrase?
-                                <button type="button" onClick={onSwitchToRecreate} className="ml-1 text-theme-primary hover:underline font-semibold">
-                                    Recreate profile here
-                                </button>
-                            </p>
+                    <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-500">
+                        <div className="text-center space-y-2">
+                            <h2 className="text-2xl font-black text-theme-primary tracking-tight flex items-center justify-center gap-2">
+                                <span>{t('profile.step1Title')}</span>
+                                <HelpIcon topic="mnemonic" size={20} />
+                            </h2>
+                            <p className="text-sm font-medium text-theme-light">{t('profile.step1Subtitle')}</p>
                         </div>
-                        <div className="my-4 p-4 border border-theme-error rounded-lg bg-red-500/10">
-                            <p className="font-bold text-center text-theme-error">WARNING: Never share this phrase with anyone. Anyone with this phrase can take your funds.</p>
+
+                        <div className="p-6 bg-rose-50 border-2 border-rose-100 rounded-[32px] flex items-start gap-4 shadow-sm">
+                            <ShieldAlert className="text-rose-500 shrink-0 mt-1" size={24} />
+                            <div>
+                                <h3 className="text-sm font-black text-rose-900 uppercase tracking-widest mb-1">{t('profile.warning')}</h3>
+                                <p className="text-xs text-rose-800 font-medium leading-relaxed">
+                                    {t('profile.seedWarning')}
+                                </p>
+                            </div>
                         </div>
-                        <div className="grid grid-cols-3 gap-x-6 gap-y-3 my-6">
+
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                             {generatedSeed.map((word, index) => (
-                                <div key={index} className="text-theme-secondary font-mono">
-                                    <span className="text-sm text-theme-light mr-2">{index + 1}.</span>{word}
+                                <div key={index} data-testid={`word-display-${index}`} className="flex items-center gap-3 p-3 bg-theme-primary/5 border border-theme-primary/10 rounded-2xl shadow-inner-soft group hover:bg-white transition-all hover:shadow-md hover:scale-[1.02] duration-300">
+                                    <span className="text-[10px] font-black text-theme-primary/40 w-5">{index + 1}</span>
+                                    <span className="text-sm font-mono font-bold text-theme-secondary tracking-tight">{word}</span>
                                 </div>
                             ))}
                         </div>
-                        <div className="flex flex-col gap-3 mt-4">
-                            <div className="flex justify-between items-center">
-                                <label className="text-sm font-semibold text-theme-secondary">Mnemonic Language</label>
-                                <select 
-                                    value={selectedLanguage} 
-                                    onChange={handleLanguageChange} 
-                                    className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary"
-                                >
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Languages size={10}/> {t('common.dictionary')}</label>
+                                <select value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value as MnemonicLanguage)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-2.5 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
                                     <option value="english">English</option>
                                     <option value="german">Deutsch</option>
                                     <option value="spanish">Español</option>
@@ -277,146 +222,264 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToRecreate, onSwitc
                                     <option value="chineseTraditional">繁體中文</option>
                                 </select>
                             </div>
-                            <div className="flex justify-between items-center">
-                                <div className="flex gap-2">
-                                    <select value={wordCount} onChange={handleWordCountChange} className="px-2 py-1 text-xs border border-theme-subtle rounded-md bg-bg-input text-theme-light focus:ring-2 focus:ring-theme-primary">
-                                        <option value={12}>12 Words</option>
-                                        <option value={24}>24 Words</option>
-                                    </select>
-                                    {onSwitchToLogin && (
-                                        <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="!px-3 !py-1 text-xs">
-                                            Back to Login
-                                        </Button>
-                                    )}
-                                </div>
-                                <Button type="button" onClick={prepareConfirmationStep} disabled={isLoading || generatedSeed.length === 0}>
-                                    I've Saved My Seed Phrase
-                                </Button>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><BookOpen size={10}/> {t('profile.wordCount')}</label>
+                                <select value={wordCount} onChange={(e) => setWordCount(parseInt(e.target.value, 10) as 12 | 24)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-2.5 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
+                                    <option value={12}>{t('profile.wordCountStandard')}</option>
+                                    <option value={24}>{t('profile.wordCountHigh')}</option>
+                                </select>
                             </div>
                         </div>
-                    </>
+
+                        <div className="space-y-4 pt-4 border-t border-theme-primary/10">
+                            <div className="space-y-2">
+                                <div className="flex items-center gap-1.5">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1">
+                                        <Lock size={10}/> 
+                                        <span>{t('profile.optionalPassphrase', { ordinal: wordCount === 12 ? '13th' : '25th' })}</span>
+                                    </label>
+                                    <HelpIcon topic="passphrase" size={12} />
+                                </div>
+                                <Input 
+                                    type="text" 
+                                    value={passphrase} 
+                                    onChange={(e) => setPassphrase(e.target.value)} 
+                                    placeholder={t('profile.passphrasePlaceholder')} 
+                                    className="rounded-2xl"
+                                />
+                                <p className="text-[9px] font-bold text-amber-600 bg-amber-50 p-3 rounded-xl border border-amber-100 flex items-start gap-2">
+                                    <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                                    {t('profile.passphraseAdvanced', { wordCount })}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col items-center gap-4 pt-4">
+                            <Button size="lg" onClick={prepareConfirmationStep} disabled={isLoading || generatedSeed.length === 0} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
+                                {isLoading ? <RefreshCw className="animate-spin" size={24} /> : <CheckCircle2 size={24} />}
+                                {t('profile.savedSeed')}
+                            </Button>
+                            <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="w-full py-3 rounded-2xl shadow-sm text-sm gap-2">
+                                <ArrowLeft size={18} /> {t('auth.backToLogin')}
+                            </Button>
+                        </div>
+                    </div>
                 );
 
-            // STEP 2: Confirm Seed Phrase
             case "confirm_seed":
                 return (
-                    <form onSubmit={handleConfirmSeedSubmit}>
-                        <div className="text-center">
-                            <h2 className="text-2xl font-bold text-theme-primary">Step 2: Confirm Your Seed Phrase</h2>
-                            <p className="text-theme-light mt-1">
-                                {isBulkMode 
-                                    ? "Paste your entire seed phrase below. Numbers and punctuation will be cleaned automatically." 
-                                    : "To ensure you saved it correctly, please enter the following words from your seed phrase."}
-                            </p>
-                            <button 
-                                type="button" 
-                                onClick={() => {
-                                    setIsBulkMode(!isBulkMode);
-                                    setFeedbackMsg("");
-                                }} 
-                                className="mt-2 text-xs text-theme-primary hover:underline font-semibold"
-                            >
-                                {isBulkMode ? "Switch to Individual Words (Standard)" : "Switch to Bulk Paste (Pro Mode)"}
+                    <form onSubmit={handleConfirmSeedSubmit} className="space-y-6 sm:space-y-8 animate-in slide-in-from-right-8 duration-500">
+                        <div className="text-center space-y-2">
+                            <h2 className="text-2xl font-black text-theme-primary tracking-tight">{t('profile.step2Title')}</h2>
+                            <p className="text-sm font-medium text-theme-light">{t('profile.step2Subtitle')}</p>
+                        </div>
+
+                        <div className="flex justify-center">
+                            <button type="button" onClick={() => { setIsBulkMode(!isBulkMode); setFeedbackMsg(""); }} className="px-4 py-1.5 bg-theme-primary/5 border border-theme-primary/10 rounded-full text-[10px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-2">
+                                <Languages size={12} /> {isBulkMode ? t('profile.interactiveMode') : t('profile.switchBulkPaste')}
                             </button>
                         </div>
 
                         {isBulkMode ? (
-                            <div className="my-8">
-                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Paste Full Seed Phrase</label>
+                            <div className="space-y-3">
+                                <label htmlFor="bulk-seed-input" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.pasteFullSeed')}</label>
                                 <textarea
+                                    id="bulk-seed-input"
                                     value={bulkSeedInput}
-                                    onChange={(e) => setBulkSeedInput(e.target.value)}
-                                    className="w-full h-32 px-3 py-2 border border-theme-subtle rounded-md bg-bg-input text-theme-primary font-mono text-sm focus:outline-none focus:ring-2 focus:ring-theme-primary"
-                                    placeholder="Paste here... e.g. 1. apple 2. banana..."
+                                    onChange={(e) => setBulkSeedInput(cleanSeedText(e.target.value))}
+                                    className="w-full h-32 px-4 py-3 bg-white border border-theme-subtle rounded-2xl text-theme-primary font-mono text-sm focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all"
+                                    placeholder={t('profile.pasteHere')}
                                     required
                                 />
-                                <p className="text-[10px] text-theme-light mt-1">Automatic cleaning will handle numbers, dots, newlines and extra spaces.</p>
+                                <p className="text-[9px] font-bold text-theme-light italic flex items-center gap-1.5"><Info size={10}/> {t('profile.formattingAuto')}</p>
                             </div>
                         ) : (
-                            <div className="space-y-4 my-8">
+                            <div className="space-y-5">
                                 {confirmationWords.map(({ index }) => (
-                                    <div key={index}>
-                                        <label className="block text-sm font-semibold text-theme-secondary mb-1">Word #{index + 1}</label>
+                                    <div key={index} className="space-y-2">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.verifyWord', { number: index + 1 })}</label>
                                         <Input
                                             type="text"
                                             value={userConfirmationInput[index] || ""}
                                             onChange={(e) => handleConfirmationInputChange(index, e.target.value)}
                                             required
-                                            className="font-mono"
+                                            className="font-mono font-bold py-4 text-center text-lg"
                                             autoComplete="off"
+                                            data-testid={`word-input-${index}`}
                                         />
                                     </div>
                                 ))}
                             </div>
                         )}
+
+                        {passphrase && (
+                            <div className="space-y-2 pt-4 border-t border-theme-primary/10">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.confirmPassphrase')}</label>
+                                <Input
+                                    type="text"
+                                    value={confirmPassphrase}
+                                    onChange={(e) => setConfirmPassphrase(e.target.value)}
+                                    required
+                                    className="font-mono font-bold py-4 text-center text-lg"
+                                    autoComplete="off"
+                                    placeholder={t('profile.enterExtraWord')}
+                                />
+                            </div>
+                        )}
                         
-                        <div className="flex justify-between items-center">
-                            <Button type="button" variant="secondary" onClick={() => setWizardStep("display_seed")}>Back</Button>
-                            <Button type="submit">Confirm Seed</Button>
+                        <div className="flex gap-4 pt-4">
+                            <Button type="button" variant="secondary" onClick={() => setWizardStep("display_seed")} className="flex-1 rounded-2xl gap-2">
+                                <ArrowLeft size={18} /> {t('profile.back')}
+                            </Button>
+                            <Button type="submit" className="flex-[2] rounded-3xl py-4 shadow-premium-lg gap-2">
+                                {t('profile.confirmSeed')} <ArrowRight size={18} />
+                            </Button>
                         </div>
                     </form>
                 );
 
-            // STEP 3: Set Password
             case "set_password":
                 return (
-                    <form onSubmit={handleCreateProfileSubmit} className="space-y-5">
-                        <div className="text-center">
-                            <h2 className="text-2xl font-bold text-theme-primary">Step 3: Secure Your Wallet</h2>
-                            <p className="text-theme-light mt-1">Create a strong password to encrypt your wallet on this device.</p>
+                    <form onSubmit={handleCreateProfileSubmit} className="space-y-6 sm:space-y-8 animate-in slide-in-from-right-8 duration-500 pb-10">
+                        <div className="text-center space-y-2">
+                            <h2 className="text-2xl font-black text-theme-primary tracking-tight">{t('profile.step3Title')}</h2>
+                            <p className="text-sm font-medium text-theme-light">{t('profile.step3Subtitle')}</p>
                         </div>
 
-                        <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Profile Name</label>
-                            <Input type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="e.g., 'My Main Wallet'" required />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Password</label>
-                            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 8 characters" required />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Password</label>
-                            <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repeat your password" required />
+                        <div className="space-y-6">
+                            <Card header={<div className="flex items-center gap-2"><Lock size={14}/><span className="font-black text-[10px] uppercase tracking-widest">{t('profile.profileDetails')}</span></div>}>
+                                <div className="space-y-4">
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><User size={10}/> {t('profile.profileLabel')}</label>
+                                        <Input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder={t('profile.profileNamePlaceholder')} required />
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.accessPassword')}</label>
+                                            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required ref={passwordInputRef} />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.confirmPassword')}</label>
+                                            <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="••••••••" required />
+                                        </div>
+                                    </div>
+                                </div>
+                            </Card>
+
+                            <Card header={<div className="flex items-center gap-2"><ShieldCheck size={14}/><span className="font-black text-[10px] uppercase tracking-widest">{t('profile.deviceSettings')}</span></div>}>
+                                <div className="space-y-4">
+                                    <div className="flex items-start gap-2.5 py-1">
+                                        <input
+                                            id="checkbox-sub-account"
+                                            type="checkbox"
+                                            checked={isSubAccount}
+                                            onChange={(e) => {
+                                                setIsSubAccount(e.target.checked);
+                                                if (!e.target.checked) {
+                                                    setUserPrefix("");
+                                                }
+                                            }}
+                                            className="mt-1 h-4.5 w-4.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary/30 cursor-pointer"
+                                        />
+                                        <div className="flex flex-col">
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="checkbox-sub-account" className="text-xs font-bold text-theme-secondary cursor-pointer select-none">
+                                                    {t('profile.subAccountOption')}
+                                                </label>
+                                                <HelpIcon topic="subaccount" size={12} />
+                                            </div>
+                                            <p className="text-[10px] font-medium text-theme-light leading-normal mt-0.5">
+                                                {t('profile.subAccountDescription')}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {isSubAccount && (
+                                        <div className="space-y-2 pt-2 border-t border-theme-primary/5 animate-in fade-in duration-300">
+                                            <div className="flex items-center justify-between">
+                                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
+                                                    {t('profile.subAccountName')}
+                                                </label>
+                                                <button 
+                                                    type="button" 
+                                                    onClick={() => setShowPrefixInfo(true)}
+                                                    className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20"
+                                                >
+                                                    <HelpCircle size={12} />
+                                                    <span>{t('profile.readInstructions')}</span>
+                                                </button>
+                                            </div>
+                                            <Input 
+                                                value={userPrefix} 
+                                                onChange={(e) => setUserPrefix(e.target.value)} 
+                                                placeholder={t('profile.prefixPlaceholder')} 
+                                            />
+                                        </div>
+                                    )}
+
+                                    <div className="space-y-1.5 p-3.5 bg-theme-subtle/20 border border-theme-subtle rounded-2xl">
+                                        <p className="text-[10px] text-theme-secondary leading-relaxed">
+                                            {t('profile.prefixDescription')}
+                                        </p>
+                                        <p className="text-[9px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic">
+                                            <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                                            {t('profile.criticalPrefix')}
+                                        </p>
+                                    </div>
+                                </div>
+                            </Card>
+
+                            <PrefixInfoModal 
+                                isOpen={showPrefixInfo} 
+                                onClose={() => setShowPrefixInfo(false)} 
+                            />
                         </div>
 
-                        <div className="border-t border-theme-light-border pt-5 space-y-5">
-                            <div>
-                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Optional Passphrase (Advanced)</label>
-                                <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Adds extra security to your seed" />
+                        <div className="flex flex-col items-center gap-4 pt-4">
+                            <div className="flex gap-4 w-full">
+                                <Button type="button" variant="secondary" onClick={() => setWizardStep("confirm_seed")} className="flex-1 py-4 rounded-2xl gap-2">
+                                    <ArrowLeft size={18} /> {t('profile.back')}
+                                </Button>
+                                <Button type="submit" disabled={isLoading} className="flex-[2] py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
+                                    {isLoading ? <RefreshCw className="animate-spin" size={24} /> : <Fingerprint size={24} />}
+                                    {isLoading ? t('profile.creating') : t('profile.create')}
+                                </Button>
                             </div>
-                            <div>
-                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Confirm Optional Passphrase</label>
-                                <Input type="password" value={confirmPassphrase} onChange={(e) => setConfirmPassphrase(e.target.value)} placeholder="Repeat your passphrase" />
-                                <p className="text-xs text-theme-light mt-1">Warning: If you forget this passphrase, your seed phrase alone will not be enough to recover your wallet.</p>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-semibold text-theme-secondary mb-1">Optional User Prefix</label>
-                                <Input type="text" value={userPrefix} onChange={(e) => setUserPrefix(e.target.value)} placeholder="e.g., 'my_wallet' (can be left blank)" />
-                            </div>
-                        </div>
-
-                        <div className="flex justify-center pt-3">
-                            <Button type="submit" disabled={isLoading}>
-                                {isLoading ? "Creating Profile..." : "Create & Encrypt Profile"}
-                            </Button>
+                            <p className="text-[10px] font-bold text-theme-light flex items-center gap-2">
+                                <Lock size={12} /> {t('profile.dataEncrypted')}
+                            </p>
                         </div>
                     </form>
                 );
         }
     };
 
+    const handleConfirmationInputChange = (index: number, value: string) => {
+        setUserConfirmationInput(prev => ({ ...prev, [index]: value.trim().toLowerCase() }));
+    };
+
     return (
-        <div className="w-full h-full flex flex-col items-center justify-center">
-            <div className="w-full max-w-xl min-w-[420px] bg-bg-card shadow-2xl rounded-2xl p-8 border border-theme-subtle">
-                <div className="text-center mb-6">
-                    <h1 className="text-4xl font-extrabold text-theme-primary">Human Money App</h1>
-                    <p className="text-lg text-theme-light mt-1">Create a New Profile</p>
+        <AuthLayout maxWidth="max-w-2xl">
+            <div className="flex items-center justify-center gap-3 sm:gap-6">
+                <img
+                    src={logo}
+                    alt="Human Money Logo"
+                    className="w-12 h-12 sm:w-20 sm:h-20 object-contain drop-shadow-sm"
+                />
+                <div className="text-left space-y-0 sm:space-y-0.5">
+                    <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
+                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">{t('profile.createNewProfile')}</p>
                 </div>
-
-                {renderContent()}
-
-                {feedbackMsg && <p className={`text-center text-sm font-medium mt-4 ${feedbackClass}`}>{feedbackMsg}</p>}
             </div>
-        </div>
+
+            {renderContent()}
+
+                {feedbackMsg && !isLoading && (
+                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 animate-in shake duration-500">
+                        <AlertTriangle className="text-rose-500 shrink-0" size={18} />
+                        <p className="text-sm font-bold text-rose-800 leading-tight">{feedbackMsg}</p>
+                    </div>
+                )}
+        </AuthLayout>
     );
 }
