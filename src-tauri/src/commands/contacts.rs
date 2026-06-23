@@ -14,6 +14,8 @@ pub fn save_contact(
     password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<(), FrontendError> {
+    let mut contact = contact;
+    contact.did = contact.did.trim().to_string();
     info!("Saving contact for DID: {}", contact.did);
     let mut service = state.service.lock().unwrap();
     state.save_contact(&mut service, contact, password.as_deref()).map_err(FrontendError::from)
@@ -25,6 +27,7 @@ pub fn delete_contact(
     password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<(), FrontendError> {
+    let did = did.trim().to_string();
     info!("Deleting contact for DID: {}", did);
     let mut service = state.service.lock().unwrap();
     state.delete_contact(&mut service, &did, password.as_deref()).map_err(FrontendError::from)

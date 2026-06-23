@@ -250,4 +250,14 @@ amount_decimal_places = 4`,
       expect(feedbackAlert.textContent).not.toContain('[object Object]');
     });
   });
+
+  it('should strip whitespace from recipient ID on input', async () => {
+    render(<SendView />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/did:key:z/i)).toBeInTheDocument());
+    const recipientInput = screen.getByPlaceholderText(/did:key:z/i);
+    fireEvent.change(recipientInput, { target: { value: 'did:key:z456 \t\n' } });
+    await waitFor(() => {
+      expect(recipientInput).toHaveValue('did:key:z456');
+    });
+  });
 });

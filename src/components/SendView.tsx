@@ -96,7 +96,7 @@ const initialState: SendState = {
 
 function reducer(state: SendState, action: SendAction): SendState {
     switch (action.type) {
-        case 'SET_RECIPIENT': return { ...state, recipientId: action.id, recipientError: false };
+        case 'SET_RECIPIENT': return { ...state, recipientId: action.id.replace(/\s+/g, ''), recipientError: false };
         case 'SET_NOTES': return { ...state, notes: action.notes };
         case 'TOGGLE_PROFILE_NAME': return { ...state, sendProfileName: action.value };
         case 'SET_SENDER_NAME': return { ...state, customSenderName: action.name };
@@ -445,7 +445,11 @@ export function SendView() {
                         {/* Empfänger (To) */}
                         <RecipientSelector 
                             recipientId={state.recipientId}
-                            onRecipientChange={(e) => dispatch({ type: 'SET_RECIPIENT', id: e.target.value })}
+                            onRecipientChange={(e) => {
+                                const val = e.target.value.replace(/\s+/g, '');
+                                e.target.value = val;
+                                dispatch({ type: 'SET_RECIPIENT', id: val });
+                            }}
                             onSelectContact={(c) => dispatch({ type: 'SET_RECIPIENT', id: c.did })}
                             contacts={contacts}
                             trustStatus={trustStatus}

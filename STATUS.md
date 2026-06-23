@@ -228,6 +228,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Recent Milestones
 
+- [x] Hardened input robustness for DID keys and user identifiers across the entire application stack: implemented a whitespace-stripping `sanitize_user_id` helper in `human_money_core`, trimmed fields at the Tauri bridge commands (`transfers.rs`, `contacts.rs`, and `queries.rs`), and added synchronous input-cleaning handlers and tests in the React frontend (`SendView.tsx` and `ContactDialog.tsx`) to prevent copy-paste errors.
 - [x] Implemented environment isolation for development: added a tauri.dev.conf.json override file changing the app identifier to 'human.money.app.dev' and window title to 'Human Money App [DEV]' when running via start-dev.sh to prevent development database/profiles collision with real production user data.
 - [x] Finalized MVP polish: updated window titles and branding to 'Human Money App', refactored authentication/recovery flows to use type-safe feedback states (removing brittle substring checks), localized recovery warning modals, and synchronized all localization keys across English, German, Spanish, French, and Italian locales
 - [x] Fixed navigation race conditions and memory leaks by cleaning up pending timeouts on component unmount and introducing a global route guard for active sessions

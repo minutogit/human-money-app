@@ -27,6 +27,7 @@ pub fn create_transfer_bundle(
     password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<CreateBundleResult, FrontendError> {
+    let recipient_id = recipient_id.trim().to_string();
     info!(
         "Attempting to create a transfer bundle for recipient: {}",
         recipient_id
