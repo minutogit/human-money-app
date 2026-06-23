@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "human.money.app.dev",
+  "app": {
+    "windows": [
+      {
+        "title": "Human Money App [DEV]"
+      }
+    ]
+  }
+}

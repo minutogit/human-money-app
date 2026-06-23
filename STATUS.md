@@ -228,6 +228,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Recent Milestones
 
+- [x] Implemented environment isolation for development: added a tauri.dev.conf.json override file changing the app identifier to 'human.money.app.dev' and window title to 'Human Money App [DEV]' when running via start-dev.sh to prevent development database/profiles collision with real production user data.
 - [x] Finalized MVP polish: updated window titles and branding to 'Human Money App', refactored authentication/recovery flows to use type-safe feedback states (removing brittle substring checks), localized recovery warning modals, and synchronized all localization keys across English, German, Spanish, French, and Italian locales
 - [x] Fixed navigation race conditions and memory leaks by cleaning up pending timeouts on component unmount and introducing a global route guard for active sessions
 - [x] Refined vocabulary (e.g. Trust Status, Trusted Account, Flagged Account, Sendeübersicht) and integrated interactive HelpIcons for voucher-related workflows (Mode, Creator, Signatures, and Signature Requests) with full German/English translations

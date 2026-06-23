@@ -34,4 +34,4 @@ npm install
 echo "🚀 Starte jetzt die Tauri App..."
 
 # Startet die Tauri-Entwicklungsumgebung
-tauri dev
+tauri dev --config src-tauri/tauri.dev.conf.json
