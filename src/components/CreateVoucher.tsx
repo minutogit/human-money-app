@@ -4,6 +4,7 @@ import { voucherService } from "../services/voucherService";
 import { Button } from "./ui/Button";
 import { useSession } from "../context/SessionContext";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
+import { translateError } from "../utils/errorHelper";
 import { PageLayout } from "./ui/PageLayout";
 import { 
     ShieldAlert, 
@@ -129,7 +130,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             setFeedback({type: 'success', msg: t('voucher.create.success')});
             timerRef.current = setTimeout(onVoucherCreated, 2000);
         } catch (e) {
-            setFeedback({type: 'error', msg: t('voucher.create.failed', { error: `${e}` })});
+            setFeedback({type: 'error', msg: t('voucher.create.failed', { error: translateError(e, t) })});
             setIsLoading(false);
             setShowConfirm(false);
         }

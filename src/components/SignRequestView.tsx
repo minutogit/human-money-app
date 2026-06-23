@@ -4,6 +4,7 @@ import { settingsService } from '../services/settingsService';
 import { standardsService } from '../services/standardsService';
 import { save } from '@tauri-apps/plugin-dialog';
 import { logger } from '../utils/log';
+import { translateError } from '../utils/errorHelper';
 import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
@@ -81,12 +82,12 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                         setAllowedRoles(roles);
                         if (roles.length === 1) setSelectedRole(roles[0]);
                     } catch (e) {
-                        setFeedbackMsg(t('voucher.signRequest.parseFailed', { error: String(e) }));
+                        setFeedbackMsg(t('voucher.signRequest.parseFailed', { error: translateError(e, t) }));
                         setFeedbackType('error');
                     }
                 }
             } catch (e) {
-                setFeedbackMsg(t('voucher.signRequest.initError', { error: String(e) }));
+                setFeedbackMsg(t('voucher.signRequest.initError', { error: translateError(e, t) }));
                 setFeedbackType('error');
             }
         }
@@ -167,7 +168,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 timerRef.current = setTimeout(() => onBack(), 2000);
             }
         } catch (e) {
-            setFeedbackMsg(t('voucher.signRequest.signFailed', { error: String(e) }));
+            setFeedbackMsg(t('voucher.signRequest.signFailed', { error: translateError(e, t) }));
             setFeedbackType('error');
         } finally {
             setIsSigning(false);

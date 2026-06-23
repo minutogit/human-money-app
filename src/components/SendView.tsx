@@ -7,6 +7,7 @@ import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
 import { contactService } from "../services/contactService";
 import { logger } from "../utils/log";
+import { translateError } from "../utils/errorHelper";
 import { 
     VoucherSummary, 
     VoucherStandardInfo, 
@@ -218,11 +219,11 @@ export function SendView() {
                 setActiveAssetClasses(activeClasses);
             } catch (e) {
                 logger.error(`Failed to fetch data for SendView: ${e}`);
-                dispatch({ type: 'SET_FEEDBACK', msg: `Error: ${e}` });
+                dispatch({ type: 'SET_FEEDBACK', msg: `Error: ${translateError(e, t)}` });
             }
         }
         fetchData();
-    }, [profileName]);
+    }, [profileName, t]);
 
     useEffect(() => {
         if (detectedPrivacy === 'stealth') dispatch({ type: 'SET_PRIVACY', mode: 'stealth' });
@@ -363,7 +364,7 @@ export function SendView() {
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferSuccess') });
             navigationTimerRef.current = setTimeout(() => navigate({ view: 'transfer_success', bundleData: bundleResult.bundleData, recipientId: state.recipientId, summary: summaryString }), 1500);
         } catch (e) {
-            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferFailed', { error: `${e}` }) });
+            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferFailed', { error: translateError(e, t) }) });
             dispatch({ type: 'SET_PROCESSING', value: false });
             dispatch({ type: 'TOGGLE_CONFIRM', value: false });
         }

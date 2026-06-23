@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { integrityService } from "../services/integrityService";
 import { logger } from "../utils/log";
+import { translateError } from "../utils/errorHelper";
 import { ProofOfDoubleSpendSummary } from "../types";
 import { Button } from "./ui/Button";
 
@@ -26,7 +27,7 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                 const result = await integrityService.getDoubleSpendConflicts();
                 setConflicts(result);
             } catch (e) {
-                const msg = t('conflict.fetchFailed', { error: String(e) });
+                const msg = t('conflict.fetchFailed', { error: translateError(e, t) });
                 logger.error(`Failed to fetch conflicts: ${e}`);
                 setErrorMsg(msg);
             } finally {

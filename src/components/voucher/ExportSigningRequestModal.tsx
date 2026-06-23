@@ -5,6 +5,7 @@ import { voucherService, SigningRequestConfig } from "../../services/voucherServ
 import { settingsService } from "../../services/settingsService";
 import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../../utils/log";
+import { translateError } from "../../utils/errorHelper";
 import { ConfirmationModal } from "../ui/ConfirmationModal";
 import { AppSettings } from "../../types";
 import { updateLastUsedDirectory } from "../../utils/settingsUtils";
@@ -96,7 +97,7 @@ export function ExportSigningRequestModal({
                 resetAndClose();
             }
         } catch (e) {
-            const msg = t('voucher.export.failed', { error: `${e}` });
+            const msg = t('voucher.export.failed', { error: translateError(e, t) });
             logger.error(msg);
             setExportError(msg);
         } finally {

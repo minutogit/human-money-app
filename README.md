@@ -210,7 +210,7 @@ The wallet is continuously sealed with a cryptographic hash of its state. Any at
 Each wallet instance is bound to a unique Host/Instance ID. Copying a wallet file to another device is detected and handled through a secure **device handover** workflow. Accidental state forks are prevented by design.
 
 ### Privacy & Stealth Mode
-Transactions can include **Stealth Mode**, which uses ephemeral keys to hide the sender's DID from the transaction history (visible only to the original issuer). This is a deliberate privacy trade-off: increased anonymity makes fraud tracing more complex, requiring manual chain reconstruction. A fraud attempt in Stealth Mode still mathematically exposes the fraudster's DID key.
+Transactions can include **Stealth Mode**, which uses ephemeral keys to hide the sender's DID from the transaction history. This is a deliberate privacy trade-off: increased anonymity makes fraud tracing more complex, requiring manual chain reconstruction. A fraud attempt in Stealth Mode still mathematically exposes the fraudster's DID key.
 
 ### Optional Layer 2 — Global Revocation Registry
 The core library is prepared for an optional, asynchronous online layer that acts as a **decentralized registry for cryptographic locks** — enabling preventive double-spend checks without any global consensus mechanism. This layer is fully optional; the system functions completely offline without it.
