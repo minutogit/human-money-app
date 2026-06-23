@@ -41,8 +41,6 @@ The name reflects the core idea: value originates from humans — from their tim
 
 ## 📸 Screenshots
 
-> 📂 Screenshots will be added to [`docs/screenshots/`](docs/screenshots/) — contributions welcome!
-
 <p float="left">
   <img src="docs/screenshots/login.png" width="48%" alt="Login & Onboarding" />
   <img src="docs/screenshots/dashboard.png" width="48%" alt="Dashboard" />
@@ -294,6 +292,7 @@ The **Menschlich Miteinander** association supports this project. Their mission:
 🌐 **Website:** [menschlich-miteinander.org](https://menschlich-miteinander.org/en/)
 
 **Get involved:**
+- ❓ Read the [**FAQ**](docs/faq/FAQ.md) — answers to 40+ common questions
 - ⭐ Star this repo to show support
 - 🐛 [Report a bug](https://github.com/minutogit/human-money-app/issues)
 - 💬 Join the conversation at [menschlich-miteinander.org](https://menschlich-miteinander.org/en/)

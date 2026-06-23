@@ -3,7 +3,7 @@ project: human-money-app
 version: "0.1.0"
 phase: "beta"
 health: "green"
-last_updated: "2026-06-15"
+last_updated: "2026-06-23"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -199,6 +199,12 @@ priority_tasks:
     priority: "medium"
     depends_on: []
     description: "Streamlined the import/receive file flow by auto-processing selected files immediately and conditionally prompting for passwords only when required by encryption."
+  - id: "APP-032"
+    title: "Custom Standard Import & Management"
+    status: "open"
+    priority: "medium"
+    depends_on: []
+    description: "Implement support for importing, managing, and utilizing custom voucher standards (TOML files) within the application UI to eliminate manual configuration file edits."
 ---
 
 # Human Money App — Status
@@ -324,3 +330,4 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [ ] L2 sync hardening (Post-MVP)
 - [ ] Trust level badges for contacts (Post-MVP)
 - [ ] BLE/NFC stranger discovery (Post-MVP)
+- [ ] Custom Standard Import & Management (Post-MVP)
