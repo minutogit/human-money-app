@@ -280,6 +280,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     name
                 });
                 setShowConfirm(true);
+                setIsProcessing(false);  // Reset so modal buttons are active
                 return;
             }
 
@@ -290,6 +291,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     type: isCritical ? 'Critical' : 'Soft',
                     message: translateError(e, t)
                 });
+                setIsProcessing(false);  // Reset so modal buttons are active
                 return;
             }
             if (errorStr.includes("already attached")) {
@@ -302,15 +304,14 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                         confirmText: t('transfer.importFile.goToAsset'),
                         voucherId: match[1]
                     });
+                    setIsProcessing(false);  // Reset so modal buttons are active
                     return;
                 }
             }
             setFeedbackMsg(translateError(e, t));
             clearSelection();
         } finally {
-            if (!toleranceModal && !pendingPasswordImport) {
-                setIsProcessing(false);
-            }
+            setIsProcessing(false);  // Always reset, no stale-closure guards
         }
     }
 

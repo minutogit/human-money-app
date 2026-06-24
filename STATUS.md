@@ -228,6 +228,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Recent Milestones
 
+- [x] Fixed app hang on wrong password entry in `ReceiveView`: updated early-return paths in the catch block to explicitly reset the processing state and simplified the finally block to always call `setIsProcessing(false)` without relying on stale closures. Added comprehensive Vitest unit tests verifying button responsiveness during single and multiple failed password entry attempts.
 - [x] Hardened input robustness for DID keys and user identifiers across the entire application stack: implemented a whitespace-stripping `sanitize_user_id` helper in `human_money_core`, trimmed fields at the Tauri bridge commands (`transfers.rs`, `contacts.rs`, and `queries.rs`), and added synchronous input-cleaning handlers and tests in the React frontend (`SendView.tsx` and `ContactDialog.tsx`) to prevent copy-paste errors.
 - [x] Systematically sanitized frontend caught errors: replaced all raw/implicit string interpolations of caught error objects (`[object Object]`) with the centralized `stringifyError` utility across the entire codebase to guarantee type-safe, human-readable logging and troubleshooting output.
 - [x] Implemented environment isolation for development: added a tauri.dev.conf.json override file changing the app identifier to 'human.money.app.dev' and window title to 'Human Money App [DEV]' when running via start-dev.sh to prevent development database/profiles collision with real production user data.
