@@ -159,3 +159,66 @@ export function getMissingProfileHint(
         return `${prefix}${missingFields.join(commaStr)}${andStr}${lastField}`;
     }
 }
+
+/**
+ * Localizes rule validation messages from the core/standard definitions.
+ * 
+ * @param message - The raw message from the core/standard definition
+ * @param t - The translation function
+ * @returns The localized message if a translation exists, otherwise the original message
+ */
+export function translateRuleMessage(message: string, t: TFunction): string {
+    if (message === "According to ISO 5218, exactly one male (1) guarantor is required.") {
+        return t("voucher.rule.genderBalanceMale", { defaultValue: message });
+    }
+    if (message === "According to ISO 5218, exactly one female (2) guarantor is required.") {
+        return t("voucher.rule.genderBalanceFemale", { defaultValue: message });
+    }
+    return message;
+}
+
+/**
+ * Localizes gentle hint messages generated dynamically by the core library.
+ * 
+ * @param hint - The raw gentle hint from the core
+ * @param t - The translation function
+ * @returns The localized gentle hint if a translation pattern matches, otherwise the original hint
+ */
+export function translateGentleHint(hint: string, t: TFunction): string {
+    const match = hint.match(/^Note: An open rule checks for your (.+)$/);
+    if (match) {
+        const field = match[1]; // e.g. "gender", "first_name", "last_name", etc.
+        
+        // Map snake_case or standard core keywords to camelCase keys for localization lookup
+        const keywordMap: Record<string, string> = {
+            'gender': 'gender',
+            'location': 'coordinates',
+            'coordinates': 'coordinates',
+            'age': 'age',
+            'first_name': 'firstName',
+            'last_name': 'lastName',
+            'email': 'email',
+            'phone': 'phone',
+            'organization': 'organization',
+            'community': 'community',
+            'url': 'url',
+            'website': 'url',
+        };
+        const mappedField = keywordMap[field] || field;
+        
+        // Lookup the translation of the field
+        const fallbackLabel = formatFieldName(mappedField);
+        const fieldLabel = t(`profile.field.${mappedField}`, {
+            defaultValue: t(`profile.${mappedField}`, {
+                defaultValue: fallbackLabel
+            })
+        });
+        
+        return t("voucher.signRequest.openRuleCheck", {
+            field: fieldLabel,
+            defaultValue: `Note: An open rule checks for your ${field}`
+        });
+    }
+    return hint;
+}
+

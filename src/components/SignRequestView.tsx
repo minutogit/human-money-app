@@ -5,6 +5,7 @@ import { standardsService } from '../services/standardsService';
 import { save } from '@tauri-apps/plugin-dialog';
 import { logger } from '../utils/log';
 import { translateError, stringifyError } from '../utils/errorHelper';
+import { translateRuleMessage, translateGentleHint } from '../utils/signatureHints';
 import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
@@ -244,7 +245,9 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                     </div>
                                 ) : allowedRoles.length === 1 ? (
                                     <div className="p-4 bg-white border-2 border-theme-primary rounded-2xl flex items-center justify-between shadow-sm">
-                                        <span className="font-black text-theme-primary tracking-tight">{selectedRole}</span>
+                                        <span className="font-black text-theme-primary tracking-tight">
+                                            {t(`voucher.role.${selectedRole}`, { defaultValue: selectedRole })}
+                                        </span>
                                         <CheckCircle2 size={18} className="text-theme-primary" />
                                     </div>
                                 ) : (
@@ -254,7 +257,11 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                         className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
                                     >
                                         <option value="">{t('voucher.signRequest.chooseRole')}</option>
-                                        {allowedRoles.map(role => <option key={role} value={role}>{role}</option>)}
+                                        {allowedRoles.map(role => (
+                                            <option key={role} value={role}>
+                                                {t(`voucher.role.${role}`, { defaultValue: role })}
+                                            </option>
+                                        ))}
                                     </select>
                                 )}
                             </div>
@@ -308,7 +315,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                             {impact.fatalConflicts.map((conflict, i) => (
                                                 <li key={i} className="text-sm font-bold text-rose-800 flex items-start gap-2">
                                                     <span className="text-rose-400 mt-1.5 flex-shrink-0 w-1 h-1 bg-rose-400 rounded-full"></span>
-                                                    {conflict}
+                                                    {translateRuleMessage(conflict, t)}
                                                 </li>
                                             ))}
                                         </ul>
@@ -324,7 +331,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                             {impact.resolvedRules.map((rule, i) => (
                                                 <li key={i} className="text-sm font-bold text-emerald-800 flex items-start gap-2">
                                                     <span className="text-emerald-400 mt-1.5 flex-shrink-0 w-1 h-1 bg-emerald-400 rounded-full"></span>
-                                                    {rule}
+                                                    {translateRuleMessage(rule, t)}
                                                 </li>
                                             ))}
                                         </ul>
@@ -336,7 +343,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                         {impact.gentleHints.map((hint, i) => (
                                             <div key={i} className="p-4 bg-blue-50/50 border border-blue-100 rounded-2xl flex items-start gap-3">
                                                 <Lightbulb size={20} className="text-blue-500 shrink-0" />
-                                                <p className="text-sm font-bold text-blue-800">{hint}</p>
+                                                <p className="text-sm font-bold text-blue-800">{translateGentleHint(hint, t)}</p>
                                             </div>
                                         ))}
                                     </div>
