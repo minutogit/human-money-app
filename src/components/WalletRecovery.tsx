@@ -10,7 +10,7 @@ import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
 import { ProfileInfo, MnemonicLanguage } from "../types";
-import { translateError } from "../utils/errorHelper";
+import { translateError, stringifyError } from "../utils/errorHelper";
 import { HelpIcon } from "./ui/HelpIcon";
 import {
     Key,
@@ -106,7 +106,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 const list = await profileService.getWordlist(selectedLanguage);
                 setBip39Wordlist(list);
             } catch (e) {
-                logger.error(`Failed to fetch BIP-39 wordlist: ${translateError(e, t)}`);
+                logger.error(`Failed to fetch BIP-39 wordlist: ${stringifyError(e)}`);
             }
         }
         fetchWordlist();

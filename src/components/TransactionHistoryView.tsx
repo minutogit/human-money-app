@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { transferService } from '../services/transferService';
 import { logger } from '../utils/log';
-import { translateError } from '../utils/errorHelper';
+import { translateError, stringifyError } from '../utils/errorHelper';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { Button } from './ui/Button';
@@ -63,7 +63,7 @@ export function TransactionHistoryView() {
                 setHistory(records);
             } catch (e) {
                 const msg = t('history.loadFailed', { error: translateError(e, t) });
-                logger.error(`Failed to load transaction history: ${e}`);
+                logger.error(`Failed to load transaction history: ${stringifyError(e)}`);
                 setError(msg);
             } finally {
                 setIsLoading(false);

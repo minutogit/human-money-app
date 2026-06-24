@@ -8,6 +8,7 @@ import { Contact } from '../types';
 import Avatar from 'boring-avatars';
 import ContactDialog from './ContactDialog';
 import { logger } from '../utils/log';
+import { stringifyError } from '../utils/errorHelper';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { useSession } from '../context/SessionContext';
 import { 
@@ -44,7 +45,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             const result: Contact[] = await contactService.getContacts();
             setContacts(result);
         } catch (err) {
-            logger.error("Failed to load contacts: " + err);
+            logger.error("Failed to load contacts: " + stringifyError(err));
         } finally {
             setIsLoading(false);
         }
@@ -69,7 +70,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             await loadContacts();
             logger.info("Contact saved successfully");
         } catch (err) {
-            logger.error("Failed to save contact: " + err);
+            logger.error("Failed to save contact: " + stringifyError(err));
             throw err;
         }
     };
@@ -84,7 +85,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             await loadContacts();
             logger.info("Contact deleted");
         } catch (err) {
-            logger.error("Failed to delete contact: " + err);
+            logger.error("Failed to delete contact: " + stringifyError(err));
         } finally {
             setDeleteRequest(null);
         }

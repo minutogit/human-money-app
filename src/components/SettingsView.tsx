@@ -8,7 +8,7 @@ import { Card } from './ui/Card';
 import { Input } from './ui/Input';
 import { AppSettings, PrivacyDefault } from '../types';
 import { useSession } from '../context/SessionContext';
-import { translateError } from '../utils/errorHelper';
+import { translateError, stringifyError } from '../utils/errorHelper';
 
 import { ProfileSettings } from './ProfileSettings';
 import { PageLayout } from './ui/PageLayout';
@@ -54,7 +54,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 setLocalInstanceId(deviceId);
             } catch (e) {
                 const msg = t('settings.loadFailed', { error: translateError(e, t) });
-                logger.error(`Failed to load settings: ${e}`);
+                logger.error(`Failed to load settings: ${stringifyError(e)}`);
                 setError(msg);
             } finally {
                 setIsLoading(false);
@@ -82,7 +82,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             setTimeout(() => setSuccess(''), 3000);
         } catch (e) {
             const msg = t('settings.saveFailed', { error: translateError(e, t) });
-            logger.error(`Failed to save settings: ${e}`);
+            logger.error(`Failed to save settings: ${stringifyError(e)}`);
             setError(msg);
         } finally {
             setIsSaving(false);

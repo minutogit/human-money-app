@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { IntegrityReport } from "../types";
 import { useSession } from "../context/SessionContext";
 import { logger } from "../utils/log";
-import { translateError } from "../utils/errorHelper";
+import { translateError, stringifyError } from "../utils/errorHelper";
 
 interface IntegrityReportModalProps {
     report: IntegrityReport;
@@ -29,7 +29,7 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
             onClose();
         } catch (e) {
             setError(t('integrity.repairFailed', { error: translateError(e, t) }));
-            logger.error(`Failed to repair integrity: ${e}`);
+            logger.error(`Failed to repair integrity: ${stringifyError(e)}`);
         } finally {
             setIsRepairing(false);
         }

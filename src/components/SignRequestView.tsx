@@ -4,7 +4,7 @@ import { settingsService } from '../services/settingsService';
 import { standardsService } from '../services/standardsService';
 import { save } from '@tauri-apps/plugin-dialog';
 import { logger } from '../utils/log';
-import { translateError } from '../utils/errorHelper';
+import { translateError, stringifyError } from '../utils/errorHelper';
 import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
@@ -110,7 +110,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                 });
                 setImpact(impactResult);
             } catch (e) {
-                logger.error(`Failed to evaluate impact: ${e}`);
+                logger.error(`Failed to evaluate impact: ${stringifyError(e)}`);
                 setImpact(null);
             } finally {
                 setIsImpactLoading(false);

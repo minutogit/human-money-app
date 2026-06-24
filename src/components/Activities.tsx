@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { transferService } from '../services/transferService';
 import { logger } from '../utils/log';
+import { stringifyError } from '../utils/errorHelper';
 import { WalletEvent } from '../types';
 import { PageLayout } from './ui/PageLayout';
 import { formatDateTime } from '../utils/format';
@@ -76,7 +77,7 @@ export function Activities() {
                 const data = await transferService.getEventHistory(0, 50);
                 setEvents(data);
             } catch (e) {
-                logger.error(`Failed to fetch activities: ${e}`);
+                logger.error(`Failed to fetch activities: ${stringifyError(e)}`);
                 setError(t('history.loadActivitiesFailed'));
             } finally {
                 setIsLoading(false);

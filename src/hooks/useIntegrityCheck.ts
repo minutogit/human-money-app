@@ -2,6 +2,7 @@
 import { useState, useCallback } from 'react';
 import { integrityService } from '../services/integrityService';
 import { logger } from '../utils/log';
+import { stringifyError } from '../utils/errorHelper';
 import { IntegrityReport } from '../types';
 
 export function useIntegrityCheck() {
@@ -15,7 +16,7 @@ export function useIntegrityCheck() {
                 logger.warn(`Integrity issue detected: ${report.type}`);
             }
         } catch (e) {
-            logger.error(`Failed to check integrity: ${e}`);
+            logger.error(`Failed to check integrity: ${stringifyError(e)}`);
         }
     }, []);
 

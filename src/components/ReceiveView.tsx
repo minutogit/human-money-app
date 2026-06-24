@@ -13,7 +13,7 @@ import { Input } from './ui/Input';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
-import { translateError, isBackendError } from '../utils/errorHelper';
+import { translateError, isBackendError, stringifyError } from '../utils/errorHelper';
 import { 
     VoucherStandardInfo,
     AppSettings,
@@ -267,7 +267,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 }
             }
         } catch (e) {
-            const errorStr = isBackendError(e) ? e.message : String(e);
+            const errorStr = stringifyError(e);
             
             // Check if it's a password required error
             const isPasswordRequired = errorStr.includes("Password required") || errorStr.toLowerCase().includes("decrypt") || errorStr.includes("SymmetricEncryption") || errorStr.includes("MacError");

@@ -10,6 +10,7 @@ import { Button } from "./ui/Button";
 import { VoucherSummary, AppSettings, PublicProfile, VoucherStandardDefinition } from "../types";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import { useSession } from "../context/SessionContext";
+import { stringifyError } from "../utils/errorHelper";
 import { PageLayout } from "./ui/PageLayout";
 import { VoucherCard } from "./ui/VoucherCard";
 import { formatDate } from "../utils/format";
@@ -81,12 +82,12 @@ export function WalletView() {
                     try {
                         parsed[s.id] = await standardsService.parseStandard(s.content);
                     } catch (e) {
-                        logger.error(`Failed to parse standard ${s.id}: ${e}`);
+                        logger.error(`Failed to parse standard ${s.id}: ${stringifyError(e)}`);
                     }
                 }
                 setParsedStandards(parsed);
             } catch (e) {
-                const msg = `Failed to fetch wallet data: ${e}`;
+                const msg = `Failed to fetch wallet data: ${stringifyError(e)}`;
                 console.error(msg);
             }
         }

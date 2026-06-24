@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { stringifyError } from "./errorHelper";
 
 /**
  * Logs a message to the Tauri backend with a specified log level.
@@ -9,7 +10,7 @@ async function logToBackend(level: string, message: string) {
     try {
         await invoke("log_to_backend", { level, message });
     } catch (e) {
-        console.error(`Failed to log to backend: ${e}`);
+        console.error(`Failed to log to backend: ${stringifyError(e)}`);
     }
 }
 

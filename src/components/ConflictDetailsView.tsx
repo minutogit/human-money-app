@@ -4,7 +4,7 @@ import { integrityService } from "../services/integrityService";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { FullProofDetails } from "../types";
-import { translateError } from "../utils/errorHelper";
+import { translateError, stringifyError } from "../utils/errorHelper";
 
 interface ConflictDetailsViewProps {
     proofId: string;
@@ -32,7 +32,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                 setDetails(result);
             } catch (e) {
                 const msg = t('conflict.fetchDetailsFailed', { error: translateError(e, t) });
-                logger.error(`Failed to fetch double-spend proof: ${e}`);
+                logger.error(`Failed to fetch double-spend proof: ${stringifyError(e)}`);
                 setErrorMsg(msg);
             } finally {
                 setIsLoading(false);

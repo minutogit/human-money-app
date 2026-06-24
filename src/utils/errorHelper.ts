@@ -39,3 +39,12 @@ export function translateError(error: unknown, t: TFunction): string {
   }
   return t('error.internal.unknown', { defaultValue: 'An unexpected error occurred.' });
 }
+
+/** Converts any caught value to a readable string for logging/display. */
+export function stringifyError(error: unknown): string {
+  if (isBackendError(error)) return error.message;
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try { return JSON.stringify(error); } catch { return String(error); }
+}
+

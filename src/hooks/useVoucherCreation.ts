@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { standardsService } from "../services/standardsService";
 import { profileService } from "../services/profileService";
 import { logger } from "../utils/log";
+import { stringifyError } from "../utils/errorHelper";
 import { 
     VoucherStandardInfo, 
     VoucherStandardDefinition, 
@@ -45,7 +46,7 @@ export function useVoucherCreation() {
                 const fetchedStandards = await standardsService.getStandards();
                 setStandards(fetchedStandards);
             } catch (e) {
-                logger.error(`Failed to fetch standards: ${e}`);
+                logger.error(`Failed to fetch standards: ${stringifyError(e)}`);
             } finally {
                 setIsLoading(false);
             }
@@ -72,7 +73,7 @@ export function useVoucherCreation() {
                     }
                 }
             } catch (e) {
-                logger.error(`Failed to parse standard: ${e}`);
+                logger.error(`Failed to parse standard: ${stringifyError(e)}`);
                 setParsedStandard(null);
             }
         } else {
@@ -107,7 +108,7 @@ export function useVoucherCreation() {
             }));
             logger.info("CreateVoucher: Profile data synchronized.");
         } catch (e) {
-            logger.error(`Failed to load profile: ${e}`);
+            logger.error(`Failed to load profile: ${stringifyError(e)}`);
         }
     }, []);
 

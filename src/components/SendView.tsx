@@ -7,7 +7,7 @@ import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
 import { contactService } from "../services/contactService";
 import { logger } from "../utils/log";
-import { translateError } from "../utils/errorHelper";
+import { translateError, stringifyError } from "../utils/errorHelper";
 import { 
     VoucherSummary, 
     VoucherStandardInfo, 
@@ -218,7 +218,7 @@ export function SendView() {
                 setContacts(fetchedContacts);
                 setActiveAssetClasses(activeClasses);
             } catch (e) {
-                logger.error(`Failed to fetch data for SendView: ${e}`);
+                logger.error(`Failed to fetch data for SendView: ${stringifyError(e)}`);
                 dispatch({ type: 'SET_FEEDBACK', msg: `Error: ${translateError(e, t)}` });
             }
         }
@@ -244,7 +244,7 @@ export function SendView() {
                 const status = await voucherService.checkReputation(state.recipientId);
                 setTrustStatus(status);
             } catch (e) {
-                logger.error(`Reputation check failed: ${e}`);
+                logger.error(`Reputation check failed: ${stringifyError(e)}`);
             }
         }, 500);
         return () => clearTimeout(timer);

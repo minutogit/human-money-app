@@ -14,7 +14,7 @@ import { Card } from "./ui/Card";
 import { ProfileInfo } from "../types";
 import { HelpIcon } from "./ui/HelpIcon";
 import { useNavigation } from "../context/NavigationContext";
-import { translateError, isBackendError } from "../utils/errorHelper";
+import { translateError, isBackendError, stringifyError } from "../utils/errorHelper";
 import { 
     UserCircle, 
     Lock, 
@@ -110,7 +110,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
                 if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName);
             } catch (e) {
-                const msg = isBackendError(e) ? e.message : String(e);
+                const msg = stringifyError(e);
                 if ((isBackendError(e) && e.code === 'error.auth.deviceMismatch') || msg.includes("Device Mismatch") || msg.includes("different device")) {
                     setFeedback(translateError(e, t), "error");
                     setShowHandoverUI(true);
@@ -550,7 +550,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                 try {
                                     await openUrl('https://menschlich-miteinander.org');
                                 } catch (err) {
-                                    logger.error(`Failed to open URL: ${err}`);
+                                    logger.error(`Failed to open URL: ${stringifyError(err)}`);
                                 }
                             }}
                             className="text-xs text-theme-light hover:text-theme-secondary hover:underline focus:outline-none mt-2 font-medium cursor-pointer"

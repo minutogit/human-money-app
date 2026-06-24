@@ -10,6 +10,7 @@ import { startSealSyncLoop, stopSealSyncLoop } from '../utils/sealSync';
 import { useWindowTitleSync } from '../hooks/useWindowTitleSync';
 import { useIntegrityCheck } from '../hooks/useIntegrityCheck';
 import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
+import { isBackendError, stringifyError } from '../utils/errorHelper';
 
 export interface SessionContextType {
     protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>;
@@ -95,19 +96,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             try {
                 return await action(pwd);
             } catch (error) {
-                const errMsg = String(error);
-                // Prüfen auf typische Backend-Fehler bei abgelaufener Session
-                if (errMsg.includes("Password required") || errMsg.includes("Session timed out") || errMsg.includes("Wallet is locked")) {
+                const errMsg = stringifyError(error);
+                const errCode = isBackendError(error) ? error.code : '';
+
+                if (errCode === 'error.wallet.locked' || errCode === 'error.auth.sessionTimeout' || errCode === 'error.auth.passwordRequired'
+                    || errMsg.includes("Password required") || errMsg.includes("Session timed out") || errMsg.includes("Wallet is locked")) {
                     logger.warn("Backend rejected action (wallet locked/session expired). Resetting frontend session state.");
                     setIsSessionActive(false);
                     isSessionActiveRef.current = false;
                     throw new Error("SESSION_EXPIRED_RETRY");
                 }
-                if (errMsg.includes("WalletLockedDueToFork") || errMsg.includes("SealForkDetected") || errMsg.includes("Security Lockdown")) {
+                if (errCode === 'error.security.walletLockedDueToFork'
+                    || errMsg.includes("WalletLockedDueToFork") || errMsg.includes("SealForkDetected") || errMsg.includes("Security Lockdown")) {
                     logger.error("CRITICAL: Wallet is locked due to a fork.");
                     setIsForkLocked(true);
                 }
-                if (errMsg.includes("RequiresSealRecovery") || errMsg.includes("No local security seal found")) {
+                if (errCode === 'error.security.sealRecoveryRequired'
+                    || errMsg.includes("RequiresSealRecovery") || errMsg.includes("No local security seal found")) {
                     logger.error("CRITICAL: Wallet requires seal recovery.");
                     setIsRecoveryRequired(true);
                 }
@@ -161,7 +166,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 });
             }
         } catch (e) {
-            logger.error(`Error in protectAction: ${e}`);
+            logger.error(`Error in protectAction: ${stringifyError(e)}`);
             throw e;
         }
     }, []);

@@ -8,7 +8,7 @@ import { AuthLayout } from "./AuthLayout";
 import { info, error } from "@tauri-apps/plugin-log";
 import { logger } from "../utils/log";
 import { MnemonicLanguage } from "../types";
-import { translateError } from "../utils/errorHelper";
+import { translateError, stringifyError } from "../utils/errorHelper";
 
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -111,7 +111,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                 setBip39Wordlist(list);
                 info(`Successfully fetched BIP-39 wordlist for ${selectedLanguage} for import.`);
             } catch (e) {
-                error(`Failed to fetch BIP-39 wordlist: ${e}`);
+                error(`Failed to fetch BIP-39 wordlist: ${stringifyError(e)}`);
             }
         }
         fetchWordlist();
