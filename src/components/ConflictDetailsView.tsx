@@ -4,6 +4,7 @@ import { integrityService } from "../services/integrityService";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { FullProofDetails } from "../types";
+import { translateError, stringifyError } from "../utils/errorHelper";
 
 interface ConflictDetailsViewProps {
     proofId: string;
@@ -30,8 +31,8 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                 const result = await integrityService.getProofOfDoubleSpend(proofId);
                 setDetails(result);
             } catch (e) {
-                const msg = t('conflict.fetchDetailsFailed', { error: String(e) });
-                logger.error(`Failed to fetch double-spend proof: ${e}`);
+                const msg = t('conflict.fetchDetailsFailed', { error: translateError(e, t) });
+                logger.error(`Failed to fetch double-spend proof: ${stringifyError(e)}`);
                 setErrorMsg(msg);
             } finally {
                 setIsLoading(false);
@@ -57,7 +58,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
             setPassword("");
             setLocalNote("");
         } catch (e) {
-            setOverrideError(String(e));
+            setOverrideError(translateError(e, t));
         } finally {
             setIsOverriding(false);
         }

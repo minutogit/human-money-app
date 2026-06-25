@@ -25,6 +25,7 @@ import {
     AlertCircle
 } from "lucide-react";
 import { truncateUserId } from "../utils/userIdHelper";
+import { stringifyError } from "../utils/errorHelper";
 
 import { useNavigation } from "../context/NavigationContext";
 import { useContactResolver } from "../hooks/useContactResolver";
@@ -87,7 +88,7 @@ export function Dashboard() {
                 const profileComplete = userProfile && userProfile.firstName && userProfile.lastName && userProfile.address?.city;
                 setIsProfileComplete(!!profileComplete);
             } catch (e) {
-                const msg = `Failed to fetch dashboard data: ${e}`;
+                const msg = `Failed to fetch dashboard data: ${stringifyError(e)}`;
                 console.error(msg);
                 setFeedbackMsg(`Error: ${msg}`);
             } finally {
@@ -104,7 +105,7 @@ export function Dashboard() {
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
         } catch (e) {
-            const msg = `Failed to copy User ID: ${e}`;
+            const msg = `Failed to copy User ID: ${stringifyError(e)}`;
             console.error(msg);
             setFeedbackMsg(`Error: ${msg}`);
         }

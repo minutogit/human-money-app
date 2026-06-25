@@ -1,6 +1,6 @@
 import { settingsService } from '../services/settingsService';
 import { logger } from './log';
-// SealUploadData import removed as unused
+import { isBackendError, stringifyError } from './errorHelper';
 
 
 let syncInterval: number | null = null;
@@ -58,9 +58,12 @@ async function performSync() {
     } catch (e) {
         // Silently fail but log, as this runs in background
         // Errors like "Wallet is locked" are expected when the session is closed
-        const msg = String(e);
-        if (!msg.includes("Wallet is locked") && !msg.includes("Session timed out")) {
-            logger.warn(`WalletSeal sync cycle encountered an issue: ${e}`);
+        const msg = stringifyError(e);
+        const code = isBackendError(e) ? e.code : '';
+        const isExpected = code === 'error.wallet.locked' || code === 'error.auth.sessionTimeout'
+            || msg.includes("Wallet is locked") || msg.includes("Session timed out");
+        if (!isExpected) {
+            logger.warn(`WalletSeal sync cycle encountered an issue: ${msg}`);
         }
     }
 }

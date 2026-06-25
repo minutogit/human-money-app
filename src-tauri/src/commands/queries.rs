@@ -113,6 +113,7 @@ pub fn check_reputation(
     offender_id: String,
     state: tauri::State<AppState>,
 ) -> Result<crate::models::FrontendTrustStatus, FrontendError> {
+    let offender_id = offender_id.trim().to_string();
     log::info!("Checking reputation for offender: {}", offender_id);
     let service = state.service.lock().unwrap();
     let status = service.check_reputation(&offender_id).map_err(FrontendError::from)?;

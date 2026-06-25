@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { ReceiveSuccessPayload, TrustStatus } from "../types";
 import { Button } from "./ui/Button";
 import { logger } from '../utils/log';
+import { stringifyError } from '../utils/errorHelper';
 import { profileService } from "../services/profileService";
 import { useTranslation } from "react-i18next";
 import { 
@@ -46,7 +47,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
         if (payload.senderId) {
             profileService.checkReputation(payload.senderId)
                 .then(setTrustStatus)
-                .catch(e => logger.error(`Reputation check error: ${e}`));
+                .catch(e => logger.error(`Reputation check error: ${stringifyError(e)}`));
         }
     }, [payload, summaryString]);
 

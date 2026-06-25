@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { transferService } from '../services/transferService';
 import { logger } from '../utils/log';
+import { translateError, stringifyError } from '../utils/errorHelper';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { Button } from './ui/Button';
@@ -61,8 +62,8 @@ export function TransactionHistoryView() {
                 records.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
                 setHistory(records);
             } catch (e) {
-                const msg = t('history.loadFailed', { error: String(e) });
-                logger.error(`Failed to load transaction history: ${e}`);
+                const msg = t('history.loadFailed', { error: translateError(e, t) });
+                logger.error(`Failed to load transaction history: ${stringifyError(e)}`);
                 setError(msg);
             } finally {
                 setIsLoading(false);
@@ -96,7 +97,7 @@ export function TransactionHistoryView() {
                 setFeedback(f => ({ ...f, [record.id]: t('history.saved') }));
             }
         } catch (e) {
-            setFeedback(f => ({ ...f, [record.id]: t('history.saveError', { error: String(e) }) }));
+            setFeedback(f => ({ ...f, [record.id]: t('history.saveError', { error: translateError(e, t) }) }));
         } finally {
             setIsSaving(null);
         }

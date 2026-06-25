@@ -10,7 +10,8 @@ import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
 import { ProfileInfo, MnemonicLanguage } from "../types";
-import { translateError } from "../utils/errorHelper";
+import { translateError, stringifyError } from "../utils/errorHelper";
+import { cleanSeedText } from "../utils/seedUtils";
 import { HelpIcon } from "./ui/HelpIcon";
 import {
     Key,
@@ -106,7 +107,7 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 const list = await profileService.getWordlist(selectedLanguage);
                 setBip39Wordlist(list);
             } catch (e) {
-                logger.error(`Failed to fetch BIP-39 wordlist: ${translateError(e, t)}`);
+                logger.error(`Failed to fetch BIP-39 wordlist: ${stringifyError(e)}`);
             }
         }
         fetchWordlist();
@@ -115,17 +116,22 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     useEffect(() => {
         if (inputMode !== 'phrase') return;
         const prevPhrase = prevRawPhraseRef.current;
-        const needsCleaning = /[0-9]+\.|\n|\r/.test(rawPhrase);
 
-        if (needsCleaning) {
-            const singleLine = rawPhrase.replace(/(\r\n|\n|\r)/gm, " ");
-            const cleaned = singleLine.replace(/[0-9]+\./g, '').trim().replace(/\s+/g, ' ').toLowerCase();
-            if (cleaned !== rawPhrase) { setRawPhrase(cleaned); return; }
+        const cleaned = cleanSeedText(rawPhrase);
+        if (cleaned !== rawPhrase && rawPhrase.length > 0) {
+            // Check if we should auto-apply cleaning.
+            // Apply it if there are numbers, punctuation, or multiple spaces.
+            if (/[0-9.,\-:]/.test(rawPhrase) || /[\r\n\t]/.test(rawPhrase) || /\s\s/.test(rawPhrase)) {
+                setRawPhrase(cleaned);
+                return;
+            }
         }
 
         const words = rawPhrase.trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
         setMnemonicWords(Array(wordCount).fill("").map((_, i) => words[i] || ""));
-        if (words.length === 12 || words.length === 24) setWordCount(words.length);
+        if (words.length === 12 || words.length === 24) {
+            setWordCount(words.length);
+        }
 
         const lastWord = words[words.length - 1];
         if (rawPhrase.length > prevPhrase.length && lastWord && !rawPhrase.endsWith(' ') && bip39Wordlist.length > 0) {
@@ -171,12 +177,27 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     }, [mnemonicWords, selectedLanguage, wordCount, t]);
 
     const handleWordChange = (index: number, value: string) => {
-        const cleanedText = value.replace(/[0-9]+\.\s*/g, '');
-        const pastedWords = cleanedText.trim().replace(/\s+/g, ' ').split(' ');
+        if (!value) {
+            const newWords = [...mnemonicWords];
+            newWords[index] = "";
+            setMnemonicWords(newWords);
+            return;
+        }
+
+        const cleanedText = cleanSeedText(value);
+
+        const pastedWords = cleanedText.split(' ').filter(Boolean);
+        if (pastedWords.length === 0) {
+            const newWords = [...mnemonicWords];
+            newWords[index] = "";
+            setMnemonicWords(newWords);
+            return;
+        }
+
         const newWords = [...mnemonicWords];
         for (let i = 0; i < pastedWords.length; i++) {
             const targetIndex = index + i;
-            if (targetIndex < wordCount) newWords[targetIndex] = pastedWords[i].toLowerCase().trim();
+            if (targetIndex < wordCount) newWords[targetIndex] = pastedWords[i];
         }
         setMnemonicWords(newWords);
         if (pastedWords.length > 1) {

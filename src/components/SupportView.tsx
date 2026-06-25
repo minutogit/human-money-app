@@ -7,6 +7,7 @@ import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import { Heart, Globe, MessageSquare, Award } from 'lucide-react';
 import { logger } from '../utils/log';
+import { stringifyError } from '../utils/errorHelper';
 
 export const SupportView: React.FC = () => {
     const { t } = useTranslation();
@@ -15,7 +16,7 @@ export const SupportView: React.FC = () => {
         try {
             await openUrl('https://menschlich-miteinander.org');
         } catch (err) {
-            logger.error(`Failed to open URL: ${err}`);
+            logger.error(`Failed to open URL: ${stringifyError(err)}`);
         }
     };
 

@@ -7,6 +7,7 @@ import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
 import { contactService } from "../services/contactService";
 import { logger } from "../utils/log";
+import { translateError, stringifyError } from "../utils/errorHelper";
 import { 
     VoucherSummary, 
     VoucherStandardInfo, 
@@ -95,7 +96,7 @@ const initialState: SendState = {
 
 function reducer(state: SendState, action: SendAction): SendState {
     switch (action.type) {
-        case 'SET_RECIPIENT': return { ...state, recipientId: action.id, recipientError: false };
+        case 'SET_RECIPIENT': return { ...state, recipientId: action.id.replace(/\s+/g, ''), recipientError: false };
         case 'SET_NOTES': return { ...state, notes: action.notes };
         case 'TOGGLE_PROFILE_NAME': return { ...state, sendProfileName: action.value };
         case 'SET_SENDER_NAME': return { ...state, customSenderName: action.name };
@@ -217,12 +218,12 @@ export function SendView() {
                 setContacts(fetchedContacts);
                 setActiveAssetClasses(activeClasses);
             } catch (e) {
-                logger.error(`Failed to fetch data for SendView: ${e}`);
-                dispatch({ type: 'SET_FEEDBACK', msg: `Error: ${e}` });
+                logger.error(`Failed to fetch data for SendView: ${stringifyError(e)}`);
+                dispatch({ type: 'SET_FEEDBACK', msg: `Error: ${translateError(e, t)}` });
             }
         }
         fetchData();
-    }, [profileName]);
+    }, [profileName, t]);
 
     useEffect(() => {
         if (detectedPrivacy === 'stealth') dispatch({ type: 'SET_PRIVACY', mode: 'stealth' });
@@ -243,7 +244,7 @@ export function SendView() {
                 const status = await voucherService.checkReputation(state.recipientId);
                 setTrustStatus(status);
             } catch (e) {
-                logger.error(`Reputation check failed: ${e}`);
+                logger.error(`Reputation check failed: ${stringifyError(e)}`);
             }
         }, 500);
         return () => clearTimeout(timer);
@@ -363,7 +364,7 @@ export function SendView() {
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferSuccess') });
             navigationTimerRef.current = setTimeout(() => navigate({ view: 'transfer_success', bundleData: bundleResult.bundleData, recipientId: state.recipientId, summary: summaryString }), 1500);
         } catch (e) {
-            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferFailed', { error: `${e}` }) });
+            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferFailed', { error: translateError(e, t) }) });
             dispatch({ type: 'SET_PROCESSING', value: false });
             dispatch({ type: 'TOGGLE_CONFIRM', value: false });
         }
@@ -444,7 +445,11 @@ export function SendView() {
                         {/* Empfänger (To) */}
                         <RecipientSelector 
                             recipientId={state.recipientId}
-                            onRecipientChange={(e) => dispatch({ type: 'SET_RECIPIENT', id: e.target.value })}
+                            onRecipientChange={(e) => {
+                                const val = e.target.value.replace(/\s+/g, '');
+                                e.target.value = val;
+                                dispatch({ type: 'SET_RECIPIENT', id: val });
+                            }}
                             onSelectContact={(c) => dispatch({ type: 'SET_RECIPIENT', id: c.did })}
                             contacts={contacts}
                             trustStatus={trustStatus}

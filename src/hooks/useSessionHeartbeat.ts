@@ -2,6 +2,7 @@
 import { useEffect, useRef } from 'react';
 import { authService } from '../services/authService';
 import { logger } from '../utils/log';
+import { stringifyError } from '../utils/errorHelper';
 
 export function useSessionHeartbeat(
     isSessionActive: boolean,
@@ -22,7 +23,7 @@ export function useSessionHeartbeat(
                 const now = Date.now();
                 if (now - lastHeartbeatRef.current > 2000) {
                     lastHeartbeatRef.current = now;
-                    authService.refreshSessionActivity().catch((e) => logger.warn(`Heartbeat failed: ${e}`));
+                    authService.refreshSessionActivity().catch((e) => logger.warn(`Heartbeat failed: ${stringifyError(e)}`));
                 }
             }
         };
@@ -49,7 +50,7 @@ export function useSessionHeartbeat(
                         onSessionExpired();
                     }
                 } catch (e) {
-                    logger.error(`Session check failed: ${e}`);
+                    logger.error(`Session check failed: ${stringifyError(e)}`);
                 }
             }
         };

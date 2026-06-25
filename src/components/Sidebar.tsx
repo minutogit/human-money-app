@@ -8,6 +8,7 @@ import { useSession } from '../context/SessionContext';
 import { useNavigation } from '../context/NavigationContext';
 import { profileService } from '../services/profileService';
 import { error } from "@tauri-apps/plugin-log";
+import { stringifyError } from '../utils/errorHelper';
 import { 
   LayoutDashboard, 
   Wallet, 
@@ -59,7 +60,7 @@ export const Sidebar: React.FC = () => {
   }
 
   const handleLogout = () => {
-    profileService.logout().catch(e => error(`Logout failed: ${e}`));
+    profileService.logout().catch(e => error(`Logout failed: ${stringifyError(e)}`));
     setSidebarOpen(false);
     notifyLogout();
     navigate({ view: "needs_login" });

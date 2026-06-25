@@ -11,6 +11,7 @@ import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
 import { translateError } from "../utils/errorHelper";
+import { cleanSeedText } from "../utils/seedUtils";
 import {
     ShieldCheck,
     Lock,
@@ -98,7 +99,6 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNe
 
     useEffect(() => {
         if (!isBulkMode) return;
-        const cleanSeedText = (text: string) => text.toLowerCase().replace(/[0-9.,\-:]/g, ' ').replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim();
         const cleaned = cleanSeedText(bulkSeedInput);
         if ((/[0-9.,\-:]/.test(bulkSeedInput) || /\s\s/.test(bulkSeedInput)) && cleaned !== bulkSeedInput) setBulkSeedInput(cleaned);
     }, [bulkSeedInput, isBulkMode]);
@@ -115,8 +115,6 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNe
         setFeedbackMsg("");
         setWizardStep("confirm_seed");
     };
-
-    const cleanSeedText = (text: string) => text.toLowerCase().replace(/[0-9.,\-:]/g, ' ').replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim();
 
     const handleConfirmSeedSubmit = (e: FormEvent) => {
         e.preventDefault();

@@ -9,7 +9,7 @@ import { Input } from './ui/Input';
 import { PublicProfile, Address } from '../types';
 import { useSession } from '../context/SessionContext';
 import { normalizeCoordinates, geocodeAddress, getCurrentLocation } from '../utils/geoUtils';
-import { translateError } from '../utils/errorHelper';
+import { translateError, stringifyError } from '../utils/errorHelper';
 import { 
     User, 
     MapPin, 
@@ -50,7 +50,7 @@ export function ProfileSettings() {
             setGeoFeedback(t('profile.locationDetected'));
             setTimeout(() => setGeoFeedback(''), 3000);
         } catch (e) {
-            const msg = e instanceof Error ? e.message : t('profile.gpsFailed');
+            const msg = stringifyError(e) || t('profile.gpsFailed');
             setGeoFeedback(msg);
             setGeoFeedbackError(true);
             setTimeout(() => setGeoFeedback(''), 5000);
@@ -71,7 +71,7 @@ export function ProfileSettings() {
             setGeoFeedback(t('profile.coordinatesResolved'));
             setTimeout(() => setGeoFeedback(''), 3000);
         } catch (e) {
-            const msg = e instanceof Error ? e.message : t('profile.lookupFailed');
+            const msg = stringifyError(e) || t('profile.lookupFailed');
             setGeoFeedback(msg);
             setGeoFeedbackError(true);
             setTimeout(() => setGeoFeedback(''), 5000);

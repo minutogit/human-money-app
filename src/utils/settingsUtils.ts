@@ -2,6 +2,7 @@
 import { settingsService } from "../services/settingsService";
 import { AppSettings } from "../types";
 import { logger } from "./log";
+import { stringifyError } from "./errorHelper";
 
 /**
  * Extracts the directory from a full file path.
@@ -38,6 +39,6 @@ export async function updateLastUsedDirectory(
             return true;
         });
     } catch (e) {
-        logger.error(`Failed to update last used directory: ${e}`);
+        logger.error(`Failed to update last used directory: ${stringifyError(e)}`);
     }
 }

@@ -8,7 +8,7 @@ import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import { Terminal, Copy, ExternalLink, AlertTriangle, Check, Loader2 } from 'lucide-react';
 import { logger } from '../utils/log';
-import { translateError } from '../utils/errorHelper';
+import { translateError, stringifyError } from '../utils/errorHelper';
 
 interface BugReportViewProps {
     onBack: () => void;
@@ -28,7 +28,7 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
                 const latestLogs = await invoke<string>("get_latest_logs");
                 setLogs(latestLogs);
             } catch (err) {
-                logger.error(`Failed to fetch logs: ${err}`);
+                logger.error(`Failed to fetch logs: ${stringifyError(err)}`);
                 setError(translateError(err, t));
             } finally {
                 setIsLoading(false);
@@ -43,7 +43,7 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
         } catch (err) {
-            logger.error(`Failed to copy logs to clipboard: ${err}`);
+            logger.error(`Failed to copy logs to clipboard: ${stringifyError(err)}`);
         }
     };
 
@@ -51,7 +51,7 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
         try {
             await openUrl('https://github.com/minutogit/human-money-app/issues/new');
         } catch (err) {
-            logger.error(`Failed to open GitHub issues link: ${err}`);
+            logger.error(`Failed to open GitHub issues link: ${stringifyError(err)}`);
         }
     };
 

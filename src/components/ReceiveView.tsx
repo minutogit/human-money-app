@@ -13,7 +13,7 @@ import { Input } from './ui/Input';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
-import { translateError, isBackendError } from '../utils/errorHelper';
+import { translateError, isBackendError, stringifyError } from '../utils/errorHelper';
 import { 
     VoucherStandardInfo,
     AppSettings,
@@ -267,7 +267,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 }
             }
         } catch (e) {
-            const errorStr = isBackendError(e) ? e.message : String(e);
+            const errorStr = stringifyError(e);
             
             // Check if it's a password required error
             const isPasswordRequired = errorStr.includes("Password required") || errorStr.toLowerCase().includes("decrypt") || errorStr.includes("SymmetricEncryption") || errorStr.includes("MacError");
@@ -280,6 +280,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     name
                 });
                 setShowConfirm(true);
+                setIsProcessing(false);  // Reset so modal buttons are active
                 return;
             }
 
@@ -290,6 +291,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     type: isCritical ? 'Critical' : 'Soft',
                     message: translateError(e, t)
                 });
+                setIsProcessing(false);  // Reset so modal buttons are active
                 return;
             }
             if (errorStr.includes("already attached")) {
@@ -302,15 +304,14 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                         confirmText: t('transfer.importFile.goToAsset'),
                         voucherId: match[1]
                     });
+                    setIsProcessing(false);  // Reset so modal buttons are active
                     return;
                 }
             }
             setFeedbackMsg(translateError(e, t));
             clearSelection();
         } finally {
-            if (!toleranceModal && !pendingPasswordImport) {
-                setIsProcessing(false);
-            }
+            setIsProcessing(false);  // Always reset, no stale-closure guards
         }
     }
 

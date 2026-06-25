@@ -1,6 +1,7 @@
 // src/hooks/useWindowTitleSync.ts
 import { useEffect } from 'react';
 import { logger } from '../utils/log';
+import { stringifyError } from '../utils/errorHelper';
 
 export function useWindowTitleSync(profileName: string) {
     useEffect(() => {
@@ -14,7 +15,7 @@ export function useWindowTitleSync(profileName: string) {
                     await win.setTitle('Human Money App');
                 }
             } catch (e) {
-                logger.warn(`Failed to update window title: ${e}`);
+                logger.warn(`Failed to update window title: ${stringifyError(e)}`);
             }
         };
 

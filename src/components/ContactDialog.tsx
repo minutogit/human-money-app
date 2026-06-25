@@ -132,7 +132,11 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                         <input
                             type="text"
                             value={did}
-                            onChange={(e) => setDid(e.target.value)}
+                            onChange={(e) => {
+                                const val = e.target.value.replace(/\s+/g, '');
+                                e.target.value = val;
+                                setDid(val);
+                            }}
                             disabled={!!existingContact}
                             placeholder={t('contacts.didPlaceholder')}
                             className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 disabled:opacity-50 font-mono text-sm shadow-sm"

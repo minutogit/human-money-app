@@ -1,9 +1,9 @@
 ---
 project: human-money-app
-version: "0.1.0"
+version: "0.1.1"
 phase: "beta"
 health: "green"
-last_updated: "2026-06-15"
+last_updated: "2026-06-25"
 blocks: []
 blocked_by: []
 priority_tasks:
@@ -199,6 +199,12 @@ priority_tasks:
     priority: "medium"
     depends_on: []
     description: "Streamlined the import/receive file flow by auto-processing selected files immediately and conditionally prompting for passwords only when required by encryption."
+  - id: "APP-032"
+    title: "Custom Standard Import & Management"
+    status: "open"
+    priority: "medium"
+    depends_on: []
+    description: "Implement support for importing, managing, and utilizing custom voucher standards (TOML files) within the application UI to eliminate manual configuration file edits."
 ---
 
 # Human Money App — Status
@@ -222,6 +228,11 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Recent Milestones
 
+- [x] Hardened seed/mnemonic input sanitization and cleaned up recovery views: created a centralized `cleanSeedText` utility (`src/utils/seedUtils.ts`) that sanitizes BIP-39 seed input (lowercasing, removing digits, punctuation like commas/dots/dashes/colons, tabs, newlines, and collapsing multiple spaces). Unified and refactored `CreateNewProfile.tsx`, `RecreateProfile.tsx`, and `WalletRecovery.tsx` to utilize this shared utility for both phrase (textarea) and words (individual inputs) modes, backed by a comprehensive unit test suite (`seedUtils.test.ts`).
+- [x] Fixed app hang on wrong password entry in `ReceiveView`: updated early-return paths in the catch block to explicitly reset the processing state and simplified the finally block to always call `setIsProcessing(false)` without relying on stale closures. Added comprehensive Vitest unit tests verifying button responsiveness during single and multiple failed password entry attempts.
+- [x] Hardened input robustness for DID keys and user identifiers across the entire application stack: implemented a whitespace-stripping `sanitize_user_id` helper in `human_money_core`, trimmed fields at the Tauri bridge commands (`transfers.rs`, `contacts.rs`, and `queries.rs`), and added synchronous input-cleaning handlers and tests in the React frontend (`SendView.tsx` and `ContactDialog.tsx`) to prevent copy-paste errors.
+- [x] Systematically sanitized frontend caught errors: replaced all raw/implicit string interpolations of caught error objects (`[object Object]`) with the centralized `stringifyError` utility across the entire codebase to guarantee type-safe, human-readable logging and troubleshooting output.
+- [x] Implemented environment isolation for development: added a tauri.dev.conf.json override file changing the app identifier to 'human.money.app.dev' and window title to 'Human Money App [DEV]' when running via start-dev.sh to prevent development database/profiles collision with real production user data.
 - [x] Finalized MVP polish: updated window titles and branding to 'Human Money App', refactored authentication/recovery flows to use type-safe feedback states (removing brittle substring checks), localized recovery warning modals, and synchronized all localization keys across English, German, Spanish, French, and Italian locales
 - [x] Fixed navigation race conditions and memory leaks by cleaning up pending timeouts on component unmount and introducing a global route guard for active sessions
 - [x] Refined vocabulary (e.g. Trust Status, Trusted Account, Flagged Account, Sendeübersicht) and integrated interactive HelpIcons for voucher-related workflows (Mode, Creator, Signatures, and Signature Requests) with full German/English translations
@@ -292,7 +303,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Structured Domain-Prefixes for i18n (Domain linter, multi-line parsing, en.json auto-sorting, and keySeparator option)
 - [x] Structured Error DTOs for i18n Localization (Transitioned error handling from opaque strings to FrontendError DTOs with variable interpolation support)
 - [x] Structured AppFacadeError Handling (Refactored AppState and remaining commands to return structured AppFacadeError / FrontendError DTOs to improve i18n error propagation)
-- [x] Migrated remaining UI component catch blocks to translateError (SettingsView, ProfileSettings, ContactDialog) and stabilized all affected unit tests.
+- [x] Migrated remaining UI component catch blocks to translateError (SettingsView, ProfileSettings, ContactDialog, SendView, ConflictDetailsView, TransactionHistoryView, SignRequestView, IntegrityReportModal, ExportSigningRequestModal, CreateVoucher, ConflictListView) and stabilized all affected unit tests.
 - [x] Localized ProfileSettings component (Batch 4 i18n migration).
 - [x] Localized VoucherDetailsView and associated subcomponents (Batch 5 i18n migration: CreatorSection, PolicySection, TimelineSection, ExportDialog, and SignatureRequestBanner).
 - [x] Localized AddressBook and ContactDialog components (Batch 6 i18n migration).
@@ -324,3 +335,4 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [ ] L2 sync hardening (Post-MVP)
 - [ ] Trust level badges for contacts (Post-MVP)
 - [ ] BLE/NFC stranger discovery (Post-MVP)
+- [ ] Custom Standard Import & Management (Post-MVP)

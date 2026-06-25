@@ -7,6 +7,7 @@ import { authService } from "../services/authService";
 import { logger } from "../utils/log";
 import { useSession } from './SessionContext';
 import { error } from "@tauri-apps/plugin-log";
+import { stringifyError } from '../utils/errorHelper';
 
 export interface NavigationContextType {
     appState: AppState;
@@ -69,7 +70,7 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
             await authService.listProfiles();
             setAppState({ view: "needs_login" });
         } catch (e) {
-            error(`Failed to check if profile exists: ${e}`);
+            error(`Failed to check if profile exists: ${stringifyError(e)}`);
             setAppState({ view: "needs_login" });
         }
     }, []);

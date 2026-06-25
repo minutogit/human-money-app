@@ -8068,6 +8068,60 @@
       "it": "ai-translated"
     }
   },
+  "voucher.role.creator": {
+    "source_text": "Creator",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.role.guarantor": {
+    "source_text": "Guarantor",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.role.issuer": {
+    "source_text": "Issuer",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.role.witness": {
+    "source_text": "Witness",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.rule.genderBalanceFemale": {
+    "source_text": "According to ISO 5218, exactly one female (2) guarantor is required.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.rule.genderBalanceMale": {
+    "source_text": "According to ISO 5218, exactly one male (1) guarantor is required.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.sendForSignatureHeader": {
     "source_text": "Send for Signature",
     "status": {
@@ -8173,6 +8227,15 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.signRequest.openRuleCheck": {
+    "source_text": "Note: An open rule checks for your {{field}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },

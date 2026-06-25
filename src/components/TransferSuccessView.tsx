@@ -17,6 +17,7 @@ import {
     ArrowUpRight
 } from 'lucide-react';
 import { suggestFilename } from '../utils/userIdHelper';
+import { stringifyError } from '../utils/errorHelper';
 
 interface TransferSuccessViewProps {
     bundleData: number[];
@@ -78,7 +79,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                 setFeedback(t('transfer.success.synced'));
             }
         } catch (e) {
-            setFeedback(`Error: ${e}`);
+            setFeedback(`Error: ${stringifyError(e)}`);
         } finally {
             setIsSaving(false);
         }

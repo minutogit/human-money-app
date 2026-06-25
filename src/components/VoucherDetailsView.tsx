@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardDefinition } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
+import { stringifyError } from "../utils/errorHelper";
 import ContactDialog from "./ContactDialog";
 import { PageLayout } from "./ui/PageLayout";
 import { InfoRow } from "./ui/InfoRow";
@@ -74,7 +75,7 @@ export function VoucherDetailsView() {
         if (voucher?.creator.id) {
             voucherService.checkReputation(voucher.creator.id)
                 .then(setTrustStatus)
-                .catch(e => logger.error(`Reputation check error: ${e}`));
+                .catch(e => logger.error(`Reputation check error: ${stringifyError(e)}`));
         }
     }, [voucher?.creator.id]);
 
@@ -98,12 +99,12 @@ export function VoucherDetailsView() {
                     try {
                         parsed[s.id] = await standardsService.parseStandard(s.content);
                     } catch (e) {
-                        logger.error(`Failed to parse standard ${s.id}: ${e}`);
+                        logger.error(`Failed to parse standard ${s.id}: ${stringifyError(e)}`);
                     }
                 }
                 setParsedStandards(parsed);
             } catch (e) {
-                const msg = `${t('voucher.errorFetchingDetails')}: ${e}`;
+                const msg = `${t('voucher.errorFetchingDetails')}: ${stringifyError(e)}`;
                 logger.error(msg);
                 setErrorMsg(msg);
             } finally {
@@ -114,7 +115,7 @@ export function VoucherDetailsView() {
     }, [voucherId, t]);
 
     useEffect(() => {
-        contactService.getContacts().then(setContacts).catch(e => logger.error(`Failed to fetch contacts: ${e}`));
+        contactService.getContacts().then(setContacts).catch(e => logger.error(`Failed to fetch contacts: ${stringifyError(e)}`));
     }, []);
 
     useEffect(() => {
@@ -125,7 +126,7 @@ export function VoucherDetailsView() {
                     const id = await voucherService.getProofId(voucherId);
                     setProofId(id);
                 } catch (e) {
-                    logger.error(`Failed to fetch proof ID for voucher ${voucherId}: ${e}`);
+                    logger.error(`Failed to fetch proof ID for voucher ${voucherId}: ${stringifyError(e)}`);
                 } finally {
                     setIsFetchingProofId(false);
                 }
@@ -139,7 +140,7 @@ export function VoucherDetailsView() {
             const result = await voucherService.getDetails(voucherId);
             setDetails(result);
         } catch (e) {
-            logger.error(`Failed to refresh voucher details: ${e}`);
+            logger.error(`Failed to refresh voucher details: ${stringifyError(e)}`);
         }
     };
 
@@ -190,7 +191,7 @@ export function VoucherDetailsView() {
                 setShowExportModal(false);
             }
         } catch (e) {
-            setExportError(`${t('voucher.exportFailed')}: ${e}`);
+            setExportError(`${t('voucher.exportFailed')}: ${stringifyError(e)}`);
         } finally {
             setIsExporting(false);
         }
@@ -206,8 +207,8 @@ export function VoucherDetailsView() {
             setShowRemoveSignatureModal(null);
             await refreshDetails();
         } catch (e) {
-            logger.error(`Failed to remove signature: ${e}`);
-            alert(`${t('voucher.failedRemoveSignature')}: ${e}`);
+            logger.error(`Failed to remove signature: ${stringifyError(e)}`);
+            alert(`${t('voucher.failedRemoveSignature')}: ${stringifyError(e)}`);
         } finally {
             setIsRemovingSignature(false);
         }

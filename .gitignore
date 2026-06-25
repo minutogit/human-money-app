@@ -33,3 +33,4 @@ dist-ssr
 # i18n temporary files
 i18n-task.json
 i18n-result.json
+/temp/
