@@ -9,6 +9,7 @@ import { info, error } from "@tauri-apps/plugin-log";
 import { logger } from "../utils/log";
 import { MnemonicLanguage } from "../types";
 import { translateError, stringifyError } from "../utils/errorHelper";
+import { cleanSeedText } from "../utils/seedUtils";
 
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
@@ -19,10 +20,6 @@ import { HelpIcon } from "./ui/HelpIcon";
 
 type WizardStep = "import_seed" | "set_details";
 type InputMode = "words" | "phrase";
-
-const cleanPhrase = (phrase: string) => {
-    return phrase.replace(/\s+/g, ' ').trim().toLowerCase();
-};
 
 interface RecreateProfileProps {
     onProfileCreated: () => void;
@@ -123,21 +120,11 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
         if (inputMode !== 'phrase') return;
         const prevPhrase = prevRawPhraseRef.current;
         
-        // --- PRO-MODE CLEANING (Same as CreateNewProfile) ---
-        const cleanSeedText = (text: string) => {
-            return text
-                .toLowerCase()
-                .replace(/[0-9.,\-:]/g, ' ') // Remove digits and punctuation
-                .replace(/[\r\n\t]/g, ' ')      // Replace tabs and newlines with space
-                .replace(/\s+/g, ' ')          // Collapse multiple spaces
-                .trim();
-        };
-
         const cleaned = cleanSeedText(rawPhrase);
         if (cleaned !== rawPhrase && rawPhrase.length > 0) {
             // Check if we should auto-apply cleaning. 
-            // For recreate, we apply it if there are numbers or multiple spaces.
-            if (/[0-9.,\-:]/.test(rawPhrase) || /\s\s/.test(rawPhrase)) {
+            // Apply it if there are numbers, punctuation, tabs/newlines, or multiple spaces.
+            if (/[0-9.,\-:]/.test(rawPhrase) || /[\r\n\t]/.test(rawPhrase) || /\s\s/.test(rawPhrase)) {
                 setRawPhrase(cleaned);
                 return;
             }
@@ -206,14 +193,28 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
     // Handler for the individual input fields ('words' mode)
     // (Copied from WalletRecovery.tsx)
     const handleWordChange = (index: number, value: string) => {
-        const cleanedText = value.replace(/[0-9]+\.\s*/g, '');
-        const pastedWords = cleanedText.trim().replace(/\s+/g, ' ').split(' ');
+        if (!value) {
+            const newWords = [...mnemonicWords];
+            newWords[index] = "";
+            setMnemonicWords(newWords);
+            return;
+        }
+
+        const cleanedText = cleanSeedText(value);
+
+        const pastedWords = cleanedText.split(' ').filter(Boolean);
+        if (pastedWords.length === 0) {
+            const newWords = [...mnemonicWords];
+            newWords[index] = "";
+            setMnemonicWords(newWords);
+            return;
+        }
 
         const newWords = [...mnemonicWords];
         for (let i = 0; i < pastedWords.length; i++) {
             const targetIndex = index + i;
             if (targetIndex < wordCount) {
-                newWords[targetIndex] = pastedWords[i].toLowerCase().trim();
+                newWords[targetIndex] = pastedWords[i];
             }
         }
         setMnemonicWords(newWords);
@@ -382,7 +383,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                                             id="phrase-input"
                                             data-testid="phrase-textarea"
                                             value={rawPhrase}
-                                            onChange={(e) => { setRawPhrase(cleanPhrase(e.target.value)); }}
+                                            onChange={(e) => setRawPhrase(e.target.value)}
                                             placeholder={t('profile.pasteSeedPhrasePlaceholder')}
                                             rows={6}
                                             className="font-mono text-sm"
