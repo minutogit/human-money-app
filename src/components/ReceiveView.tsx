@@ -16,11 +16,13 @@ import { useSession } from '../context/SessionContext';
 import { translateError, isBackendError, stringifyError } from '../utils/errorHelper';
 import { 
     VoucherStandardInfo,
+    VoucherStandardDefinition,
     AppSettings,
     ReceiveSuccessPayload,
     VoucherDetails
 } from '../types';
 import { PageLayout } from './ui/PageLayout';
+import { ImportStandardModal } from './ImportStandardModal';
 import { 
     UploadCloud, 
     FileCheck, 
@@ -66,6 +68,10 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         type: 'transfer' | 'ask' | 'sig';
         name: string;
     } | null>(null);
+    const [importStandardModalData, setImportStandardModalData] = useState<{
+        containerBytes: number[];
+        definition?: VoucherStandardDefinition;
+    } | null>(null);
 
     useEffect(() => {
         async function fetchData() {
@@ -89,6 +95,18 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         fetchData();
     }, [t]);
 
+    const processStandardFile = async (fileData: number[]) => {
+        setIsProcessing(true);
+        try {
+            const def = await standardsService.inspectStandardFile(fileData, null);
+            setImportStandardModalData({ containerBytes: fileData, definition: def });
+        } catch {
+            setImportStandardModalData({ containerBytes: fileData });
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
     const handleFileSelect = async () => {
         setFeedbackMsg('');
         try {
@@ -96,10 +114,11 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 multiple: false,
                 defaultPath: settings?.lastUsedDirectory,
                 filters: [
-                    { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'humocoreq', 'humocosig'] },
+                    { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'standard', 'humocoreq', 'humocosig'] },
                     { name: 'Transfer File (.transfer)', extensions: ['transfer'] },
                     { name: 'Signature Request (.ask)', extensions: ['ask', 'humocoreq'] },
                     { name: 'Signature Response (.sig)', extensions: ['sig', 'humocosig'] },
+                    { name: 'Voucher Standard (.standard)', extensions: ['standard'] },
                     { name: 'All Files', extensions: ['*'] }
                 ]
             });
@@ -117,20 +136,24 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 const fileName = selectedPath.split(/[/\\]/).pop() || '';
                 setBundleName(fileName);
                 
-                let detectedType: 'transfer' | 'ask' | 'sig' | null = null;
-                if (fileName.endsWith('.transfer')) {
-                    detectedType = 'transfer';
-                } else if (fileName.endsWith('.ask') || fileName.endsWith('.humocoreq')) {
-                    detectedType = 'ask';
-                } else if (fileName.endsWith('.sig') || fileName.endsWith('.humocosig')) {
-                    detectedType = 'sig';
-                }
+                const fileUint8Array = await readFile(selectedPath);
+                const fileData = Array.from(fileUint8Array);
 
+                if (fileName.endsWith('.standard')) {
+                    await processStandardFile(fileData);
+                } else {
+                    let detectedType: 'transfer' | 'ask' | 'sig' | null = null;
+                    if (fileName.endsWith('.transfer')) {
+                        detectedType = 'transfer';
+                    } else if (fileName.endsWith('.ask') || fileName.endsWith('.humocoreq')) {
+                        detectedType = 'ask';
+                    } else if (fileName.endsWith('.sig') || fileName.endsWith('.humocosig')) {
+                        detectedType = 'sig';
+                    }
 
-                if (detectedType) {
-                    const fileUint8Array = await readFile(selectedPath);
-                    const fileData = Array.from(fileUint8Array);
-                    executeReceiveDirectly(fileData, detectedType, fileName);
+                    if (detectedType) {
+                        executeReceiveDirectly(fileData, detectedType, fileName);
+                    }
                 }
             }
         } catch (e) {
@@ -144,6 +167,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
         setDroppedFileContent(null);
         setPendingPasswordImport(null);
+        setImportStandardModalData(null);
     }
 
     const [isDragOver, setIsDragOver] = useState(false);
@@ -186,7 +210,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             const file = files[0];
-            const validExtensions = ['.transfer', '.ask', '.sig', '.humocoreq', '.humocosig'];
+            const validExtensions = ['.transfer', '.ask', '.sig', '.standard', '.humocoreq', '.humocosig'];
             if (validExtensions.some(ext => file.name.endsWith(ext))) {
                 try {
                     const fileBuffer = await file.arrayBuffer();
@@ -197,14 +221,17 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     setBundleName(file.name);
                     setDroppedFileContent(bundleData);
                     
-                    let detectedType: 'transfer' | 'ask' | 'sig' | null = null;
-                    if (file.name.endsWith('.transfer')) detectedType = 'transfer';
-                    else if (file.name.endsWith('.ask') || file.name.endsWith('.humocoreq')) detectedType = 'ask';
-                    else if (file.name.endsWith('.sig') || file.name.endsWith('.humocosig')) detectedType = 'sig';
+                    if (file.name.endsWith('.standard')) {
+                        await processStandardFile(bundleData);
+                    } else {
+                        let detectedType: 'transfer' | 'ask' | 'sig' | null = null;
+                        if (file.name.endsWith('.transfer')) detectedType = 'transfer';
+                        else if (file.name.endsWith('.ask') || file.name.endsWith('.humocoreq')) detectedType = 'ask';
+                        else if (file.name.endsWith('.sig') || file.name.endsWith('.humocosig')) detectedType = 'sig';
 
-
-                    if (detectedType) {
-                        executeReceiveDirectly(bundleData, detectedType, file.name);
+                        if (detectedType) {
+                            executeReceiveDirectly(bundleData, detectedType, file.name);
+                        }
                     }
                 } catch (error) {
                     setFeedbackMsg(translateError(error, t));
@@ -594,6 +621,29 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                         setResultModal(null);
                     }}
                     onCancel={() => { setResultModal(null); onBack(); }}
+                />
+            )}
+
+            {importStandardModalData && (
+                <ImportStandardModal
+                    isOpen={true}
+                    containerBytes={importStandardModalData.containerBytes}
+                    initialDefinition={importStandardModalData.definition}
+                    onClose={() => setImportStandardModalData(null)}
+                    onSuccess={(importedId) => {
+                        setResultModal({
+                            isOpen: true,
+                            title: t('standards.importSuccess'),
+                            content: (
+                                <div className="space-y-3">
+                                    <p className="text-xs font-bold text-theme-primary">{t('standards.importSuccess')}</p>
+                                    <p className="text-[10px] font-mono text-theme-light">Standard ID: {importedId}</p>
+                                </div>
+                            ),
+                            confirmText: t('common.ok')
+                        });
+                        standardsService.getStandards().then(setVoucherStandards).catch(() => {});
+                    }}
                 />
             )}
         </PageLayout>

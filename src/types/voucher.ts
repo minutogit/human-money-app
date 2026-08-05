@@ -77,6 +77,12 @@ export type PrimaryRedemptionType = "goodsOrServices" | "time" | "physicalAsset"
 export type CollateralType = "personalGuarantee" | "fiatBacked" | "cryptoBacked" | "physicalAsset";
 export type PrivacyMode = "public" | "stealth" | "flexible";
 
+export type ContainerConfig = 
+    | { type: "Cleartext" }
+    | { type: "Password"; value: string }
+    | { type: "TargetDid"; value: [string, PrivacyMode] }
+    | { type: "TargetDids"; value: [string[], PrivacyMode] };
+
 export interface ImmutableBlueprint {
     unit: string;
     primaryRedemptionType: PrimaryRedemptionType;

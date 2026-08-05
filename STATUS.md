@@ -3,10 +3,16 @@ project: human-money-app
 version: "0.1.1"
 phase: "beta"
 health: "green"
-last_updated: "2026-06-25"
+last_updated: "2026-08-05"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-032"
+    title: "Custom Standard Import & Management"
+    status: "completed"
+    priority: "medium"
+    depends_on: []
+    description: "Decoupled On-Demand Voucher Standard Management (.standard): Implemented container inspection, import preview with metadata, cleartext/password export, standard deletion with in-use safeguards, ReceiveView drag-and-drop integration, and a dedicated Standards Manager UI in Settings."
   - id: "APP-031"
     title: "Concept Documentation System"
     status: "completed"
@@ -199,12 +205,6 @@ priority_tasks:
     priority: "medium"
     depends_on: []
     description: "Streamlined the import/receive file flow by auto-processing selected files immediately and conditionally prompting for passwords only when required by encryption."
-  - id: "APP-032"
-    title: "Custom Standard Import & Management"
-    status: "open"
-    priority: "medium"
-    depends_on: []
-    description: "Implement support for importing, managing, and utilizing custom voucher standards (TOML files) within the application UI to eliminate manual configuration file edits."
 ---
 
 # Human Money App — Status
@@ -328,6 +328,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Localized signature hints and added dynamic Title Case formatting for custom/arbitrary field checks
 - [x] Stabilized ConfirmationModal button layout using grid-cols-2 and fixed width classes to prevent layout shifts and Cancel button deformation during state changes
 - [x] Unified onboarding start screen with side-by-side tiles and enforced device prefix recovery compliant with SAI principles
+- [x] Decoupled On-Demand Voucher Standard Management (.standard): Implemented container inspection, import preview with metadata, cleartext/password export, standard deletion with in-use safeguards, ReceiveView drag-and-drop integration, and a dedicated Standards Manager UI in Settings (APP-032).
 ## Next Milestones
 
 - [ ] Internationalization (i18n) - German/English (MVP)
@@ -335,4 +336,3 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [ ] L2 sync hardening (Post-MVP)
 - [ ] Trust level badges for contacts (Post-MVP)
 - [ ] BLE/NFC stranger discovery (Post-MVP)
-- [ ] Custom Standard Import & Management (Post-MVP)

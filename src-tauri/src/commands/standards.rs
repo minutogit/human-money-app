@@ -1,6 +1,8 @@
 use crate::AppState;
 use crate::models::{VoucherStandardDefinitionDto, FrontendSignatureImpact, FrontendError};
+use human_money_core::models::secure_container::ContainerConfig;
 use log::info;
+use tauri::Manager;
 
 #[tauri::command]
 pub fn parse_standard_toml(
@@ -35,3 +37,93 @@ pub fn evaluate_signature_suitability(
     let impact = service.evaluate_signature_suitability(&core_voucher, &role, &standard_toml_content).map_err(FrontendError::from)?;
     Ok(impact.into())
 }
+
+#[tauri::command]
+pub fn export_voucher_standard(
+    standard_id: String,
+    config: ContainerConfig,
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<Vec<u8>, FrontendError> {
+    info!("Exporting voucher standard '{}'...", standard_id);
+    let app_data_dir = app.path().app_data_dir().map_err(|e| FrontendError::from(e.to_string()))?;
+    let toml_path = app_data_dir.join("voucher_standards").join(&standard_id).join("standard.toml");
+    if !toml_path.exists() {
+        return Err(FrontendError::from(format!("Standard file standard.toml not found for ID '{}'", standard_id)));
+    }
+    let toml_content = std::fs::read_to_string(&toml_path)
+        .map_err(|e| FrontendError::from(format!("Failed to read standard file: {}", e)))?;
+
+    let service = state.service.lock().unwrap();
+    service.export_voucher_standard(&toml_content, config).map_err(FrontendError::from)
+}
+
+#[tauri::command]
+pub fn inspect_voucher_standard_file(
+    container_bytes: Vec<u8>,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<VoucherStandardDefinitionDto, FrontendError> {
+    info!("Inspecting voucher standard file container...");
+    let service = state.service.lock().unwrap();
+    let core_def = service
+        .inspect_voucher_standard_container(&container_bytes, password.as_deref())
+        .map_err(FrontendError::from)?;
+    Ok(core_def.into())
+}
+
+#[tauri::command]
+pub fn import_voucher_standard(
+    container_bytes: Vec<u8>,
+    password: Option<String>,
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<String, FrontendError> {
+    info!("Importing voucher standard from container file...");
+    let app_data_dir = app.path().app_data_dir().map_err(|e| FrontendError::from(e.to_string()))?;
+    let standards_dir = app_data_dir.join("voucher_standards");
+    if !standards_dir.exists() {
+        std::fs::create_dir_all(&standards_dir)
+            .map_err(|e| FrontendError::from(format!("Failed to create standards directory: {}", e)))?;
+    }
+
+    let service = state.service.lock().unwrap();
+    service
+        .import_voucher_standard(&container_bytes, password.as_deref(), &standards_dir)
+        .map_err(FrontendError::from)
+}
+
+#[tauri::command]
+pub fn delete_voucher_standard(
+    standard_id: String,
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<(), FrontendError> {
+    info!("Attempting to delete voucher standard '{}'...", standard_id);
+    let service = state.service.lock().unwrap();
+
+    if service.is_wallet_unlocked() {
+        let summaries = service
+            .get_voucher_summaries(Some(std::slice::from_ref(&standard_id)), None, None)
+            .map_err(FrontendError::from)?;
+        if !summaries.is_empty() {
+            return Err(FrontendError::from(format!(
+                "Standard cannot be deleted because it is still in use by {} voucher(s).",
+                summaries.len()
+            )));
+        }
+    }
+
+    let app_data_dir = app.path().app_data_dir().map_err(|e| FrontendError::from(e.to_string()))?;
+    let target_dir = app_data_dir.join("voucher_standards").join(&standard_id);
+    if target_dir.exists() {
+        std::fs::remove_dir_all(&target_dir)
+            .map_err(|e| FrontendError::from(format!("Failed to delete standard directory: {}", e)))?;
+        info!("Successfully deleted standard directory for '{}'.", standard_id);
+    } else {
+        info!("Standard directory for '{}' did not exist.", standard_id);
+    }
+
+    Ok(())
+}
+

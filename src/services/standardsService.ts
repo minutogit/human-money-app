@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { VoucherStandardInfo, VoucherStandardDefinition, SignatureImpact } from "../types";
+import { VoucherStandardInfo, VoucherStandardDefinition, SignatureImpact, ContainerConfig } from "../types";
 
 export interface EvaluateSignatureSuitabilityArgs {
     voucher: unknown;
@@ -22,6 +22,22 @@ export const standardsService = {
             role: args.role,
             standardTomlContent: args.standardTomlContent
         });
+    },
+
+    exportStandard: async (standardId: string, config: ContainerConfig) => {
+        return await invoke<number[]>("export_voucher_standard", { standardId, config });
+    },
+
+    inspectStandardFile: async (containerBytes: number[], password?: string | null) => {
+        return await invoke<VoucherStandardDefinition>("inspect_voucher_standard_file", { containerBytes, password });
+    },
+
+    importStandard: async (containerBytes: number[], password?: string | null) => {
+        return await invoke<string>("import_voucher_standard", { containerBytes, password });
+    },
+
+    deleteStandard: async (standardId: string) => {
+        return await invoke<void>("delete_voucher_standard", { standardId });
     }
 };
 

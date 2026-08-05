@@ -11,6 +11,7 @@ import { useSession } from '../context/SessionContext';
 import { translateError, stringifyError } from '../utils/errorHelper';
 
 import { ProfileSettings } from './ProfileSettings';
+import { StandardsManager } from './StandardsManager';
 import { PageLayout } from './ui/PageLayout';
 import { authService } from '../services/authService';
 import { LanguageSelector } from './ui/LanguageSelector';
@@ -18,6 +19,7 @@ import {
     User, 
     Settings as SettingsIcon, 
     Shield, 
+    ShieldCheck,
     Eye, 
     EyeOff, 
     Clock, 
@@ -41,7 +43,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
-    const [activeTab, setActiveTab] = useState<'app' | 'profile'>('profile');
+    const [activeTab, setActiveTab] = useState<'app' | 'profile' | 'standards'>('profile');
 
     useEffect(() => {
         async function fetchSettings() {
@@ -110,6 +112,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         {t('settings.tabIdentityProfile')}
                     </button>
                     <button 
+                        onClick={() => setActiveTab('standards')}
+                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'standards' ? 'bg-white text-theme-primary shadow-premium' : 'text-theme-light hover:text-theme-secondary hover:bg-white/40'}`}
+                    >
+                        <ShieldCheck size={14} />
+                        {t('standards.title')}
+                    </button>
+                    <button 
                         onClick={() => setActiveTab('app')}
                         className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'app' ? 'bg-white text-theme-primary shadow-premium' : 'text-theme-light hover:text-theme-secondary hover:bg-white/40'}`}
                     >
@@ -120,6 +129,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
                 {activeTab === 'profile' ? (
                     <ProfileSettings />
+                ) : activeTab === 'standards' ? (
+                    <StandardsManager />
                 ) : (
                     <form onSubmit={handleSave} className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
