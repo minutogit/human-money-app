@@ -80,17 +80,17 @@ export function StandardsManager() {
             await standardsService.deleteStandard(deleteTarget.id);
             logger.info(`Deleted standard ${deleteTarget.id}`);
             setSuccessMsg(`Standard '${deleteTarget.displayName}' deleted successfully.`);
-            setDeleteTarget(null);
             await loadStandards();
         } catch (e) {
             const translated = translateError(e, t);
-            if (translated.includes("in use") || translated.includes("VoucherStandardInUse")) {
+            if (translated.includes("in use") || translated.includes("VoucherStandardInUse") || translated.includes("still in use")) {
                 setError(t('standards.inUseError'));
             } else {
                 setError(translated);
             }
         } finally {
             setIsDeleting(false);
+            setDeleteTarget(null);
         }
     };
 

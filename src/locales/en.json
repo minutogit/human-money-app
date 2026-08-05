@@ -604,6 +604,7 @@
   "standards.inUseError": "This standard is still in use by active vouchers and cannot be deleted.",
   "standards.password": "Password",
   "standards.passwordEncrypted": "Password Protected",
+  "standards.rawToml": "Raw File (.toml)",
   "standards.title": "Voucher Standards",
   "transfer.all": "All",
   "transfer.anonymous": "Anonymous",

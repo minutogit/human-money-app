@@ -604,6 +604,7 @@
   "standards.inUseError": "Dieser Standard wird noch von aktiven Gutscheinen verwendet und kann nicht gelöscht werden.",
   "standards.password": "Passwort",
   "standards.passwordEncrypted": "Passwortgeschützt",
+  "standards.rawToml": "Rohdatei (.toml)",
   "standards.title": "Gutschein-Standards",
   "transfer.all": "Alle",
   "transfer.anonymous": "Anonym",

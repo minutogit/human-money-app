@@ -49,7 +49,9 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
                 }
             }
             human_money_core::app_service::AppFacadeError::ValidationError(msg) => {
-                if msg.contains("Initial transaction amount must match") {
+                if msg.contains("still in use") || msg.contains("in use by") {
+                    "standards.inUseError".to_string()
+                } else if msg.contains("Initial transaction amount must match") {
                     if let Some((expected, found)) = extract_expected_found(msg) {
                         details.insert("expected".into(), expected);
                         details.insert("found".into(), found);
@@ -122,6 +124,10 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
     }
 
     // --- Validation Errors (with structured details extraction) ---
+    if msg.contains("still in use") || msg.contains("in use by") {
+        return ("standards.inUseError".into(), details);
+    }
+
     if msg.contains("Initial transaction amount must match") {
         if let Some((expected, found)) = extract_expected_found(msg) {
             details.insert("expected".into(), expected);

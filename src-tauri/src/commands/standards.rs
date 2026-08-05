@@ -100,30 +100,12 @@ pub fn delete_voucher_standard(
     state: tauri::State<AppState>,
 ) -> Result<(), FrontendError> {
     info!("Attempting to delete voucher standard '{}'...", standard_id);
-    let service = state.service.lock().unwrap();
-
-    if service.is_wallet_unlocked() {
-        let summaries = service
-            .get_voucher_summaries(Some(std::slice::from_ref(&standard_id)), None, None)
-            .map_err(FrontendError::from)?;
-        if !summaries.is_empty() {
-            return Err(FrontendError::from(format!(
-                "Standard cannot be deleted because it is still in use by {} voucher(s).",
-                summaries.len()
-            )));
-        }
-    }
-
     let app_data_dir = app.path().app_data_dir().map_err(|e| FrontendError::from(e.to_string()))?;
-    let target_dir = app_data_dir.join("voucher_standards").join(&standard_id);
-    if target_dir.exists() {
-        std::fs::remove_dir_all(&target_dir)
-            .map_err(|e| FrontendError::from(format!("Failed to delete standard directory: {}", e)))?;
-        info!("Successfully deleted standard directory for '{}'.", standard_id);
-    } else {
-        info!("Standard directory for '{}' did not exist.", standard_id);
-    }
+    let standards_dir = app_data_dir.join("voucher_standards");
 
-    Ok(())
+    let service = state.service.lock().unwrap();
+    service
+        .delete_voucher_standard(&standard_id, &standards_dir)
+        .map_err(FrontendError::from)
 }
 
