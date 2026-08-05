@@ -114,11 +114,11 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 multiple: false,
                 defaultPath: settings?.lastUsedDirectory,
                 filters: [
-                    { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'standard', 'humocoreq', 'humocosig'] },
+                    { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'standard', 'toml', 'humocoreq', 'humocosig'] },
                     { name: 'Transfer File (.transfer)', extensions: ['transfer'] },
                     { name: 'Signature Request (.ask)', extensions: ['ask', 'humocoreq'] },
                     { name: 'Signature Response (.sig)', extensions: ['sig', 'humocosig'] },
-                    { name: 'Voucher Standard (.standard)', extensions: ['standard'] },
+                    { name: 'Voucher Standard (.standard, .toml)', extensions: ['standard', 'toml'] },
                     { name: 'All Files', extensions: ['*'] }
                 ]
             });
@@ -139,7 +139,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 const fileUint8Array = await readFile(selectedPath);
                 const fileData = Array.from(fileUint8Array);
 
-                if (fileName.endsWith('.standard')) {
+                if (fileName.endsWith('.standard') || fileName.endsWith('.toml')) {
                     await processStandardFile(fileData);
                 } else {
                     let detectedType: 'transfer' | 'ask' | 'sig' | null = null;
@@ -210,7 +210,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             const file = files[0];
-            const validExtensions = ['.transfer', '.ask', '.sig', '.standard', '.humocoreq', '.humocosig'];
+            const validExtensions = ['.transfer', '.ask', '.sig', '.standard', '.toml', '.humocoreq', '.humocosig'];
             if (validExtensions.some(ext => file.name.endsWith(ext))) {
                 try {
                     const fileBuffer = await file.arrayBuffer();
@@ -221,7 +221,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     setBundleName(file.name);
                     setDroppedFileContent(bundleData);
                     
-                    if (file.name.endsWith('.standard')) {
+                    if (file.name.endsWith('.standard') || file.name.endsWith('.toml')) {
                         await processStandardFile(bundleData);
                     } else {
                         let detectedType: 'transfer' | 'ask' | 'sig' | null = null;

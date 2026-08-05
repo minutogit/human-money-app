@@ -53,7 +53,7 @@ export function StandardsManager() {
         try {
             const selectedPath = await open({
                 multiple: false,
-                filters: [{ name: t('standards.formatDesc'), extensions: ['standard'] }]
+                filters: [{ name: t('standards.formatDesc'), extensions: ['standard', 'toml'] }]
             });
 
             if (typeof selectedPath === 'string') {
