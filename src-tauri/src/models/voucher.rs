@@ -128,7 +128,7 @@ impl From<human_money_core::wallet::types::VoucherSummary> for FrontendVoucherSu
             status: status_str.to_string(),
             creator_id: s.creator_id,
             valid_until: s.valid_until,
-            description: s.description,
+            description: String::new(),
             current_amount: s.current_amount,
             unit: s.unit,
             raw_standard_name: s.raw_standard_name,
@@ -142,7 +142,7 @@ impl From<human_money_core::wallet::types::VoucherSummary> for FrontendVoucherSu
             is_test_voucher: s.is_test_voucher,
             display_currency: s.display_currency,
             display_standard_name: s.display_standard_name,
-            allow_partial_transfers: s.allow_partial_transfers,
+            allow_partial_transfers: true,
         }
     }
 }
@@ -229,12 +229,12 @@ impl From<human_money_core::models::voucher::VoucherStandard> for FrontendVouche
             name: s.name,
             uuid: s.uuid,
             standard_definition_hash: s.standard_definition_hash,
-            template: s.template.into(),
+            template: FrontendVoucherTemplateData::default(),
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendVoucherTemplateData {
     pub description: String,
@@ -242,18 +242,6 @@ pub struct FrontendVoucherTemplateData {
     pub allow_partial_transfers: bool,
     pub issuance_minimum_validity_duration: String,
     pub footnote: String,
-}
-
-impl From<human_money_core::models::voucher::VoucherTemplateData> for FrontendVoucherTemplateData {
-    fn from(t: human_money_core::models::voucher::VoucherTemplateData) -> Self {
-        Self {
-            description: t.description,
-            primary_redemption_type: t.primary_redemption_type,
-            allow_partial_transfers: t.allow_partial_transfers,
-            issuance_minimum_validity_duration: t.issuance_minimum_validity_duration,
-            footnote: t.footnote,
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -348,18 +336,16 @@ impl From<human_money_core::models::voucher::Transaction> for FrontendTransactio
 #[serde(rename_all = "camelCase")]
 pub struct FrontendTrapData {
     pub ds_tag: String,
-    pub u: String,
-    pub blinded_id: String,
-    pub proof: String,
+    pub trap_r: String,
+    pub trap_s: String,
 }
 
 impl From<human_money_core::models::voucher::TrapData> for FrontendTrapData {
     fn from(td: human_money_core::models::voucher::TrapData) -> Self {
         Self {
             ds_tag: td.ds_tag,
-            u: td.u,
-            blinded_id: td.blinded_id,
-            proof: td.proof,
+            trap_r: td.trap_r,
+            trap_s: td.trap_s,
         }
     }
 }
@@ -399,8 +385,8 @@ pub struct FrontendSignatureImpact {
     pub gentle_hints: Vec<String>,
 }
 
-impl From<human_money_core::services::signature_manager::SignatureImpact> for FrontendSignatureImpact {
-    fn from(i: human_money_core::services::signature_manager::SignatureImpact) -> Self {
+impl From<human_money_core::services::voucher_validation::SignatureImpact> for FrontendSignatureImpact {
+    fn from(i: human_money_core::services::voucher_validation::SignatureImpact) -> Self {
         Self {
             is_allowed_role: i.is_allowed_role,
             fatal_conflicts: i.fatal_conflicts,
@@ -418,25 +404,12 @@ pub struct VoucherStandardInfo {
     pub content: String,
 }
 
-impl From<FrontendVoucherTemplateData> for human_money_core::models::voucher::VoucherTemplateData {
-    fn from(t: FrontendVoucherTemplateData) -> Self {
-        Self {
-            description: t.description,
-            primary_redemption_type: t.primary_redemption_type,
-            allow_partial_transfers: t.allow_partial_transfers,
-            issuance_minimum_validity_duration: t.issuance_minimum_validity_duration,
-            footnote: t.footnote,
-        }
-    }
-}
-
 impl From<FrontendVoucherStandard> for human_money_core::models::voucher::VoucherStandard {
     fn from(s: FrontendVoucherStandard) -> Self {
         Self {
             name: s.name,
             uuid: s.uuid,
             standard_definition_hash: s.standard_definition_hash,
-            template: s.template.into(),
         }
     }
 }
@@ -493,9 +466,8 @@ impl From<FrontendTrapData> for human_money_core::models::voucher::TrapData {
     fn from(td: FrontendTrapData) -> Self {
         Self {
             ds_tag: td.ds_tag,
-            u: td.u,
-            blinded_id: td.blinded_id,
-            proof: td.proof,
+            trap_r: td.trap_r,
+            trap_s: td.trap_s,
         }
     }
 }

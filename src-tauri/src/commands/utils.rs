@@ -92,7 +92,7 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
                             .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
                         info!("[Debug] Successfully read '{}', parsing for display name.", toml_path.display());
                         
-                        let display_name = match human_money_core::services::standard_manager::verify_and_parse_standard(&content) {
+                        let display_name = match human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(&content) {
                             Ok((def, _)) => def.immutable.identity.name.clone(),
                             Err(e) => {
                                 warn!("Failed to parse standard TOML for {}: {}. Falling back to ID.", standard_id, e);

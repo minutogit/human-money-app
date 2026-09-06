@@ -97,8 +97,7 @@ pub fn get_seal_for_upload(state: tauri::State<AppState>) -> Result<Option<SealU
         let seal: human_money_core::models::seal::WalletSeal = serde_json::from_slice(&bytes)
             .map_err(|e| FrontendError::from(format!("Failed to parse seal for hashing: {}", e)))?;
         
-        let hash = human_money_core::services::seal_manager::SealManager::compute_seal_hash(&seal)
-            .map_err(|e| FrontendError::from(e.to_string()))?;
+        let hash = seal.compute_hash().map_err(FrontendError::from)?;
             
         Ok(Some(SealUploadData {
             seal_bytes: bytes,

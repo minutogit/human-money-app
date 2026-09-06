@@ -3,7 +3,7 @@ use crate::{models::{FrontendNewVoucherData, FrontendError}, AppState};
 use log::{info, error};
 use human_money_core::{
     models::secure_container::ContainerConfig,
-    services::voucher_manager::NewVoucherData,
+    NewVoucherData,
 };
 
 #[tauri::command]
@@ -15,8 +15,7 @@ pub fn create_new_voucher(
 ) -> Result<crate::models::FrontendVoucher, FrontendError> {
     info!("Attempting to create a new voucher...");
     let mut service = state.service.lock().unwrap();
-    let lang_preference = "en-US";
-    let user_id = service.get_user_id().map_err(FrontendError::from)?;
+    let user_id = service.with_wallet(|w| w.get_user_id().to_string()).map_err(FrontendError::from)?;
 
     let voucher_data = NewVoucherData {
         nominal_value: human_money_core::models::voucher::ValueDefinition {
@@ -60,7 +59,7 @@ pub fn create_new_voucher(
         non_redeemable_test_voucher: data.non_redeemable_test_voucher,
     };
 
-    let voucher = service.create_new_voucher(&standard_toml_content, lang_preference, voucher_data, password.as_deref()).map_err(FrontendError::from)?;
+    let voucher = service.create_new_voucher(&standard_toml_content, voucher_data, password.as_deref()).map_err(FrontendError::from)?;
     
     if let Err(e) = state.refresh_events_cache(&mut service, password.as_deref()) {
         error!("Failed to refresh events cache after create_new_voucher: {}", e);

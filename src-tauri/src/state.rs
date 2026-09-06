@@ -51,7 +51,7 @@ impl AppState {
     }
 
     pub fn save_settings(&self, service: &mut AppService, settings: AppSettings, password: Option<&str>) -> Result<(), AppFacadeError> {
-        let bytes = serde_json::to_vec(&settings).map_err(|e| AppFacadeError::JsonError(e.to_string()))?;
+        let bytes = serde_json::to_vec(&settings).map_err(|e| AppFacadeError::Json(e.to_string()))?;
         service.save_encrypted_data(SETTINGS_KEY, &bytes, password)?;
         *self.settings.lock().unwrap() = Some(settings);
         Ok(())
@@ -80,7 +80,7 @@ impl AppState {
                 let address_book: FrontendAddressBook = serde_json::from_slice(&data)
                     .map_err(|e| {
                         error!("Failed to parse address book: {}", e);
-                        AppFacadeError::JsonError(format!("Failed to parse address book: {}", e))
+                        AppFacadeError::Json(format!("Failed to parse address book: {}", e))
                     })?;
 
                 *self.contacts.lock().unwrap() = Some(address_book.clone());
@@ -94,12 +94,12 @@ impl AppState {
                 Ok(contacts)
             }
             Err(e) => {
-                if matches!(&e, AppFacadeError::StorageError(msg) if msg.contains("NotFound") || msg.contains("not found")) {
+                if matches!(&e, AppFacadeError::Storage(human_money_core::StorageError::NotFound)) {
                     info!("No address book found, returning empty list.");
                     let default_book = FrontendAddressBook::default();
                     *self.contacts.lock().unwrap() = Some(default_book);
                     Ok(vec![])
-                } else if matches!(&e, AppFacadeError::WalletLocked(_) | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                } else if matches!(&e, AppFacadeError::WalletLocked | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
                     error!("Error loading address book (locked/session issue): {:?}", e);
                     Err(e)
                 } else {
@@ -114,7 +114,7 @@ impl AppState {
         let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
             Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data).unwrap_or_default(),
             Err(e) => {
-                if matches!(&e, AppFacadeError::WalletLocked(_) | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                if matches!(&e, AppFacadeError::WalletLocked | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
                     return Err(e);
                 }
                 FrontendAddressBook::default()
@@ -124,7 +124,7 @@ impl AppState {
         address_book.contacts.insert(contact.did.clone(), contact);
 
         let data = serde_json::to_vec(&address_book)
-            .map_err(|e| AppFacadeError::JsonError(format!("Failed to serialize address book: {}", e)))?;
+            .map_err(|e| AppFacadeError::Json(format!("Failed to serialize address book: {}", e)))?;
 
         service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
             .map_err(|e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)))?;
@@ -137,7 +137,7 @@ impl AppState {
         let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
             Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data).unwrap_or_default(),
             Err(e) => {
-                if matches!(&e, AppFacadeError::WalletLocked(_) | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                if matches!(&e, AppFacadeError::WalletLocked | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
                     return Err(e);
                 }
                 return Ok(());
@@ -146,7 +146,7 @@ impl AppState {
 
         if address_book.contacts.remove(did).is_some() {
             let data = serde_json::to_vec(&address_book)
-                .map_err(|e| AppFacadeError::JsonError(format!("Failed to serialize address book: {}", e)))?;
+                .map_err(|e| AppFacadeError::Json(format!("Failed to serialize address book: {}", e)))?;
 
             service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
                 .map_err(|e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)))?;
@@ -177,12 +177,12 @@ impl AppState {
                     Err(e) => {
                         let msg = format!("Failed to parse transaction history: {}", e);
                         error!("{}", msg);
-                        Err(AppFacadeError::JsonError(msg))
+                        Err(AppFacadeError::Json(msg))
                     }
                 }
             }
             Err(e) => {
-                if matches!(&e, AppFacadeError::WalletLocked(_) | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                if matches!(&e, AppFacadeError::WalletLocked | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
                     return Err(e);
                 }
                 info!("Keine Transaktionshistorie auf Festplatte gefunden. Erstelle neue.");
@@ -194,7 +194,7 @@ impl AppState {
     }
 
     pub fn save_history(&self, service: &mut AppService, history: Vec<TransactionRecord>, password: Option<&str>) -> Result<(), AppFacadeError> {
-        let history_bytes = serde_json::to_vec(&history).map_err(|e| AppFacadeError::JsonError(e.to_string()))?;
+        let history_bytes = serde_json::to_vec(&history).map_err(|e| AppFacadeError::Json(e.to_string()))?;
         service.save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, password)?;
         *self.history.lock().unwrap() = Some(history);
         Ok(())

@@ -31,34 +31,35 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
         let mut details = HashMap::new();
         
         let code = match &error {
-            human_money_core::app_service::AppFacadeError::WalletLocked(_) => "error.wallet.locked".to_string(),
+            human_money_core::app_service::AppFacadeError::WalletLocked => "error.wallet.locked".to_string(),
             human_money_core::app_service::AppFacadeError::SessionExpired(_) => "error.auth.sessionTimeout".to_string(),
             human_money_core::app_service::AppFacadeError::SessionNotActive(_) => "error.auth.sessionNotActive".to_string(),
-            human_money_core::app_service::AppFacadeError::DoubleSpendAttemptBlocked(local_id) => {
-                details.insert("localInstanceId".to_string(), local_id.clone());
+            human_money_core::app_service::AppFacadeError::DoubleSpendAttemptBlocked { local_instance_id } => {
+                details.insert("localInstanceId".to_string(), local_instance_id.clone());
                 "error.conflict.doubleSpendBlocked".to_string()
             }
-            human_money_core::app_service::AppFacadeError::RequiresSealRecovery(_) => "error.security.sealRecoveryRequired".to_string(),
-            human_money_core::app_service::AppFacadeError::StateRollbackDetected(_) => "error.security.rollbackDetected".to_string(),
-            human_money_core::app_service::AppFacadeError::WalletLockedDueToFork(_) => "error.security.walletLockedDueToFork".to_string(),
-            human_money_core::app_service::AppFacadeError::VoucherNotActive(status_msg) => {
-                if status_msg.contains("Quarantined") {
+            human_money_core::app_service::AppFacadeError::RequiresSealRecovery => "error.security.sealRecoveryRequired".to_string(),
+            human_money_core::app_service::AppFacadeError::StateRollbackDetected => "error.security.rollbackDetected".to_string(),
+            human_money_core::app_service::AppFacadeError::WalletLockedDueToFork => "error.security.walletLockedDueToFork".to_string(),
+            human_money_core::app_service::AppFacadeError::VoucherNotActive(status) => {
+                if matches!(status, human_money_core::wallet::instance::VoucherStatus::Quarantined { .. }) {
                     "error.conflict.voucherQuarantined".to_string()
                 } else {
                     "error.validation.voucherNotActive".to_string()
                 }
             }
-            human_money_core::app_service::AppFacadeError::ValidationError(msg) => {
+            human_money_core::app_service::AppFacadeError::Validation(val_err) => {
+                let msg = val_err.to_string();
                 if msg.contains("still in use") || msg.contains("in use by") {
                     "standards.inUseError".to_string()
                 } else if msg.contains("Initial transaction amount must match") {
-                    if let Some((expected, found)) = extract_expected_found(msg) {
+                    if let Some((expected, found)) = extract_expected_found(&msg) {
                         details.insert("expected".into(), expected);
                         details.insert("found".into(), found);
                     }
                     "error.validation.initAmountMismatch".to_string()
                 } else if msg.contains("Insufficient funds") {
-                    if let Some((needed, available)) = extract_two_labeled_values(msg, "Needed:", "Available:") {
+                    if let Some((needed, available)) = extract_two_labeled_values(&msg, "Needed:", "Available:") {
                         details.insert("needed".into(), needed);
                         details.insert("available".into(), available);
                     }

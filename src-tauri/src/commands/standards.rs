@@ -4,24 +4,26 @@ use human_money_core::models::secure_container::ContainerConfig;
 use log::info;
 use tauri::Manager;
 
+use human_money_core::models::voucher_standard_definition::VoucherStandardDefinition;
+
 #[tauri::command]
 pub fn parse_standard_toml(
     toml_content: String,
-    state: tauri::State<AppState>,
+    _state: tauri::State<AppState>,
 ) -> Result<VoucherStandardDefinitionDto, FrontendError> {
-    let service = state.service.lock().unwrap();
-    let core_standard = service.parse_voucher_standard(&toml_content).map_err(FrontendError::from)?;
+    let (core_standard, _) = VoucherStandardDefinition::from_toml(&toml_content).map_err(FrontendError::from)?;
     Ok(core_standard.into())
 }
 
 #[tauri::command]
 pub fn get_allowed_signature_roles_from_standard(
     toml_content: String,
-    state: tauri::State<AppState>,
+    _state: tauri::State<AppState>,
 ) -> Result<Vec<String>, FrontendError> {
     info!("Getting allowed signature roles from standard...");
-    let service = state.service.lock().unwrap();
-    service.get_allowed_signature_roles_from_standard(&toml_content).map_err(FrontendError::from)
+    VoucherStandardDefinition::from_toml(&toml_content)
+        .map(|(std, _)| std.immutable.issuance.allowed_signature_roles)
+        .map_err(FrontendError::from)
 }
 
 #[tauri::command]

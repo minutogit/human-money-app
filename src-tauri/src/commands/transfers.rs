@@ -11,7 +11,7 @@ use log::{info, error};
 use uuid::Uuid;
 use std::collections::HashMap;
 use human_money_core::{
-    archive::VoucherArchive,
+    archive::FileVoucherArchive,
     wallet::{MultiTransferRequest, SourceTransfer},
 };
 
@@ -50,7 +50,7 @@ pub fn create_transfer_bundle(
         use_privacy_mode,
     };
 
-    let archive: Option<&dyn VoucherArchive> = None;
+    let archive: Option<&FileVoucherArchive> = None;
 
     match service.create_transfer_bundle(request, &standard_definitions_toml, archive, password.as_deref()) {
         Ok(result) => {
@@ -78,7 +78,7 @@ pub fn receive_bundle(
 ) -> Result<ReceiveSuccessPayload, FrontendError> {
     info!("Attempting to receive and process a transfer bundle...");
     let mut service = state.service.lock().unwrap();
-    let archive: Option<&dyn VoucherArchive> = None;
+    let archive: Option<&FileVoucherArchive> = None;
 
     match service.receive_bundle(&bundle_data, &standard_definitions_toml, archive, password.as_deref(), force_accept_tolerance_bundle) {
         Ok(result) => {
@@ -100,11 +100,12 @@ pub fn receive_bundle(
             let notes = result.header.notes.clone();
             let sender_profile_name = result.header.sender_profile_name.clone();
             let bundle_id = result.header.bundle_id.clone();
+            let recipient_id = service.with_wallet(|w| w.get_user_id().to_string()).map_err(FrontendError::from)?;
 
             let record = TransactionRecord {
                 id: Uuid::new_v4().to_string(),
                 direction: "received".to_string(),
-                recipient_id: service.get_user_id().map_err(FrontendError::from)?,
+                recipient_id,
                 sender_id: result.header.sender_id.clone(),
                 timestamp: Utc::now().to_rfc3339(),
                 summable_amounts: transfer_summary.summable_amounts.clone(),

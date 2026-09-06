@@ -4,14 +4,14 @@ use crate::models::FrontendError;
 #[tauri::command]
 pub fn get_active_asset_classes(state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendAssetClassSummary>, FrontendError> {
     let service = state.service.lock().unwrap();
-    let asset_classes = service.get_active_asset_classes().map_err(FrontendError::from)?;
+    let asset_classes = service.with_wallet(|w| w.get_active_asset_classes()).map_err(FrontendError::from)?;
     Ok(asset_classes.into_iter().map(|s| s.into()).collect())
 }
 
 #[tauri::command]
 pub fn get_user_profile(state: tauri::State<AppState>) -> Result<crate::models::FrontendUserProfile, FrontendError> {
     let service = state.service.lock().unwrap();
-    let profile = service.get_public_profile().map_err(FrontendError::from)?;
+    let profile = service.with_wallet(|w| w.profile.to_public_profile()).map_err(FrontendError::from)?;
     
     Ok(crate::models::FrontendUserProfile {
         protocol_version: profile.protocol_version,
@@ -42,35 +42,39 @@ pub fn get_user_profile(state: tauri::State<AppState>) -> Result<crate::models::
 #[tauri::command]
 pub fn get_user_id(state: tauri::State<AppState>) -> Result<String, FrontendError> {
     let service = state.service.lock().unwrap();
-    service.get_user_id().map_err(FrontendError::from)
+    service.with_wallet(|w| w.get_user_id().to_string()).map_err(FrontendError::from)
 }
 
 #[tauri::command]
 pub fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendAggregatedBalance>, FrontendError> {
     let service = state.service.lock().unwrap();
-    let balances = service.get_total_balance_by_currency().map_err(FrontendError::from)?;
+    let balances = service.with_wallet_and_identity(|w, id| w.get_total_balance_by_currency(Some(id))).map_err(FrontendError::from)?;
     Ok(balances.into_iter().map(|b| b.into()).collect())
 }
 
 #[tauri::command]
 pub fn get_voucher_summaries(test_filter: Option<bool>, state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendVoucherSummary>, FrontendError> {
     let service = state.service.lock().unwrap();
-    // Use the optional test_filter provided by the frontend.
-    let summaries = service.get_voucher_summaries(None, None, test_filter).map_err(FrontendError::from)?;
+    let summaries = service.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, test_filter)).map_err(FrontendError::from)?;
     Ok(summaries.into_iter().map(|s| s.into()).collect())
 }
 
 #[tauri::command]
 pub fn get_voucher_details(local_id: String, state: tauri::State<AppState>) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     let service = state.service.lock().unwrap();
-    let details = service.get_voucher_details(&local_id).map_err(FrontendError::from)?;
+    let details = service.with_wallet(|w| w.get_voucher_details(&local_id))
+        .map_err(FrontendError::from)?
+        .map_err(FrontendError::from)?;
     Ok(details.into())
 }
 
 #[tauri::command]
 pub fn get_voucher_source_sender(local_id: String, state: tauri::State<AppState>) -> Result<Option<String>, FrontendError> {
     let service = state.service.lock().unwrap();
-    service.get_voucher_source_sender(&local_id).map_err(FrontendError::from)
+    let sender = service.with_wallet_and_identity(|w, id| w.get_voucher_source_sender(&local_id, id))
+        .map_err(FrontendError::from)?
+        .map_err(FrontendError::from)?;
+    Ok(sender)
 }
 
 #[tauri::command]
@@ -116,7 +120,7 @@ pub fn check_reputation(
     let offender_id = offender_id.trim().to_string();
     log::info!("Checking reputation for offender: {}", offender_id);
     let service = state.service.lock().unwrap();
-    let status = service.check_reputation(&offender_id).map_err(FrontendError::from)?;
+    let status = service.with_wallet(|w| w.check_reputation(&offender_id)).map_err(FrontendError::from)?;
     Ok(status.into())
 }
 #[tauri::command]
