@@ -25,18 +25,22 @@ Die Anwendung folgt einer strikten Trennung von Backend und Frontend.
 * **Schnittstelle:** Funktionen werden über das `#[tauri::command]`-Makro für das Frontend zugänglich gemacht. Rust `Result`-Typen werden in für das Frontend verständliche Fehler umgewandelt.
 * **Kommandomodulstruktur:** Die Tauri-Befehle sind in mehrere Module aufgeteilt:
   * `commands/auth.rs`: Authentifizierungsbezogene Befehle
-  * `commands/queries.rs`: Abfragebezogene Befehle
-  * `commands/actions.rs`: Aktionen wie Gutscheinerstellung und Transaktionen
+  * `commands/queries.rs`: Abfragebezogene Befehle (nutzt `service.with_wallet` / `with_wallet_and_identity`)
+  * `commands/vouchers.rs`: Gutscheinerstellung und Signaturanfragen
+  * `commands/transfers.rs`: Transfer-Bundles erstellen und empfangen (`FileVoucherArchive`)
+  * `commands/standards.rs`: VoucherStandard-Inspektion, Import, Export, Parsing
+  * `commands/settings_cmd.rs`: Einstellungen und Siegel-Synchronisation
   * `commands/contacts.rs`: Adressbuch- und Kontaktverwaltung
   * `commands/integrity.rs`: Sicherheitsprüfungen und Integritätsberichte
-  * `commands/utils.rs`: Hilfsfunktionen und Logging
+  * `commands/utils.rs`: Hilfsfunktionen, Standard-Discovery und Logging
   * `settings.rs`: Konfigurations- und Einstellungsverwaltung
 * **Datenmodelle:** Die Datenstrukturen in `src-tauri/src/models/` sind modularisiert:
-  * `models/voucher.rs`: Gutscheinbezogene DTOs
+  * `models/voucher.rs`: Gutscheinbezogene DTOs (inkl. V3 SST `FrontendTrapData`, `FrontendVoucherSummary`, etc.)
   * `models/wallet.rs`: Wallet- und Guthaben-DTOs
   * `models/profile.rs`: Profilbezogene DTOs
   * `models/events.rs`: Event-Sourcing-bezogene DTOs
   * `models/conflicts.rs`: Double-Spend-Konflikt-DTOs
+  * `models/error.rs`: Zentraler `FrontendError` mit Mapping für `AppFacadeError` v0.3
 
 **Frontend (React - src)**
 

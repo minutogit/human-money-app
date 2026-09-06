@@ -1,18 +1,18 @@
 ---
 project: human-money-app
-version: "0.1.1"
+version: "0.2.0"
 phase: "beta"
 health: "green"
-last_updated: "2026-08-23"
+last_updated: "2026-09-06"
 blocks: []
 blocked_by: []
 priority_tasks:
   - id: "APP-033"
     title: "human_money_core v0.3+ Breaking Changes & Archive Integration"
-    status: "open"
+    status: "completed"
     priority: "high"
     depends_on: []
-    description: "Prepare host app for human_money_core v0.3+ breaking changes. Core must be checked on errors. Breaking Change: Voucher archives must be constructed using FileVoucherArchive::new_secure(path, wallet_passwort). Open issues (report-only, without deterministic test): Missing fsync in save_wallet and TOCTOU race in PID lock."
+    description: "Prepare host app for human_money_core v0.3+ breaking changes. Migrated read queries to with_wallet/with_wallet_and_identity, updated AppFacadeError handling, integrated FileVoucherArchive, upgraded TrapData to V3 SST, and ensured full frontend backward compatibility."
   - id: "APP-032"
     title: "Custom Standard Import & Management"
     status: "completed"
@@ -234,6 +234,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Recent Milestones
 
+- [x] Migrated to human_money_core v0.3.0 and bumped app version to 0.2.0: adapted AppFacadeError variants, converted read-only queries to with_wallet / with_wallet_and_identity, upgraded TrapData to V3 SST protocol (trap_r, trap_s), integrated concrete FileVoucherArchive, and maintained backward compatibility for voucher standard templates in frontend models.
 - [x] Hardened seed/mnemonic input sanitization and cleaned up recovery views: created a centralized `cleanSeedText` utility (`src/utils/seedUtils.ts`) that sanitizes BIP-39 seed input (lowercasing, removing digits, punctuation like commas/dots/dashes/colons, tabs, newlines, and collapsing multiple spaces). Unified and refactored `CreateNewProfile.tsx`, `RecreateProfile.tsx`, and `WalletRecovery.tsx` to utilize this shared utility for both phrase (textarea) and words (individual inputs) modes, backed by a comprehensive unit test suite (`seedUtils.test.ts`).
 - [x] Fixed app hang on wrong password entry in `ReceiveView`: updated early-return paths in the catch block to explicitly reset the processing state and simplified the finally block to always call `setIsProcessing(false)` without relying on stale closures. Added comprehensive Vitest unit tests verifying button responsiveness during single and multiple failed password entry attempts.
 - [x] Hardened input robustness for DID keys and user identifiers across the entire application stack: implemented a whitespace-stripping `sanitize_user_id` helper in `human_money_core`, trimmed fields at the Tauri bridge commands (`transfers.rs`, `contacts.rs`, and `queries.rs`), and added synchronous input-cleaning handlers and tests in the React frontend (`SendView.tsx` and `ContactDialog.tsx`) to prevent copy-paste errors.
