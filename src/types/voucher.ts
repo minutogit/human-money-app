@@ -229,3 +229,14 @@ export interface SignatureImpact {
     resolvedRules: string[];
     gentleHints: string[];
 }
+
+export type L2VerdictState = 'final' | 'provisional' | 'conflict' | 'offline' | 'unverified';
+
+export interface L2QuorumInfo {
+    status: L2VerdictState;
+    shardId?: number;
+    signerCount?: number;
+    activeNodesCount?: number;
+    details?: string;
+}
+

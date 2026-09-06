@@ -1,6 +1,6 @@
 // src/types/transaction.ts
 
-import { TransactionHistoryEntry } from './voucher';
+import { TransactionHistoryEntry, L2QuorumInfo } from './voucher';
 
 export interface AggregatedBalance {
     standardName: string;
@@ -74,6 +74,7 @@ export interface ReceiveSuccessPayload {
     voucherId?: string;
     verifiableConflicts?: Record<string, TransactionFingerprint[]>;
     conflictSummaries?: ProofOfDoubleSpendSummary[];
+    l2Quorum?: L2QuorumInfo;
 }
 
 export interface TransactionFingerprint {

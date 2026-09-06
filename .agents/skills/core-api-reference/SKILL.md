@@ -118,3 +118,11 @@ Prüft auf Double-Spending-Versuche durch Abgleich mit dem Server-Seal.
 1.  **`local_instance_id`**: Muss stabil für ein Gerät sein, darf aber **NIE** im Wallet-Ordner gespeichert werden (Gefahr der Klonung). Empfohlen: OS Keyring.
 2.  **Passwort-Sicherheit**: Sensible Operationen erfordern Passwort oder eine aktive Session.
 3.  **Fehlerbehandlung**: UI sollte Sperrfehler (`Wallet locked by PID 1234`) verständlich anzeigen.
+
+### 8. Breaking Changes & Core-Updates (ab v0.3)
+
+*   **Core Codebase Review:** Wenn Fehler auftreten oder Abhängigkeiten aktualisiert werden, muss `human_money_core` geprüft werden (diverse Breaking Changes ab v0.3).
+*   **Voucher Archive:** In der Host-App (Tauri) müssen Archive künftig zwingend mit `FileVoucherArchive::new_secure(path, wallet_passwort)` instanziiert/gebaut werden.
+*   **Offene Punkte / Bekannte Limitationen (report-only, ohne deterministischen Test):**
+    *   Fehlendes `fsync` in `save_wallet`.
+    *   TOCTOU-Race im PID-Locking (`.wallet.lock`).

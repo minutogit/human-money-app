@@ -37,6 +37,11 @@ When working with the `human_money_core` API, the **authoritative source** is al
 
 Read the code directly when you need current API signatures.
 
+> **Wichtiger Hinweis zu `human_money_core` (ab v0.3 Breaking Changes):**
+> Bei Fehlern oder Core-Updates muss zwingend `human_money_core` geprüft werden, da es ab Version 0.3 diverse Breaking Changes gibt.
+> - **Host-App (Tauri) Breaking Change:** Archive müssen künftig mit `FileVoucherArchive::new_secure(path, wallet_passwort)` gebaut werden.
+> - **Offene Punkte (report-only, ohne deterministischen Test):** Fehlendes `fsync` in `save_wallet` und TOCTOU-Race im PID-Lock.
+
 ## Status Maintenance
 
 You are responsible for keeping `STATUS.md` in the project root up to date. For minor or trivial changes (e.g., simple text edits, deleting unused elements, formatting fixes), updating `STATUS.md` is not required.

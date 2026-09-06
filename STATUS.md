@@ -3,10 +3,16 @@ project: human-money-app
 version: "0.1.1"
 phase: "beta"
 health: "green"
-last_updated: "2026-08-05"
+last_updated: "2026-08-23"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-033"
+    title: "human_money_core v0.3+ Breaking Changes & Archive Integration"
+    status: "open"
+    priority: "high"
+    depends_on: []
+    description: "Prepare host app for human_money_core v0.3+ breaking changes. Core must be checked on errors. Breaking Change: Voucher archives must be constructed using FileVoucherArchive::new_secure(path, wallet_passwort). Open issues (report-only, without deterministic test): Missing fsync in save_wallet and TOCTOU race in PID lock."
   - id: "APP-032"
     title: "Custom Standard Import & Management"
     status: "completed"
@@ -331,8 +337,14 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Decoupled On-Demand Voucher Standard Management (.standard): Implemented container inspection, import preview with metadata, cleartext/password export, standard deletion with in-use safeguards, ReceiveView drag-and-drop integration, and a dedicated Standards Manager UI in Settings (APP-032).
 ## Next Milestones
 
+- [ ] Core v0.3+ Breaking Changes & Archive Migration (`FileVoucherArchive::new_secure`) (APP-033)
 - [ ] Internationalization (i18n) - German/English (MVP)
 - [ ] Improve Session Timeout UX (Activity Log visibility etc.) (MVP)
 - [ ] L2 sync hardening (Post-MVP)
 - [ ] Trust level badges for contacts (Post-MVP)
 - [ ] BLE/NFC stranger discovery (Post-MVP)
+
+### Core-Notes & Breaking Changes (human_money_core v0.3+)
+- **Breaking Changes in Core ab v0.3:** Bei auftretenden Fehlern oder Core-Synchronisationen muss `human_money_core` analysiert werden.
+- **Archive-Erstellung (Tauri Host):** Archive müssen künftig mit `FileVoucherArchive::new_secure(path, wallet_passwort)` gebaut werden.
+- **Offene Punkte Core (report-only, ohne deterministischen Test):** Fehlendes `fsync` in `save_wallet` und TOCTOU-Race im PID-Locking.
