@@ -154,6 +154,7 @@ pub fn run() {
             get_contacts, save_contact, delete_contact,
             // WalletSeal / Sync
             get_seal_sync_status, get_seal_for_upload, acknowledge_seal_sync,
+            check_anchor_sync, reconcile_rollback, flush_pending_anchor_sync,
             // Integrity
             check_wallet_integrity, repair_wallet_integrity
         ])

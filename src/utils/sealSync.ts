@@ -37,22 +37,11 @@ async function performSync() {
         const status = await settingsService.getSealSyncStatus();
         
         if (status === "PendingUpload") {
-            logger.info("Pending seal upload detected. Starting sync process...");
+            logger.info("Pending seal upload detected. Flushing L2 anchor sync...");
             
-            const uploadData = await settingsService.getSealForUpload();
-            
-            if (uploadData) {
-                // MOCK UPLOAD PROCESS
-                // In a production app, this would be a POST request to a coordinating server.
-                logger.info(`Uploading seal to coordinator (Mock)... Hash: ${uploadData.sealHash}`);
-                
-                // Simulate network latency
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                
-                // After successful "upload", acknowledge it in the core
-                await settingsService.acknowledgeSealSync(uploadData.sealHash);
-                
-                logger.info("WalletSeal successfully synchronized and acknowledged.");
+            const success = await settingsService.flushPendingAnchorSync();
+            if (success) {
+                logger.info("Wallet L2 anchor successfully synchronized.");
             }
         }
     } catch (e) {

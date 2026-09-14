@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { AppSettings } from "../types";
+import { AppSettings, AnchorSyncStatus, RollbackReport } from "../types";
+
+export type { AnchorSyncStatus, RollbackReport };
 
 export interface SealForUpload {
     sealHash: string;
@@ -25,5 +27,17 @@ export const settingsService = {
 
     acknowledgeSealSync: async (uploadedSealHash: string, password?: string) => {
         return await invoke<void>("acknowledge_seal_sync", { uploadedSealHash, password });
+    },
+
+    checkAnchorSync: async () => {
+        return await invoke<AnchorSyncStatus>("check_anchor_sync");
+    },
+
+    reconcileRollback: async (password?: string) => {
+        return await invoke<RollbackReport>("reconcile_rollback", { password });
+    },
+
+    flushPendingAnchorSync: async (password?: string) => {
+        return await invoke<boolean>("flush_pending_anchor_sync", { password });
     }
 };

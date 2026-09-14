@@ -2341,6 +2341,7 @@ dependencies = [
  "human_money_core",
  "log",
  "machine-uid",
+ "reqwest",
  "serde",
  "serde_json",
  "sysinfo",

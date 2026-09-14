@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import logo from './assets/logo.png';
 import "./App.css";
 import { ForkLockOverlay } from './components/ForkLockOverlay';
 import { Button } from './components/ui/Button';
@@ -11,12 +10,13 @@ import { SessionProvider, useSession } from './context/SessionContext';
 import { NavigationProvider, useNavigation } from './context/NavigationContext';
 
 // Components
-import { Sidebar, INTERNAL_VIEWS } from './components/Sidebar';
+import { Sidebar } from './components/Sidebar';
+import { Header } from './components/Header';
 import { AppRouter } from "./components/AppRouter";
 
 function AppContent() {
     const { t } = useTranslation();
-    const { appState, navigate, setSidebarOpen } = useNavigation();
+    const { appState, navigate } = useNavigation();
     const { isForkLocked, isRecoveryRequired, clearLocks, isSessionActive } = useSession();
 
     useEffect(() => {
@@ -38,26 +38,9 @@ function AppContent() {
                 <Sidebar />
 
                 <div className="flex flex-1 flex-col overflow-y-auto">
-                    {INTERNAL_VIEWS.includes(appState.view) && isSessionActive && (
-                        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-theme-subtle bg-card px-4 shadow-sm md:hidden">
-                            <button
-                                onClick={() => setSidebarOpen(true)}
-                                className="rounded p-2 text-theme-secondary hover:bg-bg-app focus:outline-none focus:ring-2 focus:ring-theme-accent"
-                                aria-label="Open navigation"
-                            >
-                                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path>
-                                </svg>
-                            </button>
-                            <div className="flex items-center gap-2">
-                                <img src={logo} alt="Logo" className="w-8 h-8 object-contain" />
-                                <h1 className="text-lg font-bold text-theme-primary">Human Money App</h1>
-                            </div>
-                            <div className="w-10"></div> {/* Spacer for symmetry */}
-                        </header>
-                    )}
+                    <Header />
 
-                    <main className={`w-full flex-grow ${INTERNAL_VIEWS.includes(appState.view) && isSessionActive ? 'p-4 md:p-6 lg:p-8' : ''}`}>
+                    <main className="w-full flex-grow p-4 md:p-6 lg:p-8">
                         <AppRouter />
                     </main>
                 </div>

@@ -117,3 +117,108 @@ pub fn acknowledge_seal_sync(
     let mut service = state.service.lock().unwrap();
     service.acknowledge_seal_sync(&uploaded_seal_hash, password.as_deref()).map_err(FrontendError::from)
 }
+
+#[tauri::command]
+pub async fn check_anchor_sync(
+    state: tauri::State<'_, AppState>,
+) -> Result<String, FrontendError> {
+    info!("Checking L2 anchor sync status...");
+    let (query, local_t_id, current_tag, urls) = {
+        let service = match state.service.lock() {
+            Ok(s) => s,
+            Err(_) => return Ok("Offline".to_string()),
+        };
+        let query_data = match service.prepare_anchor_status_query() {
+            Ok(data) => data,
+            Err(e) => {
+                log::debug!("prepare_anchor_status_query returned: {}", e);
+                return Ok("Offline".to_string());
+            }
+        };
+        let urls = state
+            .get_cached_settings()
+            .ok()
+            .and_then(|s| s.l2_node_urls)
+            .filter(|list| !list.is_empty())
+            .unwrap_or_else(|| vec!["http://127.0.0.1:8080".to_string()]);
+        (query_data.0, query_data.1, query_data.2, urls)
+    };
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(2500))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("Failed to build HTTP client: {}", e);
+            return Ok("Offline".to_string());
+        }
+    };
+
+    let mut responses = Vec::new();
+    for url in &urls {
+        let status_url = format!("{}/status", url.trim_end_matches('/'));
+        match client.post(&status_url).json(&query).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(envelope) = resp.json::<human_money_core::models::layer2_api::L2ResponseEnvelope>().await {
+                    responses.push(envelope.verdict);
+                }
+            }
+            Ok(resp) => {
+                log::debug!("Node {} returned HTTP {}", url, resp.status());
+            }
+            Err(e) => {
+                log::debug!("Node {} connection failed: {}", url, e);
+            }
+        }
+    }
+
+    if responses.is_empty() {
+        return Ok("Offline".to_string());
+    }
+
+    let verdict = human_money_core::services::l2_gateway::evaluate_multi_node_anchor_verdicts(
+        &responses,
+        &local_t_id,
+        &current_tag,
+        urls.len(),
+    );
+
+    let status_str = match verdict {
+        human_money_core::services::l2_gateway::AnchorSyncVerdict::Synchronized => "Synchronized",
+        human_money_core::services::l2_gateway::AnchorSyncVerdict::RollbackDetected { .. } => "RollbackDetected",
+        human_money_core::services::l2_gateway::AnchorSyncVerdict::ForkConflict { .. } => "ForkConflict",
+        human_money_core::services::l2_gateway::AnchorSyncVerdict::PendingLeapLock { .. } => "PendingLeapLock",
+        human_money_core::services::l2_gateway::AnchorSyncVerdict::GenesisRequired => "PendingLeapLock",
+    };
+
+    info!("Anchor sync check evaluated to: {}", status_str);
+    Ok(status_str.to_string())
+}
+
+#[tauri::command]
+pub fn reconcile_rollback(
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<human_money_core::models::seal::RollbackReconciliationReport, FrontendError> {
+    info!("Reconciling rollback with Layer 2 network...");
+    let mut service = state.service.lock().unwrap();
+    if let Some(ref pwd) = password {
+        let _ = service.unlock_session(pwd, 300);
+    }
+    service
+        .reconcile_rollback_with_diagnostics(&[], None, password.as_deref())
+        .map_err(FrontendError::from)
+}
+
+#[tauri::command]
+pub fn flush_pending_anchor_sync(
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<bool, FrontendError> {
+    info!("Flushing pending anchor sync to L2...");
+    let mut service = state.service.lock().unwrap();
+    service
+        .flush_pending_anchor_sync(password.as_deref())
+        .map_err(FrontendError::from)
+}

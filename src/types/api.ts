@@ -31,11 +31,33 @@ export interface SealUploadData {
     sealHash: string;
 }
 
+export type AnchorSyncStatus =
+    | 'Synchronized'
+    | 'Offline'
+    | 'RollbackDetected'
+    | 'ForkConflict'
+    | 'PendingLeapLock';
+
+export interface RollbackReport {
+    quarantinedVoucherIds?: string[];
+    archivedVoucherIds?: string[];
+    retainedVoucherIds?: string[];
+    newTxNonce?: number;
+    consolidatedStateHash?: string;
+    quarantined_voucher_ids?: string[];
+    archived_voucher_ids?: string[];
+    retained_voucher_ids?: string[];
+    new_tx_nonce?: number;
+    consolidated_state_hash?: string;
+    message: string;
+}
+
 export interface AppSettings {
     bundleRetentionDays: number;
     sessionTimeoutSeconds: number;
     lastUsedDirectory?: string;
     privacyDefault: PrivacyDefault;
+    l2NodeUrls?: string[];
 }
 
 export type IntegrityReport =

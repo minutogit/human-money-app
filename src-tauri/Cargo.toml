@@ -26,6 +26,7 @@ human_money_core = { git = "https://github.com/minutogit/human-money-core.git", 
 log = "0.4"
 tauri-plugin-log = { version = "2", features = ["colored"] }
 sysinfo = "0.30"
+reqwest = { version = "0.13.2", features = ["json"] }
 
 tauri-plugin-clipboard-manager = "2.0.0"
 bip39 = "2.0"

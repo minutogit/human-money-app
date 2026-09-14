@@ -12,6 +12,8 @@ pub struct AppSettings {
     pub last_used_directory: Option<String>,
     #[serde(default = "default_privacy_default")]
     pub privacy_default: String,
+    #[serde(default)]
+    pub l2_node_urls: Option<Vec<String>>,
 }
 
 fn default_privacy_default() -> String {
@@ -25,6 +27,7 @@ impl Default for AppSettings {
             session_timeout_seconds: 600, // Standard: 10 Minuten
             last_used_directory: None,
             privacy_default: "ask".to_string(),
+            l2_node_urls: None,
         }
     }
 }
