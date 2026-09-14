@@ -39,5 +39,9 @@ export const settingsService = {
 
     flushPendingAnchorSync: async (password?: string) => {
         return await invoke<boolean>("flush_pending_anchor_sync", { password });
+    },
+
+    benchmarkL2Servers: async (urls?: string[]) => {
+        return await invoke<Array<{ url: string; latencyMs?: number; reachable: boolean }>>("benchmark_l2_servers", { urls });
     }
 };

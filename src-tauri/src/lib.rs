@@ -155,6 +155,7 @@ pub fn run() {
             // WalletSeal / Sync
             get_seal_sync_status, get_seal_for_upload, acknowledge_seal_sync,
             check_anchor_sync, reconcile_rollback, flush_pending_anchor_sync,
+            benchmark_l2_servers,
             // Integrity
             check_wallet_integrity, repair_wallet_integrity
         ])

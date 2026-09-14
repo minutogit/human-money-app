@@ -52,12 +52,27 @@ export interface RollbackReport {
     message: string;
 }
 
+export interface CustomServerDto {
+    url: string;
+    name: string;
+    authToken?: string;
+    peerToken?: string;
+    isActive: boolean;
+}
+
 export interface AppSettings {
     bundleRetentionDays: number;
     sessionTimeoutSeconds: number;
     lastUsedDirectory?: string;
     privacyDefault: PrivacyDefault;
     l2NodeUrls?: string[];
+    activeNetwork?: string;
+    bootstrapSeedUrl?: string | null;
+    customServers?: CustomServerDto[];
+    exclusiveCustomServers?: boolean;
+    cachedPeersMainnet?: string[];
+    cachedPeersTestnet?: string[];
+    devModeUnlocked?: boolean;
 }
 
 export type IntegrityReport =

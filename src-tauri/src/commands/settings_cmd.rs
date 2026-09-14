@@ -1,5 +1,18 @@
 use crate::{models::{FrontendUserProfile, SealUploadData, FrontendError}, AppState, settings::AppSettings};
 use log::{info, error};
+use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
+
+const MAINNET_SEED_FALLBACK: &str = "https://raw.githubusercontent.com/minutogit/seeds/main/mainnet.json";
+const TESTNET_SEED_FALLBACK: &str = "https://raw.githubusercontent.com/minutogit/seeds/main/testnet.json";
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct L2BenchmarkResult {
+    pub url: String,
+    pub latency_ms: Option<u64>,
+    pub reachable: bool,
+}
 
 #[tauri::command]
 pub fn get_app_settings(state: tauri::State<AppState>) -> Result<AppSettings, FrontendError> {
@@ -73,6 +86,283 @@ pub fn set_conflict_local_override(
     }
     
     service.set_conflict_local_override(&proof_id, value, note, password.as_deref()).map_err(FrontendError::from)
+}
+
+// --- PEX / Seed Resolver ---
+
+async fn ping_url_3median(client: &reqwest::Client, url: &str) -> Option<u128> {
+    let mut successes: Vec<u128> = Vec::new();
+    let target = url.trim_end_matches('/');
+    if target.is_empty() {
+        return None;
+    }
+    for _ in 0..3 {
+        let start = Instant::now();
+        match client.get(target).send().await {
+            Ok(resp) => {
+                // Any response (even 404) counts as reachable; we just measure time to first byte
+                let _ = resp.status();
+                let elapsed = start.elapsed().as_millis();
+                successes.push(elapsed);
+            }
+            Err(_) => {
+                // failed attempt, ignore
+            }
+        }
+    }
+    if successes.is_empty() {
+        None
+    } else {
+        successes.sort_unstable();
+        Some(successes[successes.len() / 2])
+    }
+}
+
+async fn filter_reachable_with_median(candidates: Vec<String>) -> Vec<String> {
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_millis(1800))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("Failed to build HTTP client for median ping: {}", e);
+            return Vec::new();
+        }
+    };
+    let mut results: Vec<(String, u128)> = Vec::new();
+    for url in candidates {
+        let trimmed = url.trim().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(median) = ping_url_3median(&client, &trimmed).await {
+            results.push((trimmed, median));
+        } else {
+            log::debug!("Node unreachable filtered: {}", trimmed);
+        }
+    }
+    results.sort_by_key(|(_, lat)| *lat);
+    results.into_iter().map(|(url, _)| url).collect()
+}
+
+async fn fetch_seed_peers(seed_url: &str) -> Option<Vec<String>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(3000))
+        .build()
+        .ok()?;
+    let resp = client.get(seed_url).send().await.ok()?;
+    if !resp.status().is_success() {
+        log::debug!("Seed fetch failed with status {} for {}", resp.status(), seed_url);
+        return None;
+    }
+    let bytes = resp.bytes().await.ok()?;
+    // Try direct Vec<String>
+    if let Ok(peers) = serde_json::from_slice::<Vec<String>>(&bytes) {
+        let filtered: Vec<String> = peers.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        if !filtered.is_empty() {
+            return Some(filtered);
+        }
+    }
+    // Try object with known keys
+    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+        let keys_to_try = ["peers", "nodes", "servers", "urls", "endpoints", "seedPeers", "seed_peers"];
+        for key in keys_to_try {
+            if let Some(arr) = val.get(key).and_then(|v| v.as_array()) {
+                let peers: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect();
+                if !peers.is_empty() {
+                    return Some(peers);
+                }
+            }
+        }
+        if let Some(obj) = val.as_object() {
+            for (_, v) in obj {
+                if let Some(arr) = v.as_array() {
+                    let peers: Vec<String> = arr.iter().filter_map(|x| x.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect();
+                    if !peers.is_empty() && peers.iter().any(|p| p.starts_with("http")) {
+                        return Some(peers);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Resolves the active L2 nodes based on AppSettings.
+/// Steps:
+/// 1. If exclusive_custom_servers == true: use only active custom_servers.
+/// 2. If custom_servers are present: test these first.
+/// 3. Otherwise: use cached_peers for active network or load seed (GitHub fallback).
+/// 4. Uses 3-ping median measurement and filters unreachable nodes.
+/// 5. Returns empty list if no nodes reachable (clean offline mode, no panics).
+pub async fn resolve_active_l2_nodes_internal(settings: &AppSettings) -> Vec<String> {
+    let active_custom: Vec<String> = settings
+        .custom_servers
+        .iter()
+        .filter(|s| s.is_active)
+        .map(|s| s.url.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .collect();
+
+    // 1. Exclusive mode: only active custom servers
+    if settings.exclusive_custom_servers {
+        if active_custom.is_empty() {
+            return Vec::new();
+        }
+        return filter_reachable_with_median(active_custom).await;
+    }
+
+    // 2. Custom servers present: test these first
+    if !active_custom.is_empty() {
+        let reachable_custom = filter_reachable_with_median(active_custom.clone()).await;
+        if !reachable_custom.is_empty() {
+            return reachable_custom;
+        }
+        // if none reachable, fall through to seed/cached peers
+    }
+
+    // 3. Use cached peers for active network or load seed
+    let is_testnet = settings.active_network.to_lowercase() == "testnet";
+    let cached = if is_testnet {
+        &settings.cached_peers_testnet
+    } else {
+        &settings.cached_peers_mainnet
+    };
+
+    let mut candidates: Vec<String> = if !cached.is_empty() {
+        cached.clone()
+    } else {
+        let seed_url = settings
+            .bootstrap_seed_url
+            .clone()
+            .unwrap_or_else(|| {
+                if is_testnet {
+                    TESTNET_SEED_FALLBACK.to_string()
+                } else {
+                    MAINNET_SEED_FALLBACK.to_string()
+                }
+            });
+        match fetch_seed_peers(&seed_url).await {
+            Some(peers) if !peers.is_empty() => peers,
+            _ => Vec::new(),
+        }
+    };
+
+    // Also consider legacy l2_node_urls as additional fallback if no candidates yet
+    if candidates.is_empty() {
+        if let Some(ref legacy) = settings.l2_node_urls {
+            if !legacy.is_empty() {
+                candidates = legacy.clone();
+            }
+        }
+    }
+
+    // Clean and dedup
+    candidates = candidates
+        .into_iter()
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .collect();
+    candidates.sort();
+    candidates.dedup();
+
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    // 4. 3-ping median and filter unreachable
+    filter_reachable_with_median(candidates).await
+}
+
+/// Tauri command that benchmarks L2 servers and measures latencies using 3-ping median.
+/// If `urls` is Some, benchmarks those URLs directly; otherwise benchmarks the resolved active nodes.
+#[tauri::command]
+pub async fn benchmark_l2_servers(
+    state: tauri::State<'_, AppState>,
+    urls: Option<Vec<String>>,
+) -> Result<Vec<L2BenchmarkResult>, FrontendError> {
+    let candidates: Vec<String> = if let Some(provided) = urls {
+        provided
+            .into_iter()
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty())
+            .collect()
+    } else {
+        let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+        let is_testnet = settings.active_network.to_lowercase() == "testnet";
+        let mut all: Vec<String> = Vec::new();
+        let active_custom: Vec<String> = settings
+            .custom_servers
+            .iter()
+            .filter(|s| s.is_active)
+            .map(|s| s.url.trim().to_string())
+            .filter(|u| !u.is_empty())
+            .collect();
+
+        if settings.exclusive_custom_servers {
+            all = active_custom;
+        } else {
+            all.extend(active_custom.clone());
+            let cached = if is_testnet {
+                &settings.cached_peers_testnet
+            } else {
+                &settings.cached_peers_mainnet
+            };
+            if !cached.is_empty() {
+                all.extend(cached.clone());
+            } else {
+                let seed_url = settings
+                    .bootstrap_seed_url
+                    .clone()
+                    .unwrap_or_else(|| {
+                        if is_testnet {
+                            TESTNET_SEED_FALLBACK.to_string()
+                        } else {
+                            MAINNET_SEED_FALLBACK.to_string()
+                        }
+                    });
+                if let Some(peers) = fetch_seed_peers(&seed_url).await {
+                    all.extend(peers);
+                }
+            }
+            if let Some(ref legacy) = settings.l2_node_urls {
+                all.extend(legacy.clone());
+            }
+        }
+        all.into_iter().map(|u| u.trim().to_string()).filter(|u| !u.is_empty()).collect()
+    };
+
+    let mut deduped = candidates;
+    deduped.sort();
+    deduped.dedup();
+    if deduped.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(1800))
+        .build()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
+
+    let mut results: Vec<L2BenchmarkResult> = Vec::new();
+    for url in deduped {
+        let median = ping_url_3median(&client, &url).await;
+        results.push(L2BenchmarkResult {
+            url: url.clone(),
+            latency_ms: median.map(|m| m as u64),
+            reachable: median.is_some(),
+        });
+    }
+    results.sort_by(|a, b| match (a.latency_ms, b.latency_ms) {
+        (Some(a_lat), Some(b_lat)) => a_lat.cmp(&b_lat),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    Ok(results)
 }
 
 // --- WalletSeal / Sync Commands ---
