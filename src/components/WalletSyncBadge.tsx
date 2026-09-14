@@ -34,6 +34,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
     const [isReconciling, setIsReconciling] = useState(false);
     const [reconcileReport, setReconcileReport] = useState<RollbackReport | null>(null);
     const [reconcileError, setReconcileError] = useState<string | null>(null);
+    const [activeNetwork, setActiveNetwork] = useState<string | undefined>(undefined);
 
     const refreshSyncStatus = useCallback(async () => {
         if (!isSessionActive) {
@@ -55,6 +56,22 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
             setIsChecking(false);
         }
     }, [isSessionActive]);
+
+    const refreshNetwork = useCallback(async () => {
+        try {
+            const s = await settingsService.getSettings();
+            setActiveNetwork(s.activeNetwork || "mainnet");
+        } catch {
+            setActiveNetwork("mainnet");
+        }
+    }, []);
+
+    useEffect(() => {
+        // Always keep network mode up-to-date (even offline) for Testnet badge
+        refreshNetwork();
+        const netInterval = window.setInterval(refreshNetwork, 30000);
+        return () => window.clearInterval(netInterval);
+    }, [refreshNetwork]);
 
     useEffect(() => {
         if (isSessionActive) {
@@ -85,6 +102,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
     };
 
     const isConflict = status === "RollbackDetected" || status === "ForkConflict";
+    const isTestnet = activeNetwork?.toLowerCase() === "testnet";
 
     const badgeConfig = {
         Synchronized: {
@@ -138,41 +156,61 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
 
     const IconComp = badgeConfig.Icon;
 
+    const testnetTooltip = isTestnet
+        ? t("wallet.anchor.testnetTooltip", "Testnet-Modus: Transaktionen laufen im Testnetzwerk – kein echtes Mainnet-Geld. Netzwerk: testnet")
+        : t("wallet.anchor.mainnetTooltip", "Mainnet-Modus: Produktiv-Netzwerk");
+
     return (
         <>
-            <div 
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border shadow-xs transition-all cursor-pointer select-none ${badgeConfig.containerStyle} ${className}`}
-                title={badgeConfig.tooltip}
-                role="button"
-                tabIndex={0}
-                aria-label={`L2 Status: ${badgeConfig.label} - ${badgeConfig.tooltip}`}
-                onClick={() => {
-                    if (isConflict) {
-                        setIsModalOpen(true);
-                    } else {
-                        refreshSyncStatus();
-                    }
-                }}
-                onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
+            <div className={`inline-flex items-center gap-2 ${className}`}>
+                <div 
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border shadow-xs transition-all cursor-pointer select-none ${badgeConfig.containerStyle}`}
+                    title={badgeConfig.tooltip}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`L2 Status: ${badgeConfig.label} - ${badgeConfig.tooltip}`}
+                    onClick={() => {
                         if (isConflict) {
                             setIsModalOpen(true);
                         } else {
                             refreshSyncStatus();
                         }
-                    }
-                }}
-            >
-                <span className={`w-2 h-2 rounded-full ${badgeConfig.dotStyle} ${isConflict ? "animate-ping" : ""}`} />
-                <IconComp size={14} className={badgeConfig.iconColor} />
-                {!compact && (
-                    <span className="font-semibold truncate">
-                        {badgeConfig.label}
+                    }}
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            if (isConflict) {
+                                setIsModalOpen(true);
+                            } else {
+                                refreshSyncStatus();
+                            }
+                        }
+                    }}
+                >
+                    <span className={`w-2 h-2 rounded-full ${badgeConfig.dotStyle} ${isConflict ? "animate-ping" : ""}`} />
+                    <IconComp size={14} className={badgeConfig.iconColor} />
+                    {!compact && (
+                        <span className="font-semibold truncate">
+                            {badgeConfig.label}
+                        </span>
+                    )}
+                    {isChecking && (
+                        <RefreshCw size={10} className="animate-spin opacity-70 ml-0.5" />
+                    )}
+                </div>
+
+                {isTestnet && (
+                    <span
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border shadow-xs bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-950/40 dark:text-orange-300 dark:border-orange-800/60"
+                        title={testnetTooltip}
+                        role="status"
+                        aria-label={`Testnet: ${testnetTooltip}`}
+                    >
+                        🧪 Testnet
                     </span>
                 )}
-                {isChecking && (
-                    <RefreshCw size={10} className="animate-spin opacity-70 ml-0.5" />
+                {!isTestnet && activeNetwork && !compact && (
+                    <span className="sr-only" title={testnetTooltip}>{testnetTooltip}</span>
                 )}
             </div>
 
