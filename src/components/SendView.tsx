@@ -144,7 +144,7 @@ export function SendView() {
     const [uuidToPrecisionMap, setUuidToPrecisionMap] = useState<Map<string, number>>(new Map());
     const [standardsDict] = useState<Record<string, VoucherStandardDefinition>>({});
 
-    const { selectedMap, toggleVoucher, setVoucherAmount, selectAmount, selectionStats } = useVoucherSelection(availableVouchers);
+    const { selectedMap, toggleVoucher, setVoucherAmount, selectAmount, selectionStats, currentPlan, autoSelectGravitational } = useVoucherSelection(availableVouchers);
     const detectedPrivacy = usePrivacyDetection(
         Array.from(selectedMap.keys()),
         availableVouchers,
@@ -261,14 +261,42 @@ export function SendView() {
         });
     }, [availableVouchers, state.selectedStandardId, state.selectedIsTest, standardIdToUuidMap]);
 
-    const handleTargetAmountChange = (valStr: string) => {
-        dispatch({ type: 'SET_TARGET_AMOUNT', amount: valStr });
-        const val = parseFloat(valStr);
-        if (isNaN(val) || val <= 0) return;
-        
+    // Gravitational auto-selection: bei gültigem Empfänger und Betrag optimale Auswahl automatisch vornehmen
+    useEffect(() => {
+        const amountStr = state.targetAmountStr.trim();
+        const recipient = state.recipientId.trim();
+        const amt = parseFloat(amountStr);
+        if (!recipient || recipient.length < 10 || isNaN(amt) || amt <= 0) return;
+        if (!state.selectedStandardId) return;
+        const standardUuid = standardIdToUuidMap.get(state.selectedStandardId) ?? null;
+        if (!standardUuid) return;
         const voucher = filteredVouchers[0];
         const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4) : 4;
-        selectAmount(val, voucher?.displayCurrency, precision);
+        const timer = setTimeout(() => {
+            autoSelectGravitational(amountStr, recipient, standardUuid, precision).catch((e) => {
+                logger.error(`Gravitational auto-select failed: ${stringifyError(e)}`);
+                // Fallback to legacy greedy selection on error
+                const val = parseFloat(amountStr);
+                if (!isNaN(val) && val > 0 && voucher) {
+                    selectAmount(val, voucher.displayCurrency, precision);
+                }
+            });
+        }, 400);
+        return () => clearTimeout(timer);
+    }, [state.targetAmountStr, state.recipientId, state.selectedStandardId, state.selectedIsTest, filteredVouchers, standardIdToUuidMap, uuidToPrecisionMap, autoSelectGravitational, selectAmount]);
+
+    const handleTargetAmountChange = (valStr: string) => {
+        dispatch({ type: 'SET_TARGET_AMOUNT', amount: valStr });
+        // Auto-selection übernimmt die Auswahl via Effekt; kein direkter selectAmount-Aufruf nötig.
+        // Fallback für fehlenden Empfänger: lokale Greedy-Auswahl sofort, damit UI nicht leer wirkt
+        if (state.recipientId.trim().length < 10) {
+            const val = parseFloat(valStr);
+            if (!isNaN(val) && val > 0 && filteredVouchers[0]) {
+                const voucher = filteredVouchers[0];
+                const precision = uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4;
+                selectAmount(val, voucher.displayCurrency, precision);
+            }
+        }
     };
 
     const handleVoucherToggle = (v: VoucherSummary) => {
@@ -500,6 +528,48 @@ export function SendView() {
                             uuidToPrecisionMap={uuidToPrecisionMap}
                             standardIdToUuidMap={standardIdToUuidMap}
                         />
+
+                        {currentPlan && (
+                            <Card className="p-5 bg-amber-50/50 border border-amber-200/60 rounded-[32px] space-y-3 animate-in fade-in duration-300">
+                                <div className="flex items-center justify-between">
+                                    <h4 className="text-[10px] font-black text-amber-700 uppercase tracking-widest">Gravitations-Plan ({currentPlan.planReason})</h4>
+                                    {currentPlan.needsSplit && <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-2 py-1 rounded-full">Split erforderlich</span>}
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 text-xs">
+                                    <div className="bg-white rounded-xl p-2 border border-amber-100">
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Ziel</p>
+                                        <p className="font-black text-slate-800">{formatAmount(currentPlan.target)} {filteredVouchers[0]?.displayCurrency ?? ''}</p>
+                                    </div>
+                                    <div className="bg-white rounded-xl p-2 border border-amber-100">
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Ausgewählt</p>
+                                        <p className="font-black text-slate-800">{formatAmount(currentPlan.totalSelected)} {filteredVouchers[0]?.displayCurrency ?? ''}</p>
+                                    </div>
+                                    <div className={`rounded-xl p-2 border ${currentPlan.needsSplit ? 'bg-white border-amber-200' : 'bg-slate-50 border-slate-100'}`}>
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Wechselgeld</p>
+                                        <p className={`font-black ${currentPlan.needsSplit ? 'text-amber-700' : 'text-slate-400'}`}>
+                                            {(() => {
+                                                const total = parseFloat(currentPlan.totalSelected);
+                                                const target = parseFloat(currentPlan.target);
+                                                const diff = total - target;
+                                                const precision = filteredVouchers[0] ? (uuidToPrecisionMap.get(filteredVouchers[0].voucherStandardUuid) ?? 4) : 4;
+                                                return formatAmount(diff.toFixed(precision));
+                                            })()} {filteredVouchers[0]?.displayCurrency ?? ''}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="space-y-1">
+                                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Involvierte Voucher</p>
+                                    <div className="space-y-1 max-h-32 overflow-auto pr-1">
+                                        {currentPlan.selected.map((rv) => (
+                                            <div key={rv.localInstanceId} className="flex justify-between items-center bg-white rounded-lg px-2 py-1 border border-slate-100 text-[11px]">
+                                                <span className="font-mono text-slate-600 truncate max-w-[140px]">{rv.localInstanceId.slice(0,8)}… {rv.amount}</span>
+                                                <span className="font-bold text-slate-500">Score {rv.score} · {rv.reason}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </Card>
+                        )}
 
                         {selectedMap.size > 0 && (
                             <Card className="p-5 bg-slate-50 border border-slate-200/60 rounded-[32px] space-y-4 animate-in fade-in duration-300">

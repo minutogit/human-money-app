@@ -1,7 +1,8 @@
 // src-tauri/src/commands/transfers.rs
 use crate::{
     models::{
-        CreateBundleResult, FrontendSourceTransfer, FrontendTransactionRecord,
+        CreateBundleResult, FrontendRankedVoucher, FrontendTransferPlan,
+        FrontendSourceTransfer, FrontendTransactionRecord,
         ReceiveSuccessPayload, TransactionRecord, FrontendError,
     },
     AppState,
@@ -159,4 +160,44 @@ pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<Fron
     info!("Loading transaction history...");
     let history = state.get_cached_history().map_err(FrontendError::from)?;
     Ok(history.iter().map(|r| r.into()).collect())
+}
+
+#[tauri::command]
+pub fn prepare_transfer_plan(
+    target_amount: String,
+    standard_uuid_filter: Option<String>,
+    recipient_id: String,
+    state: tauri::State<AppState>,
+) -> Result<FrontendTransferPlan, FrontendError> {
+    let recipient_id = recipient_id.trim().to_string();
+    info!(
+        "Preparing transfer plan for recipient {} amount {} filter {:?}",
+        recipient_id, target_amount, standard_uuid_filter
+    );
+    let service = state.service.lock().unwrap();
+    let plan = service
+        .with_wallet(|w| w.prepare_transfer(&target_amount, standard_uuid_filter.as_deref(), &recipient_id))
+        .map_err(FrontendError::from)?
+        .map_err(FrontendError::from)?;
+    Ok(plan.into())
+}
+
+#[tauri::command]
+pub fn rank_vouchers_for_recipient(
+    target_amount: String,
+    standard_uuid_filter: Option<String>,
+    recipient_id: String,
+    state: tauri::State<AppState>,
+) -> Result<Vec<FrontendRankedVoucher>, FrontendError> {
+    let recipient_id = recipient_id.trim().to_string();
+    info!(
+        "Ranking vouchers for recipient {} amount {} filter {:?}",
+        recipient_id, target_amount, standard_uuid_filter
+    );
+    let service = state.service.lock().unwrap();
+    let ranked = service
+        .with_wallet(|w| w.rank_vouchers(&target_amount, standard_uuid_filter.as_deref(), &recipient_id))
+        .map_err(FrontendError::from)?
+        .map_err(FrontendError::from)?;
+    Ok(ranked.into_iter().map(|r| r.into()).collect())
 }

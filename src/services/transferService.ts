@@ -24,9 +24,51 @@ export interface CreateBundleResult {
     involvedSourcesDetails: unknown[];
 }
 
+export interface ScoreBreakdown {
+    sBoomerang: number;
+    sEigen: number;
+    sCorridor: number;
+    sAge: number;
+    sChain: number;
+    sFit: number;
+}
+
+export interface RankedVoucher {
+    localInstanceId: string;
+    score: number;
+    breakdown: ScoreBreakdown;
+    reason: string;
+    amount: string;
+    standardUuid: string;
+}
+
+export interface TransferPlan {
+    selected: RankedVoucher[];
+    totalSelected: string;
+    target: string;
+    needsSplit: boolean;
+    planReason: string;
+}
+
 export const transferService = {
     getHistory: async () => {
         return await invoke<TransactionRecord[]>("get_transaction_history");
+    },
+
+    prepareTransferPlan: async (args: { targetAmount: string; standardUuidFilter?: string | null; recipientId: string }) => {
+        return await invoke<TransferPlan>("prepare_transfer_plan", {
+            targetAmount: args.targetAmount,
+            standardUuidFilter: args.standardUuidFilter ?? null,
+            recipientId: args.recipientId
+        });
+    },
+
+    rankVouchers: async (args: { targetAmount: string; standardUuidFilter?: string | null; recipientId: string }) => {
+        return await invoke<RankedVoucher[]>("rank_vouchers_for_recipient", {
+            targetAmount: args.targetAmount,
+            standardUuidFilter: args.standardUuidFilter ?? null,
+            recipientId: args.recipientId
+        });
     },
 
     createBundle: async (args: CreateBundleArgs) => {

@@ -137,7 +137,7 @@ pub fn run() {
             get_user_id, get_user_profile, get_total_balance_by_currency, get_voucher_summaries, get_voucher_details,
             get_active_asset_classes,
             create_new_voucher, create_transfer_bundle, receive_bundle, save_transaction_record,
-            get_transaction_history,
+            get_transaction_history, prepare_transfer_plan, rank_vouchers_for_recipient,
             get_app_settings, save_app_settings,
             update_user_profile,
             log_to_backend,
