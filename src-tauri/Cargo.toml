@@ -40,4 +40,11 @@ machine-uid = "0.6"
 [dev-dependencies]
 tauri = { version = "~2.11", features = ["test"] }
 
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1
+
+
 
