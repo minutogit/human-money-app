@@ -45,11 +45,11 @@ interface StatusConfig {
 const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
     final: {
         labelKey: "transfer.l2.finalTitle",
-        defaultLabel: "Final gesichert",
+        defaultLabel: "Regional bestätigt",
         sublabelKey: "transfer.l2.finalSub",
-        defaultSublabel: "Shard-Quorum erreicht",
+        defaultSublabel: "Aktuelles Shard-Quorum bestätigt",
         merchantHintKey: "transfer.l2.finalHint",
-        defaultMerchantHint: "Vollständiges Shard-Quorum erreicht. Zahlung ist kryptografisch unwiderruflich und final abgesichert. Ware kann sicher ausgehändigt werden.",
+        defaultMerchantHint: "Eine verifizierte aktuelle Shard-Bestätigung gilt regional und kann sich nach einem Netz-Merge ändern. Warenfreigabe erfordert zusätzlich die dauerhafte Speicherung des L1-Gutscheins und seiner Kaufzuordnung.",
         badgeStyle: "bg-emerald-50 border-emerald-200 text-emerald-900 shadow-emerald-500/10",
         pillStyle: "bg-emerald-600 text-white",
         borderStyle: "border-emerald-300",
@@ -109,7 +109,7 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         sublabelKey: "transfer.l2.unverifiedSub",
         defaultSublabel: "Nicht geprüft",
         merchantHintKey: "transfer.l2.unverifiedHint",
-        defaultMerchantHint: "Keine Layer-2 Prüfung erfolgt.",
+        defaultMerchantHint: "Kein verifizierter aktueller Layer-2-Nachweis. Diese Anzeige bestätigt keine Zahlung und erlaubt keine Warenfreigabe.",
         badgeStyle: "bg-slate-50 border-slate-200 text-slate-800 shadow-slate-500/10",
         pillStyle: "bg-slate-600 text-white",
         borderStyle: "border-slate-300",
@@ -134,11 +134,16 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
     const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState<boolean>(showDetails);
 
-    const effectiveStatus: L2VerdictState = quorum?.status ?? status ?? "unverified";
-    const effectiveSignerCount = quorum?.signerCount ?? signerCount;
-    const effectiveActiveNodes = quorum?.activeNodesCount ?? activeNodesCount;
-    const effectiveShardId = quorum?.shardId ?? shardId;
-    const effectiveDetails = quorum?.details ?? details;
+    // These public props are presentation data, not a verifier result. No production
+    // current-proof verifier is connected in this host yet; confirmation claims
+    // must remain unverified until that integration supplies a trusted boundary.
+    const claimedStatus = quorum?.status ?? status ?? "unverified";
+    const unsupportedConfirmation = claimedStatus === 'final' || claimedStatus === 'provisional';
+    const effectiveStatus: L2VerdictState = unsupportedConfirmation ? 'unverified' : claimedStatus;
+    const effectiveSignerCount = unsupportedConfirmation ? undefined : quorum?.signerCount ?? signerCount;
+    const effectiveActiveNodes = unsupportedConfirmation ? undefined : quorum?.activeNodesCount ?? activeNodesCount;
+    const effectiveShardId = unsupportedConfirmation ? undefined : quorum?.shardId ?? shardId;
+    const effectiveDetails = unsupportedConfirmation ? undefined : quorum?.details ?? details;
 
     const config = STATUS_CONFIGS[effectiveStatus] || STATUS_CONFIGS.unverified;
     const IconComponent = config.Icon;
@@ -248,11 +253,7 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
                             <div className="w-full bg-black/10 rounded-full h-1.5 overflow-hidden">
                                 <div 
                                     className={`h-full rounded-full transition-all duration-500 ${
-                                        effectiveStatus === 'final' 
-                                            ? 'bg-emerald-500' 
-                                            : effectiveStatus === 'conflict' 
-                                                ? 'bg-rose-500' 
-                                                : 'bg-amber-500'
+                                        effectiveStatus === 'conflict' ? 'bg-rose-500' : 'bg-amber-500'
                                     }`}
                                     style={{ width: `${Math.min(100, Math.max(0, percentage))}%` }}
                                 />

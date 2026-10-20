@@ -15,6 +15,18 @@ const enTranslations = vi.hoisted(() => {
   }
 });
 
+// Node 26 exposes a localStorage getter even without a backing file. Vitest 2
+// preserves that existing global instead of installing JSDOM's browser storage.
+// Use the real storage of this test environment, never Node's process storage.
+const browserWindow = (globalThis as typeof globalThis & {
+    jsdom: { window: Window };
+}).jsdom.window;
+Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    writable: true,
+    value: browserWindow.localStorage,
+});
+
 // Limit the size of the DOM dump in error messages to keep output readable
 configure({
     // This prevents the huge HTML dump on failure

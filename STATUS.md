@@ -2,11 +2,17 @@
 project: human-money-app
 version: "0.2.1"
 phase: "beta"
-health: "green"
-last_updated: "2026-09-14"
+health: "yellow"
+last_updated: "2026-10-20"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-034"
+    title: "Prevent unverified L2 payment confirmation"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "UI correction implemented; full frontend verification pending. Removed fabricated 15/20 FINAL from received bundle display. Unverified presentation claims cannot produce confirmed badges or release advice. Current-proof verification, durable purchase binding and actual payment transport remain unimplemented; this UI correction does not complete A09 or establish global finality."
   - id: "APP-033"
     title: "human_money_core v0.3+ Breaking Changes & Archive Integration"
     status: "completed"

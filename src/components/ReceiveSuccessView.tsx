@@ -60,12 +60,12 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
         ? (payload.conflictSummaries.some(c => c.conflictRole === 'witness' && !c.isResolved && !c.localOverride) && !isVictim) 
         : false;
 
-    // Layer-2 Reifegrad-Ampel: explicit payload data or sensible POS default
-    const l2Quorum: L2QuorumInfo = payload.l2Quorum || (
-        isVictim 
-            ? { status: 'conflict', details: t('transfer.receiveSuccess.conflictDesc') }
-            : { status: 'final', signerCount: 15, activeNodesCount: 20, shardId: 1 }
-    );
+    // Bundle import establishes local L1 custody, not a verified current L2 quorum.
+    // The host has no current-proof verifier/release integration yet. A response DTO
+    // (including its status or signer count) cannot authorize payment confirmation.
+    const l2Quorum: L2QuorumInfo = isVictim
+        ? { status: 'conflict', details: t('transfer.receiveSuccess.conflictDesc') }
+        : { status: 'unverified' };
 
     return (
         <div className="flex flex-col items-center justify-center min-h-[80vh] py-12 px-4 animate-in fade-in zoom-in-95 duration-500">
