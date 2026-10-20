@@ -93,9 +93,9 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                 setStatus("Synchronized");
                 logger.info("Rollback successfully reconciled with L2 anchor.");
             });
-        } catch (e: any) {
+        } catch (e: unknown) {
             logger.error(`Reconciliation failed: ${e}`);
-            setReconcileError(e?.message || String(e));
+            setReconcileError(e instanceof Error ? e.message : String(e));
         } finally {
             setIsReconciling(false);
         }

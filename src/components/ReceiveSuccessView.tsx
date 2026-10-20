@@ -52,6 +52,8 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
         }
     }, [payload, summaryString]);
 
+    const [manualApprovalGranted, setManualApprovalGranted] = useState(false);
+
     const isVictim = payload.conflictSummaries 
         ? payload.conflictSummaries.some(c => c.conflictRole === 'victim' && !c.isResolved && !c.localOverride) 
         : (payload.verifiableConflicts && Object.keys(payload.verifiableConflicts).length > 0);
@@ -60,12 +62,20 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
         ? (payload.conflictSummaries.some(c => c.conflictRole === 'witness' && !c.isResolved && !c.localOverride) && !isVictim) 
         : false;
 
-    // Bundle import establishes local L1 custody, not a verified current L2 quorum.
-    // The host has no current-proof verifier/release integration yet. A response DTO
-    // (including its status or signer count) cannot authorize payment confirmation.
-    const l2Quorum: L2QuorumInfo = isVictim
+    const checkoutVerdict = payload.checkoutVerdict;
+    const isConfirmed = checkoutVerdict?.outcome === 'Confirmed';
+    const isQuarantined = isVictim || (checkoutVerdict ? checkoutVerdict.outcome.startsWith('Quarantined') : false);
+    const isProvisional = checkoutVerdict?.outcome === 'Provisional';
+
+    // Only a verified Confirmed checkout verdict with full 14/20 quorum can yield 'final'.
+    // Unverified bundle import or raw response DTOs must never confirm payment or release goods.
+    const l2Quorum: L2QuorumInfo = isQuarantined
         ? { status: 'conflict', details: t('transfer.receiveSuccess.conflictDesc') }
-        : { status: 'unverified' };
+        : isConfirmed
+            ? { status: 'final', signerCount: 14, activeNodesCount: 20, details: t('transfer.l2.finalHint') }
+            : isProvisional
+                ? { status: 'provisional', details: t('transfer.l2.provisionalHint') }
+                : { status: 'unverified' };
 
     return (
         <div className="flex flex-col items-center justify-center min-h-[80vh] py-12 px-4 animate-in fade-in zoom-in-95 duration-500">
@@ -118,7 +128,65 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                 )}
 
                 {/* Layer 2 Reifegrad-Ampel at POS */}
-                <L2QuorumBadge quorum={l2Quorum} />
+                <L2QuorumBadge quorum={l2Quorum} isVerifiedCheckout={Boolean(checkoutVerdict)} />
+
+                {/* Checkout & Goods Release (Warenfreigabe) Status */}
+                {checkoutVerdict && (
+                    <div data-testid="goods-release-section" className="space-y-3">
+                        {isConfirmed ? (
+                            <div data-testid="goods-release-card" className="p-5 bg-emerald-50 border-2 border-emerald-200 rounded-[28px] flex items-center justify-between shadow-sm">
+                                <div className="flex items-center gap-3">
+                                    <CheckCircle2 className="text-emerald-600 shrink-0" size={28} />
+                                    <div>
+                                        <h3 className="text-sm font-black text-emerald-950 uppercase tracking-wider">{t('transfer.checkout.goodsReleased')}</h3>
+                                        <p className="text-xs text-emerald-800 font-medium">{t('transfer.checkout.goodsReleasedDesc')}</p>
+                                    </div>
+                                </div>
+                                <span className="text-[10px] font-mono font-bold bg-emerald-200/60 text-emerald-900 px-3 py-1.5 rounded-full uppercase tracking-wider">
+                                    14/20 BFT
+                                </span>
+                            </div>
+                        ) : isQuarantined ? (
+                            <div data-testid="goods-release-card" className="p-5 bg-rose-50 border-2 border-rose-200 rounded-[28px] flex items-center gap-3 shadow-sm">
+                                <ShieldAlert className="text-rose-600 shrink-0" size={28} />
+                                <div>
+                                    <h3 className="text-sm font-black text-rose-950 uppercase tracking-wider">{t('transfer.checkout.goodsBlocked')}</h3>
+                                    <p className="text-xs text-rose-800 font-medium">{t('transfer.checkout.goodsBlockedDesc')}</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div data-testid="goods-release-card" className="p-5 bg-amber-50 border-2 border-amber-200 rounded-[28px] space-y-3 shadow-sm">
+                                <div className="flex items-start gap-3">
+                                    <AlertTriangle className="text-amber-600 shrink-0 mt-0.5" size={24} />
+                                    <div className="flex-1">
+                                        <h3 className="text-sm font-black text-amber-950 uppercase tracking-wider">
+                                            {manualApprovalGranted ? t('transfer.checkout.approvedManually') : t('transfer.checkout.approvalRequired')}
+                                        </h3>
+                                        <p className="text-xs text-amber-800 font-medium">
+                                            {checkoutVerdict.merchantWarning || t('transfer.checkout.approvalRequiredDesc')}
+                                        </p>
+                                    </div>
+                                </div>
+                                {!manualApprovalGranted ? (
+                                    <Button
+                                        data-testid="merchant-approve-btn"
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={() => setManualApprovalGranted(true)}
+                                        className="w-full py-2.5 rounded-2xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white border-none shadow-sm"
+                                    >
+                                        {t('transfer.checkout.approveBtn')}
+                                    </Button>
+                                ) : (
+                                    <div data-testid="merchant-approved-badge" className="text-xs font-bold text-emerald-700 bg-emerald-100/70 px-3 py-1.5 rounded-xl flex items-center gap-2">
+                                        <CheckCircle2 size={16} />
+                                        {t('transfer.checkout.approvedManually')}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* Transfer Details Card */}
                 <div className="bg-white border border-theme-subtle rounded-[40px] p-8 shadow-premium space-y-8">

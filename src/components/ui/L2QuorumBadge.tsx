@@ -24,6 +24,7 @@ export interface L2QuorumBadgeProps {
     size?: 'sm' | 'md' | 'lg';
     showDetails?: boolean;
     className?: string;
+    isVerifiedCheckout?: boolean;
 }
 
 interface StatusConfig {
@@ -98,8 +99,8 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         badgeStyle: "bg-slate-50 border-slate-200 text-slate-800 shadow-slate-500/10",
         pillStyle: "bg-slate-600 text-white",
         borderStyle: "border-slate-300",
-        textStyle: "text-slate-700",
-        iconStyle: "text-slate-500",
+        textStyle: "text-slate-800",
+        iconStyle: "text-slate-600",
         dotColor: "bg-slate-400",
         Icon: WifiOff,
     },
@@ -110,8 +111,8 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         defaultSublabel: "Nicht geprüft",
         merchantHintKey: "transfer.l2.unverifiedHint",
         defaultMerchantHint: "Kein verifizierter aktueller Layer-2-Nachweis. Diese Anzeige bestätigt keine Zahlung und erlaubt keine Warenfreigabe.",
-        badgeStyle: "bg-slate-50 border-slate-200 text-slate-800 shadow-slate-500/10",
-        pillStyle: "bg-slate-600 text-white",
+        badgeStyle: "bg-slate-50 border-slate-200 text-slate-700 shadow-slate-500/10",
+        pillStyle: "bg-slate-500 text-white",
         borderStyle: "border-slate-300",
         textStyle: "text-slate-700",
         iconStyle: "text-slate-500",
@@ -130,15 +131,16 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
     size = "md",
     showDetails = false,
     className = "",
+    isVerifiedCheckout = false,
 }) => {
     const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState<boolean>(showDetails);
 
-    // These public props are presentation data, not a verifier result. No production
-    // current-proof verifier is connected in this host yet; confirmation claims
-    // must remain unverified until that integration supplies a trusted boundary.
+    // These public props are presentation data, not a verifier result. Only when
+    // verified checkout integration supplies a trusted boundary (isVerifiedCheckout),
+    // confirmation claims may produce final/provisional badges.
     const claimedStatus = quorum?.status ?? status ?? "unverified";
-    const unsupportedConfirmation = claimedStatus === 'final' || claimedStatus === 'provisional';
+    const unsupportedConfirmation = !isVerifiedCheckout && (claimedStatus === 'final' || claimedStatus === 'provisional');
     const effectiveStatus: L2VerdictState = unsupportedConfirmation ? 'unverified' : claimedStatus;
     const effectiveSignerCount = unsupportedConfirmation ? undefined : quorum?.signerCount ?? signerCount;
     const effectiveActiveNodes = unsupportedConfirmation ? undefined : quorum?.activeNodesCount ?? activeNodesCount;

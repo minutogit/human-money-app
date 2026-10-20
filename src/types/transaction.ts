@@ -63,6 +63,14 @@ export interface TransferSummary {
     countableItems: Record<string, number>;
 }
 
+export interface CheckoutReleaseVerdict {
+    outcome: string; // 'Confirmed' | 'Found' | 'Provisional' | 'SyncRequired:...' | 'Quarantined:...'
+    canReleaseGoodsAutomatically: boolean;
+    requiresMerchantApproval: boolean;
+    isGoodsReleaseAuthorized: boolean;
+    merchantWarning?: string;
+}
+
 export interface ReceiveSuccessPayload {
     senderId: string;
     senderProfileName?: string;
@@ -75,6 +83,7 @@ export interface ReceiveSuccessPayload {
     verifiableConflicts?: Record<string, TransactionFingerprint[]>;
     conflictSummaries?: ProofOfDoubleSpendSummary[];
     l2Quorum?: L2QuorumInfo;
+    checkoutVerdict?: CheckoutReleaseVerdict;
 }
 
 export interface TransactionFingerprint {

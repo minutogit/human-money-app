@@ -93,3 +93,37 @@ impl From<TransferPlan> for FrontendTransferPlan {
         }
     }
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendCheckoutReleaseVerdict {
+    pub outcome: String,
+    pub can_release_goods_automatically: bool,
+    pub requires_merchant_approval: bool,
+    pub is_goods_release_authorized: bool,
+    pub merchant_warning: Option<String>,
+}
+
+impl From<human_money_core::models::layer2_api::CheckoutReleaseVerdict> for FrontendCheckoutReleaseVerdict {
+    fn from(v: human_money_core::models::layer2_api::CheckoutReleaseVerdict) -> Self {
+        let outcome_str = match &v.outcome {
+            human_money_core::models::layer2_api::L2ProcessingOutcome::Confirmed => "Confirmed".to_string(),
+            human_money_core::models::layer2_api::L2ProcessingOutcome::Found => "Found".to_string(),
+            human_money_core::models::layer2_api::L2ProcessingOutcome::Provisional => "Provisional".to_string(),
+            human_money_core::models::layer2_api::L2ProcessingOutcome::SyncRequired { sync_point } => {
+                format!("SyncRequired:{}", sync_point)
+            }
+            human_money_core::models::layer2_api::L2ProcessingOutcome::Quarantined { reason } => {
+                format!("Quarantined:{}", reason)
+            }
+        };
+
+        Self {
+            outcome: outcome_str,
+            can_release_goods_automatically: v.can_release_goods_automatically,
+            requires_merchant_approval: v.requires_merchant_approval,
+            is_goods_release_authorized: v.is_goods_release_authorized,
+            merchant_warning: v.merchant_warning,
+        }
+    }
+}

@@ -269,6 +269,7 @@ pub struct ReceiveSuccessPayload {
     pub involved_vouchers_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
     pub verifiable_conflicts: std::collections::HashMap<String, Vec<human_money_core::models::conflict::TransactionFingerprint>>,
     pub conflict_summaries: Vec<crate::models::FrontendProofOfDoubleSpendSummary>,
+    pub checkout_verdict: Option<crate::models::FrontendCheckoutReleaseVerdict>,
 }
 
 #[derive(Serialize, Clone, Debug)]

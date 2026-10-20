@@ -25,4 +25,71 @@ describe('ReceiveSuccessView payment evidence', () => {
     render(<ReceiveSuccessView payload={{ ...payload, verifiableConflicts: { conflict: [] } }} onDone={vi.fn()} />);
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('conflict');
   });
+
+  it('releases goods automatically only on verified Confirmed checkout verdict', () => {
+    render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          checkoutVerdict: {
+            outcome: 'Confirmed',
+            canReleaseGoodsAutomatically: true,
+            requiresMerchantApproval: false,
+            isGoodsReleaseAuthorized: true,
+          },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('final');
+    expect(screen.getByTestId('goods-release-card')).toHaveTextContent(/Goods Release Authorized|Warenfreigabe erteilt/i);
+    expect(screen.getByText('14/20 BFT')).toBeInTheDocument();
+  });
+
+  it('requires explicit merchant approval for Provisional checkout and does not auto-release', () => {
+    render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          checkoutVerdict: {
+            outcome: 'Provisional',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: true,
+            isGoodsReleaseAuthorized: false,
+            merchantWarning: 'Provisional quorum registered',
+          },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('provisional');
+    expect(screen.getByTestId('goods-release-card')).toHaveTextContent(/Manual Merchant Approval Required|Manuelle Händlerfreigabe/i);
+    const approveBtn = screen.getByTestId('merchant-approve-btn');
+    expect(approveBtn).toBeInTheDocument();
+
+    // Click explicit merchant approval button
+    fireEvent.click(approveBtn);
+    expect(screen.getByTestId('merchant-approved-badge')).toBeInTheDocument();
+  });
+
+  it('blocks goods release on Quarantined double-spend collision', () => {
+    render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          checkoutVerdict: {
+            outcome: 'Quarantined:Double spend detected',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: false,
+            isGoodsReleaseAuthorized: false,
+            merchantWarning: 'Double-spend detected',
+          },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('conflict');
+    expect(screen.getByTestId('goods-release-card')).toHaveTextContent(/Goods Release Blocked|Warenfreigabe blockiert/i);
+    expect(screen.queryByTestId('merchant-approve-btn')).not.toBeInTheDocument();
+  });
 });

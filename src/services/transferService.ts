@@ -105,5 +105,44 @@ export const transferService = {
 
     getEventHistory: async (offset: number, limit: number) => {
         return await invoke<WalletEvent[]>("get_event_history", { offset, limit });
+    },
+
+    verifyLiveCheckoutAndRelease: async (proofJson: string, expectedContextJson: string, explicitMerchantApproval: boolean = false) => {
+        return await invoke<import("../types").CheckoutReleaseVerdict>("verify_live_checkout_and_release", {
+            proofJson,
+            expectedContextJson,
+            explicitMerchantApproval,
+        });
+    },
+
+    evaluateCheckoutRelease: async (outcome: string, explicitMerchantApproval: boolean = false) => {
+        return await invoke<import("../types").CheckoutReleaseVerdict>("evaluate_checkout_release", {
+            outcome,
+            explicitMerchantApproval,
+        });
+    },
+
+    verifyCheckoutResponseWithAuthority: async (args: {
+        localId: string;
+        responseBytes: number[];
+        network: number;
+        shardId: number;
+        parentLockHex: string;
+        childLockHex: string;
+        committeePubkeysHex: string[];
+        explicitMerchantApproval?: boolean;
+        password?: string;
+    }) => {
+        return await invoke<import("../types").CheckoutReleaseVerdict>("verify_checkout_response_with_authority", {
+            localId: args.localId,
+            responseBytes: args.responseBytes,
+            network: args.network,
+            shardId: args.shardId,
+            parentLockHex: args.parentLockHex,
+            childLockHex: args.childLockHex,
+            committeePubkeysHex: args.committeePubkeysHex,
+            explicitMerchantApproval: args.explicitMerchantApproval ?? false,
+            password: args.password,
+        });
     }
 };

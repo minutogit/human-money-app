@@ -138,6 +138,7 @@ pub fn run() {
             get_active_asset_classes,
             create_new_voucher, create_transfer_bundle, receive_bundle, save_transaction_record,
             get_transaction_history, prepare_transfer_plan, rank_vouchers_for_recipient,
+            verify_live_checkout_and_release, evaluate_checkout_release, verify_checkout_response_with_authority,
             get_app_settings, save_app_settings,
             update_user_profile,
             log_to_backend,

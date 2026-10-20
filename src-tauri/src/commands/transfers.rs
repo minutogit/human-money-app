@@ -4,6 +4,7 @@ use crate::{
         CreateBundleResult, FrontendRankedVoucher, FrontendTransferPlan,
         FrontendSourceTransfer, FrontendTransactionRecord,
         ReceiveSuccessPayload, TransactionRecord, FrontendError,
+        FrontendCheckoutReleaseVerdict,
     },
     AppState,
 };
@@ -134,6 +135,7 @@ pub fn receive_bundle(
                 involved_vouchers_details: involved_vouchers_details.into_iter().map(|d| d.into()).collect(),
                 verifiable_conflicts: result.check_result.verifiable_conflicts,
                 conflict_summaries: service.list_conflicts().map_err(FrontendError::from)?.into_iter().map(|s| s.into()).collect(),
+                checkout_verdict: None,
             })
         }
         Err(e) => {
@@ -200,4 +202,109 @@ pub fn rank_vouchers_for_recipient(
         .map_err(FrontendError::from)?
         .map_err(FrontendError::from)?;
     Ok(ranked.into_iter().map(|r| r.into()).collect())
+}
+
+#[tauri::command]
+pub fn verify_live_checkout_and_release(
+    proof_json: String,
+    expected_context_json: String,
+    explicit_merchant_approval: bool,
+    state: tauri::State<AppState>,
+) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
+    info!("Verifying live checkout proof with recipient challenge binding...");
+    let service = state.service.lock().unwrap();
+
+    let proof: human_money_core::humoco_proto::live::LiveStateProof = serde_json::from_str(&proof_json)
+        .map_err(|e| FrontendError::from(format!("Failed to parse LiveStateProof: {}", e)))?;
+    let expected: human_money_core::humoco_proto::live::LiveStateContext = serde_json::from_str(&expected_context_json)
+        .map_err(|e| FrontendError::from(format!("Failed to parse LiveStateContext: {}", e)))?;
+
+    let verdict = service.verify_live_checkout_proof(&proof, &expected, explicit_merchant_approval)
+        .map_err(FrontendError::from)?;
+
+    Ok(verdict.into())
+}
+
+#[tauri::command]
+pub fn evaluate_checkout_release(
+    outcome: String,
+    explicit_merchant_approval: bool,
+    state: tauri::State<AppState>,
+) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
+    let service = state.service.lock().unwrap();
+    let l2_outcome = match outcome.as_str() {
+        "Confirmed" => human_money_core::models::layer2_api::L2ProcessingOutcome::Confirmed,
+        "Found" => human_money_core::models::layer2_api::L2ProcessingOutcome::Found,
+        "Provisional" => human_money_core::models::layer2_api::L2ProcessingOutcome::Provisional,
+        s if s.starts_with("Quarantined") => human_money_core::models::layer2_api::L2ProcessingOutcome::Quarantined {
+            reason: s.strip_prefix("Quarantined:").unwrap_or("Conflict").to_string(),
+        },
+        s if s.starts_with("SyncRequired") => human_money_core::models::layer2_api::L2ProcessingOutcome::SyncRequired {
+            sync_point: s.strip_prefix("SyncRequired:").unwrap_or("0").to_string(),
+        },
+        _ => human_money_core::models::layer2_api::L2ProcessingOutcome::Found,
+    };
+
+    let verdict = service.evaluate_checkout_release(l2_outcome, explicit_merchant_approval);
+    Ok(verdict.into())
+}
+
+#[tauri::command]
+pub fn verify_checkout_response_with_authority(
+    local_id: String,
+    response_bytes: Vec<u8>,
+    network: u8,
+    shard_id: u16,
+    parent_lock_hex: String,
+    child_lock_hex: String,
+    committee_pubkeys_hex: Vec<String>,
+    explicit_merchant_approval: bool,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
+    info!("Verifying checkout response with authority for voucher {}", local_id);
+    let mut service = state.service.lock().unwrap();
+
+    let parent_lock = human_money_core::hex::decode(&parent_lock_hex)
+        .map_err(|e| FrontendError::from(format!("Invalid parent_lock hex: {}", e)))?;
+    let child_lock = human_money_core::hex::decode(&child_lock_hex)
+        .map_err(|e| FrontendError::from(format!("Invalid child_lock hex: {}", e)))?;
+    if parent_lock.len() != 32 || child_lock.len() != 32 {
+        return Err(FrontendError::from("Locks must be 32 bytes".to_string()));
+    }
+
+    let mut committee = Vec::new();
+    for pk_hex in committee_pubkeys_hex {
+        let pk_bytes = human_money_core::hex::decode(&pk_hex)
+            .map_err(|e| FrontendError::from(format!("Invalid committee pubkey hex: {}", e)))?;
+        if pk_bytes.len() != 32 {
+            return Err(FrontendError::from("Committee keys must be 32 bytes".to_string()));
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&pk_bytes);
+        committee.push(arr);
+    }
+
+    let mut p_arr = [0u8; 32];
+    p_arr.copy_from_slice(&parent_lock);
+    let mut c_arr = [0u8; 32];
+    c_arr.copy_from_slice(&child_lock);
+
+    let authority = human_money_core::services::l2_gateway::CheckoutAuthority {
+        network,
+        shard_id,
+        parent_lock: p_arr,
+        child_lock: c_arr,
+        committee,
+    };
+
+    let verdict = service.verify_checkout_response_with_authority(
+        local_id,
+        &response_bytes,
+        password.as_deref(),
+        authority,
+        explicit_merchant_approval,
+    ).map_err(FrontendError::from)?;
+
+    Ok(verdict.into())
 }
