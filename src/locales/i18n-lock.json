@@ -2821,6 +2821,15 @@
       "it": "ai-translated"
     }
   },
+  "error.network.l2Offline": {
+    "source_text": "Offline: No Layer 2 node is reachable. The transfer cannot be confirmed by the network. Check your server settings or try again later.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "error.security.rollbackDetected": {
     "source_text": "Critical: Wallet state manipulation or outdated backup detected.",
     "status": {

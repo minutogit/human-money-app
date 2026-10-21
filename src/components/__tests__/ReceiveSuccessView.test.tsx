@@ -131,4 +131,26 @@ describe('ReceiveSuccessView payment evidence', () => {
     expect(screen.getByTestId('goods-release-card')).toHaveTextContent(/WARE NICHT HERAUSGEBEN|DO NOT HAND OVER GOODS|Ware keinesfalls herausgeben/i);
     expect(screen.queryByTestId('merchant-approve-btn')).not.toBeInTheDocument();
   });
+
+  it('does not authorize automatic release or final status if outcome is Confirmed without live proof', () => {
+    render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          checkoutVerdict: {
+            outcome: 'Confirmed',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: true,
+            isGoodsReleaseAuthorized: false,
+            merchantWarning: 'Keine Server-Verbindung vorhanden.',
+          },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('unverified');
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('○○');
+    expect(screen.queryByTestId('l2-quorum-count')).not.toBeInTheDocument();
+    expect(screen.getByTestId('merchant-approve-btn')).toBeInTheDocument();
+  });
 });

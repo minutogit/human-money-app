@@ -293,6 +293,7 @@
   "error.conflict.doubleSpendBlocked": "Double spend attempt was blocked for this voucher.",
   "error.conflict.voucherQuarantined": "This voucher is quarantined due to a detected double-spend conflict.",
   "error.internal.unknown": "An unexpected error occurred.",
+  "error.network.l2Offline": "Offline: No Layer 2 node is reachable. The transfer cannot be confirmed by the network. Check your server settings or try again later.",
   "error.security.rollbackDetected": "Critical: Wallet state manipulation or outdated backup detected.",
   "error.security.sealRecoveryRequired": "Security Alert: No local security seal found. Recovery is required.",
   "error.security.walletLockedDueToFork": "Security Lockdown: Wallet is locked due to a detected fork. Recovery required.",

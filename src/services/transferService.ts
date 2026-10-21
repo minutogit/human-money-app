@@ -107,11 +107,12 @@ export const transferService = {
         return await invoke<WalletEvent[]>("get_event_history", { offset, limit });
     },
 
-    verifyLiveCheckoutAndRelease: async (proofJson: string, expectedContextJson: string, explicitMerchantApproval: boolean = false) => {
+    verifyLiveCheckoutAndRelease: async (proofJson: string, expectedContextJson: string, explicitMerchantApproval: boolean = false, password?: string | null) => {
         return await invoke<import("../types").CheckoutReleaseVerdict>("verify_live_checkout_and_release", {
             proofJson,
             expectedContextJson,
             explicitMerchantApproval,
+            password: password ?? null,
         });
     },
 

@@ -291,6 +291,7 @@
   "error.conflict.doubleSpendBlocked": "La tentative de double dépense a été bloquée pour ce titre.",
   "error.conflict.voucherQuarantined": "Ce titre est mis en quarantaine en raison d'un conflit de double dépense détecté.",
   "error.internal.unknown": "Une erreur inattendue s'est produite.",
+  "error.network.l2Offline": "Hors ligne : aucun nœud de couche 2 n'est joignable. Le transfert ne peut pas être confirmé par le réseau. Vérifie tes paramètres de serveur ou réessaie plus tard.",
   "error.security.rollbackDetected": "Critique : Manipulation de l'état du portefeuille ou sauvegarde obsolète détectée.",
   "error.security.sealRecoveryRequired": "Alerte de sécurité : Aucun sceau de sécurité local trouvé. Une récupération est requise.",
   "error.security.walletLockedDueToFork": "Verrouillage de sécurité : Le portefeuille est verrouillé en raison d'un fork détecté. Récupération requise.",

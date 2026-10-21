@@ -291,6 +291,7 @@
   "error.conflict.doubleSpendBlocked": "Tentativo di doppia spesa bloccato per questo voucher.",
   "error.conflict.voucherQuarantined": "Questo voucher è in quarantena a causa di un conflitto di doppia spesa rilevato.",
   "error.internal.unknown": "Si è verificato un errore imprevisto.",
+  "error.network.l2Offline": "Offline: nessun nodo di Livello 2 raggiungibile. Il trasferimento non può essere confermato dalla rete. Controlla le impostazioni dei server o riprova più tardi.",
   "error.security.rollbackDetected": "Critico: Rilevata manipolazione dello stato del wallet o backup obsoleto.",
   "error.security.sealRecoveryRequired": "Avviso di Sicurezza: Nessun sigillo di sicurezza locale trovato. È necessario il recupero.",
   "error.security.walletLockedDueToFork": "Blocco di Sicurezza: Il wallet è bloccato a causa di un fork rilevato. Recupero necessario.",

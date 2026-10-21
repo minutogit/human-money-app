@@ -291,6 +291,7 @@
   "error.conflict.doubleSpendBlocked": "El intento de doble gasto fue bloqueado para este voucher.",
   "error.conflict.voucherQuarantined": "Este voucher está en cuarentena debido a un conflicto de doble gasto detectado.",
   "error.internal.unknown": "Ocurrió un error inesperado.",
+  "error.network.l2Offline": "Sin conexión: No hay ningún nodo de Capa 2 accesible. La transferencia no puede ser confirmada por la red. Revisa la configuración de servidores o inténtalo de nuevo más tarde.",
   "error.security.rollbackDetected": "Crítico: Se detectó manipulación del estado de la billetera o copia de seguridad desactualizada.",
   "error.security.sealRecoveryRequired": "Alerta de Seguridad: No se encontró sello de seguridad local. Se requiere recuperación.",
   "error.security.walletLockedDueToFork": "Bloqueo de Seguridad: La billetera está bloqueada debido a una bifurcación detectada. Se requiere recuperación.",

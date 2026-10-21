@@ -1,5 +1,6 @@
 // src-tauri/src/commands/transfers.rs
 use crate::{
+    commands::settings_cmd,
     models::{
         CreateBundleResult, FrontendRankedVoucher, FrontendTransferPlan,
         FrontendSourceTransfer, FrontendTransactionRecord,
@@ -9,17 +10,83 @@ use crate::{
     AppState,
 };
 use chrono::Utc;
-use log::{info, error};
+use log::{info, error, warn};
 use uuid::Uuid;
 use std::collections::HashMap;
 use human_money_core::{
+    app_service::AppService,
     archive::FileVoucherArchive,
+    humoco_proto::live::{LiveStateContext, LiveStateProof},
+    models::layer2_api::L2ProcessingOutcome,
     wallet::{MultiTransferRequest, SourceTransfer},
 };
 
+/// i18n key for the "no reachable L2 node" condition.
+const ERR_L2_OFFLINE: &str = "error.network.l2Offline";
+
+/// Pre-flight Layer 2 connectivity gate (M6.1).
+///
+/// The wallet is offline-first: a transfer bundle is created locally and stays
+/// cryptographically valid without any network. Therefore the connectivity check
+/// is only *enforced* when the user pinned the app to their own L2 servers
+/// (`exclusive_custom_servers`). In that mode the pinned infrastructure is the
+/// only possible source of confirmations — an unreachable set means the payment
+/// could never be confirmed by the network, so the user is told about the
+/// offline state instead of silently degrading to an unconfirmable transfer.
+///
+/// In every other mode the PEX/seed fallback of the resolver stays available and
+/// offline transfers remain possible, so no error is raised.
+async fn ensure_l2_connectivity(state: &AppState) -> Result<(), FrontendError> {
+    let settings = match state.get_cached_settings() {
+        Ok(settings) => settings,
+        Err(e) => {
+            // Settings cache is not initialized (e.g. no active session yet).
+            // The wallet lock produces the proper error later, so do not block here.
+            warn!("L2 connectivity check skipped, settings unavailable: {}", e);
+            return Ok(());
+        }
+    };
+
+    if !settings.exclusive_custom_servers {
+        // Not pinned to custom servers: offline transfers are explicitly supported.
+        return Ok(());
+    }
+
+    let reachable = settings_cmd::resolve_active_l2_nodes_internal(&settings).await;
+
+    if reachable.is_empty() {
+        let configured = settings
+            .custom_servers
+            .iter()
+            .filter(|s| s.is_active && !s.url.trim().is_empty())
+            .count();
+        error!(
+            "L2 connectivity check failed: no reachable node in exclusive custom server mode ({} configured)",
+            configured
+        );
+        let mut details = HashMap::new();
+        details.insert("configuredServers".to_string(), configured.to_string());
+        return Err(FrontendError {
+            code: ERR_L2_OFFLINE.to_string(),
+            message: format!(
+                "Offline: No Layer 2 node is reachable ({} configured custom server(s) in exclusive mode). \
+                 The transfer cannot be confirmed by the network. Check your server settings or disable the exclusive custom server mode.",
+                configured
+            ),
+            details,
+        });
+    }
+
+    info!(
+        "L2 connectivity check passed: {} node(s) reachable",
+        reachable.len()
+    );
+    Ok(())
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn create_transfer_bundle(
+pub async fn create_transfer_bundle(
     recipient_id: String,
     sources: Vec<FrontendSourceTransfer>,
     notes: Option<String>,
@@ -27,13 +94,18 @@ pub fn create_transfer_bundle(
     standard_definitions_toml: HashMap<String, String>,
     use_privacy_mode: Option<bool>,
     password: Option<String>,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<CreateBundleResult, FrontendError> {
     let recipient_id = recipient_id.trim().to_string();
     info!(
         "Attempting to create a transfer bundle for recipient: {}",
         recipient_id
     );
+
+    // M6.1: Pre-flight L2 connectivity gate. This must happen before the service
+    // lock is taken, because the resolver performs network requests.
+    ensure_l2_connectivity(&state).await?;
+
     let mut service = state.service.lock().unwrap();
 
     let source_transfers = sources
@@ -204,27 +276,146 @@ pub fn rank_vouchers_for_recipient(
     Ok(ranked.into_iter().map(|r| r.into()).collect())
 }
 
+/// Builds the transaction-history record for a verified live checkout (M6.2).
+///
+/// The record is the audit trail of a goods release that was authorized by a
+/// live, recipient-challenge-bound L2 quorum proof. The locally stored voucher
+/// (resolved through the L2 voucher id of the live context) contributes amount,
+/// unit and counterparty, while the live context itself contributes the
+/// confirmed successor transaction (`child_lock`).
+fn build_verified_checkout_record(
+    service: &AppService,
+    proof: &LiveStateProof,
+) -> TransactionRecord {
+    let context: &LiveStateContext = &proof.context;
+
+    // Resolve the local voucher instance the live proof refers to.
+    let resolved = service
+        .with_wallet(|w| {
+            w.voucher_store
+                .vouchers
+                .iter()
+                .find(|(_, instance)| {
+                    instance
+                        .voucher
+                        .transactions
+                        .first()
+                        .and_then(|tx| {
+                            human_money_core::services::l2_gateway::calculate_layer2_voucher_id(tx).ok()
+                        })
+                        .map(|l2_voucher_id| l2_voucher_id == context.voucher_id)
+                        .unwrap_or(false)
+                })
+                .map(|(local_id, instance)| (local_id.clone(), instance.voucher.clone()))
+        })
+        .ok()
+        .flatten();
+
+    let own_user_id = service
+        .with_wallet(|w| w.get_user_id().to_string())
+        .unwrap_or_default();
+
+    // The immediate sender (payer) of the voucher, if it can be resolved locally.
+    let sender_id = resolved.as_ref().and_then(|(local_id, _)| {
+        service
+            .with_wallet_and_identity(|w, identity| w.get_voucher_source_sender(local_id, identity))
+            .ok()
+            .and_then(|sender| sender.ok())
+            .flatten()
+    });
+
+    let (amount, unit) = resolved
+        .as_ref()
+        .and_then(|(_, voucher)| {
+            let amount = voucher.transactions.last().map(|tx| tx.amount.clone())?;
+            let unit = voucher.nominal_value.unit.clone();
+            Some((amount, unit))
+        })
+        .unwrap_or_else(|| (String::new(), String::new()));
+
+    let mut summable_amounts = HashMap::new();
+    if !amount.is_empty() && !unit.is_empty() {
+        summable_amounts.insert(unit, amount);
+    }
+
+    let notes = format!(
+        "Verified live checkout: goods release authorized by L2 quorum proof ({}/20 votes, shard {}).",
+        proof.votes.len(),
+        context.shard_id
+    );
+
+    TransactionRecord {
+        id: Uuid::new_v4().to_string(),
+        direction: "received".to_string(),
+        recipient_id: own_user_id,
+        sender_id: sender_id.unwrap_or_default(),
+        timestamp: Utc::now().to_rfc3339(),
+        summable_amounts,
+        countable_items: HashMap::new(),
+        involved_vouchers: resolved
+            .as_ref()
+            .map(|(local_id, _)| vec![local_id.clone()])
+            .unwrap_or_default(),
+        involved_sources_details: None,
+        bundle_data: Vec::new(),
+        bundle_id: human_money_core::hex::encode(context.child_lock),
+        notes: Some(notes),
+        sender_profile_name: None,
+    }
+}
+
 #[tauri::command]
 pub fn verify_live_checkout_and_release(
     proof_json: String,
     expected_context_json: String,
     explicit_merchant_approval: bool,
+    password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
     info!("Verifying live checkout proof with recipient challenge binding...");
-    let service = state.service.lock().unwrap();
+    let mut service = state.service.lock().unwrap();
 
-    let proof: human_money_core::humoco_proto::live::LiveStateProof = serde_json::from_str(&proof_json)
+    let proof: LiveStateProof = serde_json::from_str(&proof_json)
         .map_err(|e| FrontendError::from(format!("Failed to parse LiveStateProof: {}", e)))?;
-    let expected: human_money_core::humoco_proto::live::LiveStateContext = serde_json::from_str(&expected_context_json)
+    let expected: LiveStateContext = serde_json::from_str(&expected_context_json)
         .map_err(|e| FrontendError::from(format!("Failed to parse LiveStateContext: {}", e)))?;
 
     let verdict = service.verify_live_checkout_proof(&proof, &expected, explicit_merchant_approval)
         .map_err(FrontendError::from)?;
 
+    // M6.2: A goods release that is authorized by a verified live quorum proof is
+    // persisted in the transaction history. Without that record the release decision
+    // would leave no audit trail at all. The write is fail-closed on purpose: if the
+    // record cannot be stored, the release is not handed out to the frontend.
+    let goods_release_authorized = verdict.is_goods_release_authorized
+        && verdict.can_release_goods_automatically
+        && matches!(verdict.outcome, L2ProcessingOutcome::Confirmed);
+
+    if goods_release_authorized {
+        let record = build_verified_checkout_record(&service, &proof);
+        info!(
+            "Persisting verified checkout record {} in the transaction history",
+            record.id
+        );
+        state
+            .append_to_history(&mut service, record, password.as_deref())
+            .map_err(FrontendError::from)?;
+    }
+
     Ok(verdict.into())
 }
 
+/// Evaluates a goods release verdict for a caller-supplied outcome string.
+///
+/// # Caller-supplied outcomes never authorize automatic goods release
+///
+/// The `outcome` string is untrusted input. It must never be promoted to
+/// [`L2ProcessingOutcome::Confirmed`](human_money_core::models::layer2_api::L2ProcessingOutcome::Confirmed),
+/// because that variant is reserved for a live, recipient-challenge-bound quorum proof.
+/// Therefore `"Confirmed"` is mapped to `Found`, and the returned verdict is defensively
+/// forced to `can_release_goods_automatically == false`.
+///
+/// Only [`verify_live_checkout_and_release`] may authorize automatic goods release.
 #[tauri::command]
 pub fn evaluate_checkout_release(
     outcome: String,
@@ -233,7 +424,9 @@ pub fn evaluate_checkout_release(
 ) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
     let service = state.service.lock().unwrap();
     let l2_outcome = match outcome.as_str() {
-        "Confirmed" => human_money_core::models::layer2_api::L2ProcessingOutcome::Confirmed,
+        // Defensive: a raw caller string is never proof of a live, challenge-bound
+        // quorum, so it must not be promoted to `Confirmed`.
+        "Confirmed" => human_money_core::models::layer2_api::L2ProcessingOutcome::Found,
         "Found" => human_money_core::models::layer2_api::L2ProcessingOutcome::Found,
         "Provisional" => human_money_core::models::layer2_api::L2ProcessingOutcome::Provisional,
         s if s.starts_with("Quarantined") => human_money_core::models::layer2_api::L2ProcessingOutcome::Quarantined {
@@ -245,11 +438,15 @@ pub fn evaluate_checkout_release(
         _ => human_money_core::models::layer2_api::L2ProcessingOutcome::Found,
     };
 
-    let verdict = service.evaluate_checkout_release(l2_outcome, explicit_merchant_approval);
+    let mut verdict = service.evaluate_checkout_release(l2_outcome, explicit_merchant_approval);
+    // Defensive: only `verify_live_checkout_and_release` may authorize automatic goods
+    // release, so a caller-provided outcome must never enable it.
+    verdict.can_release_goods_automatically = false;
     Ok(verdict.into())
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn verify_checkout_response_with_authority(
     local_id: String,
     response_bytes: Vec<u8>,

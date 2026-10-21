@@ -3,10 +3,22 @@ project: human-money-app
 version: "0.2.1"
 phase: "beta"
 health: "yellow"
-last_updated: "2026-10-20"
+last_updated: "2026-10-21"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-036"
+    title: "L2 Connectivity Pre-Flight & Verified Checkout Audit Trail (M6.1 / M6.2)"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "M6.1: `create_transfer_bundle` now performs a pre-flight L2 connectivity check via `settings_cmd::resolve_active_l2_nodes_internal` with the cached settings. In exclusive custom server mode, zero reachable nodes aborts the send with the structured error `error.network.l2Offline` (new i18n key in EN/DE/ES/FR/IT) instead of silently degrading to an unconfirmable transfer; offline-first transfers remain untouched in all other modes. M6.2: `verify_live_checkout_and_release` persists a verified checkout record (resolved local voucher, amount/unit, payer, confirmed child lock, quorum vote count) in the transaction history via `state.append_to_history` whenever the live quorum proof authorizes the goods release. The persistence is fail-closed: a release is not handed out when it cannot be recorded."
+  - id: "APP-035"
+    title: "Prevent automatic goods release via caller-supplied outcome"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Fixed Finding F02 in the Tauri bridge (`evaluate_checkout_release`): an untrusted, caller-provided raw outcome string could be mapped to `L2ProcessingOutcome::Confirmed` and thereby authorize automatic goods release. The raw string \"Confirmed\" is now mapped to `Found`, and the returned verdict is defensively forced to `can_release_goods_automatically == false`. Only `verify_live_checkout_and_release` (live, recipient-challenge-bound quorum proof) may authorize automatic goods release."
   - id: "APP-034"
     title: "Prevent unverified L2 payment confirmation"
     status: "completed"
@@ -240,6 +252,8 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Recent Milestones
 
+- [x] Implemented M6.1 (L2 connectivity pre-flight) and M6.2 (verified checkout audit trail): `create_transfer_bundle` is now an async command that checks the reachability of the active L2 nodes before a bundle is created and reports an informative offline error (`error.network.l2Offline`) when the app is pinned to custom servers and none of them is reachable. `verify_live_checkout_and_release` writes a transaction-history record for every goods release that was authorized by a live, recipient-challenge-bound quorum proof, so a release decision always leaves an auditable trail.
+- [x] Fixed Finding F02 (automatic goods release via caller-supplied outcome): the Tauri command `evaluate_checkout_release` mapped the untrusted raw outcome string `"Confirmed"` to `L2ProcessingOutcome::Confirmed`, which `CheckoutReleaseVerdict::new` turns into `can_release_goods_automatically == true` — letting any frontend caller bypass live-proof verification and unlock automatic goods release. The raw string is now mapped to `Found`, the returned verdict is defensively forced to `can_release_goods_automatically == false`, and the invariant is documented on the command. Only `verify_live_checkout_and_release` may authorize automatic goods release.
 - [x] Migrated to human_money_core v0.3.0 and bumped app version to 0.2.0: adapted AppFacadeError variants, converted read-only queries to with_wallet / with_wallet_and_identity, upgraded TrapData to V3 SST protocol (trap_r, trap_s), integrated concrete FileVoucherArchive, and maintained backward compatibility for voucher standard templates in frontend models.
 - [x] Hardened seed/mnemonic input sanitization and cleaned up recovery views: created a centralized `cleanSeedText` utility (`src/utils/seedUtils.ts`) that sanitizes BIP-39 seed input (lowercasing, removing digits, punctuation like commas/dots/dashes/colons, tabs, newlines, and collapsing multiple spaces). Unified and refactored `CreateNewProfile.tsx`, `RecreateProfile.tsx`, and `WalletRecovery.tsx` to utilize this shared utility for both phrase (textarea) and words (individual inputs) modes, backed by a comprehensive unit test suite (`seedUtils.test.ts`).
 - [x] Fixed app hang on wrong password entry in `ReceiveView`: updated early-return paths in the catch block to explicitly reset the processing state and simplified the finally block to always call `setIsProcessing(false)` without relying on stale closures. Added comprehensive Vitest unit tests verifying button responsiveness during single and multiple failed password entry attempts.

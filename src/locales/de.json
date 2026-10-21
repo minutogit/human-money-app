@@ -293,6 +293,7 @@
   "error.conflict.doubleSpendBlocked": "Double-Spend-Versuch wurde für diesen Gutschein blockiert.",
   "error.conflict.voucherQuarantined": "Dieser Gutschein befindet sich aufgrund eines erkannten Double-Spend-Konflikts in Quarantäne.",
   "error.internal.unknown": "Ein unerwarteter Fehler ist aufgetreten.",
+  "error.network.l2Offline": "Offline: Kein Layer-2-Knoten erreichbar. Die Übertragung kann vom Netzwerk nicht bestätigt werden. Prüfe deine Server-Einstellungen oder versuche es später erneut.",
   "error.security.rollbackDetected": "Kritisch: Wallet-Zustandsmanipulation oder veraltetes Backup erkannt.",
   "error.security.sealRecoveryRequired": "Sicherheitswarnung: Kein lokales Sicherheitssiegel gefunden. Wiederherstellung erforderlich.",
   "error.security.walletLockedDueToFork": "Sicherheitssperre: Wallet aufgrund eines erkannten Forks gesperrt. Wiederherstellung erforderlich.",
