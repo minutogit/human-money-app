@@ -17,7 +17,8 @@ import {
     AlertTriangle,
     Layers,
     UserX,
-    Info
+    Info,
+    WifiOff
 } from "lucide-react";
 
 interface ReceiveSuccessViewProps {
@@ -63,9 +64,10 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
         : false;
 
     const checkoutVerdict = payload.checkoutVerdict;
-    const isConfirmed = checkoutVerdict?.outcome === 'Confirmed';
+    const outcome = checkoutVerdict?.outcome;
+    const isConfirmed = outcome === 'Confirmed';
     const isQuarantined = isVictim || (checkoutVerdict ? checkoutVerdict.outcome.startsWith('Quarantined') : false);
-    const isProvisional = checkoutVerdict?.outcome === 'Provisional';
+    const isProvisional = outcome === 'Provisional';
 
     // Only a verified Confirmed checkout verdict with full 14/20 quorum can yield 'final'.
     // Unverified bundle import or raw response DTOs must never confirm payment or release goods.
@@ -127,8 +129,46 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                     </div>
                 )}
 
-                {/* Layer 2 Reifegrad-Ampel at POS */}
-                <L2QuorumBadge quorum={l2Quorum} isVerifiedCheckout={Boolean(checkoutVerdict)} />
+                {/* 2-Pillar Security Verification: L1 Voucher Authenticity & L2 Network Protection */}
+                <div className="space-y-3" data-testid="two-pillar-security">
+                    {/* Säule 1: Gutschein-Echtheit (L1) */}
+                    <div 
+                        data-testid="pillar-1-l1"
+                        className="p-3.5 sm:p-4 rounded-3xl bg-white border border-emerald-200/80 shadow-xs flex items-center justify-between gap-3"
+                    >
+                        <div className="flex items-center gap-3 min-w-0">
+                            <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-600 shrink-0">
+                                <ShieldCheck size={20} />
+                            </div>
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-xs font-bold uppercase tracking-wider text-theme-secondary">
+                                        {t('transfer.pillars.l1Title', '1. Gutschein-Echtheit (L1)')}
+                                    </span>
+                                    <span className="inline-flex items-center gap-1 rounded-full text-[10px] px-2 py-0.5 font-bold uppercase tracking-wider bg-emerald-600 text-white">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                                        {isVictim ? t('transfer.pillars.l1FormatOnly', 'Format intakt') : t('transfer.pillars.l1Valid', 'Echt & gültig')}
+                                    </span>
+                                </div>
+                                <p className="text-[11px] font-medium text-emerald-800 truncate">
+                                    {isVictim 
+                                        ? t('transfer.pillars.l1DescVictim', 'Schein-Format mathematisch intakt (aber im Netzwerk als Doppelausgabe blockiert)')
+                                        : t('transfer.pillars.l1Desc', 'Schein mathematisch echt & unverfälscht (100 % offline geprüft)')}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="hidden sm:flex items-center text-emerald-600 shrink-0 pr-1">
+                            <CheckCircle2 size={18} />
+                        </div>
+                    </div>
+
+                    {/* Säule 2: Netzwerkschutz (L2) */}
+                    <L2QuorumBadge 
+                        quorum={l2Quorum} 
+                        isVerifiedCheckout={Boolean(checkoutVerdict)} 
+                        pillarLabel={t('transfer.pillars.l2Prefix', '2. Netzwerkschutz (L2)')}
+                    />
+                </div>
 
                 {/* Checkout & Goods Release (Warenfreigabe) Status */}
                 {checkoutVerdict && (
@@ -138,32 +178,55 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                                 <div className="flex items-center gap-3">
                                     <CheckCircle2 className="text-emerald-600 shrink-0" size={28} />
                                     <div>
-                                        <h3 className="text-sm font-black text-emerald-950 uppercase tracking-wider">{t('transfer.checkout.goodsReleased')}</h3>
-                                        <p className="text-xs text-emerald-800 font-medium">{t('transfer.checkout.goodsReleasedDesc')}</p>
+                                        <h3 className="text-sm font-black text-emerald-950 uppercase tracking-wider">
+                                            {t('transfer.checkout.goodsReleasedConfirmed', 'Ware sicher herausgeben')}
+                                        </h3>
+                                        <p className="text-xs text-emerald-800 font-medium">
+                                            {t('transfer.checkout.goodsReleasedConfirmedDesc', 'Weltweit durch großes Server-Netzwerk final bestätigt.')}
+                                        </p>
                                     </div>
                                 </div>
-                                <span className="text-[10px] font-mono font-bold bg-emerald-200/60 text-emerald-900 px-3 py-1.5 rounded-full uppercase tracking-wider">
-                                    14/20 BFT
+                                <span className="text-[11px] font-mono font-bold bg-emerald-200/70 text-emerald-900 px-3 py-1.5 rounded-full uppercase tracking-wider shrink-0 flex items-center gap-1.5">
+                                    <span className="text-emerald-600 font-mono">●●</span>
+                                    {t('transfer.checkout.level2Tag', 'Stufe 2')}
+                                </span>
+                            </div>
+                        ) : isProvisional ? (
+                            <div data-testid="goods-release-card" className="p-5 bg-emerald-50/80 border-2 border-emerald-200 rounded-[28px] flex items-center justify-between shadow-sm">
+                                <div className="flex items-center gap-3">
+                                    <CheckCircle2 className="text-emerald-600 shrink-0" size={28} />
+                                    <div>
+                                        <h3 className="text-sm font-black text-emerald-950 uppercase tracking-wider">
+                                            {t('transfer.checkout.goodsReleasedProvisional', 'Ware freigegeben')}
+                                        </h3>
+                                        <p className="text-xs text-emerald-800 font-medium">
+                                            {t('transfer.checkout.goodsReleasedProvisionalDesc', 'Zahlung durch Server-Netzwerk gegen Doppelausgabe gesichert.')}
+                                        </p>
+                                    </div>
+                                </div>
+                                <span className="text-[11px] font-mono font-bold bg-emerald-200/50 text-emerald-900 px-3 py-1.5 rounded-full uppercase tracking-wider shrink-0 flex items-center gap-1.5">
+                                    <span className="text-emerald-600 font-mono">●○</span>
+                                    {t('transfer.checkout.level1Tag', 'Stufe 1')}
                                 </span>
                             </div>
                         ) : isQuarantined ? (
                             <div data-testid="goods-release-card" className="p-5 bg-rose-50 border-2 border-rose-200 rounded-[28px] flex items-center gap-3 shadow-sm">
                                 <ShieldAlert className="text-rose-600 shrink-0" size={28} />
                                 <div>
-                                    <h3 className="text-sm font-black text-rose-950 uppercase tracking-wider">{t('transfer.checkout.goodsBlocked')}</h3>
-                                    <p className="text-xs text-rose-800 font-medium">{t('transfer.checkout.goodsBlockedDesc')}</p>
+                                    <h3 className="text-sm font-black text-rose-950 uppercase tracking-wider">{t('transfer.checkout.goodsBlocked', 'WARE NICHT HERAUSGEBEN!')}</h3>
+                                    <p className="text-xs text-rose-800 font-medium">{t('transfer.checkout.goodsBlockedDesc', 'Doppelausgabe erkannt! Dieser Gutschein wurde bereits anderweitig ausgegeben.')}</p>
                                 </div>
                             </div>
                         ) : (
-                            <div data-testid="goods-release-card" className="p-5 bg-amber-50 border-2 border-amber-200 rounded-[28px] space-y-3 shadow-sm">
+                            <div data-testid="goods-release-card" className="p-5 bg-slate-50 border-2 border-slate-200 rounded-[28px] space-y-3 shadow-sm">
                                 <div className="flex items-start gap-3">
-                                    <AlertTriangle className="text-amber-600 shrink-0 mt-0.5" size={24} />
+                                    <WifiOff className="text-slate-600 shrink-0 mt-0.5" size={24} />
                                     <div className="flex-1">
-                                        <h3 className="text-sm font-black text-amber-950 uppercase tracking-wider">
-                                            {manualApprovalGranted ? t('transfer.checkout.approvedManually') : t('transfer.checkout.approvalRequired')}
+                                        <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                                            {manualApprovalGranted ? t('transfer.checkout.acceptedOnTrust', 'Auf Vertrauensbasis angenommen') : t('transfer.checkout.acceptOnTrustTitle', 'Offline-Zahlung (Vertrauensbasis)')}
                                         </h3>
-                                        <p className="text-xs text-amber-800 font-medium">
-                                            {checkoutVerdict.merchantWarning || t('transfer.checkout.approvalRequiredDesc')}
+                                        <p className="text-xs text-slate-700 font-medium">
+                                            {checkoutVerdict.merchantWarning || t('transfer.checkout.acceptOnTrustDesc', 'Keine Server-Verbindung vorhanden. Zahlung basiert auf Vertrauen (z. B. Stammkunden oder Kleinstbeträge).')}
                                         </p>
                                     </div>
                                 </div>
@@ -173,14 +236,14 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                                         variant="secondary"
                                         size="sm"
                                         onClick={() => setManualApprovalGranted(true)}
-                                        className="w-full py-2.5 rounded-2xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white border-none shadow-sm"
+                                        className="w-full py-2.5 rounded-2xl text-xs font-bold bg-slate-700 hover:bg-slate-800 text-white border-none shadow-sm cursor-pointer"
                                     >
-                                        {t('transfer.checkout.approveBtn')}
+                                        {t('transfer.checkout.acceptOnTrustBtn', 'Zahlung auf Vertrauensbasis annehmen')}
                                     </Button>
                                 ) : (
                                     <div data-testid="merchant-approved-badge" className="text-xs font-bold text-emerald-700 bg-emerald-100/70 px-3 py-1.5 rounded-xl flex items-center gap-2">
                                         <CheckCircle2 size={16} />
-                                        {t('transfer.checkout.approvedManually')}
+                                        {t('transfer.checkout.acceptedOnTrust', 'Auf Vertrauensbasis angenommen')}
                                     </div>
                                 )}
                             </div>
@@ -263,7 +326,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                     <Button 
                         size="lg" 
                         onClick={onDone} 
-                        className="w-full max-w-sm py-4 rounded-3xl shadow-premium-lg text-lg gap-2"
+                        className="w-full max-w-sm py-4 rounded-3xl shadow-premium-lg text-lg gap-2 cursor-pointer"
                     >
                         {t('transfer.receiveSuccess.backToDashboard')}
                         <ArrowRight size={20} />
