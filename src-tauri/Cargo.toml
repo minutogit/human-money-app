@@ -39,6 +39,11 @@ machine-uid = "0.6"
 
 [dev-dependencies]
 tauri = { version = "~2.11", features = ["test"] }
+# Used only by the Z01 fail-closed boundary unit tests (transfers.rs) to build
+# real, correctly signed 14/20 live-state quorum proofs. Both crates are already
+# part of the dependency graph via humoco-proto, so no new packages are pulled.
+blake3 = "1.5"
+ed25519-dalek = { version = "2.1", default-features = false }
 
 [profile.dev]
 debug = 1

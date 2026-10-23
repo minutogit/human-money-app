@@ -17,7 +17,7 @@ use human_money_core::{
     app_service::AppService,
     archive::FileVoucherArchive,
     humoco_proto::live::{LiveStateContext, LiveStateProof},
-    models::layer2_api::L2ProcessingOutcome,
+    models::layer2_api::{CheckoutReleaseVerdict, L2ProcessingOutcome},
     wallet::{MultiTransferRequest, SourceTransfer},
 };
 
@@ -364,10 +364,139 @@ fn build_verified_checkout_record(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Z01 fail-closed goods-release boundary (DEC-072 / DEC-084)
+//
+// Untrusted IPC parameters alone can never mint automatic goods release
+// (`can_release_goods_automatically == true`): `evaluate_checkout_release`
+// (raw outcome strings) and `verify_live_checkout_and_release` (live quorum
+// proofs) both funnel through the fail-closed helpers below. A verified
+// live proof is only an **observation**; the boundary stays closed until
+// the backend durably commits the purchase state (Z08) and lifts it via a
+// `DurablePurchaseBinding`, which cannot be forged from IPC parameters.
+// ---------------------------------------------------------------------------
+
+/// Maps an untrusted IPC outcome string to an [`L2ProcessingOutcome`] (Z01 fail-closed).
+///
+/// The string arrives over the IPC bridge and is therefore untrusted input. It
+/// must never be promoted to [`L2ProcessingOutcome::Confirmed`]: that variant
+/// reports a live, recipient-challenge-bound 14/20 quorum proof and may only be
+/// produced by `AppService::verify_live_checkout_proof`. A caller-supplied
+/// `"Confirmed"` string (and any unrecognized string) is therefore degraded to
+/// [`L2ProcessingOutcome::Found`], the weakest unauthenticated observation.
+fn map_untrusted_outcome_str(outcome: &str) -> L2ProcessingOutcome {
+    match outcome {
+        "Found" => L2ProcessingOutcome::Found,
+        "Provisional" => L2ProcessingOutcome::Provisional,
+        s if s.starts_with("Quarantined") => L2ProcessingOutcome::Quarantined {
+            reason: s.strip_prefix("Quarantined:").unwrap_or("Conflict").to_string(),
+        },
+        s if s.starts_with("SyncRequired") => L2ProcessingOutcome::SyncRequired {
+            sync_point: s.strip_prefix("SyncRequired:").unwrap_or("0").to_string(),
+        },
+        // Defensive: a raw caller string is never proof of a live, challenge-bound
+        // quorum, so it must not be promoted to `Confirmed`.
+        _ => L2ProcessingOutcome::Found,
+    }
+}
+
+/// Evaluates a goods-release verdict from untrusted IPC parameters (Z01 fail-closed).
+///
+/// Helper of [`evaluate_checkout_release`]: the outcome string is mapped down via
+/// [`map_untrusted_outcome_str`] (a raw `"Confirmed"` becomes `Found`) and the
+/// verdict is *defensively* forced to `can_release_goods_automatically == false`,
+/// so the command can never mint automatic goods release from untrusted IPC
+/// parameters alone. Only a backend-verified `DurablePurchaseBinding` (Z08) may
+/// lift the boundary.
+fn evaluate_untrusted_checkout_release(
+    service: &AppService,
+    outcome: &str,
+    explicit_merchant_approval: bool,
+) -> FrontendCheckoutReleaseVerdict {
+    let l2_outcome = map_untrusted_outcome_str(outcome);
+    let mut verdict = service.evaluate_checkout_release(l2_outcome, explicit_merchant_approval);
+    // Defensive: only a Z08 durable purchase binding may authorize automatic goods
+    // release, so a caller-provided outcome must never enable it.
+    verdict.can_release_goods_automatically = false;
+    verdict.into()
+}
+
+/// Parses the IPC JSON payloads of [`verify_live_checkout_and_release`] (fail-closed).
+///
+/// Any malformed `proof_json` / `expected_context_json` is rejected as a
+/// [`FrontendError`] before any verification happens; parsing errors never fall
+/// back to permissive defaults.
+fn parse_live_checkout_ipc(
+    proof_json: &str,
+    expected_context_json: &str,
+) -> Result<(LiveStateProof, LiveStateContext), FrontendError> {
+    let proof = serde_json::from_str(proof_json)
+        .map_err(|e| FrontendError::from(format!("Failed to parse LiveStateProof: {}", e)))?;
+    let expected = serde_json::from_str(expected_context_json)
+        .map_err(|e| FrontendError::from(format!("Failed to parse LiveStateContext: {}", e)))?;
+    Ok((proof, expected))
+}
+
+/// Verifies a live checkout proof supplied over IPC (Z01 fail-closed boundary).
+///
+/// Helper of [`verify_live_checkout_and_release`]. The proof is verified
+/// **mathematically** (14/20 quorum signatures bound to a fresh recipient
+/// challenge), and a valid proof reports [`L2ProcessingOutcome::Confirmed`].
+/// That confirmation, however, is only an observation: the verdict is
+/// defensively clamped to `can_release_goods_automatically == false`, so
+/// automatic goods release is never minted from untrusted IPC parameters alone.
+#[cfg(test)]
+fn verify_untrusted_live_checkout(
+    service: &AppService,
+    proof_json: &str,
+    expected_context_json: &str,
+    explicit_merchant_approval: bool,
+) -> Result<(LiveStateProof, CheckoutReleaseVerdict), FrontendError> {
+    let (proof, expected) = parse_live_checkout_ipc(proof_json, expected_context_json)?;
+    let mut verdict = service
+        .verify_live_checkout_proof(&proof, &expected, explicit_merchant_approval)
+        .map_err(FrontendError::from)?;
+    // Defensive Z01 clamp: a mathematically valid 14/20 proof is an observation,
+    // not an authorization. Automatic goods release stays fail-closed until the
+    // durable purchase state (Z08) is wired.
+    verdict.can_release_goods_automatically = false;
+    Ok((proof, verdict))
+}
+
+/// Command-level persistence gate for verified checkouts (M6.2 / Z01).
+///
+/// A persisted audit record (and any automatic goods release) requires the
+/// verdict to be a `Confirmed` live proof **and** `can_release_goods_automatically
+/// == true`, i.e. a backend `DurablePurchaseBinding` (Z08). As long as Z08 is not
+/// wired, this gate is fail-closed for every verdict built from untrusted IPC
+/// parameters alone.
+fn checkout_release_gate(verdict: &CheckoutReleaseVerdict) -> bool {
+    verdict.is_goods_release_authorized
+        && verdict.can_release_goods_automatically
+        && matches!(verdict.outcome, L2ProcessingOutcome::Confirmed)
+}
+
+/// Verifies a recipient-challenge-bound L2 live checkout proof over IPC and
+/// reports the goods-release verdict.
+///
+/// # Z01 Fail-Closed Goods Release Boundary (DEC-072 / DEC-084)
+/// `verify_live_checkout_and_release` and `evaluate_checkout_release` must never
+/// mint automatic goods release (`can_release_goods_automatically == true`) from
+/// untrusted IPC parameters alone:
+/// - Malformed `proof_json` / `expected_context_json` are rejected as
+///   [`FrontendError`]s before verification ([`parse_live_checkout_ipc`]).
+/// - Even a mathematically valid live proof (14/20 quorum bound to a fresh
+///   recipient challenge) is only an **observation**; the verdict is clamped to
+///   `can_release_goods_automatically == false` ([`verify_untrusted_live_checkout`]).
+/// - The M6.2 persistence gate ([`checkout_release_gate`]) therefore stays closed
+///   until the backend durably commits the purchase state (Z08) via a
+///   `DurablePurchaseBinding`, and every IPC-only precondition test lives in the
+///   `z01_fail_closed_tests` module of this file.
 #[tauri::command]
 pub fn verify_live_checkout_and_release(
     proof_json: String,
     expected_context_json: String,
+    regional_views_json: Option<String>,
     explicit_merchant_approval: bool,
     password: Option<String>,
     state: tauri::State<AppState>,
@@ -375,23 +504,20 @@ pub fn verify_live_checkout_and_release(
     info!("Verifying live checkout proof with recipient challenge binding...");
     let mut service = state.service.lock().unwrap();
 
-    let proof: LiveStateProof = serde_json::from_str(&proof_json)
-        .map_err(|e| FrontendError::from(format!("Failed to parse LiveStateProof: {}", e)))?;
-    let expected: LiveStateContext = serde_json::from_str(&expected_context_json)
-        .map_err(|e| FrontendError::from(format!("Failed to parse LiveStateContext: {}", e)))?;
-
-    let verdict = service.verify_live_checkout_proof(&proof, &expected, explicit_merchant_approval)
+    let (proof, expected) = parse_live_checkout_ipc(&proof_json, &expected_context_json)?;
+    let views_json = regional_views_json.ok_or_else(|| FrontendError::from("Configured regional mesh views are required".to_string()))?;
+    if views_json.len() > 4 * 1024 * 1024 { return Err(FrontendError::from("Regional mesh view budget exceeded".to_string())); }
+    let views: Vec<human_money_core::humoco_proto::mesh::RegionalMeshView> = serde_json::from_str(&views_json)
+        .map_err(|_| FrontendError::from("Invalid regional mesh views".to_string()))?;
+    let now_ms = u64::try_from(Utc::now().timestamp_millis()).map_err(|_| FrontendError::from("Invalid local verification time".to_string()))?;
+    let verdict = service.verify_live_checkout_with_regional_authority(&proof, &expected, &views, now_ms, explicit_merchant_approval)
         .map_err(FrontendError::from)?;
 
     // M6.2: A goods release that is authorized by a verified live quorum proof is
     // persisted in the transaction history. Without that record the release decision
     // would leave no audit trail at all. The write is fail-closed on purpose: if the
     // record cannot be stored, the release is not handed out to the frontend.
-    let goods_release_authorized = verdict.is_goods_release_authorized
-        && verdict.can_release_goods_automatically
-        && matches!(verdict.outcome, L2ProcessingOutcome::Confirmed);
-
-    if goods_release_authorized {
+    if checkout_release_gate(&verdict) {
         let record = build_verified_checkout_record(&service, &proof);
         info!(
             "Persisting verified checkout record {} in the transaction history",
@@ -405,17 +531,23 @@ pub fn verify_live_checkout_and_release(
     Ok(verdict.into())
 }
 
-/// Evaluates a goods release verdict for a caller-supplied outcome string.
+/// Evaluates a goods release verdict for a caller-supplied outcome string (Z01 fail-closed).
 ///
 /// # Caller-supplied outcomes never authorize automatic goods release
 ///
-/// The `outcome` string is untrusted input. It must never be promoted to
-/// [`L2ProcessingOutcome::Confirmed`](human_money_core::models::layer2_api::L2ProcessingOutcome::Confirmed),
-/// because that variant is reserved for a live, recipient-challenge-bound quorum proof.
-/// Therefore `"Confirmed"` is mapped to `Found`, and the returned verdict is defensively
-/// forced to `can_release_goods_automatically == false`.
+/// The `outcome` string is untrusted IPC input. It must never be promoted to
+/// [`L2ProcessingOutcome::Confirmed`], because that variant is reserved for a live,
+/// recipient-challenge-bound quorum proof. Untrusted strings are therefore mapped
+/// down via [`map_untrusted_outcome_str`] (a raw `"Confirmed"` becomes `Found`),
+/// and the returned verdict is defensively forced to
+/// `can_release_goods_automatically == false`
+/// ([`evaluate_untrusted_checkout_release`]).
 ///
-/// Only [`verify_live_checkout_and_release`] may authorize automatic goods release.
+/// Together with [`verify_live_checkout_and_release`] this enforces the Z01
+/// fail-closed boundary: neither command can mint automatic goods release from
+/// untrusted IPC parameters alone. Only [`verify_live_checkout_and_release`]
+/// observes a mathematically verified live quorum proof, and even that remains
+/// an observation until a backend `DurablePurchaseBinding` (Z08) is presented.
 #[tauri::command]
 pub fn evaluate_checkout_release(
     outcome: String,
@@ -423,26 +555,7 @@ pub fn evaluate_checkout_release(
     state: tauri::State<AppState>,
 ) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
     let service = state.service.lock().unwrap();
-    let l2_outcome = match outcome.as_str() {
-        // Defensive: a raw caller string is never proof of a live, challenge-bound
-        // quorum, so it must not be promoted to `Confirmed`.
-        "Confirmed" => human_money_core::models::layer2_api::L2ProcessingOutcome::Found,
-        "Found" => human_money_core::models::layer2_api::L2ProcessingOutcome::Found,
-        "Provisional" => human_money_core::models::layer2_api::L2ProcessingOutcome::Provisional,
-        s if s.starts_with("Quarantined") => human_money_core::models::layer2_api::L2ProcessingOutcome::Quarantined {
-            reason: s.strip_prefix("Quarantined:").unwrap_or("Conflict").to_string(),
-        },
-        s if s.starts_with("SyncRequired") => human_money_core::models::layer2_api::L2ProcessingOutcome::SyncRequired {
-            sync_point: s.strip_prefix("SyncRequired:").unwrap_or("0").to_string(),
-        },
-        _ => human_money_core::models::layer2_api::L2ProcessingOutcome::Found,
-    };
-
-    let mut verdict = service.evaluate_checkout_release(l2_outcome, explicit_merchant_approval);
-    // Defensive: only `verify_live_checkout_and_release` may authorize automatic goods
-    // release, so a caller-provided outcome must never enable it.
-    verdict.can_release_goods_automatically = false;
-    Ok(verdict.into())
+    Ok(evaluate_untrusted_checkout_release(&service, &outcome, explicit_merchant_approval))
 }
 
 #[tauri::command]
@@ -504,4 +617,268 @@ pub fn verify_checkout_response_with_authority(
     ).map_err(FrontendError::from)?;
 
     Ok(verdict.into())
+}
+
+/// Unit tests pinning the Z01 fail-closed goods-release boundary.
+///
+/// # Z01 Fail-Closed Goods Release Boundary (DEC-072 / DEC-084)
+/// Neither [`evaluate_checkout_release`] nor [`verify_live_checkout_and_release`]
+/// may mint automatic goods release (`can_release_goods_automatically == true`)
+/// from untrusted IPC parameters alone. These tests document and enforce that:
+///
+/// 1. A caller-supplied `"Confirmed"` outcome string is downgraded to `Found`
+///    and can never produce automatic goods release.
+/// 2. Malformed `proof_json` / `expected_context_json` payloads are rejected as
+///    [`FrontendError`]s before any verification happens.
+/// 3. A mathematically valid 14/20 live proof with a fresh recipient challenge
+///    verifies positively (`Confirmed`), yet the verdict — and the M6.2
+///    persistence gate ([`checkout_release_gate`]) — stays fail-closed until the
+///    durable purchase state (Z08) is wired.
+///
+/// Because `tauri::State` cannot be constructed ad hoc, the tests exercise the
+/// exact code paths of the Tauri commands through the pure helper functions of
+/// this module (`map_untrusted_outcome_str`, `evaluate_untrusted_checkout_release`,
+/// `parse_live_checkout_ipc`, `verify_untrusted_live_checkout`).
+#[cfg(test)]
+mod z01_fail_closed_tests {
+    use super::*;
+
+    use ed25519_dalek::{Signer, SigningKey};
+    use human_money_core::humoco_proto::AttestationVote;
+    use uuid::Uuid;
+
+    /// Isolated `AppService` in a fresh temp dir. The Z01 boundary does not depend
+    /// on wallet state, so a locked service is the correct subject under test —
+    /// no unlocked wallet or runtime is required.
+    fn test_service() -> AppService {
+        let dir = std::env::temp_dir().join(format!("humoco_z01_test_{}", Uuid::new_v4()));
+        AppService::new(&dir).unwrap()
+    }
+
+    /// Builds a mathematically valid 14/20 live checkout fixture: 20 distinct
+    /// committee keys, `parent_lock = blake3(lookup_tag)` and 14 signatures over
+    /// the live-state digest bound to a fresh, non-zero recipient challenge.
+    fn build_valid_live_fixture() -> (LiveStateContext, LiveStateProof) {
+        let keys: Vec<SigningKey> = (1..=20).map(|i| SigningKey::from_bytes(&[i; 32])).collect();
+        let committee: Vec<[u8; 32]> = keys.iter().map(|k| k.verifying_key().to_bytes()).collect();
+
+        let lookup_tag = "humoco_z01_checkout".to_string();
+        let parent_lock = *blake3::hash(lookup_tag.as_bytes()).as_bytes();
+
+        let context = LiveStateContext {
+            version: 1,
+            network: 0,
+            shard_id: 5,
+            voucher_id: "v_z01_test".to_string(),
+            lookup_tag: lookup_tag.clone(),
+            parent_lock,
+            child_lock: [7; 32],
+            root_valid_until: 100_000,
+            state_digest: [8; 32],
+            recipient_nonce: [9; 32], // fresh, non-zero recipient challenge
+            committee,
+        };
+
+        let digest = human_money_core::humoco_proto::live::live_state_digest(&context).unwrap();
+        let votes: Vec<AttestationVote> = keys
+            .iter()
+            .take(14)
+            .map(|k| AttestationVote {
+                signer_pubkey: k.verifying_key().to_bytes(),
+                signature: k.sign(&digest).to_bytes(),
+            })
+            .collect();
+
+        let proof = LiveStateProof {
+            context: context.clone(),
+            votes,
+        };
+        (context, proof)
+    }
+
+    /// (1) `evaluate_checkout_release`: the caller-supplied string `"Confirmed"`
+    /// maps down to `Found` and can never mint automatic goods release, no matter
+    /// what the merchant approval flag is. Unknown strings degrade to `Found`
+    /// as well, so no IPC string can ever mint `Confirmed`.
+    #[test]
+    fn test_z01_caller_outcome_confirmed_maps_to_found_and_stays_fail_closed() {
+        // The mapping itself never mints `Confirmed`
+        assert_eq!(map_untrusted_outcome_str("Confirmed"), L2ProcessingOutcome::Found);
+        assert_eq!(map_untrusted_outcome_str("confirmed"), L2ProcessingOutcome::Found);
+        assert_eq!(map_untrusted_outcome_str("CONFIRMED/anything"), L2ProcessingOutcome::Found);
+
+        // Non-privileged outcomes round-trip untouched
+        assert_eq!(map_untrusted_outcome_str("Found"), L2ProcessingOutcome::Found);
+        assert_eq!(map_untrusted_outcome_str("Provisional"), L2ProcessingOutcome::Provisional);
+
+        let app = test_service();
+        for approval in [false, true] {
+            let verdict = evaluate_untrusted_checkout_release(&app, "Confirmed", approval);
+            assert_eq!(verdict.outcome, "Found", "Caller string must map down to Found");
+            assert!(
+                !verdict.can_release_goods_automatically,
+                "Automatic goods release must not be minted from an IPC string (Z01)"
+            );
+            assert!(verdict.requires_merchant_approval);
+            assert!(verdict.merchant_warning.is_some());
+        }
+
+        // Quarantined strings stay strictly blocked, not even manually releasable
+        let quarantined = evaluate_untrusted_checkout_release(&app, "Quarantined:collision", true);
+        assert_eq!(quarantined.outcome, "Quarantined:collision");
+        assert!(!quarantined.can_release_goods_automatically);
+        assert!(!quarantined.is_goods_release_authorized);
+    }
+
+    /// (2) Malformed `proof_json` / `expected_context_json` payloads are rejected
+    /// with a descriptive [`FrontendError`] before any verification runs
+    /// (fail-closed parsing, no silent defaults).
+    #[test]
+    fn test_z01_malformed_ipc_json_returns_frontend_error() {
+        // Malformed proof JSON
+        let err = parse_live_checkout_ipc("{ this is not json", "{}").unwrap_err();
+        assert!(err.message.contains("Failed to parse LiveStateProof"), "{}", err.message);
+        assert_eq!(err.code, "error.internal.unknown");
+
+        // Structurally serializable proof payload, but malformed context payload
+        let proof = LiveStateProof {
+            context: LiveStateContext {
+                version: 1,
+                network: 0,
+                shard_id: 0,
+                voucher_id: String::new(),
+                lookup_tag: "tag".to_string(),
+                parent_lock: [0; 32],
+                child_lock: [0; 32],
+                root_valid_until: 0,
+                state_digest: [0; 32],
+                recipient_nonce: [0; 32],
+                committee: Vec::new(),
+            },
+            votes: Vec::new(),
+        };
+        let proof_json = serde_json::to_string(&proof).unwrap();
+        let err = parse_live_checkout_ipc(&proof_json, "{ broken context").unwrap_err();
+        assert!(err.message.contains("Failed to parse LiveStateContext"), "{}", err.message);
+        assert_eq!(err.code, "error.internal.unknown");
+
+        // The same fail-closed behavior holds on the command-level helper
+        let app = test_service();
+        let result = verify_untrusted_live_checkout(&app, "§garbage§", "{}", false);
+        assert!(result.is_err(), "Malformed IPC payloads must never verify");
+    }
+
+    /// (3) `verify_live_checkout_and_release`: a mathematically valid 14/20 live
+    /// proof with a fresh recipient challenge verifies positively and reports
+    /// `Confirmed`, yet the verdict is only an observation — automatic goods
+    /// release and the M6.2 persistence gate stay fail-closed (Z01) until the
+    /// durable purchase state (Z08) is wired.
+    #[test]
+    fn test_z01_valid_14_of_20_proof_verifies_but_automatic_release_stays_fail_closed() {
+        let (context, proof) = build_valid_live_fixture();
+        let proof_json = serde_json::to_string(&proof).unwrap();
+        let context_json = serde_json::to_string(&context).unwrap();
+
+        // Mathematical verification succeeds for the valid 14/20 proof
+        let (parsed_proof, verdict) = verify_untrusted_live_checkout(
+            &test_service(),
+            &proof_json,
+            &context_json,
+            false,
+        )
+        .expect("Mathematically valid 14/20 proof with recipient challenge must verify");
+        assert_eq!(parsed_proof.votes.len(), 14);
+        assert!(matches!(verdict.outcome, L2ProcessingOutcome::Confirmed));
+
+        // Z01: the verified proof is only an observation — goods release stays closed
+        assert!(!verdict.can_release_goods_automatically);
+        assert!(!verdict.is_goods_release_authorized);
+        assert!(verdict.requires_merchant_approval);
+        assert!(verdict.merchant_warning.as_deref().unwrap_or_default().contains("Z01"));
+
+        // The M6.2 persistence gate stays closed: no durable purchase state (Z08)
+        // has been wired, so no audit record justifies automatic release.
+        assert!(!checkout_release_gate(&verdict));
+
+        // The wire DTO the frontend receives is fail-closed as well
+        let frontend: FrontendCheckoutReleaseVerdict = verdict.into();
+        assert_eq!(frontend.outcome, "Confirmed");
+        assert!(!frontend.can_release_goods_automatically);
+        assert!(!frontend.is_goods_release_authorized);
+
+        // Even an explicitly approving merchant cannot lift the Z01 boundary —
+        // approval is a manual observation, not a Z08 binding.
+        let (_, approved) = verify_untrusted_live_checkout(
+            &test_service(),
+            &proof_json,
+            &context_json,
+            true,
+        )
+        .expect("Explicit merchant approval must not change the mathematical verdict");
+        assert!(matches!(approved.outcome, L2ProcessingOutcome::Confirmed));
+        assert!(!approved.can_release_goods_automatically);
+        assert!(!checkout_release_gate(&approved));
+    }
+
+    /// Backing check for (3): the mathematical gate is real — sub-quorum votes,
+    /// a missing recipient challenge, a deviated proof context and forged
+    /// signatures are all rejected as [`FrontendError`]s.
+    #[test]
+    fn test_z01_live_proof_rejects_subquorum_missing_challenge_and_mismatch() {
+        let (context, proof) = build_valid_live_fixture();
+        let app = test_service();
+
+        let verify = |p: &LiveStateProof, ctx: &LiveStateContext| {
+            verify_untrusted_live_checkout(
+                &app,
+                &serde_json::to_string(p).unwrap(),
+                &serde_json::to_string(ctx).unwrap(),
+                false,
+            )
+        };
+
+        // 13/20 sub-quorum must be rejected
+        let short = LiveStateProof {
+            context: context.clone(),
+            votes: proof.votes[..13].to_vec(),
+        };
+        assert!(verify(&short, &context).is_err(), "13/20 sub-quorum must fail");
+
+        // A zeroed recipient challenge must be rejected (no fresh challenge binding)
+        let mut zero_nonce = context.clone();
+        zero_nonce.recipient_nonce = [0; 32];
+        let zero_proof = LiveStateProof {
+            context: zero_nonce.clone(),
+            votes: proof.votes.clone(),
+        };
+        assert!(verify(&zero_proof, &zero_nonce).is_err(), "Missing challenge must fail");
+
+        // A proof whose context deviates from the recipient-expected context
+        // must be rejected ("live context mismatch")
+        let mut deviated = context.clone();
+        deviated.child_lock = [9; 32];
+        let deviated_proof = LiveStateProof {
+            context: deviated.clone(),
+            votes: proof.votes.clone(),
+        };
+        assert!(verify(&deviated_proof, &context).is_err(), "Context mismatch must fail");
+
+        // A forged (zeroed) signature must be rejected
+        let mut forged = proof.clone();
+        forged.votes[0].signature = [0; 64];
+        assert!(verify(&forged, &context).is_err(), "Forged signature must fail");
+    }
+}
+
+/// Explicit recipient configuration, authenticated and persisted separately from
+/// checkout proof input. Source keys never come from a payment receipt.
+#[tauri::command]
+pub fn configure_regional_mesh_authority(
+    policy_json: String, password: String, state: tauri::State<AppState>,
+) -> Result<(), FrontendError> {
+    if policy_json.len() > 4096 { return Err(FrontendError::from("Regional policy budget exceeded".to_string())); }
+    let policy: human_money_core::humoco_proto::mesh::RegionalMeshPolicy = serde_json::from_str(&policy_json)
+        .map_err(|_| FrontendError::from("Invalid regional mesh policy".to_string()))?;
+    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet unavailable".to_string()))?;
+    service.configure_regional_mesh_authority(policy, Some(&password)).map_err(FrontendError::from)
 }

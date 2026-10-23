@@ -2336,7 +2336,9 @@ name = "human_money_app"
 version = "0.2.1"
 dependencies = [
  "bip39",
+ "blake3",
  "chrono",
+ "ed25519-dalek",
  "fs_extra",
  "human_money_core",
  "log",

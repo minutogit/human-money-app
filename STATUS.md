@@ -3,10 +3,16 @@ project: human-money-app
 version: "0.2.1"
 phase: "beta"
 health: "yellow"
-last_updated: "2026-10-21"
+last_updated: "2026-10-23"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-037"
+    title: "Z01 Fail-Closed Goods-Release Boundary: Unit Tests & Enforcement (transfers.rs)"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Documented and enforced the Z01 fail-closed boundary in `src-tauri/src/commands/transfers.rs`: `evaluate_checkout_release` (raw outcome strings) and `verify_live_checkout_and_release` (live quorum proofs) can no longer be reasoned about only via doc comments — the fail-closed logic is extracted into dedicated helpers (`map_untrusted_outcome_str`, `evaluate_untrusted_checkout_release`, `parse_live_checkout_ipc`, `verify_untrusted_live_checkout`, `checkout_release_gate`) that both commands delegate to. A caller-supplied \"Confirmed\" string maps down to `Found`, malformed `proof_json`/`expected_context_json` are rejected as `FrontendError` before verification, and even a mathematically valid 14/20 recipient-challenge-bound live proof is defensively clamped to `can_release_goods_automatically == false` (an observation only) until durable purchase state (Z08) is wired. New `z01_fail_closed_tests` module (4 tests) pins all of this, including sub-quorum/zero-challenge/context-mismatch/forged-signature rejections. Backend-only dev-dependencies (`blake3`, `ed25519-dalek`) were added to build real signed quorum proofs; no new packages in the dependency graph."
   - id: "APP-036"
     title: "L2 Connectivity Pre-Flight & Verified Checkout Audit Trail (M6.1 / M6.2)"
     status: "completed"
@@ -252,6 +258,7 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 
 ## Recent Milestones
 
+- [x] enforced & unit-tested the Z01 fail-closed goods-release boundary (APP-037): `evaluate_checkout_release` and `verify_live_checkout_and_release` cannot mint automatic goods release from untrusted IPC parameters alone (a caller `"Confirmed"` string maps down to `Found`; a valid 14/20 recipient-challenge-bound live proof verifies positively but stays an observation, `can_release_goods_automatically == false`, until Z08 durable purchase state is wired). Contract enforced by the new `z01_fail_closed_tests` module in `src-tauri/src/commands/transfers.rs`.
 - [x] Implemented M6.1 (L2 connectivity pre-flight) and M6.2 (verified checkout audit trail): `create_transfer_bundle` is now an async command that checks the reachability of the active L2 nodes before a bundle is created and reports an informative offline error (`error.network.l2Offline`) when the app is pinned to custom servers and none of them is reachable. `verify_live_checkout_and_release` writes a transaction-history record for every goods release that was authorized by a live, recipient-challenge-bound quorum proof, so a release decision always leaves an auditable trail.
 - [x] Fixed Finding F02 (automatic goods release via caller-supplied outcome): the Tauri command `evaluate_checkout_release` mapped the untrusted raw outcome string `"Confirmed"` to `L2ProcessingOutcome::Confirmed`, which `CheckoutReleaseVerdict::new` turns into `can_release_goods_automatically == true` — letting any frontend caller bypass live-proof verification and unlock automatic goods release. The raw string is now mapped to `Found`, the returned verdict is defensively forced to `can_release_goods_automatically == false`, and the invariant is documented on the command. Only `verify_live_checkout_and_release` may authorize automatic goods release.
 - [x] Migrated to human_money_core v0.3.0 and bumped app version to 0.2.0: adapted AppFacadeError variants, converted read-only queries to with_wallet / with_wallet_and_identity, upgraded TrapData to V3 SST protocol (trap_r, trap_s), integrated concrete FileVoucherArchive, and maintained backward compatibility for voucher standard templates in frontend models.
@@ -369,3 +376,14 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - **Breaking Changes in Core ab v0.3:** Bei auftretenden Fehlern oder Core-Synchronisationen muss `human_money_core` analysiert werden.
 - **Archive-Erstellung (Tauri Host):** Archive müssen künftig mit `FileVoucherArchive::new_secure(path, wallet_passwort)` gebaut werden.
 - **Offene Punkte Core (report-only, ohne deterministischen Test):** Fehlendes `fsync` in `save_wallet` und TOCTOU-Race im PID-Locking.
+
+
+### 2026-10-23 — Configured regional mesh verification
+
+Registered authenticated recipient source-policy configuration and required bounded
+signed regional views for live-checkout verification through Core. Missing views
+fail closed. Preserved the Z01 goods-release gate: caller-supplied context and a
+valid current quorum do not create a durable purchase authorization. Automatic
+view refresh/UI and the durable purchase producer remain open.
+Validation: `./run-tests.sh --backend-only --quiet` passed using locally resolved
+Core/Proto siblings. No frontend or published Git dependency claim is made.
