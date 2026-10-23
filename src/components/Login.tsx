@@ -1,3 +1,4 @@
+import { settingsService } from "../services/settingsService";
 // src/components/Login.tsx
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
@@ -107,6 +108,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     localInstanceId,
                 });
                 
+                // Discovery is a background cold path; checkout sends use the cache.
+                void settingsService.refreshGatewayCache(password).catch(() => undefined);
                 const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
                 if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName);
             } catch (e) {

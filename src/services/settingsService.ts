@@ -13,6 +13,10 @@ export const settingsService = {
         return await invoke<AppSettings>("get_app_settings");
     },
 
+    refreshGatewayCache: async (password?: string) => {
+        return await invoke<string[]>("refresh_l2_gateway_cache", { password });
+    },
+
     saveSettings: async (settings: AppSettings, password?: string) => {
         return await invoke<void>("save_app_settings", { settings, password });
     },

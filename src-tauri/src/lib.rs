@@ -5,6 +5,7 @@
 pub mod commands;
 pub mod models;
 pub mod settings;
+mod gateway_resolver;
 pub mod state;
 
 pub use state::AppState;
@@ -138,7 +139,7 @@ pub fn run() {
             get_active_asset_classes,
             create_new_voucher, create_transfer_bundle, receive_bundle, save_transaction_record,
             get_transaction_history, prepare_transfer_plan, rank_vouchers_for_recipient,
-            configure_regional_mesh_authority, verify_live_checkout_and_release, evaluate_checkout_release, verify_checkout_response_with_authority,
+            begin_pos_checkout, complete_pos_checkout, submit_l2_send_intent, configure_regional_mesh_authority, verify_live_checkout_and_release, evaluate_checkout_release, verify_checkout_response_with_authority,
             get_app_settings, save_app_settings,
             update_user_profile,
             log_to_backend,
@@ -157,6 +158,7 @@ pub fn run() {
             get_seal_sync_status, get_seal_for_upload, acknowledge_seal_sync,
             check_anchor_sync, reconcile_rollback, flush_pending_anchor_sync,
             benchmark_l2_servers,
+            refresh_l2_gateway_cache,
             // Integrity
             check_wallet_integrity, repair_wallet_integrity
         ])

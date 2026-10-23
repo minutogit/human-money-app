@@ -387,3 +387,15 @@ valid current quorum do not create a durable purchase authorization. Automatic
 view refresh/UI and the durable purchase producer remain open.
 Validation: `./run-tests.sh --backend-only --quiet` passed using locally resolved
 Core/Proto siblings. No frontend or published Git dependency claim is made.
+
+### 2026-10-23 — Exact-byte dispatch and backend purchase APIs
+
+Registered durable intent submission, retained-choice observation and transactional
+purchase/challenge commands. Gateway retries preserve signed bytes, isolate f2f
+credentials by exact origin, disable redirects and share one 800 ms budget.
+Login starts bounded public cold discovery; cached routing avoids ping probes in
+the new intent send command. Public discovery conveys URLs, never committee
+authority. Regional policy remains recipient configured and authenticated.
+Validation: backend test script and TypeScript type check passed. Complete
+productive UI orchestration, signed roster refresh, terminal resolution and full
+App/Core/Node/QUIC-to-PoS acceptance remain open.

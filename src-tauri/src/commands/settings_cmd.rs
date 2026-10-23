@@ -150,15 +150,21 @@ async fn filter_reachable_with_median(candidates: Vec<String>) -> Vec<String> {
 
 async fn fetch_seed_peers(seed_url: &str) -> Option<Vec<String>> {
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_millis(3000))
         .build()
         .ok()?;
-    let resp = client.get(seed_url).send().await.ok()?;
+    let mut resp = client.get(seed_url).send().await.ok()?;
     if !resp.status().is_success() {
         log::debug!("Seed fetch failed with status {} for {}", resp.status(), seed_url);
         return None;
     }
-    let bytes = resp.bytes().await.ok()?;
+    if resp.content_length().is_some_and(|length| length > 65_536) { return None; }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = resp.chunk().await.ok()? {
+        if bytes.len().saturating_add(chunk.len()) > 65_536 { return None; }
+        bytes.extend_from_slice(&chunk);
+    }
     // Try direct Vec<String>
     if let Ok(peers) = serde_json::from_slice::<Vec<String>>(&bytes) {
         let filtered: Vec<String> = peers.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
@@ -511,4 +517,36 @@ pub fn flush_pending_anchor_sync(
     service
         .flush_pending_anchor_sync(password.as_deref())
         .map_err(FrontendError::from)
+}
+
+/// Explicit cold-path refresh. Public gateway directories select messengers;
+/// independently pinned regional authority remains the checkout trust source.
+#[tauri::command]
+pub async fn refresh_l2_gateway_cache(password: Option<String>, state: tauri::State<'_, AppState>) -> Result<Vec<String>, FrontendError> {
+    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    let candidates = crate::gateway_resolver::cached_candidates(&settings);
+    if settings.exclusive_custom_servers { return Ok(candidates); }
+    let owner = {
+        let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service.with_wallet(|wallet| wallet.get_user_id().to_string()).map_err(FrontendError::from)?
+    };
+    let network = settings.active_network.clone();
+    let candidates = if candidates.is_empty() {
+        let seed = settings.bootstrap_seed_url.clone().unwrap_or_else(|| if network.eq_ignore_ascii_case("testnet") { TESTNET_SEED_FALLBACK.into() } else { MAINNET_SEED_FALLBACK.into() });
+        fetch_seed_peers(&seed).await.unwrap_or_default().into_iter().take(32).collect()
+    } else { candidates };
+    let mut refreshed = candidates.clone();
+    for url in crate::gateway_resolver::discover_gateways(&candidates).await {
+        if !refreshed.contains(&url) { refreshed.push(url); }
+        if refreshed.len() == 32 { break; }
+    }
+    let mut settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    if settings.active_network != network { return Err(FrontendError::from("Network changed during discovery".to_string())); }
+    if network.eq_ignore_ascii_case("testnet") { settings.cached_peers_testnet = refreshed.clone(); }
+    else if network.eq_ignore_ascii_case("mainnet") { settings.cached_peers_mainnet = refreshed.clone(); }
+    else { return Err(FrontendError::from("Invalid L2 network configuration".to_string())); }
+    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    if service.with_wallet(|wallet| wallet.get_user_id().to_string()).map_err(FrontendError::from)? != owner { return Err(FrontendError::from("Profile changed during discovery".to_string())); }
+    state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)?;
+    Ok(refreshed)
 }
