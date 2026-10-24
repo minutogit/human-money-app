@@ -7,6 +7,12 @@ last_updated: "2026-10-24"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-040"
+    title: "Host-Owned L2 Intent Reconciliation Supervisor"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Added `src-tauri/src/intent_reconciliation.rs`: a host-owned supervisor that periodically reconciles unresolved L2 send intents while the wallet is unlocked. It skips intents younger than 30 seconds, expires overdue intents, guards per-intent work with an in-flight set, best-effort observes retained originals, ensures an owner-bound regional view cache, begins and completes quorum reconciliation, and cleans up terminal intents. A 15-second worker is spawned during Tauri setup, and `submit_l2_send_intent` now also cleans up terminal intents in its terminal and expired early-return branches. Three unit tests cover locked wallets, young intents and expired intents."
   - id: "APP-039"
     title: "Fail-Closed Regional Mesh Cache Expiry & Renewal (F05/R05)"
     status: "completed"
@@ -423,3 +429,16 @@ impending-expiry detection.
 
 Validation: `./run-tests.sh --backend-only --quiet` and
 `cargo test checkout::tests -- --nocapture` passed.
+
+### 2026-10-24 — Host-owned L2 intent reconciliation supervisor
+
+Added a 15-second host supervisor that reconciles unresolved L2 send intents
+while the wallet is unlocked. Overdue intents are expired, intents younger than
+30 seconds are skipped, per-intent overlap is prevented by an in-flight set,
+retained originals are observed best-effort, and live quorum reconciliation is
+completed only after verifying that the wallet owner and cached regional views
+still match. Terminal intents are cleaned up after resolution, and the manual
+`submit_l2_send_intent` early-return paths now perform the same cleanup.
+
+Validation: `cargo test` in `src-tauri` passed (23 tests, including the three
+new intent reconciliation tests).

@@ -867,6 +867,8 @@ pub async fn submit_l2_send_intent(
             human_money_core::app_service::IntentTerminalResolution::Conflicted { .. } => "conflicted",
             human_money_core::app_service::IntentTerminalResolution::Expired { .. } => "expired",
         };
+        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let _ = service.cleanup_terminal_intents(60_000, now_ms, password.as_deref());
         return Ok(crate::gateway_resolver::IntentDispatchObservation {
             local_instance_id,
             status: status.into(),
@@ -877,6 +879,7 @@ pub async fn submit_l2_send_intent(
     if now_ms >= intent.root_valid_until_ms {
         let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
         let _ = service.expire_intent_if_overdue(&local_instance_id, now_ms, password.as_deref());
+        let _ = service.cleanup_terminal_intents(60_000, now_ms, password.as_deref());
         return Ok(crate::gateway_resolver::IntentDispatchObservation {
             local_instance_id,
             status: "expired".into(),

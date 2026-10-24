@@ -6,6 +6,7 @@ pub mod commands;
 pub mod models;
 pub mod settings;
 mod gateway_resolver;
+pub(crate) mod intent_reconciliation;
 pub mod state;
 
 pub use state::AppState;
@@ -100,6 +101,7 @@ pub fn run() {
                 regional_views: Mutex::new(None),
             });
             crate::checkout::spawn_regional_view_renewal_worker(app.handle().clone());
+            crate::intent_reconciliation::spawn_intent_reconciliation_worker(app.handle().clone());
 
             Ok(())
         })
