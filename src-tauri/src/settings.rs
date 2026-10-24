@@ -37,6 +37,15 @@ impl Default for CustomServerDto {
     }
 }
 
+/// Independently pinned regional observation source, configured by the recipient.
+#[derive(Serialize,Deserialize,Debug,Clone,Default)]
+#[serde(default,rename_all="camelCase")]
+pub struct RegionalSourceDto {
+    pub url:String,
+    pub public_key:String,
+    pub bearer_token:Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppSettings {
@@ -63,6 +72,7 @@ pub struct AppSettings {
     pub cached_peers_testnet: Vec<String>,
     #[serde(default)]
     pub dev_mode_unlocked: bool,
+    pub regional_mesh_sources: Vec<RegionalSourceDto>,
 }
 
 fn default_privacy_default() -> String {
@@ -84,6 +94,7 @@ impl Default for AppSettings {
             cached_peers_mainnet: Vec::new(),
             cached_peers_testnet: Vec::new(),
             dev_mode_unlocked: false,
+            regional_mesh_sources:Vec::new(),
         }
     }
 }

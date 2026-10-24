@@ -390,7 +390,7 @@ export function SendView() {
                 .join(', ');
 
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferSuccess') });
-            navigationTimerRef.current = setTimeout(() => navigate({ view: 'transfer_success', bundleData: bundleResult.bundleData, recipientId: state.recipientId, summary: summaryString }), 1500);
+            navigationTimerRef.current = setTimeout(() => navigate({ view: 'transfer_success', bundleData: bundleResult.bundleData, recipientId: state.recipientId, summary: summaryString, l2Dispatch: bundleResult.l2Dispatch }), 1500);
         } catch (e) {
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferFailed', { error: translateError(e, t) }) });
             dispatch({ type: 'SET_PROCESSING', value: false });

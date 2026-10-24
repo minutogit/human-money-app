@@ -71,6 +71,18 @@ export interface CheckoutReleaseVerdict {
     merchantWarning?: string;
 }
 
+export interface PurchaseCompletion {
+    purchaseId: string;
+    newlyCommitted: boolean;
+    verdict: CheckoutReleaseVerdict;
+}
+
+export interface IntentDispatchObservation {
+    localInstanceId: string;
+    status: string;
+    httpStatus?: number | null;
+}
+
 export interface ReceiveSuccessPayload {
     senderId: string;
     senderProfileName?: string;
@@ -84,6 +96,9 @@ export interface ReceiveSuccessPayload {
     conflictSummaries?: ProofOfDoubleSpendSummary[];
     l2Quorum?: L2QuorumInfo;
     checkoutVerdict?: CheckoutReleaseVerdict;
+    purchaseId?: string;
+    newlyCommitted?: boolean;
+    isReplay?: boolean;
 }
 
 export interface TransactionFingerprint {

@@ -3,14 +3,14 @@
 use crate::settings::AppSettings;
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntentDispatchObservation {
     pub local_instance_id: String,
     pub status: String,
     pub http_status: Option<u16>,
 }
-fn endpoint(raw: &str, path: &str) -> Option<reqwest::Url> {
+pub(crate) fn endpoint(raw: &str, path: &str) -> Option<reqwest::Url> {
     let mut url = reqwest::Url::parse(raw).ok()?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
@@ -30,49 +30,100 @@ fn endpoint(raw: &str, path: &str) -> Option<reqwest::Url> {
 }
 /// Every attempt builds a new request and derives credentials ONLY from that
 /// destination's configured origin. Redirects cannot carry secrets elsewhere.
-pub(crate) async fn dispatch_exact(
-    settings: &AppSettings,
-    candidates: &[String],
-    bytes: &[u8],
-) -> Result<Option<u16>, String> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_millis(800))
-        .build()
-        .map_err(|_| "HTTP client unavailable".to_string())?;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(800);
+pub(crate) async fn dispatch_exact(settings:&AppSettings,candidates:&[String],bytes:&[u8])->Result<Option<u16>,String> {
+    dispatch_path(settings,candidates,bytes,"v1/lock",tokio::time::Instant::now()+std::time::Duration::from_millis(800)).await
+}
+/// All pending transfer inputs share one transport budget. None of these status
+/// observations can authorize goods release or synthesize a replacement spend.
+pub(crate) async fn dispatch_intents(settings:&AppSettings,candidates:&[String],intents:&[human_money_core::models::l2_intent::L2SendIntent])->Vec<IntentDispatchObservation> {
+    let deadline = tokio::time::Instant::now()+std::time::Duration::from_millis(800);
+    let mut observations = Vec::new();
+    for intent in intents {
+        let (bytes,path) = if intent.chain_request_bytes.is_empty() { (&intent.request_bytes,"v1/lock") } else { (&intent.chain_request_bytes,"v1/lock/chain") };
+        let status = if tokio::time::Instant::now()<deadline {
+            dispatch_path(settings,candidates,bytes,path,deadline).await.ok().flatten()
+        } else { None };
+        observations.push(IntentDispatchObservation {local_instance_id:intent.local_instance_id.clone(),status:"pending".into(),http_status:status});
+    }
+    observations
+}
+async fn dispatch_path(settings:&AppSettings,candidates:&[String],bytes:&[u8],path:&str,deadline:tokio::time::Instant)->Result<Option<u16>,String> {
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().map_err(|_|"HTTP client unavailable".to_string())?;
     for base in candidates.iter().take(4) {
-        let Some(url) = endpoint(base, "v1/lock") else {
-            continue;
-        };
-        let mut request = client
-            .post(url.clone())
-            .header("Content-Type", "application/json")
-            .body(bytes.to_vec());
-        if let Some(provider) = settings.custom_servers.iter().find(|provider| {
-            provider.is_active
-                && endpoint(&provider.url, "v1/lock")
-                    .is_some_and(|known| known.origin() == url.origin())
-        }) {
-            if let Some(token) = &provider.auth_token {
-                request = request.bearer_auth(token);
-            }
-            if let Some(token) = &provider.peer_token {
-                if token.len() == 36
-                    && token.starts_with("f2f_")
-                    && token[4..].bytes().all(|b| b.is_ascii_hexdigit())
-                {
-                    request = request.header("X-Peer-Token", token);
+        let Some(url) = endpoint(base,path) else {continue};
+        let mut pow:Option<(String,u64)> = None;
+        for attempt in 0..2 {
+            let mut request = client.post(url.clone()).header("Content-Type","application/json").body(bytes.to_vec());
+            if let Some(provider) = settings.custom_servers.iter().find(|provider|provider.is_active && endpoint(&provider.url,path).is_some_and(|known|known.origin()==url.origin())) {
+                if let Some(token) = &provider.auth_token {request=request.bearer_auth(token);}
+                if let Some(token) = &provider.peer_token {
+                    if token.len()==36 && token.starts_with("f2f_") && token[4..].bytes().all(|b|b.is_ascii_hexdigit()) { request=request.header("X-Peer-Token",token); }
                 }
             }
+            if let Some((challenge,nonce)) = &pow {request=request.header("X-PoW-Challenge",challenge).header("X-PoW-Nonce",nonce.to_string());}
+            match tokio::time::timeout_at(deadline,request.send()).await {
+                Ok(Ok(response)) if response.status().as_u16()==401 && attempt==0 => {
+                    pow = solve_public_pow(&client,base,deadline).await;
+                    if pow.is_some() {continue} else {return Ok(Some(401));}
+                }
+                Ok(Ok(response)) if matches!(response.status().as_u16(),429|500..=599) => break,
+                Ok(Ok(response)) => return Ok(Some(response.status().as_u16())),
+                Ok(Err(_)) => break,
+                Err(_) => return Ok(None),
+            }
         }
-        let result = tokio::time::timeout_at(deadline, request.send()).await;
-        match result {
-            Ok(Ok(response)) if matches!(response.status().as_u16(), 429 | 500..=599) => continue,
-            Ok(Ok(response)) => return Ok(Some(response.status().as_u16())),
-            Ok(Err(_)) => continue,
-            Err(_) => return Ok(None),
+    }
+    Ok(None)
+}
+pub(crate) async fn bounded_body(mut response:reqwest::Response,ceiling:usize)->Option<Vec<u8>> {
+    if response.content_length().is_some_and(|len|len>ceiling as u64) {return None;}
+    let mut bytes=Vec::new();
+    while let Some(chunk)=response.chunk().await.ok()? {
+        if bytes.len().saturating_add(chunk.len())>ceiling {return None;}
+        bytes.extend_from_slice(&chunk);
+    }
+    Some(bytes)
+}
+async fn solve_public_pow(client:&reqwest::Client,base:&str,deadline:tokio::time::Instant)->Option<(String,u64)> {
+    #[derive(serde::Deserialize)] struct Challenge {challenge:String,difficulty:u32}
+    let url=endpoint(base,"v1/pow-challenge")?;
+    let response=tokio::time::timeout_at(deadline,client.get(url).send()).await.ok()?.ok()?;
+    if !response.status().is_success() {return None;}
+    let bytes=tokio::time::timeout_at(deadline,bounded_body(response,2048)).await.ok()??;
+    let challenge:Challenge=serde_json::from_slice(&bytes).ok()?;
+    if challenge.difficulty>24 {return None;}
+    let raw=human_money_core::hex::decode(&challenge.challenge).ok()?;
+    let raw:[u8;32]=raw.try_into().ok()?;
+    // Independent random search starts prevent clients reusing the same generic
+    // slot's solution. Yield regularly; expensive PoW never blocks the runtime.
+    let start=uuid::Uuid::new_v4().as_u128() as u64;
+    for batch in 0..256u64 {
+        if tokio::time::Instant::now()>=deadline {return None;}
+        for offset in 0..4096u64 {
+            let nonce=start.wrapping_add(batch*4096+offset);
+            let mut hash=blake3::Hasher::new(); let tag=b"HUMOCO_POW_SOLUTION";
+            hash.update(&[tag.len() as u8]); hash.update(tag); hash.update(&raw); hash.update(&nonce.to_le_bytes());
+            let mut zeros=0u32;
+            for byte in hash.finalize().as_bytes() {let n=byte.leading_zeros();zeros+=n;if n<8 {break;}}
+            if zeros>=challenge.difficulty {return Some((challenge.challenge,nonce));}
         }
+        tokio::task::yield_now().await;
+    }
+    None
+}
+/// One payment gateway collects signatures. Authority comes from the recipient's
+/// independent cold cache and Core's stored purchase, never from this response.
+pub(crate) async fn fetch_live_proof(candidates:&[String],context:&human_money_core::humoco_proto::live::LiveStateContext)
+    ->Result<Option<human_money_core::humoco_proto::live::LiveStateProof>,String> {
+    let client=reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().map_err(|_|"HTTP client unavailable".to_string())?;
+    let deadline=tokio::time::Instant::now()+std::time::Duration::from_millis(800);
+    let bytes=serde_json::to_vec(context).map_err(|_|"Invalid live context".to_string())?;
+    for base in candidates.iter().take(4) {
+        let Some(url)=endpoint(base,"v1/verify-current") else {continue};
+        let result=tokio::time::timeout_at(deadline,client.post(url).header("Content-Type","application/json").body(bytes.clone()).send()).await;
+        let response=match result {Ok(Ok(response)) if response.status().is_success()=>response,Ok(_)=>continue,Err(_)=>return Ok(None)};
+        let body=match tokio::time::timeout_at(deadline,bounded_body(response,65_536)).await {Ok(Some(bytes))=>bytes,_=>continue};
+        if let Ok(proof)=serde_json::from_slice(&body) {return Ok(Some(proof));}
     }
     Ok(None)
 }
@@ -296,10 +347,12 @@ mod discovery_tests {
     }
     #[test]
     fn cached_selection_is_local_network_specific_bounded_and_respects_exclusive_mode() {
-        let mut settings = AppSettings::default();
-        settings.active_network = "testnet".into();
-        settings.cached_peers_testnet = vec!["https://test.example".into()];
-        settings.cached_peers_mainnet = vec!["https://main.example".into()];
+        let mut settings = AppSettings {
+            active_network: "testnet".into(),
+            cached_peers_testnet: vec!["https://test.example".into()],
+            cached_peers_mainnet: vec!["https://main.example".into()],
+            ..Default::default()
+        };
         assert_eq!(cached_candidates(&settings), vec!["https://test.example"]);
         settings.exclusive_custom_servers = true;
         assert!(cached_candidates(&settings).is_empty());

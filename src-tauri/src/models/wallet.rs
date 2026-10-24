@@ -270,6 +270,12 @@ pub struct ReceiveSuccessPayload {
     pub verifiable_conflicts: std::collections::HashMap<String, Vec<human_money_core::models::conflict::TransactionFingerprint>>,
     pub conflict_summaries: Vec<crate::models::FrontendProofOfDoubleSpendSummary>,
     pub checkout_verdict: Option<crate::models::FrontendCheckoutReleaseVerdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purchase_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newly_committed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_replay: Option<bool>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -278,6 +284,7 @@ pub struct CreateBundleResult {
     pub bundle_data: Vec<u8>,
     pub bundle_id: String,
     pub involved_sources_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
+    pub l2_dispatch: Vec<crate::gateway_resolver::IntentDispatchObservation>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

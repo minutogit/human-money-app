@@ -28,6 +28,10 @@ pub fn save_app_settings(
 ) -> Result<(), FrontendError> {
     info!("Saving app settings to disk...");
     let mut service = state.service.lock().unwrap();
+    if let Some(policy)=crate::checkout::configured_policy(&settings)? {
+        service.configure_regional_mesh_authority(policy,password.as_deref()).map_err(FrontendError::from)?;
+    }
+    *state.regional_views.lock().map_err(|_|FrontendError::from("Regional cache unavailable".to_string()))?=None;
     state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)
 }
 
@@ -549,4 +553,10 @@ pub async fn refresh_l2_gateway_cache(password: Option<String>, state: tauri::St
     if service.with_wallet(|wallet| wallet.get_user_id().to_string()).map_err(FrontendError::from)? != owner { return Err(FrontendError::from("Profile changed during discovery".to_string())); }
     state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)?;
     Ok(refreshed)
+}
+
+/// Refreshes authenticated observation sources on the cold path only.
+#[tauri::command]
+pub async fn refresh_regional_mesh_views(state:tauri::State<'_,AppState>)->Result<bool,FrontendError> {
+    crate::checkout::refresh_views(&state).await
 }

@@ -50,6 +50,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     const [showConfirm, setShowConfirm] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [bundlePassword, setBundlePassword] = useState("");
+    const [isPosMode, setIsPosMode] = useState(false);
+    const [purchaseId, setPurchaseId] = useState("");
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [resultModal, setResultModal] = useState<{
         isOpen: boolean;
@@ -258,6 +260,32 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     if (uuidMatch && uuidMatch[1]) standardDefinitionsToml[uuidMatch[1]] = standard.content;
                 });
 
+                if (isPosMode || purchaseId.trim().length > 0) {
+                    const activePurchaseId = purchaseId.trim() || `pos-${Date.now()}`;
+                    const completion = await protectAction(async (walletPassword) => {
+                        return await transferService.checkoutReceivedBundle({
+                            purchaseId: activePurchaseId,
+                            bundleData: fileData,
+                            standardDefinitionsToml,
+                            password: password || walletPassword || undefined,
+                        });
+                    });
+
+                    if (completion) {
+                        const payload: ReceiveSuccessPayload = {
+                            senderId: "pos-terminal",
+                            transferSummary: { summableAmounts: {}, countableItems: {} },
+                            involvedVouchers: [],
+                            purchaseId: completion.purchaseId,
+                            newlyCommitted: completion.newlyCommitted,
+                            isReplay: !completion.newlyCommitted,
+                            checkoutVerdict: completion.verdict,
+                        };
+                        onReceiveSuccess(payload);
+                        return;
+                    }
+                }
+
                 const payload = await protectAction(async (walletPassword) => {
                     return await transferService.receiveBundle({
                         bundleData: fileData,
@@ -417,6 +445,31 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 )}
 
                 <div className="space-y-8">
+                    {/* PoS Mode Toggle */}
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
+                        <label className="flex items-center gap-3 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={isPosMode}
+                                onChange={(e) => setIsPosMode(e.target.checked)}
+                                className="rounded accent-theme-primary h-4 w-4"
+                            />
+                            <span className="text-xs font-bold text-theme-secondary">
+                                PoS Kassen-Modus (Point-of-Sale Checkout)
+                            </span>
+                        </label>
+                        {isPosMode && (
+                            <div className="w-full sm:w-64">
+                                <Input
+                                    placeholder="Bon- / Kauf-ID (optional)"
+                                    value={purchaseId}
+                                    onChange={(e) => setPurchaseId(e.target.value)}
+                                    className="text-xs font-mono py-1.5"
+                                />
+                            </div>
+                        )}
+                    </div>
+
                     <div
                         id="bundle-drop-zone"
                         className={`relative group border-2 border-dashed rounded-[40px] p-12 transition-all flex flex-col items-center justify-center text-center overflow-hidden min-h-[340px] cursor-pointer ${

@@ -15,6 +15,7 @@ pub struct AppState {
     pub events: Mutex<Option<Vec<human_money_core::models::wallet_event::WalletEvent>>>,
     pub contacts: Mutex<Option<crate::models::FrontendAddressBook>>,
     pub settings: Mutex<Option<AppSettings>>,
+    pub(crate) regional_views: Mutex<Option<crate::checkout::RegionalViewCache>>,
 }
 
 impl AppState {
@@ -217,6 +218,7 @@ impl AppState {
     // 6. Logout Helpers
     pub fn clear_all_caches(&self) {
         info!("Clearing all caches on logout...");
+        *self.regional_views.lock().unwrap() = None;
         *self.history.lock().unwrap() = None;
         *self.events.lock().unwrap() = None;
         *self.contacts.lock().unwrap() = None;
@@ -234,6 +236,14 @@ impl AppState {
 
         // 1. Load or create settings
         let settings = self.load_settings(service, Some(password))?;
+
+        if let Some(policy) = crate::checkout::configured_policy(&settings)
+            .map_err(|e| AppFacadeError::Generic(e.message))?
+        {
+            service
+                .configure_regional_mesh_authority(policy, Some(password))
+                .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
+        }
 
         // 2. Start session timer if configured
         if settings.session_timeout_seconds > 0 {

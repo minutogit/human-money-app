@@ -1,6 +1,6 @@
 // src/types/api.ts
 
-import { ReceiveSuccessPayload } from './transaction';
+import { ReceiveSuccessPayload, IntentDispatchObservation } from './transaction';
 import { VoucherDetails } from './voucher';
 
 export interface ReceiveBundleArgs {
@@ -60,6 +60,12 @@ export interface CustomServerDto {
     isActive: boolean;
 }
 
+export interface RegionalSourceDto {
+    url: string;
+    publicKey: string;
+    bearerToken?: string | null;
+}
+
 export interface AppSettings {
     bundleRetentionDays: number;
     sessionTimeoutSeconds: number;
@@ -73,6 +79,7 @@ export interface AppSettings {
     cachedPeersMainnet?: string[];
     cachedPeersTestnet?: string[];
     devModeUnlocked?: boolean;
+    regionalMeshSources?: RegionalSourceDto[];
 }
 
 export type IntegrityReport =
@@ -100,7 +107,7 @@ export type AppState =
     | { view: "receive_bundle" }
     | { view: "transaction_history" }
     | { view: "activities" }
-    | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string }
+    | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string; l2Dispatch?: IntentDispatchObservation[] }
     | { view: "receive_success"; payload: ReceiveSuccessPayload }
     | { view: "address_book"; initialSearchQuery?: string; previousView?: AppState }
     | { view: "sign_request"; voucherData: VoucherDetails }

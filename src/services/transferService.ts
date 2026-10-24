@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { TransactionRecord, AssetClassSummary, ReceiveSuccessPayload, WalletEvent, SourceTransfer } from "../types";
+import { TransactionRecord, AssetClassSummary, ReceiveSuccessPayload, WalletEvent, SourceTransfer, IntentDispatchObservation, PurchaseCompletion } from "../types";
 
 interface ReceiveBundleArgs {
     bundleData: number[];
@@ -22,6 +22,7 @@ export interface CreateBundleResult {
     bundleData: number[];
     bundleId: string;
     involvedSourcesDetails: unknown[];
+    l2Dispatch?: IntentDispatchObservation[];
 }
 
 export interface ScoreBreakdown {
@@ -144,6 +145,30 @@ export const transferService = {
             committeePubkeysHex: args.committeePubkeysHex,
             explicitMerchantApproval: args.explicitMerchantApproval ?? false,
             password: args.password,
+        });
+    },
+
+    checkoutReceivedBundle: async (args: {
+        purchaseId: string;
+        bundleData: number[];
+        standardDefinitionsToml: Record<string, string>;
+        password?: string | null;
+    }) => {
+        return await invoke<PurchaseCompletion>("checkout_received_bundle", {
+            purchaseId: args.purchaseId,
+            bundleData: args.bundleData,
+            standardDefinitionsToml: args.standardDefinitionsToml,
+            password: args.password ?? null,
+        });
+    },
+
+    submitL2SendIntent: async (args: {
+        localInstanceId: string;
+        password?: string | null;
+    }) => {
+        return await invoke<IntentDispatchObservation>("submit_l2_send_intent", {
+            localInstanceId: args.localInstanceId,
+            password: args.password ?? null,
         });
     }
 };

@@ -110,6 +110,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 
                 // Discovery is a background cold path; checkout sends use the cache.
                 void settingsService.refreshGatewayCache(password).catch(() => undefined);
+                void settingsService.refreshRegionalMeshViews().catch(() => undefined);
                 const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
                 if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName);
             } catch (e) {

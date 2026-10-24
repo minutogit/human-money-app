@@ -6,7 +6,7 @@ import { logger } from '../utils/log';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { Input } from './ui/Input';
-import { AppSettings, PrivacyDefault, CustomServerDto } from '../types';
+import { AppSettings, PrivacyDefault, CustomServerDto, RegionalSourceDto } from '../types';
 import { useSession } from '../context/SessionContext';
 import { translateError, stringifyError } from '../utils/errorHelper';
 
@@ -59,6 +59,11 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     const [newServerUrl, setNewServerUrl] = useState('');
     const [newServerAuthToken, setNewServerAuthToken] = useState('');
     const [newServerPeerToken, setNewServerPeerToken] = useState('');
+    const [newRegionalUrl, setNewRegionalUrl] = useState('');
+    const [newRegionalPublicKey, setNewRegionalPublicKey] = useState('');
+    const [newRegionalBearerToken, setNewRegionalBearerToken] = useState('');
+    const [isRefreshingMesh, setIsRefreshingMesh] = useState(false);
+    const [meshRefreshFeedback, setMeshRefreshFeedback] = useState<string | null>(null);
 
     useEffect(() => {
         async function fetchSettings() {
@@ -137,6 +142,40 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
     const handleRemoveCustomServer = (idx: number) => {
         setSettings(s => s ? { ...s, customServers: (s.customServers || []).filter((_, i) => i !== idx) } : s);
+    };
+
+    const handleAddRegionalSource = () => {
+        if (!newRegionalUrl.trim() || !newRegionalPublicKey.trim()) return;
+        const newSource: RegionalSourceDto = {
+            url: newRegionalUrl.trim(),
+            publicKey: newRegionalPublicKey.trim(),
+            bearerToken: newRegionalBearerToken.trim() || undefined,
+        };
+        setSettings(s => s ? {
+            ...s,
+            regionalMeshSources: [...(s.regionalMeshSources || []), newSource]
+        } : s);
+        setNewRegionalUrl('');
+        setNewRegionalPublicKey('');
+        setNewRegionalBearerToken('');
+    };
+
+    const handleRemoveRegionalSource = (idx: number) => {
+        setSettings(s => s ? { ...s, regionalMeshSources: (s.regionalMeshSources || []).filter((_, i) => i !== idx) } : s);
+    };
+
+    const handleRefreshMeshViews = async () => {
+        setIsRefreshingMesh(true);
+        setMeshRefreshFeedback(null);
+        try {
+            const success = await settingsService.refreshRegionalMeshViews();
+            setMeshRefreshFeedback(success ? 'Regionale Mesh-Sichten erfolgreich aktualisiert' : 'Keine regionalen Mesh-Quellen konfiguriert');
+        } catch (e) {
+            setMeshRefreshFeedback(`Fehler bei Mesh-Aktualisierung: ${translateError(e, t)}`);
+        } finally {
+            setIsRefreshingMesh(false);
+            setTimeout(() => setMeshRefreshFeedback(null), 4000);
+        }
     };
 
     const handleBenchmark = async () => {
@@ -459,6 +498,91 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                             <span className="block text-[10px] text-theme-light/60 font-normal">Wenn aktiv, werden ausschließlich die oben eingetragenen Server verwendet – keine Seed-Peers.</span>
                                         </span>
                                     </label>
+
+                                    {/* Regionale Beobachtungsquellen (Regional Mesh Sources) */}
+                                    <div className="space-y-3 pt-4 border-t border-theme-subtle">
+                                        <div className="flex items-center justify-between">
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
+                                                <ShieldCheck size={12} /> Regionale Beobachtungsquellen (Regional Mesh)
+                                            </label>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                onClick={handleRefreshMeshViews}
+                                                disabled={isRefreshingMesh}
+                                                className="text-[10px] px-2.5 py-1 gap-1"
+                                            >
+                                                {isRefreshingMesh ? <Clock className="animate-spin" size={12} /> : <Globe size={12} />}
+                                                {isRefreshingMesh ? 'Aktualisiere...' : 'Cold Refresh'}
+                                            </Button>
+                                        </div>
+                                        {meshRefreshFeedback && (
+                                            <p className={`text-xs font-medium ${meshRefreshFeedback.includes('Fehler') ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                                {meshRefreshFeedback}
+                                            </p>
+                                        )}
+                                        {(settings?.regionalMeshSources || []).length > 0 ? (
+                                            <div className="space-y-2">
+                                                {(settings?.regionalMeshSources || []).map((src, idx) => (
+                                                    <div key={`${src.url}-${idx}`} className="flex items-center gap-2 p-3 bg-slate-50 border border-theme-subtle rounded-xl">
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="text-xs font-bold text-theme-secondary truncate">{src.url}</div>
+                                                            <div className="text-[10px] font-mono text-theme-light truncate">Key: {src.publicKey}</div>
+                                                            {src.bearerToken && (
+                                                                <div className="text-[10px] text-theme-light/60 truncate">Bearer Token konfiguriert</div>
+                                                            )}
+                                                        </div>
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            onClick={() => handleRemoveRegionalSource(idx)}
+                                                            className="px-2 py-1 text-xs shrink-0"
+                                                            title="Entfernen"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </Button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <p className="text-xs text-theme-light/60 italic">Noch keine regionalen Beobachtungsquellen hinterlegt.</p>
+                                        )}
+
+                                        {/* Add new regional source */}
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-white border border-dashed border-theme-subtle rounded-xl">
+                                            <Input
+                                                placeholder="URL (https://...)"
+                                                value={newRegionalUrl}
+                                                onChange={(e) => setNewRegionalUrl(e.target.value)}
+                                                className="text-xs font-mono"
+                                            />
+                                            <Input
+                                                placeholder="Public Key (Ed25519 Hex / Base58)"
+                                                value={newRegionalPublicKey}
+                                                onChange={(e) => setNewRegionalPublicKey(e.target.value)}
+                                                className="text-xs font-mono"
+                                            />
+                                            <div className="md:col-span-2">
+                                                <Input
+                                                    placeholder="Bearer Token (optional)"
+                                                    value={newRegionalBearerToken}
+                                                    onChange={(e) => setNewRegionalBearerToken(e.target.value)}
+                                                    className="text-xs font-mono"
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    onClick={handleAddRegionalSource}
+                                                    disabled={!newRegionalUrl.trim() || !newRegionalPublicKey.trim()}
+                                                    className="w-full gap-2"
+                                                >
+                                                    <Plus size={14} /> Regionale Quelle hinzufügen
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    </div>
 
                                     {/* Benchmark */}
                                     <div className="space-y-3">

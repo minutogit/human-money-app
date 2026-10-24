@@ -5,7 +5,7 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
-import { AppSettings } from '../types';
+import { AppSettings, IntentDispatchObservation } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
 import { settingsService } from '../services/settingsService';
@@ -23,10 +23,11 @@ interface TransferSuccessViewProps {
     bundleData: number[];
     recipientId: string;
     summary: string;
+    l2Dispatch?: IntentDispatchObservation[];
     onDone: () => void;
 }
 
-export function TransferSuccessView({ bundleData, recipientId, summary, onDone }: TransferSuccessViewProps) {
+export function TransferSuccessView({ bundleData, recipientId, summary, l2Dispatch, onDone }: TransferSuccessViewProps) {
     const { t } = useTranslation();
     const { protectAction } = useSession();
     const [feedback, setFeedback] = useState('');
@@ -137,6 +138,36 @@ export function TransferSuccessView({ bundleData, recipientId, summary, onDone }
                                 </p>
                             </div>
                         </div>
+
+                        {l2Dispatch && l2Dispatch.length > 0 && (
+                            <div className="p-5 bg-slate-50 border border-slate-200 rounded-3xl space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-theme-secondary flex items-center gap-1.5">
+                                        <ShieldCheck size={14} className="text-emerald-600" /> Layer 2 Dispatch
+                                    </span>
+                                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                                        {l2Dispatch.length} {l2Dispatch.length === 1 ? 'Lock-Intent' : 'Lock-Intents'}
+                                    </span>
+                                </div>
+                                <div className="space-y-1.5">
+                                    {l2Dispatch.map((obs, idx) => (
+                                        <div key={`${obs.localInstanceId}-${idx}`} className="flex items-center justify-between text-xs p-2.5 bg-white rounded-xl border border-slate-100">
+                                            <span className="font-mono text-[11px] text-theme-light truncate max-w-[220px]" title={obs.localInstanceId}>
+                                                {obs.localInstanceId.slice(0, 16)}...
+                                            </span>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${obs.httpStatus && obs.httpStatus >= 200 && obs.httpStatus < 300 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                                                    {obs.httpStatus ? `HTTP ${obs.httpStatus}` : obs.status}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <p className="text-[10px] text-theme-light/70 italic border-t border-slate-200/60 pt-2">
+                                    ⚠️ Hinweis: Die HTTP-Beobachtung ist ein reiner Transportnachweis und autorisiert keine automatische Warenausgabe.
+                                </p>
+                            </div>
+                        )}
                     </div>
                 </div>
 

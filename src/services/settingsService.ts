@@ -47,5 +47,9 @@ export const settingsService = {
 
     benchmarkL2Servers: async (urls?: string[]) => {
         return await invoke<Array<{ url: string; latencyMs?: number; reachable: boolean }>>("benchmark_l2_servers", { urls });
+    },
+
+    refreshRegionalMeshViews: async () => {
+        return await invoke<boolean>("refresh_regional_mesh_views");
     }
 };

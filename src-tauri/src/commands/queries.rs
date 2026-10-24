@@ -167,6 +167,7 @@ mod tests {
             ])),
             contacts: Mutex::new(None),
             settings: Mutex::new(None),
+            regional_views: Mutex::new(None),
         };
         
         let events = state_raw.events.lock().unwrap();

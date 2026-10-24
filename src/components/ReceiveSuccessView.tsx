@@ -65,10 +65,11 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
 
     const checkoutVerdict = payload.checkoutVerdict;
     const outcome = checkoutVerdict?.outcome;
+    const isReplay = payload.newlyCommitted === false || payload.isReplay === true;
     const isLiveConfirmed = checkoutVerdict?.canReleaseGoodsAutomatically === true && outcome === 'Confirmed';
-    const isConfirmed = isLiveConfirmed;
+    const isConfirmed = isLiveConfirmed && !isReplay;
     const isQuarantined = isVictim || (checkoutVerdict ? checkoutVerdict.outcome.startsWith('Quarantined') : false);
-    const isProvisional = outcome === 'Provisional' && checkoutVerdict?.canReleaseGoodsAutomatically === true;
+    const isProvisional = outcome === 'Provisional' && checkoutVerdict?.canReleaseGoodsAutomatically === true && !isReplay;
 
     // Only a verified Confirmed checkout verdict with full 14/20 live quorum can yield 'final'.
     // Unverified bundle import or raw response DTOs must never confirm payment or release goods automatically.
@@ -174,7 +175,24 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                 {/* Checkout & Goods Release (Warenfreigabe) Status */}
                 {checkoutVerdict && (
                     <div data-testid="goods-release-section" className="space-y-3">
-                    {isConfirmed ? (
+                    {isReplay ? (
+                        <div data-testid="goods-release-card" className="p-5 bg-blue-50 border-2 border-blue-200 rounded-[28px] flex items-center justify-between shadow-sm">
+                            <div className="flex items-center gap-3">
+                                <Info className="text-blue-600 shrink-0" size={28} />
+                                <div>
+                                    <h3 className="text-sm font-black text-blue-950 uppercase tracking-wider">
+                                        Bereits verbucht (Idempotente Wiederholung)
+                                    </h3>
+                                    <p className="text-xs text-blue-800 font-medium">
+                                        Diese Zahlung wurde bereits verbucht. Keine erneute Warenausgabe durchführen!
+                                    </p>
+                                </div>
+                            </div>
+                            <span className="text-[11px] font-mono font-bold bg-blue-200/70 text-blue-900 px-3 py-1.5 rounded-full uppercase tracking-wider shrink-0 flex items-center gap-1.5">
+                                REPLAY
+                            </span>
+                        </div>
+                    ) : isConfirmed ? (
                         <div data-testid="goods-release-card" className="p-5 bg-emerald-50 border-2 border-emerald-200 rounded-[28px] flex items-center justify-between shadow-sm">
                             <div className="flex items-center gap-3">
                                 <CheckCircle2 className="text-emerald-600 shrink-0" size={28} />

@@ -179,6 +179,7 @@ mod tests {
             events: Mutex::new(None),
             contacts: Mutex::new(Some(book)),
             settings: Mutex::new(None),
+            regional_views: Mutex::new(None),
         };
 
         let cache = state_raw.contacts.lock().unwrap();

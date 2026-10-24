@@ -116,6 +116,7 @@ export const AppRouter: React.FC = () => {
                 bundleData={appState.bundleData}
                 recipientId={appState.recipientId}
                 summary={appState.summary}
+                l2Dispatch={appState.l2Dispatch}
                 onDone={() => navigate({ view: "logged_in" })}
             />;
         case "receive_success":

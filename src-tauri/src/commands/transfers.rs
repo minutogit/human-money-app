@@ -1,6 +1,5 @@
 // src-tauri/src/commands/transfers.rs
 use crate::{
-    commands::settings_cmd,
     models::{
         CreateBundleResult, FrontendRankedVoucher, FrontendTransferPlan,
         FrontendSourceTransfer, FrontendTransactionRecord,
@@ -10,7 +9,7 @@ use crate::{
     AppState,
 };
 use chrono::Utc;
-use log::{info, error, warn};
+use log::{info, error};
 use uuid::Uuid;
 use std::collections::HashMap;
 use human_money_core::{
@@ -24,63 +23,12 @@ use human_money_core::{
 /// i18n key for the "no reachable L2 node" condition.
 const ERR_L2_OFFLINE: &str = "error.network.l2Offline";
 
-/// Pre-flight Layer 2 connectivity gate (M6.1).
-///
-/// The wallet is offline-first: a transfer bundle is created locally and stays
-/// cryptographically valid without any network. Therefore the connectivity check
-/// is only *enforced* when the user pinned the app to their own L2 servers
-/// (`exclusive_custom_servers`). In that mode the pinned infrastructure is the
-/// only possible source of confirmations — an unreachable set means the payment
-/// could never be confirmed by the network, so the user is told about the
-/// offline state instead of silently degrading to an unconfirmable transfer.
-///
-/// In every other mode the PEX/seed fallback of the resolver stays available and
-/// offline transfers remain possible, so no error is raised.
-async fn ensure_l2_connectivity(state: &AppState) -> Result<(), FrontendError> {
-    let settings = match state.get_cached_settings() {
-        Ok(settings) => settings,
-        Err(e) => {
-            // Settings cache is not initialized (e.g. no active session yet).
-            // The wallet lock produces the proper error later, so do not block here.
-            warn!("L2 connectivity check skipped, settings unavailable: {}", e);
-            return Ok(());
-        }
-    };
-
-    if !settings.exclusive_custom_servers {
-        // Not pinned to custom servers: offline transfers are explicitly supported.
-        return Ok(());
+/// Cold cached routing is the only preflight. Reachability probes belong to
+/// discovery, never to the signed transfer's checkout budget.
+fn validate_l2_routing(settings:&crate::settings::AppSettings)->Result<(),FrontendError> {
+    if settings.exclusive_custom_servers && crate::gateway_resolver::cached_candidates(settings).is_empty() {
+        return Err(FrontendError {code:ERR_L2_OFFLINE.into(),message:"No configured Layer 2 gateway".into(),details:HashMap::new()});
     }
-
-    let reachable = settings_cmd::resolve_active_l2_nodes_internal(&settings).await;
-
-    if reachable.is_empty() {
-        let configured = settings
-            .custom_servers
-            .iter()
-            .filter(|s| s.is_active && !s.url.trim().is_empty())
-            .count();
-        error!(
-            "L2 connectivity check failed: no reachable node in exclusive custom server mode ({} configured)",
-            configured
-        );
-        let mut details = HashMap::new();
-        details.insert("configuredServers".to_string(), configured.to_string());
-        return Err(FrontendError {
-            code: ERR_L2_OFFLINE.to_string(),
-            message: format!(
-                "Offline: No Layer 2 node is reachable ({} configured custom server(s) in exclusive mode). \
-                 The transfer cannot be confirmed by the network. Check your server settings or disable the exclusive custom server mode.",
-                configured
-            ),
-            details,
-        });
-    }
-
-    info!(
-        "L2 connectivity check passed: {} node(s) reachable",
-        reachable.len()
-    );
     Ok(())
 }
 
@@ -102,12 +50,9 @@ pub async fn create_transfer_bundle(
         recipient_id
     );
 
-    // M6.1: Pre-flight L2 connectivity gate. This must happen before the service
-    // lock is taken, because the resolver performs network requests.
-    ensure_l2_connectivity(&state).await?;
-
-    let mut service = state.service.lock().unwrap();
-
+    let settings=state.get_cached_settings().map_err(FrontendError::from)?;
+    validate_l2_routing(&settings)?;
+    let network=match settings.active_network.to_lowercase().as_str() {"mainnet"=>0,"testnet"=>1,_=>return Err(FrontendError::from("Invalid L2 network".to_string()))};
     let source_transfers = sources
         .into_iter()
         .map(|s| SourceTransfer {
@@ -124,22 +69,31 @@ pub async fn create_transfer_bundle(
         use_privacy_mode,
     };
 
-    let archive: Option<&FileVoucherArchive> = None;
-
-    match service.create_transfer_bundle(request, &standard_definitions_toml, archive, password.as_deref()) {
-        Ok(result) => {
-            if let Err(e) = state.refresh_events_cache(&mut service, password.as_deref()) {
-                error!("Failed to refresh events cache after create_transfer_bundle: {}", e);
+    let (result,intents) = {
+        let mut service=state.service.lock().map_err(|_|FrontendError::from("Wallet service unavailable".to_string()))?;
+        let result=service.create_transfer_bundle_with_l2_intents(request,&standard_definitions_toml,None,password.as_deref(),network).map_err(FrontendError::from)?;
+        let mut intents = Vec::with_capacity(result.involved_sources_details.len());
+        for source in &result.involved_sources_details {
+            match service.pending_l2_send_intent(&source.local_instance_id) {
+                Ok(intent) => intents.push(intent),
+                Err(err) => {
+                    log::warn!(
+                        "Pending L2 send intent missing or failed for source {}: {}",
+                        source.local_instance_id,
+                        err
+                    );
+                }
             }
-
-            Ok(CreateBundleResult {
-                bundle_data: result.bundle_bytes,
-                bundle_id: result.bundle_id,
-                involved_sources_details: result.involved_sources_details.into_iter().map(|s| s.into()).collect(),
-            })
         }
-        Err(e) => Err(FrontendError::from(e)),
-    }
+        if let Err(error)=state.refresh_events_cache(&mut service,password.as_deref()) {error!("Failed to refresh events after transfer commit: {}",error);}
+        (result,intents)
+    };
+    // The service mutex is released; the managed Core commit has acknowledged
+    // exact bytes before the first HTTP attempt. Uncertain outputs stay pending.
+    let candidates=crate::gateway_resolver::cached_candidates(&settings);
+    let l2_dispatch=crate::gateway_resolver::dispatch_intents(&settings,&candidates,&intents).await;
+    Ok(CreateBundleResult {bundle_data:result.bundle_bytes,bundle_id:result.bundle_id,
+        involved_sources_details:result.involved_sources_details.into_iter().map(Into::into).collect(),l2_dispatch})
 }
 
 #[tauri::command]
@@ -208,6 +162,9 @@ pub fn receive_bundle(
                 verifiable_conflicts: result.check_result.verifiable_conflicts,
                 conflict_summaries: service.list_conflicts().map_err(FrontendError::from)?.into_iter().map(|s| s.into()).collect(),
                 checkout_verdict: None,
+                purchase_id: None,
+                newly_committed: None,
+                is_replay: None,
             })
         }
         Err(e) => {
@@ -903,6 +860,30 @@ pub async fn submit_l2_send_intent(
     };
     let candidates = crate::gateway_resolver::cached_candidates(&settings);
     let now_ms = u64::try_from(Utc::now().timestamp_millis()).map_err(|_| FrontendError::from("Invalid verification time".to_string()))?;
+
+    if let Some(res) = &intent.terminal_resolution {
+        let status = match res {
+            human_money_core::app_service::IntentTerminalResolution::Confirmed { .. } => "reconciled_confirmed",
+            human_money_core::app_service::IntentTerminalResolution::Conflicted { .. } => "conflicted",
+            human_money_core::app_service::IntentTerminalResolution::Expired { .. } => "expired",
+        };
+        return Ok(crate::gateway_resolver::IntentDispatchObservation {
+            local_instance_id,
+            status: status.into(),
+            http_status: None,
+        });
+    }
+
+    if now_ms >= intent.root_valid_until_ms {
+        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let _ = service.expire_intent_if_overdue(&local_instance_id, now_ms, password.as_deref());
+        return Ok(crate::gateway_resolver::IntentDispatchObservation {
+            local_instance_id,
+            status: "expired".into(),
+            http_status: None,
+        });
+    }
+
     if now_ms >= intent.created_at_ms.saturating_add(30_000) {
         let tag = {
             let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
@@ -910,9 +891,46 @@ pub async fn submit_l2_send_intent(
         };
         let observed = if let Some(bytes) = crate::gateway_resolver::fetch_retained(&candidates, &tag).await.map_err(FrontendError::from)? {
             let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-            service.record_retained_choice_observation(&local_instance_id, &bytes, now_ms, password.as_deref()).map_err(FrontendError::from)?
+            match service.record_retained_choice_observation(&local_instance_id, &bytes, now_ms, password.as_deref()) {
+                Ok(true) => true,
+                Ok(false) => false,
+                Err(err) => {
+                    log::warn!("Retained choice observation for {} detected conflict/mismatch: {}", local_instance_id, err);
+                    false
+                }
+            }
         } else { false };
-        return Ok(crate::gateway_resolver::IntentDispatchObservation { local_instance_id, status: if observed { "retained_original_observed_output_pending" } else { "pending" }.into(), http_status: None });
+
+        if let Ok((_owner, views)) = crate::checkout::cached_views(&state) {
+            let context_res = {
+                let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+                service.begin_intent_reconciliation(&local_instance_id, &views, now_ms, password.as_deref())
+            };
+            if let Ok(context) = context_res {
+                if let Ok(Some(proof)) = crate::gateway_resolver::fetch_live_proof(&candidates, &context).await {
+                    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+                    if let Ok(res) = service.complete_intent_reconciliation(&local_instance_id, &proof, &views, now_ms, password.as_deref()) {
+                        let _ = service.cleanup_terminal_intents(60_000, now_ms, password.as_deref());
+                        let status = match res {
+                            human_money_core::app_service::IntentTerminalResolution::Confirmed { .. } => "reconciled_confirmed",
+                            human_money_core::app_service::IntentTerminalResolution::Conflicted { .. } => "conflicted",
+                            human_money_core::app_service::IntentTerminalResolution::Expired { .. } => "expired",
+                        };
+                        return Ok(crate::gateway_resolver::IntentDispatchObservation {
+                            local_instance_id,
+                            status: status.into(),
+                            http_status: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        return Ok(crate::gateway_resolver::IntentDispatchObservation {
+            local_instance_id,
+            status: if observed { "retained_original_observed_output_pending" } else { "pending" }.into(),
+            http_status: None,
+        });
     }
     let http_status = crate::gateway_resolver::dispatch_exact(&settings, &candidates, &intent.request_bytes).await.map_err(FrontendError::from)?;
     Ok(crate::gateway_resolver::IntentDispatchObservation { local_instance_id, status: "pending".into(), http_status })
@@ -945,10 +963,26 @@ pub fn begin_pos_checkout(purchase_id:String,bundle_data:Vec<u8>,regional_views_
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn complete_pos_checkout(purchase_id:String,bundle_data:Vec<u8>,proof_json:String,regional_views_json:String,standard_definitions_toml:HashMap<String,String>,password:Option<String>,state:tauri::State<AppState>)->Result<FrontendPurchaseCompletion,FrontendError> {
+    {
+        let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        if let Some(completion) = service.replay_checkout_purchase(&purchase_id, &bundle_data).map_err(FrontendError::from)? {
+            return Ok(FrontendPurchaseCompletion {
+                purchase_id: completion.purchase_id,
+                newly_committed: completion.newly_committed,
+                verdict: completion.verdict.into(),
+            });
+        }
+    }
     if proof_json.len()>32*1024 {return Err(FrontendError::from("Checkout proof budget exceeded".to_string()));}
     let proof:LiveStateProof=serde_json::from_str(&proof_json).map_err(|_|FrontendError::from("Invalid checkout proof".to_string()))?;
     let views=parse_regional_views(&regional_views_json)?;let now=checkout_now_ms()?;
     let mut service=state.service.lock().map_err(|_|FrontendError::from("Wallet service unavailable".to_string()))?;
     let completion=service.complete_checkout_purchase(&purchase_id,&bundle_data,&proof,&views,&standard_definitions_toml,now,password.as_deref()).map_err(FrontendError::from)?;
     Ok(FrontendPurchaseCompletion {purchase_id:completion.purchase_id,newly_committed:completion.newly_committed,verdict:completion.verdict.into()})
+}
+
+/// Productive purchase path: stored challenge, one payment gateway, atomic import.
+#[tauri::command]
+pub async fn checkout_received_bundle(purchase_id:String,bundle_data:Vec<u8>,standard_definitions_toml:HashMap<String,String>,password:Option<String>,state:tauri::State<'_,AppState>)->Result<crate::checkout::PurchaseCompletion,FrontendError> {
+    crate::checkout::checkout_bundle(&state,&purchase_id,&bundle_data,&standard_definitions_toml,password.as_deref()).await
 }

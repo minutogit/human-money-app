@@ -2,11 +2,17 @@
 project: human-money-app
 version: "0.2.1"
 phase: "beta"
-health: "yellow"
-last_updated: "2026-10-23"
+health: "green"
+last_updated: "2026-10-24"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-038"
+    title: "Z08 Productive PoS Checkout, Replay Idempotency & Z10 Retained-Choice Reconciliation"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Completed productive UI and backend integration: SettingsView regional mesh sources & cold refresh on login, ReceiveView PoS checkout mode & cart ID, ReceiveSuccessView idempotency warning on replay (suppressing goods release on replay), TransferSuccessView L2 transport observation disclaimer, robust non-swallowing intent collection, and complete submit_l2_send_intent terminal reconciliation flow."
   - id: "APP-037"
     title: "Z01 Fail-Closed Goods-Release Boundary: Unit Tests & Enforcement (transfers.rs)"
     status: "completed"
