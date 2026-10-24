@@ -2,10 +2,8 @@
 use crate::{AppState,settings::{AppSettings,RegionalSourceDto},models::FrontendError};
 use human_money_core::humoco_proto::{mesh::{RegionalMeshPolicy,RegionalMeshView,regional_committee},live::LiveStateProof};
 use std::collections::HashMap;
-use tauri::Manager;
 
 const REGIONAL_VIEW_RENEWAL_WINDOW_MS:u64=10_000;
-const REGIONAL_VIEW_RENEWAL_INTERVAL_SECS:u64=30;
 
 #[derive(Clone)]
 pub(crate) struct RegionalViewCache {
@@ -94,23 +92,6 @@ pub(crate) async fn ensure_cached_views(state:&AppState)->Result<(String,Vec<Reg
         if let Err(error)=refresh_views(state).await {log::warn!("Regional view cache refresh failed: {}",error.message);}
     }
     cached_views(state)
-}
-pub(crate) fn spawn_regional_view_renewal_worker(app:tauri::AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        let mut interval=tokio::time::interval(std::time::Duration::from_secs(REGIONAL_VIEW_RENEWAL_INTERVAL_SECS));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            let state=app.state::<AppState>();
-            let unlocked=match state.service.lock() {
-                Ok(service)=>service.with_wallet(|_|()).is_ok(),
-                Err(_)=>false,
-            };
-            if unlocked {
-                if let Err(error)=ensure_cached_views(state.inner()).await {log::warn!("Regional view renewal failed: {}",error.message);}
-            }
-        }
-    });
 }
 #[derive(serde::Serialize)]
 #[serde(rename_all="camelCase")]

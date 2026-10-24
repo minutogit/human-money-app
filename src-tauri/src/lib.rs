@@ -100,7 +100,7 @@ pub fn run() {
                 settings: Mutex::new(None),
                 regional_views: Mutex::new(None),
             });
-            crate::checkout::spawn_regional_view_renewal_worker(app.handle().clone());
+            spawn_regional_view_renewal_worker(app.handle().clone());
             crate::intent_reconciliation::spawn_intent_reconciliation_worker(app.handle().clone());
 
             Ok(())
@@ -171,3 +171,23 @@ pub fn run() {
 }
 
 mod checkout;
+
+fn spawn_regional_view_renewal_worker(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let state = app.state::<AppState>();
+            let unlocked = match state.service.lock() {
+                Ok(service) => service.with_wallet(|_| ()).is_ok(),
+                Err(_) => false,
+            };
+            if unlocked {
+                if let Err(error) = crate::checkout::ensure_cached_views(state.inner()).await {
+                    log::warn!("Regional view renewal failed: {}", error.message);
+                }
+            }
+        }
+    });
+}
