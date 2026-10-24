@@ -262,6 +262,9 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
                 if (isPosMode || purchaseId.trim().length > 0) {
                     const activePurchaseId = purchaseId.trim() || `pos-${Date.now()}`;
+                    if (!purchaseId.trim()) {
+                        setPurchaseId(activePurchaseId);
+                    }
                     const completion = await protectAction(async (walletPassword) => {
                         return await transferService.checkoutReceivedBundle({
                             purchaseId: activePurchaseId,
