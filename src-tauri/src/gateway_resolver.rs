@@ -33,13 +33,23 @@ pub(crate) fn endpoint(raw: &str, path: &str) -> Option<reqwest::Url> {
 pub(crate) async fn dispatch_exact(settings:&AppSettings,candidates:&[String],bytes:&[u8])->Result<Option<u16>,String> {
     dispatch_path(settings,candidates,bytes,"v1/lock",tokio::time::Instant::now()+std::time::Duration::from_millis(800)).await
 }
-/// All pending transfer inputs share one transport budget. None of these status
-/// observations can authorize goods release or synthesize a replacement spend.
+/// Each transfer input gets its own transport budget. Causal chains must
+/// persist and quorum-verify every hop, so they receive 800 ms per hop with a
+/// 3000 ms floor; single locks keep the 800 ms checkout budget. None of these
+/// status observations can authorize goods release or synthesize a replacement
+/// spend.
 pub(crate) async fn dispatch_intents(settings:&AppSettings,candidates:&[String],intents:&[human_money_core::models::l2_intent::L2SendIntent])->Vec<IntentDispatchObservation> {
-    let deadline = tokio::time::Instant::now()+std::time::Duration::from_millis(800);
     let mut observations = Vec::new();
     for intent in intents {
-        let (bytes,path) = if intent.chain_request_bytes.is_empty() { (&intent.request_bytes,"v1/lock") } else { (&intent.chain_request_bytes,"v1/lock/chain") };
+        let (bytes,path,hops) = if intent.chain_request_bytes.is_empty() {
+            (&intent.request_bytes,"v1/lock",1u64)
+        } else {
+            let hops = serde_json::from_slice::<human_money_core::models::layer2_api::L2ChainLockRequest>(&intent.chain_request_bytes)
+                .map(|chain|chain.chain.len().max(1) as u64).unwrap_or(1);
+            (&intent.chain_request_bytes,"v1/lock/chain",hops)
+        };
+        let budget_ms = if path == "v1/lock" {800} else {hops.saturating_mul(800).max(3000)};
+        let deadline = tokio::time::Instant::now()+std::time::Duration::from_millis(budget_ms);
         let status = if tokio::time::Instant::now()<deadline {
             dispatch_path(settings,candidates,bytes,path,deadline).await.ok().flatten()
         } else { None };
