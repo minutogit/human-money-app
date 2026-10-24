@@ -21,18 +21,23 @@ pub fn get_app_settings(state: tauri::State<AppState>) -> Result<AppSettings, Fr
 }
 
 #[tauri::command]
-pub fn save_app_settings(
+pub async fn save_app_settings(
     settings: AppSettings,
     password: Option<String>,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<(), FrontendError> {
     info!("Saving app settings to disk...");
-    let mut service = state.service.lock().unwrap();
-    if let Some(policy)=crate::checkout::configured_policy(&settings)? {
-        service.configure_regional_mesh_authority(policy,password.as_deref()).map_err(FrontendError::from)?;
+    {
+        let mut service = state.service.lock().unwrap();
+        if let Some(policy)=crate::checkout::configured_policy(&settings)? {
+            service.configure_regional_mesh_authority(policy,password.as_deref()).map_err(FrontendError::from)?;
+        }
+        *state.regional_views.lock().map_err(|_|FrontendError::from("Regional cache unavailable".to_string()))?=None;
+        state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)?;
+        drop(service);
     }
-    *state.regional_views.lock().map_err(|_|FrontendError::from("Regional cache unavailable".to_string()))?=None;
-    state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)
+    if let Err(error)=crate::checkout::refresh_views(state.inner()).await {log::warn!("Proactive regional view refresh failed: {}",error.message);}
+    Ok(())
 }
 
 #[tauri::command]

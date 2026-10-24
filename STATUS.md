@@ -7,6 +7,12 @@ last_updated: "2026-10-24"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-039"
+    title: "Fail-Closed Regional Mesh Cache Expiry & Renewal (F05/R05)"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Fixed Finding F05 in the Tauri host: regional mesh authority views now carry the earliest signed-view expiry, expired caches are rejected fail-closed, checkout proactively refreshes missing or near-expiry caches, settings invalidation triggers a best-effort refresh, and a host-owned 30-second worker renews the cache only while the wallet is unlocked. Added unit coverage for expired-cache rejection and impending-expiry detection."
   - id: "APP-038"
     title: "Z08 Productive PoS Checkout, Replay Idempotency & Z10 Retained-Choice Reconciliation"
     status: "completed"
@@ -405,3 +411,15 @@ authority. Regional policy remains recipient configured and authenticated.
 Validation: backend test script and TypeScript type check passed. Complete
 productive UI orchestration, signed roster refresh, terminal resolution and full
 App/Core/Node/QUIC-to-PoS acceptance remain open.
+
+### 2026-10-24 — Fail-closed regional cache expiry and renewal (F05/R05)
+
+Regional mesh view caches now expire at the earliest signed-source validity
+boundary and reject expired entries before checkout use. Checkout and a
+host-owned 30-second renewal worker refresh missing or near-expiry caches while
+the wallet is unlocked; settings changes invalidate the old authority and
+trigger a proactive refresh. Two unit tests cover expired-cache rejection and
+impending-expiry detection.
+
+Validation: `./run-tests.sh --backend-only --quiet` and
+`cargo test checkout::tests -- --nocapture` passed.

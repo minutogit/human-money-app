@@ -2,11 +2,21 @@
 use crate::{AppState,settings::{AppSettings,RegionalSourceDto},models::FrontendError};
 use human_money_core::humoco_proto::{mesh::{RegionalMeshPolicy,RegionalMeshView,regional_committee},live::LiveStateProof};
 use std::collections::HashMap;
+use tauri::Manager;
+
+const REGIONAL_VIEW_RENEWAL_WINDOW_MS:u64=10_000;
+const REGIONAL_VIEW_RENEWAL_INTERVAL_SECS:u64=30;
+
 #[derive(Clone)]
 pub(crate) struct RegionalViewCache {
     pub owner:String,
     pub policy:RegionalMeshPolicy,
     pub views:Vec<RegionalMeshView>,
+    pub expires_at_ms:u64,
+}
+impl RegionalViewCache {
+    fn is_expired(&self,now_ms:u64)->bool {now_ms>=self.expires_at_ms}
+    fn is_expiring_within(&self,now_ms:u64,window_ms:u64)->bool {self.expires_at_ms<=now_ms.saturating_add(window_ms)}
 }
 fn fail(message:&str)->FrontendError {FrontendError::from(message.to_string())}
 fn now()->Result<u64,FrontendError> {u64::try_from(chrono::Utc::now().timestamp_millis()).map_err(|_|fail("Invalid verification time"))}
@@ -53,21 +63,54 @@ pub(crate) async fn refresh_views(state:&AppState)->Result<bool,FrontendError> {
         service.with_wallet(|wallet|(wallet.get_user_id().to_string(),wallet.profile.l2_regional_mesh_policy.clone())).map_err(FrontendError::from)?};
     if owner.1.as_ref()!=Some(&policy) {return Err(fail("Regional source configuration is not authenticated"));}
     let views=fetch_regional_views(&settings.regional_mesh_sources,&policy).await?;
+    let expires_at_ms=views.iter().map(|view|view.valid_until_ms).min().ok_or_else(||fail("Regional view expiry unavailable"))?;
     let service=state.service.lock().map_err(|_|fail("Wallet service unavailable"))?;
     let current=service.with_wallet(|wallet|(wallet.get_user_id().to_string(),wallet.profile.l2_regional_mesh_policy.clone())).map_err(FrontendError::from)?;
     if current!=owner {return Err(fail("Wallet authority changed during refresh"));}
     let current_settings=state.get_cached_settings().map_err(FrontendError::from)?;
     if configured_policy(&current_settings)?.as_ref()!=Some(&policy) {return Err(fail("Source settings changed during refresh"));}
-    *state.regional_views.lock().map_err(|_|fail("Regional cache unavailable"))?=Some(RegionalViewCache {owner:owner.0,policy,views});
+    *state.regional_views.lock().map_err(|_|fail("Regional cache unavailable"))?=Some(RegionalViewCache {owner:owner.0,policy,views,expires_at_ms});
     Ok(true)
 }
 pub(crate) fn cached_views(state:&AppState)->Result<(String,Vec<RegionalMeshView>),FrontendError> {
     let service=state.service.lock().map_err(|_|fail("Wallet service unavailable"))?;
-    let owner=service.with_wallet(|wallet|(wallet.get_user_id().to_string(),wallet.profile.l2_regional_mesh_policy.clone())).map_err(FrontendError::from)?;
     let cache=state.regional_views.lock().map_err(|_|fail("Regional cache unavailable"))?;
     let cache=cache.as_ref().ok_or_else(||fail("Authenticated regional view cache unavailable"))?;
+    if cache.is_expired(now()?) {return Err(fail("Authenticated regional view cache expired"));}
+    let owner=service.with_wallet(|wallet|(wallet.get_user_id().to_string(),wallet.profile.l2_regional_mesh_policy.clone())).map_err(FrontendError::from)?;
     if cache.owner!=owner.0 || owner.1.as_ref()!=Some(&cache.policy) {return Err(fail("Regional cache belongs to another authority"));}
     Ok((owner.0,cache.views.clone()))
+}
+pub(crate) async fn ensure_cached_views(state:&AppState)->Result<(String,Vec<RegionalMeshView>),FrontendError> {
+    let now_ms=now()?;
+    let needs_refresh={
+        let cache=state.regional_views.lock().map_err(|_|fail("Regional cache unavailable"))?;
+        match cache.as_ref() {
+            None=>true,
+            Some(cache)=>cache.is_expiring_within(now_ms,REGIONAL_VIEW_RENEWAL_WINDOW_MS),
+        }
+    };
+    if needs_refresh {
+        if let Err(error)=refresh_views(state).await {log::warn!("Regional view cache refresh failed: {}",error.message);}
+    }
+    cached_views(state)
+}
+pub(crate) fn spawn_regional_view_renewal_worker(app:tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut interval=tokio::time::interval(std::time::Duration::from_secs(REGIONAL_VIEW_RENEWAL_INTERVAL_SECS));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let state=app.state::<AppState>();
+            let unlocked=match state.service.lock() {
+                Ok(service)=>service.with_wallet(|_|()).is_ok(),
+                Err(_)=>false,
+            };
+            if unlocked {
+                if let Err(error)=ensure_cached_views(state.inner()).await {log::warn!("Regional view renewal failed: {}",error.message);}
+            }
+        }
+    });
 }
 #[derive(serde::Serialize)]
 #[serde(rename_all="camelCase")]
@@ -94,7 +137,7 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
         }
     }
 
-    let (owner,views)=cached_views(state)?;
+    let (owner,views)=ensure_cached_views(state).await?;
     let context={let mut service=state.service.lock().map_err(|_|fail("Wallet service unavailable"))?;
         service.begin_checkout_purchase(purchase_id,bundle,&views,now()?,password).map_err(FrontendError::from)?};
     let settings=state.get_cached_settings().map_err(FrontendError::from)?;
@@ -106,4 +149,49 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
     let completion=service.complete_checkout_purchase(purchase_id,bundle,&proof,&views,standards,now()?,password).map_err(FrontendError::from)?;
     if let Err(error)=state.refresh_events_cache(&mut service,password) {log::warn!("Checkout committed; event cache refresh failed: {}",error);}
     Ok(PurchaseCompletion {purchase_id:completion.purchase_id,newly_committed:completion.newly_committed,verdict:completion.verdict.into()})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use human_money_core::app_service::AppService;
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    fn cache(expires_at_ms:u64)->RegionalViewCache {
+        RegionalViewCache {
+            owner:"owner".to_string(),
+            policy:RegionalMeshPolicy {network:0,source_keys:Vec::new()},
+            views:Vec::new(),
+            expires_at_ms,
+        }
+    }
+
+    fn test_state(cache:Option<RegionalViewCache>,path:&Path)->AppState {
+        AppState {
+            service:Mutex::new(AppService::new(path).unwrap()),
+            history:Mutex::new(None),
+            events:Mutex::new(None),
+            contacts:Mutex::new(None),
+            settings:Mutex::new(None),
+            regional_views:Mutex::new(cache),
+        }
+    }
+
+    #[test]
+    fn cached_views_rejects_expired_cache() {
+        let path=std::env::temp_dir().join(format!("human-money-app-checkout-{}",uuid::Uuid::new_v4()));
+        let state=test_state(Some(cache(0)),&path);
+        let error=cached_views(&state).expect_err("expired cache must be rejected");
+        assert_eq!(error.message,"Authenticated regional view cache expired");
+        drop(state);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn is_expiring_within_detects_impending_expiry() {
+        let cache=cache(15_000);
+        assert!(cache.is_expiring_within(5_000,10_000));
+        assert!(!cache.is_expiring_within(4_999,10_000));
+    }
 }

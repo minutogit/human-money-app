@@ -99,6 +99,7 @@ pub fn run() {
                 settings: Mutex::new(None),
                 regional_views: Mutex::new(None),
             });
+            crate::checkout::spawn_regional_view_renewal_worker(app.handle().clone());
 
             Ok(())
         })
