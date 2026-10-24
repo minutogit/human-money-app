@@ -118,7 +118,7 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
         }
     }
 
-    let (owner,views)=ensure_cached_views(state).await?;
+    let (owner,views)=cached_views(state)?;
     let context={let mut service=state.service.lock().map_err(|_|fail("Wallet service unavailable"))?;
         service.begin_checkout_purchase(purchase_id,bundle,&views,now()?,password).map_err(FrontendError::from)?};
     let settings=state.get_cached_settings().map_err(FrontendError::from)?;

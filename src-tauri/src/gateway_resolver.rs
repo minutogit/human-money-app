@@ -36,7 +36,7 @@ pub(crate) async fn dispatch_exact(settings:&AppSettings,candidates:&[String],by
 /// All pending transfer inputs share one transport budget. None of these status
 /// observations can authorize goods release or synthesize a replacement spend.
 pub(crate) async fn dispatch_intents(settings:&AppSettings,candidates:&[String],intents:&[human_money_core::models::l2_intent::L2SendIntent])->Vec<IntentDispatchObservation> {
-    let deadline = tokio::time::Instant::now()+std::time::Duration::from_millis(2500);
+    let deadline = tokio::time::Instant::now()+std::time::Duration::from_millis(800);
     let mut observations = Vec::new();
     for intent in intents {
         let (bytes,path) = if intent.chain_request_bytes.is_empty() { (&intent.request_bytes,"v1/lock") } else { (&intent.chain_request_bytes,"v1/lock/chain") };

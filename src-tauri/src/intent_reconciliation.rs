@@ -113,11 +113,19 @@ pub async fn reconcile_due_intents(
     let now = now_ms()?;
 
     let (owner, intents) = {
-        let service = state.service.lock().map_err(|_| wallet_unavailable())?;
+        let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
         let owner = match service.with_wallet(|wallet| wallet.get_user_id().to_string()) {
             Ok(owner) => owner,
             Err(_) => return Ok(0),
         };
+        if let Err(error) =
+            service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None)
+        {
+            log::warn!(
+                "Failed to clean up terminal L2 send intents: {}",
+                error
+            );
+        }
         let intents = service
             .unresolved_l2_send_intents()
             .map_err(FrontendError::from)?;
@@ -354,6 +362,48 @@ mod tests {
             intent.terminal_resolution,
             Some(IntentTerminalResolution::Expired { .. })
         ));
+        drop(service);
+        drop(state);
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn cleans_up_terminal_intents_without_unresolved_intents() {
+        let path = temp_path();
+        let password = "terminal-intent-password";
+        let (state, local_id) = unlocked_fixture(&path, password);
+        let now = now_ms().unwrap();
+
+        {
+            let mut service = state.service.lock().unwrap();
+            let wallet = service.get_wallet_mut().unwrap();
+            let intent = wallet
+                .profile
+                .l2_send_intents
+                .get_mut(&local_id)
+                .unwrap();
+            intent.root_valid_until_ms = now.saturating_add(60_000);
+            intent.terminal_resolution = Some(IntentTerminalResolution::Confirmed {
+                resolved_at_ms: now.saturating_sub(61_000),
+            });
+        }
+
+        {
+            let service = state.service.lock().unwrap();
+            assert!(service.unresolved_l2_send_intents().unwrap().is_empty());
+            assert!(service
+                .with_wallet(|wallet| wallet.profile.l2_send_intents.contains_key(&local_id))
+                .unwrap());
+        }
+
+        let in_flight = Arc::new(Mutex::new(HashSet::new()));
+        let handled = reconcile_due_intents(&state, &in_flight).await.unwrap();
+
+        assert_eq!(handled, 0);
+        let service = state.service.lock().unwrap();
+        assert!(!service
+            .with_wallet(|wallet| wallet.profile.l2_send_intents.contains_key(&local_id))
+            .unwrap());
         drop(service);
         drop(state);
         cleanup(&path);
