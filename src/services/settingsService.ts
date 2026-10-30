@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { AppSettings, AnchorSyncStatus, RollbackReport } from "../types";
+import { AppSettings, AnchorSyncStatus, RollbackReport, VoucherL2StatusDto } from "../types";
 
-export type { AnchorSyncStatus, RollbackReport };
+export type { AnchorSyncStatus, RollbackReport, VoucherL2StatusDto };
 
 export interface SealForUpload {
     sealHash: string;
@@ -41,8 +41,8 @@ export const settingsService = {
         return await invoke<RollbackReport>("reconcile_rollback", { password });
     },
 
-    flushPendingAnchorSync: async (password?: string) => {
-        return await invoke<boolean>("flush_pending_anchor_sync", { password });
+    flushPendingAnchorSync: async (password?: string | null) => {
+        return await invoke<boolean>("flush_pending_anchor_sync", { password: password ?? null });
     },
 
     benchmarkL2Servers: async (urls?: string[]) => {
@@ -51,5 +51,12 @@ export const settingsService = {
 
     refreshRegionalMeshViews: async () => {
         return await invoke<boolean>("refresh_regional_mesh_views");
+    },
+
+    checkVoucherL2Status: async (localInstanceId: string, password?: string | null) => {
+        return await invoke<VoucherL2StatusDto>("check_voucher_l2_status", {
+            localInstanceId,
+            password: password ?? null,
+        });
     }
 };

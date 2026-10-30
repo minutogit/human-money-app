@@ -260,4 +260,33 @@ amount_decimal_places = 4`,
       expect(recipientInput).toHaveValue('did:key:z456');
     });
   });
+
+  it('parses standard TOML definitions into standardsDict', async () => {
+    let parsedTomlContent = '';
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_voucher_summaries') return Promise.resolve(mockVouchers);
+      if (cmd === 'get_user_id') return Promise.resolve('did:key:z789');
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_active_asset_classes') return Promise.resolve([]);
+      if (cmd === 'get_user_profile') return Promise.resolve(null);
+      if (cmd === 'parse_standard_toml') {
+        parsedTomlContent = String(args?.tomlContent || '');
+        return Promise.resolve({
+          immutable: {
+            identity: { uuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde', name: 'FreeTaler', abbreviation: 'Taler' },
+            features: { privacyMode: 'stealth' },
+          },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<SendView />);
+
+    await waitFor(() => {
+      expect(parsedTomlContent).toContain('name = "FreeTaler"');
+    });
+  });
 });

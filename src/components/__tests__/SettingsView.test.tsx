@@ -264,4 +264,29 @@ describe('SettingsView Component', () => {
     
     setItemSpy.mockRestore();
   });
+
+  it('renders Network & L2 Protection card by default on Security & Ops tab with pure offline mode', async () => {
+    const user = userEvent.setup();
+    render(<SettingsView onBack={mockOnBack} />);
+
+    await screen.findByText('Identity Profile');
+    const securityTab = screen.getByText('Security & Ops');
+    await user.click(securityTab);
+
+    // Network card header is visible without dev mode
+    expect(screen.getByText('Network & L2 Protection')).toBeInTheDocument();
+
+    // Pure offline mode overview box is shown
+    expect(screen.getByText('Pure Offline P2P Mode')).toBeInTheDocument();
+    expect(screen.getByText(/No public Human Money Node servers are active yet/i)).toBeInTheDocument();
+
+    // Collapsible advanced section is toggled
+    const advancedToggle = screen.getByRole('button', { name: /Advanced Server & PoS Configuration/i });
+    expect(advancedToggle).toBeInTheDocument();
+    await user.click(advancedToggle);
+
+    // After expanding, custom servers and network selection become visible
+    expect(screen.getByText('Active Network')).toBeInTheDocument();
+    expect(screen.getByText('Custom Servers & Trusted Peers')).toBeInTheDocument();
+  });
 });

@@ -14,7 +14,7 @@ import { cleanSeedText } from "../utils/seedUtils";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Textarea } from "./ui/Textarea";
-import { ArrowLeft, ArrowRight, RefreshCw, CheckCircle2, HelpCircle, AlertTriangle } from "lucide-react";
+import { ArrowLeft, ArrowRight, RefreshCw, CheckCircle2, HelpCircle, AlertTriangle, Archive } from "lucide-react";
 import { PrefixInfoModal } from "./ui/PrefixInfoModal";
 import { HelpIcon } from "./ui/HelpIcon";
 
@@ -24,9 +24,10 @@ type InputMode = "words" | "phrase";
 interface RecreateProfileProps {
     onProfileCreated: () => void;
     onSwitchToLogin: () => void;
+    onSwitchToRestoreBackup?: () => void;
 }
 
-export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateProfileProps) {
+export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToRestoreBackup }: RecreateProfileProps) {
     const { t } = useTranslation();
     const [wizardStep, setWizardStep] = useState<WizardStep>("import_seed");
     const [feedbackMsg, setFeedbackMsg] = useState("");
@@ -322,6 +323,24 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin }: RecreateP
                             </h2>
                             <p className="text-theme-light mt-1">{t('profile.recoverStep1Subtitle')}</p>
                         </div>
+
+                        {onSwitchToRestoreBackup && (
+                            <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-left">
+                                <p className="text-xs text-amber-900 font-medium leading-relaxed">
+                                    {t('profile.recreateIdentityOnlyDesc')}
+                                </p>
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="xs"
+                                    onClick={onSwitchToRestoreBackup}
+                                    className="shrink-0 bg-white border-amber-300 text-amber-900 hover:bg-amber-100"
+                                >
+                                    <Archive size={12} className="mr-1" />
+                                    {t('profile.recreateSwitchToRestore')}
+                                </Button>
+                            </div>
+                        )}
 
                         <div className="space-y-5 my-8">
                             <div>

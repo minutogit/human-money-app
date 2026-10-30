@@ -18,6 +18,7 @@ pub struct FrontendProofOfDoubleSpendSummary {
     pub display_affected_voucher_name: Option<String>,
     pub voucher_standard_uuid: Option<String>,
     pub is_test_voucher: bool,
+    pub is_cryptographically_attributed: bool,
 }
 
 impl From<human_money_core::wallet::types::ProofOfDoubleSpendSummary> for FrontendProofOfDoubleSpendSummary {
@@ -29,6 +30,7 @@ impl From<human_money_core::wallet::types::ProofOfDoubleSpendSummary> for Fronte
 
         Self {
             proof_id: s.proof_id,
+            is_cryptographically_attributed: s.offender_id.contains("did:key:"),
             offender_id: s.offender_id,
             fork_point_prev_hash: s.fork_point_prev_hash,
             report_timestamp: s.report_timestamp,
@@ -62,6 +64,10 @@ pub struct FrontendProofOfDoubleSpend {
     pub voucher_standard_uuid: Option<String>,
     pub is_resolved: Option<bool>,
     pub non_redeemable_test_voucher: bool,
+    pub is_cryptographically_attributed: bool,
+    pub has_victim_witness: bool,
+    pub victim_witness_count: usize,
+    pub suspected_identity: Option<String>,
 }
 
 impl From<human_money_core::models::conflict::ProofOfDoubleSpend> for FrontendProofOfDoubleSpend {
@@ -82,6 +88,11 @@ impl From<human_money_core::models::conflict::ProofOfDoubleSpend> for FrontendPr
             }
         });
 
+        let is_cryptographically_attributed = p.offender_id.contains("did:key:");
+        let has_victim_witness = !p.victim_witnesses.is_empty();
+        let victim_witness_count = p.victim_witnesses.len();
+        let suspected_identity = p.suspected_identity.clone();
+
         Self {
             proof_id: p.proof_id,
             offender_id: p.offender_id,
@@ -97,6 +108,10 @@ impl From<human_money_core::models::conflict::ProofOfDoubleSpend> for FrontendPr
             voucher_standard_uuid: None,
             is_resolved: None,
             non_redeemable_test_voucher: false,
+            is_cryptographically_attributed,
+            has_victim_witness,
+            victim_witness_count,
+            suspected_identity,
         }
     }
 }

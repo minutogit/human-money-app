@@ -12,6 +12,7 @@ use chrono::Utc;
 use log::{info, error};
 use uuid::Uuid;
 use std::collections::HashMap;
+use tauri::Manager;
 use human_money_core::{
     app_service::AppService,
     archive::FileVoucherArchive,
@@ -32,9 +33,30 @@ fn validate_l2_routing(settings:&crate::settings::AppSettings)->Result<(),Fronte
     Ok(())
 }
 
+fn open_wallet_archive(
+    app: &tauri::AppHandle,
+    service: &human_money_core::app_service::AppService,
+) -> Option<FileVoucherArchive> {
+    let app_data_dir = app.path().app_data_dir().ok()?;
+    let (user_id, key) = service
+        .with_wallet_and_identity(|w, id| {
+            let uid = w.get_user_id().to_string();
+            let derived = blake3::derive_key("HUMOCO_APP_ARCHIVE_KEY_V1", &id.signing_key.to_bytes());
+            (uid, derived)
+        })
+        .ok()?;
+    if key.iter().all(|&b| b == 0) {
+        return None;
+    }
+    let folder_hash = &blake3::hash(user_id.as_bytes()).to_hex()[..32];
+    let archive_dir = app_data_dir.join("voucher_archives").join(folder_hash);
+    Some(FileVoucherArchive::with_key(archive_dir, key))
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn create_transfer_bundle(
+    app: tauri::AppHandle,
     recipient_id: String,
     sources: Vec<FrontendSourceTransfer>,
     notes: Option<String>,
@@ -71,7 +93,8 @@ pub async fn create_transfer_bundle(
 
     let (result,intents) = {
         let mut service=state.service.lock().map_err(|_|FrontendError::from("Wallet service unavailable".to_string()))?;
-        let result=service.create_transfer_bundle_with_l2_intents(request,&standard_definitions_toml,None,password.as_deref(),network).map_err(FrontendError::from)?;
+        let archive = open_wallet_archive(&app, &service);
+        let result=service.create_transfer_bundle_with_l2_intents(request,&standard_definitions_toml,archive.as_ref(),password.as_deref(),network).map_err(FrontendError::from)?;
         let mut intents = Vec::with_capacity(result.involved_sources_details.len());
         for source in &result.involved_sources_details {
             match service.pending_l2_send_intent(&source.local_instance_id) {
@@ -98,6 +121,7 @@ pub async fn create_transfer_bundle(
 
 #[tauri::command]
 pub fn receive_bundle(
+    app: tauri::AppHandle,
     bundle_data: Vec<u8>,
     standard_definitions_toml: HashMap<String, String>,
     password: Option<String>,
@@ -106,9 +130,9 @@ pub fn receive_bundle(
 ) -> Result<ReceiveSuccessPayload, FrontendError> {
     info!("Attempting to receive and process a transfer bundle...");
     let mut service = state.service.lock().unwrap();
-    let archive: Option<&FileVoucherArchive> = None;
+    let archive = open_wallet_archive(&app, &service);
 
-    match service.receive_bundle(&bundle_data, &standard_definitions_toml, archive, password.as_deref(), force_accept_tolerance_bundle) {
+    match service.receive_bundle(&bundle_data, &standard_definitions_toml, archive.as_ref(), password.as_deref(), force_accept_tolerance_bundle) {
         Ok(result) => {
             info!("Bundle processed successfully. Creating transaction record.");
 
@@ -945,6 +969,8 @@ pub struct FrontendPurchaseCompletion {
     pub purchase_id:String,
     pub newly_committed:bool,
     pub verdict:FrontendCheckoutReleaseVerdict,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receive_payload: Option<ReceiveSuccessPayload>,
 }
 fn parse_regional_views(json:&str)->Result<Vec<human_money_core::humoco_proto::mesh::RegionalMeshView>,FrontendError> {
     if json.len()>4*1024*1024 {return Err(FrontendError::from("Regional view budget exceeded".to_string()));}
@@ -973,6 +999,7 @@ pub fn complete_pos_checkout(purchase_id:String,bundle_data:Vec<u8>,proof_json:S
                 purchase_id: completion.purchase_id,
                 newly_committed: completion.newly_committed,
                 verdict: completion.verdict.into(),
+                receive_payload: None,
             });
         }
     }
@@ -981,7 +1008,7 @@ pub fn complete_pos_checkout(purchase_id:String,bundle_data:Vec<u8>,proof_json:S
     let views=parse_regional_views(&regional_views_json)?;let now=checkout_now_ms()?;
     let mut service=state.service.lock().map_err(|_|FrontendError::from("Wallet service unavailable".to_string()))?;
     let completion=service.complete_checkout_purchase(&purchase_id,&bundle_data,&proof,&views,&standard_definitions_toml,now,password.as_deref()).map_err(FrontendError::from)?;
-    Ok(FrontendPurchaseCompletion {purchase_id:completion.purchase_id,newly_committed:completion.newly_committed,verdict:completion.verdict.into()})
+    Ok(FrontendPurchaseCompletion {purchase_id:completion.purchase_id,newly_committed:completion.newly_committed,verdict:completion.verdict.into(),receive_payload:None})
 }
 
 /// Productive purchase path: stored challenge, one payment gateway, atomic import.

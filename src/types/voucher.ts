@@ -240,3 +240,9 @@ export interface L2QuorumInfo {
     details?: string;
 }
 
+export interface VoucherL2StatusDto {
+    status: "no_servers" | "offline" | "unspent" | "spent";
+    archived: boolean;
+    successorTId?: string;
+}
+

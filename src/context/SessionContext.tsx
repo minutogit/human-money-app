@@ -15,6 +15,7 @@ import { isBackendError, stringifyError } from '../utils/errorHelper';
 export interface SessionContextType {
     protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>;
     isSessionActive: boolean;
+    isAuthenticated?: boolean;
     profileName: string;
     setProfileName: (name: string) => void;
     notifyLogin: (name?: string) => void;
@@ -37,6 +38,7 @@ export function useSession() {
 export function SessionProvider({ children }: { children: ReactNode }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSessionActive, setIsSessionActive] = useState(false);
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [profileName, setProfileName] = useState<string>("");
     const [isForkLocked, setIsForkLocked] = useState(false);
     const [isRecoveryRequired, setIsRecoveryRequired] = useState(false);
@@ -51,7 +53,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const onSessionExpired = useCallback(() => {
         setIsSessionActive(false);
         isSessionActiveRef.current = false;
-        setProfileName("");
+        // DO NOT clear profileName and DO NOT set isAuthenticated to false
     }, []);
 
     useSessionHeartbeat(isSessionActive, onSessionExpired, lastHeartbeatRef);
@@ -78,13 +80,29 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     // Wird von App.tsx nach Login aufgerufen
     const notifyLogin = useCallback((name?: string) => {
+        setIsAuthenticated(true);
         if (name) setProfileName(name);
         activateSession();
         startSealSyncLoop();
         checkIntegrity();
+
+        authService.isSessionActive()
+            .then((active) => {
+                if (active) {
+                    activateSession();
+                } else {
+                    setIsSessionActive(false);
+                    isSessionActiveRef.current = false;
+                }
+            })
+            .catch(() => {
+                setIsSessionActive(false);
+                isSessionActiveRef.current = false;
+            });
     }, [activateSession, checkIntegrity]);
 
     const notifyLogout = useCallback(() => {
+        setIsAuthenticated(false);
         setIsSessionActive(false);
         isSessionActiveRef.current = false;
         setProfileName("");
@@ -216,7 +234,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, []);
 
     return (
-        <SessionContext.Provider value={{ protectAction, isSessionActive, profileName, setProfileName, notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks }}>
+        <SessionContext.Provider value={{ protectAction, isSessionActive, isAuthenticated, profileName, setProfileName, notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks }}>
             {children}
             <AuthModal
                 isOpen={isModalOpen}

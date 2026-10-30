@@ -37,10 +37,11 @@ interface LoginProps {
     onLoginSuccess: (profileName: string) => void;
     onSwitchToCreate: () => void;
     onSwitchToRecreate: () => void;
+    onSwitchToRestoreBackup?: () => void;
     onSwitchToReset: () => void;
 }
 
-export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, onSwitchToReset }: LoginProps) {
+export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, onSwitchToRestoreBackup, onSwitchToReset }: LoginProps) {
     const { t } = useTranslation();
     const { navigate } = useNavigation();
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
@@ -466,7 +467,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                     </button>
                                     <button 
                                         type="button" 
-                                        onClick={onSwitchToRecreate} 
+                                        onClick={onSwitchToRestoreBackup ?? onSwitchToRecreate} 
                                         className="p-6 bg-slate-50 border border-slate-200 hover:border-theme-primary/40 hover:bg-theme-primary/5 rounded-[28px] text-center group transition-all flex flex-col items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md"
                                     >
                                         <div className="w-12 h-12 rounded-full bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -520,7 +521,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                 </button>
                                 <button 
                                     type="button" 
-                                    onClick={onSwitchToRecreate} 
+                                    onClick={onSwitchToRestoreBackup ?? onSwitchToRecreate} 
                                     className="p-6 bg-slate-50 border border-slate-200 hover:border-theme-primary/40 hover:bg-theme-primary/5 rounded-[28px] text-center group transition-all flex flex-col items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md"
                                 >
                                     <div className="w-12 h-12 rounded-full bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-110 transition-transform">

@@ -79,7 +79,7 @@ describe('L2QuorumBadge', () => {
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('●●');
     expect(screen.getByTestId('l2-quorum-badge').className).toContain('emerald');
     expect(screen.getByText(/Ein großes, weltweites Server-Netzwerk/)).toBeInTheDocument();
-    expect(screen.getByTestId('l2-quorum-count')).toHaveTextContent('14/20 Knoten');
+    expect(screen.getByTestId('l2-quorum-count')).toHaveTextContent(/14\/20 (Nodes|Knoten)/);
 
     expect(screen.queryByText('Shard #4')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('l2-toggle-tech-diagnostics'));

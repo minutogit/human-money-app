@@ -34,6 +34,7 @@ export interface SealUploadData {
 export type AnchorSyncStatus =
     | 'Synchronized'
     | 'Offline'
+    | 'NoServers'
     | 'RollbackDetected'
     | 'ForkConflict'
     | 'PendingLeapLock';
@@ -97,6 +98,7 @@ export type AppState =
     | { view: "needs_login" }
     | { view: "logged_in" }
     | { view: "recreate_profile" }
+    | { view: "restore_backup"; previousView?: AppState }
     | { view: "needs_recovery" }
     | { view: "settings" }
     | { view: "support" }

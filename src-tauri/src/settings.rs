@@ -73,6 +73,12 @@ pub struct AppSettings {
     #[serde(default)]
     pub dev_mode_unlocked: bool,
     pub regional_mesh_sources: Vec<RegionalSourceDto>,
+    #[serde(default)]
+    pub backup_sync_folder: Option<String>,
+    #[serde(default)]
+    pub backup_protection_mode: Option<String>,
+    #[serde(default)]
+    pub last_backup_at: Option<String>,
 }
 
 fn default_privacy_default() -> String {
@@ -95,6 +101,9 @@ impl Default for AppSettings {
             cached_peers_testnet: Vec::new(),
             dev_mode_unlocked: false,
             regional_mesh_sources:Vec::new(),
+            backup_sync_folder: None,
+            backup_protection_mode: None,
+            last_backup_at: None,
         }
     }
 }

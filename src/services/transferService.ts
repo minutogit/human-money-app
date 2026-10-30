@@ -108,10 +108,17 @@ export const transferService = {
         return await invoke<WalletEvent[]>("get_event_history", { offset, limit });
     },
 
-    verifyLiveCheckoutAndRelease: async (proofJson: string, expectedContextJson: string, explicitMerchantApproval: boolean = false, password?: string | null) => {
+    verifyLiveCheckoutAndRelease: async (
+        proofJson: string,
+        expectedContextJson: string,
+        regionalViewsJson?: string | null,
+        explicitMerchantApproval: boolean = false,
+        password?: string | null
+    ) => {
         return await invoke<import("../types").CheckoutReleaseVerdict>("verify_live_checkout_and_release", {
             proofJson,
             expectedContextJson,
+            regionalViewsJson: regionalViewsJson ?? null,
             explicitMerchantApproval,
             password: password ?? null,
         });

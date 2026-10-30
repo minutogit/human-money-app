@@ -142,7 +142,7 @@ export function SendView() {
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [standardIdToUuidMap, setStandardIdToUuidMap] = useState<Map<string, string>>(new Map());
     const [uuidToPrecisionMap, setUuidToPrecisionMap] = useState<Map<string, number>>(new Map());
-    const [standardsDict] = useState<Record<string, VoucherStandardDefinition>>({});
+    const [standardsDict, setStandardsDict] = useState<Record<string, VoucherStandardDefinition>>({});
 
     const { selectedMap, toggleVoucher, setVoucherAmount, selectAmount, selectionStats, currentPlan, autoSelectGravitational } = useVoucherSelection(availableVouchers);
     const detectedPrivacy = usePrivacyDetection(
@@ -199,6 +199,7 @@ export function SendView() {
 
                 const newIdMap = new Map<string, string>();
                 const newPrecisionMap = new Map<string, number>();
+                const parsedDict: Record<string, VoucherStandardDefinition> = {};
 
                 for (const s of standards) {
                     const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
@@ -208,7 +209,26 @@ export function SendView() {
                         newPrecisionMap.set(uuid, getPrecision(s.content));
                     }
                 }
+
+                await Promise.all(
+                    standards.map(async (s) => {
+                        try {
+                            const parseToml = (voucherService as unknown as { parseStandardToml?: (toml: string) => Promise<VoucherStandardDefinition> }).parseStandardToml
+                                ? (voucherService as unknown as { parseStandardToml: (toml: string) => Promise<VoucherStandardDefinition> }).parseStandardToml
+                                : standardsService.parseStandard;
+                            const def = await parseToml(s.content);
+                            if (def) {
+                                const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
+                                const uuid = def.immutable?.identity?.uuid || (uuidMatch && uuidMatch[1]) || s.id;
+                                parsedDict[uuid] = def;
+                            }
+                        } catch (err) {
+                            logger.warn(`Failed to parse standard definition ${s.id}: ${stringifyError(err)}`);
+                        }
+                    })
+                );
                 
+                setStandardsDict(parsedDict);
                 setStandardIdToUuidMap(newIdMap);
                 setUuidToPrecisionMap(newPrecisionMap);
                 setAvailableVouchers(activeVouchers);

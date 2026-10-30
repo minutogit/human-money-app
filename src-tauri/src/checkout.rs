@@ -93,13 +93,136 @@ pub(crate) async fn ensure_cached_views(state:&AppState)->Result<(String,Vec<Reg
     }
     cached_views(state)
 }
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug, Clone)]
 #[serde(rename_all="camelCase")]
 pub struct PurchaseCompletion {
-    pub purchase_id:String,
-    pub newly_committed:bool,
-    pub verdict:crate::models::FrontendCheckoutReleaseVerdict,
+    pub purchase_id: String,
+    pub newly_committed: bool,
+    pub verdict: crate::models::FrontendCheckoutReleaseVerdict,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receive_payload: Option<crate::models::ReceiveSuccessPayload>,
 }
+
+fn format_bff_name(raw_name: &str, is_test: bool) -> String {
+    if is_test {
+        if raw_name.starts_with("TEST-") {
+            raw_name.to_string()
+        } else {
+            format!("TEST-{}", raw_name)
+        }
+    } else {
+        raw_name.to_string()
+    }
+}
+
+fn build_receive_payload_and_record(
+    service: &human_money_core::app_service::AppService,
+    purchase_id: &str,
+    bundle_data: &[u8],
+    standards: &HashMap<String, String>,
+    newly_committed: bool,
+    verdict: crate::models::FrontendCheckoutReleaseVerdict,
+) -> Result<(crate::models::ReceiveSuccessPayload, Option<crate::models::TransactionRecord>), FrontendError> {
+    let (opened_bundle, recipient_id) = service.with_wallet_and_identity(|wallet, identity| {
+        let bundle = human_money_core::services::bundle_processor::open_and_verify_bundle(identity, bundle_data)?;
+        Ok::<_, human_money_core::Error>((bundle, wallet.get_user_id().to_string()))
+    }).map_err(FrontendError::from)?
+    .map_err(FrontendError::from)?;
+
+    let registry = human_money_core::services::voucher_validation::StandardRegistry::from_toml_map(standards)
+        .map_err(FrontendError::from)?;
+
+    let mut transfer_summary = human_money_core::wallet::types::TransferSummary::default();
+    let mut involved_vouchers_ids = Vec::new();
+    let mut involved_vouchers_details = Vec::new();
+
+    for voucher in &opened_bundle.vouchers {
+        let local_id = human_money_core::wallet::Wallet::calculate_local_instance_id(voucher, &recipient_id)
+            .map_err(FrontendError::from)?;
+        involved_vouchers_ids.push(local_id.clone());
+
+        let last_tx = voucher.transactions.last().ok_or_else(|| {
+            fail("purchase transaction missing")
+        })?;
+
+        let display_currency = format_bff_name(
+            voucher
+                .nominal_value
+                .abbreviation
+                .as_deref()
+                .unwrap_or(&voucher.nominal_value.unit),
+            voucher.non_redeemable_test_voucher,
+        );
+
+        let standard_opt = registry.get(&voucher.voucher_standard.uuid);
+        let balances_are_summable = standard_opt.map(|s| s.immutable.features.balances_are_summable).unwrap_or(true);
+        let standard_name = standard_opt.map(|s| s.immutable.identity.name.clone()).unwrap_or_else(|| voucher.voucher_standard.name.clone());
+        let allow_partial = standard_opt.map(|s| s.immutable.features.allow_partial_transfers).unwrap_or(false);
+
+        if balances_are_summable {
+            transfer_summary
+                .summable_amounts
+                .insert(display_currency.clone(), last_tx.amount.clone());
+        } else {
+            transfer_summary
+                .countable_items
+                .insert(display_currency.clone(), 1);
+        }
+
+        involved_vouchers_details.push(human_money_core::wallet::types::InvolvedVoucherInfo {
+            local_instance_id: local_id,
+            voucher_id: voucher.voucher_id.clone(),
+            standard_name,
+            unit: voucher.nominal_value.unit.clone(),
+            amount: last_tx.amount.clone(),
+            allow_partial_transfers: allow_partial,
+            is_test_voucher: voucher.non_redeemable_test_voucher,
+            display_currency,
+            display_standard_name: format_bff_name(
+                &voucher.voucher_standard.name,
+                voucher.non_redeemable_test_voucher,
+            ),
+            counterparty_id: Some(opened_bundle.sender_id.clone()),
+            counterparty_name: opened_bundle.sender_profile_name.clone(),
+        });
+    }
+
+    let conflict_summaries = service.list_conflicts().map_err(FrontendError::from)?.into_iter().map(|s| s.into()).collect();
+
+    let record = crate::models::TransactionRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        direction: "received".to_string(),
+        recipient_id,
+        sender_id: opened_bundle.sender_id.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        summable_amounts: transfer_summary.summable_amounts.clone(),
+        countable_items: transfer_summary.countable_items.clone(),
+        involved_vouchers: involved_vouchers_ids.clone(),
+        involved_sources_details: Some(involved_vouchers_details.clone()),
+        bundle_data: Vec::new(),
+        bundle_id: opened_bundle.bundle_id.clone(),
+        notes: opened_bundle.notes.clone(),
+        sender_profile_name: opened_bundle.sender_profile_name.clone(),
+    };
+
+    let payload = crate::models::ReceiveSuccessPayload {
+        sender_id: opened_bundle.sender_id,
+        sender_profile_name: opened_bundle.sender_profile_name,
+        notes: opened_bundle.notes,
+        transfer_summary: transfer_summary.into(),
+        involved_vouchers: involved_vouchers_ids,
+        involved_vouchers_details: involved_vouchers_details.into_iter().map(|d| d.into()).collect(),
+        verifiable_conflicts: Default::default(),
+        conflict_summaries,
+        checkout_verdict: Some(verdict),
+        purchase_id: Some(purchase_id.to_string()),
+        newly_committed: Some(newly_committed),
+        is_replay: Some(!newly_committed),
+    };
+
+    Ok((payload, Some(record)))
+}
+
 /// Host orchestration uses the exact stored recipient nonce. No network request
 /// for membership is made on this hot path; Core revalidates the cold authority.
 pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8],standards:&HashMap<String,String>,password:Option<&str>)->Result<PurchaseCompletion,FrontendError> {
@@ -110,26 +233,67 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
         let service = state.service.lock().map_err(|_| fail("Wallet service unavailable"))?;
         if let Some(completion) = service.replay_checkout_purchase(purchase_id, bundle).map_err(FrontendError::from)? {
             log::info!("Purchase {} already completed; returning idempotent replay result without network request", purchase_id);
+            let receive_payload = build_receive_payload_and_record(
+                &service,
+                purchase_id,
+                bundle,
+                standards,
+                false,
+                completion.verdict.clone().into(),
+            ).map(|(payload, _)| payload).ok();
+
             return Ok(PurchaseCompletion {
                 purchase_id: completion.purchase_id,
                 newly_committed: completion.newly_committed,
                 verdict: completion.verdict.into(),
+                receive_payload,
             });
         }
+    }
+
+    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    let candidates = crate::gateway_resolver::cached_candidates(&settings);
+    if settings.regional_mesh_sources.is_empty() || candidates.is_empty() {
+        return Err(FrontendError::from("pos.noServersConfigured".to_string()));
     }
 
     let (owner,views)=ensure_cached_views(state).await?;
     let context={let mut service=state.service.lock().map_err(|_|fail("Wallet service unavailable"))?;
         service.begin_checkout_purchase(purchase_id,bundle,&views,now()?,password).map_err(FrontendError::from)?};
-    let settings=state.get_cached_settings().map_err(FrontendError::from)?;
-    let candidates=crate::gateway_resolver::cached_candidates(&settings);
-    let proof:LiveStateProof=crate::gateway_resolver::fetch_live_proof(&candidates,&context).await.map_err(|_|fail("Live verification unavailable"))?
-        .ok_or_else(||fail("Payment remains pending: current quorum unavailable"))?;
+
+    let proof:LiveStateProof = match crate::gateway_resolver::fetch_live_proof(&candidates,&context).await {
+        Ok(Some(proof)) => proof,
+        _ => return Err(FrontendError::from("pos.quorumUnavailable".to_string())),
+    };
+
     let mut service=state.service.lock().map_err(|_|fail("Wallet service unavailable"))?;
     if service.with_wallet(|wallet|wallet.get_user_id().to_string()).map_err(FrontendError::from)?!=owner {return Err(fail("Wallet changed during checkout"));}
     let completion=service.complete_checkout_purchase(purchase_id,bundle,&proof,&views,standards,now()?,password).map_err(FrontendError::from)?;
     if let Err(error)=state.refresh_events_cache(&mut service,password) {log::warn!("Checkout committed; event cache refresh failed: {}",error);}
-    Ok(PurchaseCompletion {purchase_id:completion.purchase_id,newly_committed:completion.newly_committed,verdict:completion.verdict.into()})
+
+    let (receive_payload, record_opt) = build_receive_payload_and_record(
+        &service,
+        purchase_id,
+        bundle,
+        standards,
+        completion.newly_committed,
+        completion.verdict.clone().into(),
+    )?;
+
+    if completion.newly_committed {
+        if let Some(record) = record_opt {
+            if let Err(e) = state.append_to_history(&mut service, record, password) {
+                log::warn!("Checkout committed; transaction history recording failed: {}", e);
+            }
+        }
+    }
+
+    Ok(PurchaseCompletion {
+        purchase_id: completion.purchase_id,
+        newly_committed: completion.newly_committed,
+        verdict: completion.verdict.into(),
+        receive_payload: Some(receive_payload),
+    })
 }
 
 #[cfg(test)]
@@ -174,5 +338,33 @@ mod tests {
         let cache=cache(15_000);
         assert!(cache.is_expiring_within(5_000,10_000));
         assert!(!cache.is_expiring_within(4_999,10_000));
+    }
+
+    #[tokio::test]
+    async fn checkout_bundle_rejects_when_no_servers_configured() {
+        let path = std::env::temp_dir().join(format!("human-money-app-checkout-test-{}", uuid::Uuid::new_v4()));
+        let mut service = AppService::new(&path).unwrap();
+        const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        service.create_profile(
+            "Alice",
+            PHRASE,
+            None,
+            Some("pc"),
+            "password123",
+            human_money_core::MnemonicLanguage::English,
+            "device-pos-test".into(),
+        ).unwrap();
+        let state = AppState {
+            service: Mutex::new(service),
+            history: Mutex::new(None),
+            events: Mutex::new(None),
+            contacts: Mutex::new(None),
+            settings: Mutex::new(Some(AppSettings::default())),
+            regional_views: Mutex::new(None),
+        };
+        let error = checkout_bundle(&state, "p1", b"fake_bundle", &HashMap::new(), None).await.expect_err("must fail");
+        assert_eq!(error.message, "pos.noServersConfigured");
+        drop(state);
+        let _ = std::fs::remove_dir_all(path);
     }
 }

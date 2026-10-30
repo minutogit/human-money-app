@@ -75,7 +75,10 @@ export interface PurchaseCompletion {
     purchaseId: string;
     newlyCommitted: boolean;
     verdict: CheckoutReleaseVerdict;
+    receivePayload?: ReceiveSuccessPayload;
 }
+
+export type CheckoutExecutionSummary = PurchaseCompletion;
 
 export interface IntentDispatchObservation {
     localInstanceId: string;
@@ -127,6 +130,7 @@ export interface ProofOfDoubleSpendSummary {
     voucherStandardUuid?: string;
     localNote?: string;
     isTestVoucher: boolean;
+    isCryptographicallyAttributed?: boolean;
 }
 
 export interface ProofOfDoubleSpend {
@@ -144,6 +148,10 @@ export interface ProofOfDoubleSpend {
     voucherStandardUuid?: string;
     isResolved?: boolean;
     nonRedeemableTestVoucher: boolean;
+    isCryptographicallyAttributed?: boolean;
+    hasVictimWitness?: boolean;
+    victimWitnessCount?: number;
+    suspectedIdentity?: string | null;
 }
 
 export interface ResolutionEndorsement {

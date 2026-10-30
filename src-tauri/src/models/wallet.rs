@@ -293,3 +293,37 @@ pub struct SealUploadData {
     pub seal_bytes: Vec<u8>,
     pub seal_hash: String,
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendRollbackReconciliationDto {
+    pub quarantined_voucher_ids: Vec<String>,
+    pub archived_voucher_ids: Vec<String>,
+    pub retained_voucher_ids: Vec<String>,
+    pub new_tx_nonce: u64,
+    pub consolidated_state_hash: String,
+    pub message: String,
+}
+
+impl From<human_money_core::models::seal::RollbackReconciliationReport> for FrontendRollbackReconciliationDto {
+    fn from(r: human_money_core::models::seal::RollbackReconciliationReport) -> Self {
+        Self {
+            quarantined_voucher_ids: r.quarantined_voucher_ids,
+            archived_voucher_ids: r.archived_voucher_ids,
+            retained_voucher_ids: r.retained_voucher_ids,
+            new_tx_nonce: r.new_tx_nonce,
+            consolidated_state_hash: r.consolidated_state_hash,
+            message: r.message,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendVoucherL2StatusDto {
+    pub status: String,
+    pub archived: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub successor_t_id: Option<String>,
+}
+

@@ -139,35 +139,72 @@ export function TransferSuccessView({ bundleData, recipientId, summary, l2Dispat
                             </div>
                         </div>
 
-                        {l2Dispatch && l2Dispatch.length > 0 && (
-                            <div className="p-5 bg-slate-50 border border-slate-200 rounded-3xl space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-[10px] font-black uppercase tracking-widest text-theme-secondary flex items-center gap-1.5">
-                                        <ShieldCheck size={14} className="text-emerald-600" /> Layer 2 Dispatch
-                                    </span>
-                                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
-                                        {l2Dispatch.length} {l2Dispatch.length === 1 ? 'Lock-Intent' : 'Lock-Intents'}
-                                    </span>
-                                </div>
-                                <div className="space-y-1.5">
-                                    {l2Dispatch.map((obs, idx) => (
-                                        <div key={`${obs.localInstanceId}-${idx}`} className="flex items-center justify-between text-xs p-2.5 bg-white rounded-xl border border-slate-100">
-                                            <span className="font-mono text-[11px] text-theme-light truncate max-w-[220px]" title={obs.localInstanceId}>
-                                                {obs.localInstanceId.slice(0, 16)}...
+                        {l2Dispatch && l2Dispatch.length > 0 && (() => {
+                            const isAnyDispatched = l2Dispatch.some(obs => obs.httpStatus === 200 || obs.httpStatus === 201);
+                            
+                            if (isAnyDispatched) {
+                                return (
+                                    <div className="p-5 bg-emerald-50/60 border border-emerald-200 rounded-3xl space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-[10px] font-black uppercase tracking-widest text-emerald-900 flex items-center gap-1.5">
+                                                <ShieldCheck size={14} className="text-emerald-600" />
+                                                {t('transfer.l2DispatchedTitle')}
                                             </span>
-                                            <div className="flex items-center gap-2">
-                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${obs.httpStatus && obs.httpStatus >= 200 && obs.httpStatus < 300 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
-                                                    {obs.httpStatus ? `HTTP ${obs.httpStatus}` : obs.status}
+                                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                                                {l2Dispatch.length} {l2Dispatch.length === 1 ? 'Lock-Intent' : 'Lock-Intents'}
+                                            </span>
+                                        </div>
+                                        <p className="text-xs text-emerald-900/80 font-medium leading-relaxed">
+                                            {t('transfer.l2DispatchedDesc')}
+                                        </p>
+                                        <div className="space-y-1.5 pt-1">
+                                            {l2Dispatch.map((obs, idx) => (
+                                                <div key={`${obs.localInstanceId}-${idx}`} className="flex items-center justify-between text-xs p-2.5 bg-white/80 rounded-xl border border-emerald-100">
+                                                    <span className="font-mono text-[11px] text-theme-light truncate max-w-[220px]" title={obs.localInstanceId}>
+                                                        {obs.localInstanceId.slice(0, 16)}...
+                                                    </span>
+                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${obs.httpStatus && obs.httpStatus >= 200 && obs.httpStatus < 300 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                                                        {obs.httpStatus ? `HTTP ${obs.httpStatus}` : obs.status}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <p className="text-[10px] text-theme-light/70 italic border-t border-emerald-200/60 pt-2">
+                                            {t('transfer.l2TransportDisclaimer')}
+                                        </p>
+                                    </div>
+                                );
+                            }
+
+                            return (
+                                <div className="p-5 bg-slate-50 border border-slate-200 rounded-3xl space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[10px] font-black uppercase tracking-widest text-theme-secondary flex items-center gap-1.5">
+                                            <ShieldCheck size={14} className="text-theme-primary" />
+                                            {t('transfer.l2PreparedOfflineTitle')}
+                                        </span>
+                                        <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                                            {l2Dispatch.length} {l2Dispatch.length === 1 ? 'Lock-Intent' : 'Lock-Intents'}
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-theme-light font-medium leading-relaxed">
+                                        {t('transfer.l2PreparedOfflineDesc')}
+                                    </p>
+                                    <div className="space-y-1.5 pt-1">
+                                        {l2Dispatch.map((obs, idx) => (
+                                            <div key={`${obs.localInstanceId}-${idx}`} className="flex items-center justify-between text-xs p-2.5 bg-white rounded-xl border border-slate-100">
+                                                <span className="font-mono text-[11px] text-theme-light truncate max-w-[220px]" title={obs.localInstanceId}>
+                                                    {obs.localInstanceId.slice(0, 16)}...
+                                                </span>
+                                                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                                                    {obs.status}
                                                 </span>
                                             </div>
-                                        </div>
-                                    ))}
+                                        ))}
+                                    </div>
                                 </div>
-                                <p className="text-[10px] text-theme-light/70 italic border-t border-slate-200/60 pt-2">
-                                    ⚠️ Hinweis: Die HTTP-Beobachtung ist ein reiner Transportnachweis und autorisiert keine automatische Warenausgabe.
-                                </p>
-                            </div>
-                        )}
+                            );
+                        })()}
                     </div>
                 </div>
 

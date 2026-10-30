@@ -16,6 +16,7 @@ import { WalletView } from './WalletView';
 import { SignRequestView } from './SignRequestView';
 import { WalletRecovery } from './WalletRecovery';
 import { RecreateProfile } from './RecreateProfile';
+import { RestoreBackupView } from './RestoreBackupView';
 import AddressBook from './AddressBook';
 import { ConflictDetailsView } from './ConflictDetailsView';
 import { ConflictListView } from './ConflictListView';
@@ -51,6 +52,7 @@ export const AppRouter: React.FC = () => {
                     navigate({ view: "logged_in" });
                 }}
                 onSwitchToRecreate={() => navigate({ view: "recreate_profile" })}
+                onSwitchToRestoreBackup={() => navigate({ view: "restore_backup" })}
                 onSwitchToCreate={() => navigate({ view: "needs_profile" })}
                 onSwitchToReset={() => navigate({ view: "needs_recovery" })}
             />;
@@ -63,6 +65,16 @@ export const AppRouter: React.FC = () => {
                     navigate({ view: "logged_in" });
                 }}
                 onSwitchToLogin={() => navigate({ view: "needs_login" })}
+                onSwitchToRestoreBackup={() => navigate({ view: "restore_backup" })}
+            />;
+        case "restore_backup":
+            return <RestoreBackupView
+                onRestoreSuccess={() => {
+                    notifyLogin();
+                    navigate({ view: "logged_in" });
+                }}
+                onSwitchToRecreate={() => navigate({ view: "recreate_profile" })}
+                onBack={() => navigate({ view: "needs_login" })}
             />;
         case "settings":
             return <SettingsView onBack={() => navigate({ view: "logged_in" })} />;

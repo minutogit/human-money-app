@@ -12,10 +12,10 @@ import { Card } from "./ui/Card";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { useSession } from "../context/SessionContext";
 import { useTranslation } from "react-i18next";
-import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardDefinition } from "../types";
+import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardDefinition, VoucherL2StatusDto } from "../types";
 import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
-import { stringifyError } from "../utils/errorHelper";
+import { stringifyError, translateError } from "../utils/errorHelper";
 import ContactDialog from "./ContactDialog";
 import { PageLayout } from "./ui/PageLayout";
 import { InfoRow } from "./ui/InfoRow";
@@ -67,6 +67,9 @@ export function VoucherDetailsView() {
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
     const [parsedStandards, setParsedStandards] = useState<Record<string, VoucherStandardDefinition>>({});
     const [contacts, setContacts] = useState<Contact[]>([]);
+    const [isCheckingL2, setIsCheckingL2] = useState(false);
+    const [l2Status, setL2Status] = useState<VoucherL2StatusDto | null>(null);
+    const [l2Error, setL2Error] = useState<string | null>(null);
 
     const voucher = details?.voucher;
     const isQuarantined = details && details.status === 'quarantined';
@@ -141,6 +144,27 @@ export function VoucherDetailsView() {
             setDetails(result);
         } catch (e) {
             logger.error(`Failed to refresh voucher details: ${stringifyError(e)}`);
+        }
+    };
+
+    const handleCheckL2Status = async () => {
+        if (!details) return;
+        setIsCheckingL2(true);
+        setL2Error(null);
+        try {
+            const statusDto = await protectAction(async (pwd) => {
+                return await settingsService.checkVoucherL2Status(details.localInstanceId, pwd || null);
+            });
+            if (statusDto) {
+                setL2Status(statusDto);
+                if (statusDto.status === 'spent') {
+                    await refreshDetails();
+                }
+            }
+        } catch (e) {
+            setL2Error(translateError(e, t));
+        } finally {
+            setIsCheckingL2(false);
         }
     };
 
@@ -221,6 +245,18 @@ export function VoucherDetailsView() {
             onBack={goBack}
             actions={
                 <div className="flex items-center gap-2">
+                    {statusInfo?.id === 'active' && (
+                        <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={handleCheckL2Status} 
+                            disabled={isCheckingL2} 
+                            className="gap-1.5 text-xs font-bold"
+                        >
+                            {isCheckingL2 ? <Clock className="animate-spin" size={14} /> : <Shield size={14} />}
+                            {isCheckingL2 ? t('voucher.checkingL2Status') : t('voucher.checkL2Status')}
+                        </Button>
+                    )}
                     {statusInfo?.id === 'incomplete' && (
                         <Button variant="primary" size="sm" onClick={() => setShowExportModal(true)} className="gap-2">
                             <FileSignature size={16} /> {t('voucher.signButton')}
@@ -247,14 +283,45 @@ export function VoucherDetailsView() {
                                     <h1 className="text-5xl font-black text-theme-primary tracking-tighter">{voucher.nominalValue.amount}</h1>
                                     <span className="text-xl font-bold text-theme-light uppercase tracking-widest">{details.displayCurrency}</span>
                                 </div>
-                                <div className="flex items-center gap-2 mt-2">
+                                <div className="flex flex-wrap items-center gap-2 mt-2">
                                     <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${statusInfo?.bgColor} ${statusInfo?.color}`}>{statusInfo?.label}</span>
                                     {details.isTestVoucher && <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-500 text-white shadow-lg shadow-rose-200">{t('voucher.testVoucher')}</span>}
+                                    {l2Status && (
+                                        <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                                            l2Status.status === 'unspent'
+                                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                                : l2Status.status === 'spent'
+                                                ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                                : l2Status.status === 'offline'
+                                                ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                                : 'bg-slate-100 text-slate-800 border border-slate-200'
+                                        }`}>
+                                            {l2Status.status === 'unspent' && t('voucher.l2StatusUnspent')}
+                                            {l2Status.status === 'spent' && t('voucher.l2StatusSpent')}
+                                            {l2Status.status === 'offline' && t('voucher.l2StatusOffline')}
+                                            {l2Status.status === 'no_servers' && t('voucher.l2StatusNoServers')}
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         </div>
                         
                         <div className="flex flex-col gap-3 w-full md:w-auto">
+                            {statusInfo?.id === 'active' && (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleCheckL2Status}
+                                    disabled={isCheckingL2}
+                                    className="bg-white/60 hover:bg-white/80 border-theme-subtle text-xs font-bold gap-1.5"
+                                >
+                                    {isCheckingL2 ? <Clock className="animate-spin" size={14} /> : <Shield size={14} />}
+                                    {isCheckingL2 ? t('voucher.checkingL2Status') : t('voucher.checkL2Status')}
+                                </Button>
+                            )}
+                            {l2Error && (
+                                <p className="text-[10px] font-bold text-rose-500 max-w-[200px] truncate">{l2Error}</p>
+                            )}
                             {isQuarantined && (
                                 <Button variant="secondary" size="sm" className="bg-white/20 text-white hover:bg-white/30 border-white/30 backdrop-blur-md" onClick={() => proofId && navigate({ view: 'conflict_details', proofId, previousView: appState })} disabled={!proofId}>
                                     <ShieldAlert size={16} className="mr-2" /> {t('voucher.viewProof')}

@@ -1,4 +1,4 @@
-use crate::{models::{FrontendUserProfile, SealUploadData, FrontendError}, AppState, settings::AppSettings};
+use crate::{models::{FrontendUserProfile, SealUploadData, FrontendError, FrontendRollbackReconciliationDto, FrontendVoucherL2StatusDto}, AppState, settings::AppSettings};
 use log::{info, error};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -36,7 +36,7 @@ pub async fn save_app_settings(
         state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)?;
         drop(service);
     }
-    if let Err(error)=crate::checkout::refresh_views(state.inner()).await {log::warn!("Proactive regional view refresh failed: {}",error.message);}
+    if let Err(error)=crate::checkout::refresh_views(state.inner()).await {log::debug!("Proactive regional view refresh failed: {}",error.message);}
     Ok(())
 }
 
@@ -427,26 +427,29 @@ pub fn acknowledge_seal_sync(
 pub async fn check_anchor_sync(
     state: tauri::State<'_, AppState>,
 ) -> Result<String, FrontendError> {
-    info!("Checking L2 anchor sync status...");
-    let (query, local_t_id, current_tag, urls) = {
+    log::debug!("Checking L2 anchor sync status...");
+    let settings = match state.get_cached_settings() {
+        Ok(s) => s,
+        Err(_) => return Ok("Offline".to_string()),
+    };
+    let candidates = crate::gateway_resolver::cached_candidates(&settings);
+    if candidates.is_empty() {
+        log::debug!("No L2 servers configured for anchor sync");
+        return Ok("NoServers".to_string());
+    }
+
+    let (query, local_t_id, current_tag) = {
         let service = match state.service.lock() {
             Ok(s) => s,
             Err(_) => return Ok("Offline".to_string()),
         };
-        let query_data = match service.prepare_anchor_status_query() {
-            Ok(data) => data,
+        match service.prepare_anchor_status_query() {
+            Ok(data) => (data.0, data.1, data.2),
             Err(e) => {
                 log::debug!("prepare_anchor_status_query returned: {}", e);
                 return Ok("Offline".to_string());
             }
-        };
-        let urls = state
-            .get_cached_settings()
-            .ok()
-            .and_then(|s| s.l2_node_urls)
-            .filter(|list| !list.is_empty())
-            .unwrap_or_else(|| vec!["http://127.0.0.1:8080".to_string()]);
-        (query_data.0, query_data.1, query_data.2, urls)
+        }
     };
 
     let client = match reqwest::Client::builder()
@@ -455,25 +458,32 @@ pub async fn check_anchor_sync(
     {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("Failed to build HTTP client: {}", e);
+            log::debug!("Failed to build HTTP client: {}", e);
             return Ok("Offline".to_string());
         }
     };
 
     let mut responses = Vec::new();
-    for url in &urls {
-        let status_url = format!("{}/status", url.trim_end_matches('/'));
-        match client.post(&status_url).json(&query).send().await {
+    for candidate in &candidates {
+        let status_url = match crate::gateway_resolver::endpoint(candidate, "v1/status") {
+            Some(u) => u,
+            None => continue,
+        };
+        match client.post(status_url).json(&query).send().await {
             Ok(resp) if resp.status().is_success() => {
-                if let Ok(envelope) = resp.json::<human_money_core::models::layer2_api::L2ResponseEnvelope>().await {
-                    responses.push(envelope.verdict);
+                if let Ok(resp_bytes) = resp.bytes().await {
+                    if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
+                        responses.push(envelope.verdict);
+                    } else if let Ok(verdict) = serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes) {
+                        responses.push(verdict);
+                    }
                 }
             }
             Ok(resp) => {
-                log::debug!("Node {} returned HTTP {}", url, resp.status());
+                log::debug!("Node {} returned HTTP {}", candidate, resp.status());
             }
             Err(e) => {
-                log::debug!("Node {} connection failed: {}", url, e);
+                log::debug!("Node {} connection failed: {}", candidate, e);
             }
         }
     }
@@ -486,7 +496,7 @@ pub async fn check_anchor_sync(
         &responses,
         &local_t_id,
         &current_tag,
-        urls.len(),
+        candidates.len(),
     );
 
     let status_str = match verdict {
@@ -497,35 +507,184 @@ pub async fn check_anchor_sync(
         human_money_core::services::l2_gateway::AnchorSyncVerdict::GenesisRequired => "PendingLeapLock",
     };
 
-    info!("Anchor sync check evaluated to: {}", status_str);
+    log::debug!("Anchor sync check evaluated to: {}", status_str);
     Ok(status_str.to_string())
 }
 
 #[tauri::command]
-pub fn reconcile_rollback(
+pub async fn reconcile_rollback(
     password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<human_money_core::models::seal::RollbackReconciliationReport, FrontendError> {
+    state: tauri::State<'_, AppState>,
+) -> Result<FrontendRollbackReconciliationDto, FrontendError> {
     info!("Reconciling rollback with Layer 2 network...");
-    let mut service = state.service.lock().unwrap();
     if let Some(ref pwd) = password {
+        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
         let _ = service.unlock_session(pwd, 300);
     }
-    service
-        .reconcile_rollback_with_diagnostics(&[], None, password.as_deref())
-        .map_err(FrontendError::from)
+
+    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    let candidates = crate::gateway_resolver::cached_candidates(&settings);
+
+    let voucher_queries = {
+        let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service.with_wallet(|wallet| {
+            let mut queries = Vec::new();
+            for (id, instance) in &wallet.voucher_store.vouchers {
+                if instance.status == human_money_core::wallet::instance::VoucherStatus::Active {
+                    if let Ok(mut query) = wallet.build_voucher_status_query(id, 1) {
+                        query.read_quorum = 1;
+                        queries.push((id.clone(), query));
+                    }
+                }
+            }
+            queries
+        }).map_err(FrontendError::from)?
+    };
+
+    let mut spent_voucher_ids = Vec::new();
+
+    if !candidates.is_empty() {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(2500))
+            .build()
+            .map_err(|_| FrontendError::from("HTTP client unavailable".to_string()))?;
+
+        for (local_id, query) in voucher_queries {
+            let body_bytes = match serde_json::to_vec(&query) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+
+            for base in &candidates {
+                let Some(url) = crate::gateway_resolver::endpoint(base, "v1/status") else { continue };
+                let mut request = client.post(url.clone())
+                    .header("Content-Type", "application/json")
+                    .body(body_bytes.clone());
+
+                if let Some(provider) = settings.custom_servers.iter().find(|p| {
+                    p.is_active
+                        && crate::gateway_resolver::endpoint(&p.url, "v1/status")
+                            .is_some_and(|k| k.origin() == url.origin())
+                }) {
+                    if let Some(token) = &provider.auth_token {
+                        request = request.bearer_auth(token);
+                    }
+                    if let Some(token) = &provider.peer_token {
+                        if token.len() == 36 && token.starts_with("f2f_") && token[4..].bytes().all(|b| b.is_ascii_hexdigit()) {
+                            request = request.header("X-Peer-Token", token);
+                        }
+                    }
+                }
+
+                let response = tokio::time::timeout(std::time::Duration::from_millis(2500), request.send()).await;
+                let Ok(Ok(resp)) = response else { continue };
+                if !resp.status().is_success() { continue; }
+                let Ok(resp_bytes) = resp.bytes().await else { continue };
+
+                let lock_entry = if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
+                    match envelope.verdict {
+                        human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
+                        _ => None,
+                    }
+                } else if let Ok(verdict) = serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes) {
+                    match verdict {
+                        human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
+                        _ => None,
+                    }
+                } else { None };
+
+                if let Some(entry) = lock_entry {
+                    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+                    let _ = service.reconcile_voucher_state(&local_id, Some(&entry), password.as_deref());
+                    spent_voucher_ids.push(local_id);
+                    break;
+                }
+            }
+        }
+    }
+
+    let report = {
+        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service
+            .reconcile_rollback_with_diagnostics(&spent_voucher_ids, None, password.as_deref())
+            .map_err(FrontendError::from)?
+    };
+
+    Ok(report.into())
 }
 
 #[tauri::command]
-pub fn flush_pending_anchor_sync(
+pub async fn flush_pending_anchor_sync(
     password: Option<String>,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<bool, FrontendError> {
     info!("Flushing pending anchor sync to L2...");
-    let mut service = state.service.lock().unwrap();
-    service
-        .flush_pending_anchor_sync(password.as_deref())
-        .map_err(FrontendError::from)
+    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    let candidates = crate::gateway_resolver::cached_candidates(&settings);
+    if candidates.is_empty() {
+        return Ok(false);
+    }
+
+    let (identity, seal) = {
+        let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let sync_status = service.get_seal_sync_status().map_err(FrontendError::from)?;
+        if sync_status != human_money_core::models::seal::SyncStatus::PendingUpload {
+            return Ok(false);
+        }
+        let seal_bytes = match service.get_seal_for_upload().map_err(FrontendError::from)? {
+            Some(b) => b,
+            None => return Ok(false),
+        };
+        let seal: human_money_core::models::seal::WalletSeal = serde_json::from_slice(&seal_bytes).map_err(|e| FrontendError::from(e.to_string()))?;
+        let identity = service.with_wallet_and_identity(|_, id| id.clone()).map_err(FrontendError::from)?;
+        (identity, seal)
+    };
+
+    let mut state_hash_bytes = [0u8; 32];
+    if let Ok(bytes) = human_money_core::hex::decode(&seal.payload.state_hash) {
+        if bytes.len() == 32 {
+            state_hash_bytes.copy_from_slice(&bytes);
+        }
+    } else if let Ok(bytes) = human_money_core::services::crypto::decode_bs58_fixed::<32>(&seal.payload.state_hash, "state_hash") {
+        state_hash_bytes = bytes;
+    } else {
+        let h = blake3::hash(seal.payload.state_hash.as_bytes());
+        state_hash_bytes = *h.as_bytes();
+    }
+
+    let lock_request = if seal.payload.tx_nonce == 0 {
+        human_money_core::services::l2_gateway::build_anchor_genesis_lock(
+            &identity,
+            seal.payload.epoch as u64,
+            &state_hash_bytes,
+            None,
+        ).map_err(FrontendError::from)?
+    } else {
+        let tag = human_money_core::models::seal::derive_anchor_step_tag(
+            &seal.payload.prev_seal_hash,
+            seal.payload.tx_nonce,
+        );
+        human_money_core::services::l2_gateway::build_anchor_leap_lock(
+            &identity,
+            seal.payload.epoch as u64,
+            seal.payload.tx_nonce,
+            &tag,
+            &state_hash_bytes,
+        ).map_err(FrontendError::from)?
+    };
+
+    let req_bytes = serde_json::to_vec(&lock_request).map_err(|e| FrontendError::from(e.to_string()))?;
+    let http_status = crate::gateway_resolver::dispatch_exact(&settings, &candidates, &req_bytes)
+        .await
+        .map_err(FrontendError::from)?;
+
+    if matches!(http_status, Some(200 | 201)) {
+        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service.flush_pending_anchor_sync(password.as_deref()).map_err(FrontendError::from)
+    } else {
+        log::debug!("L2 anchor flush returned non-success HTTP status: {:?}", http_status);
+        Ok(false)
+    }
 }
 
 /// Explicit cold-path refresh. Public gateway directories select messengers;
@@ -551,12 +710,20 @@ pub async fn refresh_l2_gateway_cache(password: Option<String>, state: tauri::St
     }
     let mut settings = state.get_cached_settings().map_err(FrontendError::from)?;
     if settings.active_network != network { return Err(FrontendError::from("Network changed during discovery".to_string())); }
-    if network.eq_ignore_ascii_case("testnet") { settings.cached_peers_testnet = refreshed.clone(); }
-    else if network.eq_ignore_ascii_case("mainnet") { settings.cached_peers_mainnet = refreshed.clone(); }
-    else { return Err(FrontendError::from("Invalid L2 network configuration".to_string())); }
-    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-    if service.with_wallet(|wallet| wallet.get_user_id().to_string()).map_err(FrontendError::from)? != owner { return Err(FrontendError::from("Profile changed during discovery".to_string())); }
-    state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)?;
+    let existing_peers = if network.eq_ignore_ascii_case("testnet") {
+        &settings.cached_peers_testnet
+    } else if network.eq_ignore_ascii_case("mainnet") {
+        &settings.cached_peers_mainnet
+    } else {
+        return Err(FrontendError::from("Invalid L2 network configuration".to_string()));
+    };
+    if existing_peers != &refreshed {
+        if network.eq_ignore_ascii_case("testnet") { settings.cached_peers_testnet = refreshed.clone(); }
+        else { settings.cached_peers_mainnet = refreshed.clone(); }
+        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        if service.with_wallet(|wallet| wallet.get_user_id().to_string()).map_err(FrontendError::from)? != owner { return Err(FrontendError::from("Profile changed during discovery".to_string())); }
+        state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)?;
+    }
     Ok(refreshed)
 }
 
@@ -564,4 +731,177 @@ pub async fn refresh_l2_gateway_cache(password: Option<String>, state: tauri::St
 #[tauri::command]
 pub async fn refresh_regional_mesh_views(state:tauri::State<'_,AppState>)->Result<bool,FrontendError> {
     crate::checkout::refresh_views(&state).await
+}
+
+#[tauri::command]
+pub async fn check_voucher_l2_status(
+    local_instance_id: String,
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<FrontendVoucherL2StatusDto, FrontendError> {
+    let (query, is_currently_archived) = {
+        let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service.with_wallet(|wallet| {
+            let instance = wallet.voucher_store.vouchers.get(&local_instance_id)
+                .ok_or_else(|| human_money_core::Error::App(human_money_core::error::AppError::InvariantViolation { message: "Voucher not found".into() }))?;
+            let is_archived = matches!(instance.status, human_money_core::wallet::instance::VoucherStatus::Archived);
+            let mut query = wallet.build_voucher_status_query(&local_instance_id, 1)?;
+            query.read_quorum = 1;
+            Ok::<_, human_money_core::Error>((query, is_archived))
+        }).map_err(FrontendError::from)?
+        .map_err(FrontendError::from)?
+    };
+
+    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    let candidates = crate::gateway_resolver::cached_candidates(&settings);
+    if candidates.is_empty() {
+        return Ok(FrontendVoucherL2StatusDto {
+            status: "no_servers".to_string(),
+            archived: is_currently_archived,
+            successor_t_id: None,
+        });
+    }
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(2500))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log::debug!("Failed to build HTTP client: {}", e);
+            return Ok(FrontendVoucherL2StatusDto {
+                status: "offline".to_string(),
+                archived: is_currently_archived,
+                successor_t_id: None,
+            });
+        }
+    };
+
+    let body_bytes = match serde_json::to_vec(&query) {
+        Ok(b) => b,
+        Err(_) => return Ok(FrontendVoucherL2StatusDto {
+            status: "offline".to_string(),
+            archived: is_currently_archived,
+            successor_t_id: None,
+        }),
+    };
+
+    let mut response_entry = None;
+    let mut at_least_one_responded = false;
+
+    for base in &candidates {
+        let Some(url) = crate::gateway_resolver::endpoint(base, "v1/status") else { continue };
+        let mut request = client.post(url.clone())
+            .header("Content-Type", "application/json")
+            .body(body_bytes.clone());
+
+        if let Some(provider) = settings.custom_servers.iter().find(|p| {
+            p.is_active
+                && crate::gateway_resolver::endpoint(&p.url, "v1/status")
+                    .is_some_and(|k| k.origin() == url.origin())
+        }) {
+            if let Some(token) = &provider.auth_token {
+                request = request.bearer_auth(token);
+            }
+            if let Some(token) = &provider.peer_token {
+                if token.len() == 36 && token.starts_with("f2f_") && token[4..].bytes().all(|b| b.is_ascii_hexdigit()) {
+                    request = request.header("X-Peer-Token", token);
+                }
+            }
+        }
+
+        let response = tokio::time::timeout(std::time::Duration::from_millis(2500), request.send()).await;
+        let Ok(Ok(resp)) = response else { continue };
+        at_least_one_responded = true;
+        if !resp.status().is_success() { continue; }
+        let Ok(resp_bytes) = resp.bytes().await else { continue };
+
+        let entry = if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
+            match envelope.verdict {
+                human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
+                _ => None,
+            }
+        } else if let Ok(verdict) = serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes) {
+            match verdict {
+                human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
+                _ => None,
+            }
+        } else { None };
+
+        if let Some(e) = entry {
+            response_entry = Some(e);
+            break;
+        }
+    }
+
+    if let Some(entry) = response_entry {
+        let successor_t_id = serde_json::to_value(&entry)
+            .ok()
+            .and_then(|v| v.get("t_id").and_then(|t| t.as_str().map(|s| s.to_string())));
+        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let _ = service.reconcile_voucher_state(&local_instance_id, Some(&entry), password.as_deref());
+        Ok(FrontendVoucherL2StatusDto {
+            status: "spent".to_string(),
+            archived: true,
+            successor_t_id,
+        })
+    } else if at_least_one_responded {
+        Ok(FrontendVoucherL2StatusDto {
+            status: "unspent".to_string(),
+            archived: is_currently_archived,
+            successor_t_id: None,
+        })
+    } else {
+        Ok(FrontendVoucherL2StatusDto {
+            status: "offline".to_string(),
+            archived: is_currently_archived,
+            successor_t_id: None,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_frontend_rollback_reconciliation_dto_serialization() {
+        let report = human_money_core::models::seal::RollbackReconciliationReport {
+            quarantined_voucher_ids: vec!["v1".to_string()],
+            archived_voucher_ids: vec!["v2".to_string()],
+            retained_voucher_ids: vec!["v3".to_string()],
+            new_tx_nonce: 42,
+            consolidated_state_hash: "hash123".to_string(),
+            message: "Reconciled".to_string(),
+        };
+        let dto: FrontendRollbackReconciliationDto = report.into();
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("\"newTxNonce\":42"));
+        assert!(json.contains("\"consolidatedStateHash\":\"hash123\""));
+        assert!(json.contains("\"quarantinedVoucherIds\":[\"v1\"]"));
+        assert!(json.contains("\"archivedVoucherIds\":[\"v2\"]"));
+        assert!(json.contains("\"retainedVoucherIds\":[\"v3\"]"));
+        assert!(json.contains("\"message\":\"Reconciled\""));
+    }
+
+    #[test]
+    fn test_frontend_voucher_l2_status_dto_serialization() {
+        let dto = FrontendVoucherL2StatusDto {
+            status: "spent".to_string(),
+            archived: true,
+            successor_t_id: Some("succ123".to_string()),
+        };
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("\"status\":\"spent\""));
+        assert!(json.contains("\"archived\":true"));
+        assert!(json.contains("\"successorTId\":\"succ123\""));
+
+        let unspent_dto = FrontendVoucherL2StatusDto {
+            status: "unspent".to_string(),
+            archived: false,
+            successor_t_id: None,
+        };
+        let unspent_json = serde_json::to_string(&unspent_dto).unwrap();
+        assert!(!unspent_json.contains("successorTId"));
+    }
 }

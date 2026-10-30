@@ -11,6 +11,7 @@ import { useSession } from '../context/SessionContext';
 import { translateError, stringifyError } from '../utils/errorHelper';
 
 import { ProfileSettings } from './ProfileSettings';
+import { BackupSettingsCard } from './BackupSettingsCard';
 import { StandardsManager } from './StandardsManager';
 import { PageLayout } from './ui/PageLayout';
 import { authService } from '../services/authService';
@@ -32,7 +33,11 @@ import {
     Network,
     Gauge,
     Trash2,
-    Plus
+    Plus,
+    ChevronDown,
+    ChevronUp,
+    Wifi,
+    WifiOff
 } from 'lucide-react';
 
 interface SettingsViewProps {
@@ -52,6 +57,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
     // Dev mode hidden trigger (7 clicks)
     const [devClickCount, setDevClickCount] = useState(0);
+    const [isAdvancedNetworkOpen, setIsAdvancedNetworkOpen] = useState(false);
     const [benchmarkResults, setBenchmarkResults] = useState<Array<{ url: string; latencyMs?: number; reachable: boolean }>>([]);
     const [isBenchmarking, setIsBenchmarking] = useState(false);
     const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
@@ -71,6 +77,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 logger.info("SettingsView: Fetching current settings.");
                 const currentSettings = await settingsService.getSettings();
                 setSettings(currentSettings);
+                if (currentSettings.customServers?.length || currentSettings.regionalMeshSources?.length || currentSettings.devModeUnlocked) {
+                    setIsAdvancedNetworkOpen(true);
+                }
                 
                 const deviceId = await authService.getLocalInstanceId();
                 setLocalInstanceId(deviceId);
@@ -92,7 +101,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         if (next >= 7) {
             setSettings(s => s ? { ...s, devModeUnlocked: true } : s);
             logger.info("SettingsView: Dev mode unlocked via 7 clicks.");
-            setSuccess('Entwicklermodus freigeschaltet');
+            setSuccess(t('settings.devModeUnlockedToast', 'Developer mode unlocked'));
             setTimeout(() => setSuccess(''), 3000);
         }
     };
@@ -169,9 +178,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         setMeshRefreshFeedback(null);
         try {
             const success = await settingsService.refreshRegionalMeshViews();
-            setMeshRefreshFeedback(success ? 'Regionale Mesh-Sichten erfolgreich aktualisiert' : 'Keine regionalen Mesh-Quellen konfiguriert');
+            setMeshRefreshFeedback(success ? t('settings.meshRefreshSuccess', 'Regional mesh views refreshed successfully.') : t('settings.meshRefreshNone', 'No regional mesh sources configured.'));
         } catch (e) {
-            setMeshRefreshFeedback(`Fehler bei Mesh-Aktualisierung: ${translateError(e, t)}`);
+            setMeshRefreshFeedback(translateError(e, t));
         } finally {
             setIsRefreshingMesh(false);
             setTimeout(() => setMeshRefreshFeedback(null), 4000);
@@ -229,6 +238,11 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     }
 
     const isDevUnlocked = !!settings?.devModeUnlocked;
+    const hasActiveServers = Boolean(
+        (settings?.customServers || []).some(s => s.isActive) ||
+        (settings?.regionalMeshSources || []).length > 0 ||
+        (settings?.activeNetwork === 'testnet' ? settings?.cachedPeersTestnet?.length : settings?.cachedPeersMainnet?.length)
+    );
 
     return (
         <PageLayout 
@@ -236,7 +250,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 <span 
                     onClick={handleDevModeClick} 
                     className="select-none cursor-pointer"
-                    title={isDevUnlocked ? "Entwicklermodus aktiv" : `Klick ${7 - devClickCount} bis Entwicklermodus`}
+                    title={isDevUnlocked ? t('settings.devModeUnlockedToast', 'Developer mode unlocked') : `Klick ${7 - devClickCount} bis Entwicklermodus`}
                     role="button"
                     tabIndex={0}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleDevModeClick(); }}}
@@ -373,259 +387,315 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                             </div>
                         </Card>
 
-                        {/* Netzwerk & L2-Server - Dev Mode Only */}
-                        {isDevUnlocked && (
-                            <Card header={
-                                <div className="flex items-center gap-2">
-                                    <Network size={18} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">Netzwerk &amp; L2-Server</span>
+                        {/* Encrypted Wallet Backups */}
+                        <BackupSettingsCard settings={settings} onSettingsUpdated={setSettings} />
+
+                        {/* Network & L2 Protection */}
+                        <Card header={
+                            <div className="flex items-center gap-2">
+                                <Network size={18} className="text-theme-primary" />
+                                <span className="font-black text-xs uppercase tracking-widest">{t('settings.l2ProtectionTitle', 'Network & L2 Protection')}</span>
+                                {isDevUnlocked && (
                                     <span className="ml-2 text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">DEV</span>
-                                </div>
-                            }>
-                                <div className="space-y-6">
-                                    {/* Netzwerk Auswahl */}
-                                    <div className="space-y-3">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">Netzwerk</label>
-                                        <div className="flex gap-3">
-                                            <label className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 cursor-pointer transition-all ${settings?.activeNetwork !== 'testnet' ? 'bg-theme-primary text-white border-theme-primary shadow-sm' : 'bg-white border-theme-subtle hover:border-theme-primary/30 text-theme-secondary'}`}>
-                                                <input
-                                                    type="radio"
-                                                    name="activeNetwork"
-                                                    value="mainnet"
-                                                    checked={settings?.activeNetwork !== 'testnet'}
-                                                    onChange={() => setSettings(s => s ? { ...s, activeNetwork: 'mainnet' } : null)}
-                                                    className="sr-only"
-                                                />
-                                                <span className="text-sm">{settings?.activeNetwork !== 'testnet' ? '● Mainnet' : '○ Mainnet'}</span>
-                                            </label>
-                                            <label className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 cursor-pointer transition-all ${settings?.activeNetwork === 'testnet' ? 'bg-orange-500 text-white border-orange-500 shadow-sm' : 'bg-white border-theme-subtle hover:border-orange-300 text-theme-secondary'}`}>
-                                                <input
-                                                    type="radio"
-                                                    name="activeNetwork"
-                                                    value="testnet"
-                                                    checked={settings?.activeNetwork === 'testnet'}
-                                                    onChange={() => setSettings(s => s ? { ...s, activeNetwork: 'testnet' } : null)}
-                                                    className="sr-only"
-                                                />
-                                                <span className="text-sm">{settings?.activeNetwork === 'testnet' ? '● Testnet' : '○ Testnet'}</span>
-                                            </label>
+                                )}
+                            </div>
+                        }>
+                            <div className="space-y-6">
+                                {/* Network Status Overview Box */}
+                                <div className={`p-4 rounded-2xl border flex items-start gap-3.5 ${
+                                    hasActiveServers 
+                                        ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-950'
+                                        : 'bg-slate-500/10 border-slate-500/20 text-slate-900'
+                                }`}>
+                                    {hasActiveServers ? (
+                                        <Wifi size={20} className="text-emerald-600 shrink-0 mt-0.5" />
+                                    ) : (
+                                        <WifiOff size={20} className="text-slate-600 shrink-0 mt-0.5" />
+                                    )}
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-black uppercase tracking-wider">
+                                                {hasActiveServers
+                                                    ? t('settings.l2ModeConnectedTitle', 'Layer 2 Gateway Network')
+                                                    : t('settings.l2ModePureOfflineTitle', 'Pure Offline P2P Mode')}
+                                            </span>
+                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                                hasActiveServers ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
+                                            }`}>
+                                                {hasActiveServers ? 'Online' : 'Offline'}
+                                            </span>
                                         </div>
-                                        <p className="text-[10px] text-theme-light/60 font-medium">Wähle zwischen produktivem Hauptnetz und Testnetzwerk für Entwicklungstests.</p>
+                                        <p className="text-xs text-theme-secondary/80 leading-relaxed font-medium">
+                                            {hasActiveServers
+                                                ? t('settings.l2ModeConnectedDesc', 'Active servers provide blind collision lock registry queries, fast PoS checkouts, and WalletSeal backup anchors.')
+                                                : t('settings.l2ModePureOfflineDesc', 'No public Human Money Node servers are active yet. Your wallet works 100% offline; transaction locks and WalletSeal state protection are ready and activate automatically as soon as servers become available.')}
+                                        </p>
                                     </div>
+                                </div>
 
-                                    {/* Eigene Server / Freunde verwalten */}
-                                    <div className="space-y-3">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-2">
-                                            <Server size={12} /> Eigene Server / Freunde
-                                        </label>
-                                        {(settings?.customServers || []).length > 0 ? (
-                                            <div className="space-y-2">
-                                                {(settings?.customServers || []).map((srv, idx) => (
-                                                    <div key={`${srv.url}-${idx}`} className="flex items-center gap-2 p-3 bg-slate-50 border border-theme-subtle rounded-xl">
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="text-xs font-bold text-theme-secondary truncate">{srv.name || srv.url}</div>
-                                                            <div className="text-[10px] font-mono text-theme-light truncate">{srv.url}</div>
-                                                            {(srv.authToken || srv.peerToken) && (
-                                                                <div className="text-[10px] text-theme-light/60 truncate">Tokens: {srv.authToken ? 'auth ' : ''}{srv.peerToken ? 'peer' : ''}</div>
-                                                            )}
-                                                        </div>
+                                {/* Advanced Server & PoS Collapsible */}
+                                <div className="border border-theme-subtle rounded-2xl overflow-hidden">
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsAdvancedNetworkOpen(v => !v)}
+                                        className="w-full flex items-center justify-between p-4 bg-slate-50/70 hover:bg-slate-100/70 transition-colors text-left"
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <Server size={14} className="text-theme-primary" />
+                                            <span className="text-xs font-bold text-theme-secondary">
+                                                {t('settings.advancedNetworkToggle', 'Advanced Server & PoS Configuration')}
+                                            </span>
+                                        </div>
+                                        {isAdvancedNetworkOpen ? <ChevronUp size={16} className="text-theme-light" /> : <ChevronDown size={16} className="text-theme-light" />}
+                                    </button>
+
+                                    {isAdvancedNetworkOpen && (
+                                        <div className="p-4 space-y-6 border-t border-theme-subtle">
+                                            {/* Network Selection */}
+                                            <div className="space-y-3">
+                                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('settings.activeNetworkLabel', 'Active Network')}</label>
+                                                <div className="flex gap-3">
+                                                    <label className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 cursor-pointer transition-all ${settings?.activeNetwork !== 'testnet' ? 'bg-theme-primary text-white border-theme-primary shadow-sm' : 'bg-white border-theme-subtle hover:border-theme-primary/30 text-theme-secondary'}`}>
+                                                        <input
+                                                            type="radio"
+                                                            name="activeNetwork"
+                                                            value="mainnet"
+                                                            checked={settings?.activeNetwork !== 'testnet'}
+                                                            onChange={() => setSettings(s => s ? { ...s, activeNetwork: 'mainnet' } : null)}
+                                                            className="sr-only"
+                                                        />
+                                                        <span className="text-sm">{settings?.activeNetwork !== 'testnet' ? '● Mainnet' : '○ Mainnet'}</span>
+                                                    </label>
+                                                    <label className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 cursor-pointer transition-all ${settings?.activeNetwork === 'testnet' ? 'bg-orange-500 text-white border-orange-500 shadow-sm' : 'bg-white border-theme-subtle hover:border-orange-300 text-theme-secondary'}`}>
+                                                        <input
+                                                            type="radio"
+                                                            name="activeNetwork"
+                                                            value="testnet"
+                                                            checked={settings?.activeNetwork === 'testnet'}
+                                                            onChange={() => setSettings(s => s ? { ...s, activeNetwork: 'testnet' } : null)}
+                                                            className="sr-only"
+                                                        />
+                                                        <span className="text-sm">{settings?.activeNetwork === 'testnet' ? '● Testnet' : '○ Testnet'}</span>
+                                                    </label>
+                                                </div>
+                                                <p className="text-[10px] text-theme-light/60 font-medium">{t('settings.activeNetworkDesc', 'Select between production Mainnet and Testnet for development tests.')}</p>
+                                            </div>
+
+                                            {/* Custom Servers */}
+                                            <div className="space-y-3">
+                                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-2">
+                                                    <Server size={12} /> {t('settings.customServersTitle', 'Custom Servers & Trusted Peers')}
+                                                </label>
+                                                {(settings?.customServers || []).length > 0 ? (
+                                                    <div className="space-y-2">
+                                                        {(settings?.customServers || []).map((srv, idx) => (
+                                                            <div key={`${srv.url}-${idx}`} className="flex items-center gap-2 p-3 bg-slate-50 border border-theme-subtle rounded-xl">
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="text-xs font-bold text-theme-secondary truncate">{srv.name || srv.url}</div>
+                                                                    <div className="text-[10px] font-mono text-theme-light truncate">{srv.url}</div>
+                                                                    {(srv.authToken || srv.peerToken) && (
+                                                                        <div className="text-[10px] text-theme-light/60 truncate">Tokens: {srv.authToken ? 'auth ' : ''}{srv.peerToken ? 'peer' : ''}</div>
+                                                                    )}
+                                                                </div>
+                                                                <Button
+                                                                    type="button"
+                                                                    variant="outline"
+                                                                    onClick={() => handleRemoveCustomServer(idx)}
+                                                                    className="px-2 py-1 text-xs shrink-0"
+                                                                    title={t('common.remove', 'Remove')}
+                                                                >
+                                                                    <Trash2 size={14} />
+                                                                </Button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <p className="text-xs text-theme-light/60 italic">{t('settings.noCustomServers', 'No custom servers registered yet.')}</p>
+                                                )}
+
+                                                {/* Add new server */}
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-white border border-dashed border-theme-subtle rounded-xl">
+                                                    <Input
+                                                        placeholder={t('settings.serverNamePlaceholder', 'Name (e.g. Peer A)')}
+                                                        value={newServerName}
+                                                        onChange={(e) => setNewServerName(e.target.value)}
+                                                        className="text-xs"
+                                                    />
+                                                    <Input
+                                                        placeholder={t('settings.serverUrlPlaceholder', 'URL (https://...)')}
+                                                        value={newServerUrl}
+                                                        onChange={(e) => setNewServerUrl(e.target.value)}
+                                                        className="text-xs font-mono"
+                                                    />
+                                                    <Input
+                                                        placeholder={t('settings.authTokenPlaceholder', 'Auth Token (optional)')}
+                                                        value={newServerAuthToken}
+                                                        onChange={(e) => setNewServerAuthToken(e.target.value)}
+                                                        className="text-xs font-mono"
+                                                    />
+                                                    <Input
+                                                        placeholder={t('settings.peerTokenPlaceholder', 'Peer Token (optional)')}
+                                                        value={newServerPeerToken}
+                                                        onChange={(e) => setNewServerPeerToken(e.target.value)}
+                                                        className="text-xs font-mono"
+                                                    />
+                                                    <div className="md:col-span-2">
                                                         <Button
                                                             type="button"
                                                             variant="outline"
-                                                            onClick={() => handleRemoveCustomServer(idx)}
-                                                            className="px-2 py-1 text-xs shrink-0"
-                                                            title="Entfernen"
+                                                            onClick={handleAddCustomServer}
+                                                            disabled={!newServerUrl.trim()}
+                                                            className="w-full gap-2"
                                                         >
-                                                            <Trash2 size={14} />
+                                                            <Plus size={14} /> {t('settings.addServerButton', 'Add Server')}
                                                         </Button>
                                                     </div>
-                                                ))}
+                                                </div>
                                             </div>
-                                        ) : (
-                                            <p className="text-xs text-theme-light/60 italic">Noch keine eigenen Server eingetragen.</p>
-                                        )}
 
-                                        {/* Add new server */}
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-white border border-dashed border-theme-subtle rounded-xl">
-                                            <Input
-                                                placeholder="Name (z. B. Freund A)"
-                                                value={newServerName}
-                                                onChange={(e) => setNewServerName(e.target.value)}
-                                                className="text-xs"
-                                            />
-                                            <Input
-                                                placeholder="URL (https://...)"
-                                                value={newServerUrl}
-                                                onChange={(e) => setNewServerUrl(e.target.value)}
-                                                className="text-xs font-mono"
-                                            />
-                                            <Input
-                                                placeholder="Auth Token (optional)"
-                                                value={newServerAuthToken}
-                                                onChange={(e) => setNewServerAuthToken(e.target.value)}
-                                                className="text-xs font-mono"
-                                            />
-                                            <Input
-                                                placeholder="Peer Token (optional)"
-                                                value={newServerPeerToken}
-                                                onChange={(e) => setNewServerPeerToken(e.target.value)}
-                                                className="text-xs font-mono"
-                                            />
-                                            <div className="md:col-span-2">
-                                                <Button
-                                                    type="button"
-                                                    variant="outline"
-                                                    onClick={handleAddCustomServer}
-                                                    disabled={!newServerUrl.trim()}
-                                                    className="w-full gap-2"
-                                                >
-                                                    <Plus size={14} /> Hinzufügen
-                                                </Button>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Exclusive Checkbox */}
-                                    <label className="flex items-start gap-3 p-3 bg-amber-50/50 border border-amber-200 rounded-xl cursor-pointer hover:bg-amber-50 transition-colors">
-                                        <input
-                                            type="checkbox"
-                                            checked={!!settings?.exclusiveCustomServers}
-                                            onChange={(e) => setSettings(s => s ? { ...s, exclusiveCustomServers: e.target.checked } : null)}
-                                            className="mt-0.5 accent-theme-primary"
-                                        />
-                                        <span className="text-xs font-medium text-theme-secondary leading-relaxed">
-                                            Ausschließlich eigene Server nutzen (Streng privat)
-                                            <span className="block text-[10px] text-theme-light/60 font-normal">Wenn aktiv, werden ausschließlich die oben eingetragenen Server verwendet – keine Seed-Peers.</span>
-                                        </span>
-                                    </label>
-
-                                    {/* Regionale Beobachtungsquellen (Regional Mesh Sources) */}
-                                    <div className="space-y-3 pt-4 border-t border-theme-subtle">
-                                        <div className="flex items-center justify-between">
-                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
-                                                <ShieldCheck size={12} /> Regionale Beobachtungsquellen (Regional Mesh)
+                                            {/* Exclusive Checkbox */}
+                                            <label className="flex items-start gap-3 p-3 bg-amber-50/50 border border-amber-200 rounded-xl cursor-pointer hover:bg-amber-50 transition-colors">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!settings?.exclusiveCustomServers}
+                                                    onChange={(e) => setSettings(s => s ? { ...s, exclusiveCustomServers: e.target.checked } : null)}
+                                                    className="mt-0.5 accent-theme-primary"
+                                                />
+                                                <span className="text-xs font-medium text-theme-secondary leading-relaxed">
+                                                    {t('settings.exclusiveServersLabel', 'Exclusively use custom servers (Strictly private)')}
+                                                    <span className="block text-[10px] text-theme-light/60 font-normal">{t('settings.exclusiveServersDesc', 'When active, only the custom servers above are used — no public seed peers.')}</span>
+                                                </span>
                                             </label>
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                onClick={handleRefreshMeshViews}
-                                                disabled={isRefreshingMesh}
-                                                className="text-[10px] px-2.5 py-1 gap-1"
-                                            >
-                                                {isRefreshingMesh ? <Clock className="animate-spin" size={12} /> : <Globe size={12} />}
-                                                {isRefreshingMesh ? 'Aktualisiere...' : 'Cold Refresh'}
-                                            </Button>
-                                        </div>
-                                        {meshRefreshFeedback && (
-                                            <p className={`text-xs font-medium ${meshRefreshFeedback.includes('Fehler') ? 'text-rose-600' : 'text-emerald-600'}`}>
-                                                {meshRefreshFeedback}
-                                            </p>
-                                        )}
-                                        {(settings?.regionalMeshSources || []).length > 0 ? (
-                                            <div className="space-y-2">
-                                                {(settings?.regionalMeshSources || []).map((src, idx) => (
-                                                    <div key={`${src.url}-${idx}`} className="flex items-center gap-2 p-3 bg-slate-50 border border-theme-subtle rounded-xl">
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="text-xs font-bold text-theme-secondary truncate">{src.url}</div>
-                                                            <div className="text-[10px] font-mono text-theme-light truncate">Key: {src.publicKey}</div>
-                                                            {src.bearerToken && (
-                                                                <div className="text-[10px] text-theme-light/60 truncate">Bearer Token konfiguriert</div>
-                                                            )}
-                                                        </div>
+
+                                            {/* Regional Observation Sources (Regional Mesh) */}
+                                            <div className="space-y-3 pt-4 border-t border-theme-subtle">
+                                                <div className="flex items-center justify-between">
+                                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
+                                                        <ShieldCheck size={12} /> {t('settings.regionalMeshTitle', 'Regional Observation Sources (Regional Mesh)')}
+                                                    </label>
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        onClick={handleRefreshMeshViews}
+                                                        disabled={isRefreshingMesh}
+                                                        className="text-[10px] px-2.5 py-1 gap-1"
+                                                    >
+                                                        {isRefreshingMesh ? <Clock className="animate-spin" size={12} /> : <Globe size={12} />}
+                                                        {isRefreshingMesh ? t('common.processing', 'Processing...') : t('settings.coldRefreshButton', 'Cold Refresh')}
+                                                    </Button>
+                                                </div>
+                                                {meshRefreshFeedback && (
+                                                    <p className={`text-xs font-medium ${meshRefreshFeedback.includes('Fehler') || meshRefreshFeedback.includes('error') ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                                        {meshRefreshFeedback}
+                                                    </p>
+                                                )}
+                                                {(settings?.regionalMeshSources || []).length > 0 ? (
+                                                    <div className="space-y-2">
+                                                        {(settings?.regionalMeshSources || []).map((src, idx) => (
+                                                            <div key={`${src.url}-${idx}`} className="flex items-center gap-2 p-3 bg-slate-50 border border-theme-subtle rounded-xl">
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="text-xs font-bold text-theme-secondary truncate">{src.url}</div>
+                                                                    <div className="text-[10px] font-mono text-theme-light truncate">Key: {src.publicKey}</div>
+                                                                    {src.bearerToken && (
+                                                                        <div className="text-[10px] text-theme-light/60 truncate">Bearer Token configured</div>
+                                                                    )}
+                                                                </div>
+                                                                <Button
+                                                                    type="button"
+                                                                    variant="outline"
+                                                                    onClick={() => handleRemoveRegionalSource(idx)}
+                                                                    className="px-2 py-1 text-xs shrink-0"
+                                                                    title={t('common.remove', 'Remove')}
+                                                                >
+                                                                    <Trash2 size={14} />
+                                                                </Button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <p className="text-xs text-theme-light/60 italic">{t('settings.noRegionalMesh', 'No regional observation sources configured yet.')}</p>
+                                                )}
+
+                                                {/* Add new regional source */}
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-white border border-dashed border-theme-subtle rounded-xl">
+                                                    <Input
+                                                        placeholder={t('settings.serverUrlPlaceholder', 'URL (https://...)')}
+                                                        value={newRegionalUrl}
+                                                        onChange={(e) => setNewRegionalUrl(e.target.value)}
+                                                        className="text-xs font-mono"
+                                                    />
+                                                    <Input
+                                                        placeholder="Public Key (Ed25519 Hex / Base58)"
+                                                        value={newRegionalPublicKey}
+                                                        onChange={(e) => setNewRegionalPublicKey(e.target.value)}
+                                                        className="text-xs font-mono"
+                                                    />
+                                                    <div className="md:col-span-2">
+                                                        <Input
+                                                            placeholder={t('settings.authTokenPlaceholder', 'Bearer Token (optional)')}
+                                                            value={newRegionalBearerToken}
+                                                            onChange={(e) => setNewRegionalBearerToken(e.target.value)}
+                                                            className="text-xs font-mono"
+                                                        />
+                                                    </div>
+                                                    <div className="md:col-span-2">
                                                         <Button
                                                             type="button"
                                                             variant="outline"
-                                                            onClick={() => handleRemoveRegionalSource(idx)}
-                                                            className="px-2 py-1 text-xs shrink-0"
-                                                            title="Entfernen"
+                                                            onClick={handleAddRegionalSource}
+                                                            disabled={!newRegionalUrl.trim() || !newRegionalPublicKey.trim()}
+                                                            className="w-full gap-2"
                                                         >
-                                                            <Trash2 size={14} />
+                                                            <Plus size={14} /> {t('settings.addRegionalSourceButton', 'Add Regional Source')}
                                                         </Button>
                                                     </div>
-                                                ))}
+                                                </div>
                                             </div>
-                                        ) : (
-                                            <p className="text-xs text-theme-light/60 italic">Noch keine regionalen Beobachtungsquellen hinterlegt.</p>
-                                        )}
 
-                                        {/* Add new regional source */}
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-white border border-dashed border-theme-subtle rounded-xl">
-                                            <Input
-                                                placeholder="URL (https://...)"
-                                                value={newRegionalUrl}
-                                                onChange={(e) => setNewRegionalUrl(e.target.value)}
-                                                className="text-xs font-mono"
-                                            />
-                                            <Input
-                                                placeholder="Public Key (Ed25519 Hex / Base58)"
-                                                value={newRegionalPublicKey}
-                                                onChange={(e) => setNewRegionalPublicKey(e.target.value)}
-                                                className="text-xs font-mono"
-                                            />
-                                            <div className="md:col-span-2">
-                                                <Input
-                                                    placeholder="Bearer Token (optional)"
-                                                    value={newRegionalBearerToken}
-                                                    onChange={(e) => setNewRegionalBearerToken(e.target.value)}
-                                                    className="text-xs font-mono"
-                                                />
-                                            </div>
-                                            <div className="md:col-span-2">
+                                            {/* Benchmark */}
+                                            <div className="space-y-3">
                                                 <Button
                                                     type="button"
                                                     variant="outline"
-                                                    onClick={handleAddRegionalSource}
-                                                    disabled={!newRegionalUrl.trim() || !newRegionalPublicKey.trim()}
+                                                    onClick={handleBenchmark}
+                                                    disabled={isBenchmarking}
                                                     className="w-full gap-2"
                                                 >
-                                                    <Plus size={14} /> Regionale Quelle hinzufügen
+                                                    {isBenchmarking ? <Clock className="animate-spin" size={16} /> : <Gauge size={16} />}
+                                                    {isBenchmarking ? t('settings.testing', 'Testing...') : t('settings.benchmarkButton', 'Test & Sort Servers by Latency')}
                                                 </Button>
+                                                {benchmarkError && (
+                                                    <p className="text-xs text-rose-600 font-medium">{benchmarkError}</p>
+                                                )}
+                                                {benchmarkResults.length > 0 && (
+                                                    <div className="space-y-2">
+                                                        {(() => {
+                                                            const maxLatency = Math.max(...benchmarkResults.filter(r => r.reachable && r.latencyMs !== undefined).map(r => r.latencyMs || 0), 0);
+                                                            return benchmarkResults.map((res) => (
+                                                                <div key={res.url} className="p-2.5 bg-white border border-theme-subtle rounded-xl space-y-1.5">
+                                                                    <div className="flex items-center justify-between gap-2">
+                                                                        <span className="text-[11px] font-mono text-theme-secondary truncate flex-1" title={res.url}>{res.url}</span>
+                                                                        <span className={`text-[11px] font-bold shrink-0 ${!res.reachable ? 'text-slate-400' : (res.latencyMs !== undefined && res.latencyMs < 300 ? 'text-emerald-600' : res.latencyMs !== undefined && res.latencyMs < 600 ? 'text-orange-600' : 'text-rose-600')}`}>
+                                                                            {res.reachable && res.latencyMs !== undefined ? `${res.latencyMs} ms` : t('settings.unreachable', 'unreachable')}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                                        <div
+                                                                            className={`h-full rounded-full transition-all ${getLatencyColor(res.latencyMs, res.reachable)}`}
+                                                                            style={{ width: getLatencyWidth(res.latencyMs, res.reachable, maxLatency) }}
+                                                                        />
+                                                                    </div>
+                                                                </div>
+                                                            ));
+                                                        })()}
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
-                                    </div>
-
-                                    {/* Benchmark */}
-                                    <div className="space-y-3">
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            onClick={handleBenchmark}
-                                            disabled={isBenchmarking}
-                                            className="w-full gap-2"
-                                        >
-                                            {isBenchmarking ? <Clock className="animate-spin" size={16} /> : <Gauge size={16} />}
-                                            {isBenchmarking ? 'Teste...' : 'Server nach Geschwindigkeit testen & sortieren'}
-                                        </Button>
-                                        {benchmarkError && (
-                                            <p className="text-xs text-rose-600 font-medium">{benchmarkError}</p>
-                                        )}
-                                        {benchmarkResults.length > 0 && (
-                                            <div className="space-y-2">
-                                                {(() => {
-                                                    const maxLatency = Math.max(...benchmarkResults.filter(r => r.reachable && r.latencyMs !== undefined).map(r => r.latencyMs || 0), 0);
-                                                    return benchmarkResults.map((res) => (
-                                                        <div key={res.url} className="p-2.5 bg-white border border-theme-subtle rounded-xl space-y-1.5">
-                                                            <div className="flex items-center justify-between gap-2">
-                                                                <span className="text-[11px] font-mono text-theme-secondary truncate flex-1" title={res.url}>{res.url}</span>
-                                                                <span className={`text-[11px] font-bold shrink-0 ${!res.reachable ? 'text-slate-400' : (res.latencyMs !== undefined && res.latencyMs < 300 ? 'text-emerald-600' : res.latencyMs !== undefined && res.latencyMs < 600 ? 'text-orange-600' : 'text-rose-600')}`}>
-                                                                    {res.reachable && res.latencyMs !== undefined ? `${res.latencyMs} ms` : 'unerreichbar'}
-                                                                </span>
-                                                            </div>
-                                                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                                                                <div
-                                                                    className={`h-full rounded-full transition-all ${getLatencyColor(res.latencyMs, res.reachable)}`}
-                                                                    style={{ width: getLatencyWidth(res.latencyMs, res.reachable, maxLatency) }}
-                                                                />
-                                                            </div>
-                                                        </div>
-                                                    ));
-                                                })()}
-                                            </div>
-                                        )}
-                                    </div>
+                                    )}
                                 </div>
-                            </Card>
-                        )}
+                            </div>
+                        </Card>
 
                         {/* Language Selector */}
                         <Card 

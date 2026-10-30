@@ -1,12 +1,30 @@
 ---
 project: human-money-app
-version: "0.2.1"
+version: "0.3.0"
 phase: "beta"
 health: "green"
-last_updated: "2026-10-24"
+last_updated: "2026-10-30"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-043"
+    title: "Real WalletSeal Anchor Upload, L2 Voucher Reconciliation, PoS Trust Fallback & SST V4 Forensics"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Added backend and bridge commands for real WalletSeal anchor uploads (`flush_pending_anchor_sync`), live L2 voucher reconciliation (`reconcile_rollback`), dirty-checked L2 gateway cache refreshes (`refresh_l2_gateway_cache`), and voucher L2 status inspection (`check_voucher_l2_status`). Wired PoS checkout with receive payload recording (`ReceiveSuccessPayload`, history entry) and structured error codes for serverless/quorum failures."
+  - id: "APP-042"
+    title: "Quiet Serverless L2 Mode, 3-State Network Status Badge & Accessible Network Settings"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Implemented quiet mode for regional mesh renewal and intent reconciliation when no custom L2 servers or regional mesh sources are configured, avoiding spamming console or debug logs. Introduced 3-state network status badge (`NoServers`, `Offline`, `Online`) and improved accessibility in Network Settings."
+  - id: "APP-041"
+    title: "Encrypted Wallet Backups (.hmcbackup & Differential Sync Folder) and 2-Path Restore Wizard"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Integrated Core differential encrypted wallet backups (`.hmcbackup` archive and differential folder export) and implemented a 2-path restore wizard supporting clean full restore and differential merge."
   - id: "APP-040"
     title: "Host-Owned L2 Intent Reconciliation Supervisor"
     status: "completed"
@@ -189,10 +207,10 @@ priority_tasks:
     description: "Investigate why local_instance_id is visible in JSON view and ensure it is not included in exported/sent vouchers."
   - id: "APP-017"
     title: "Improve Session Timeout UX"
-    status: "open"
+    status: "completed"
     priority: "high"
     depends_on: []
-    description: "Handle session timeouts gracefully in the UI. Ensure components like Activity Log don't just 'disappear' but prompt for re-auth or show clear state."
+    description: "Separated `isAuthenticated` vs `isSessionActive` in auth state, ensuring unsaved form state and view context are preserved when session times out. Added clickable sidebar lock indicator for immediate manual locking and fixed the `sessionTimeoutSeconds = 0` auto-logout bug."
   - id: "APP-018"
     title: "Display Voucher Description and Footnote"
     status: "completed"
@@ -383,9 +401,9 @@ Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive
 - [x] Decoupled On-Demand Voucher Standard Management (.standard): Implemented container inspection, import preview with metadata, cleartext/password export, standard deletion with in-use safeguards, ReceiveView drag-and-drop integration, and a dedicated Standards Manager UI in Settings (APP-032).
 ## Next Milestones
 
-- [ ] Core v0.3+ Breaking Changes & Archive Migration (`FileVoucherArchive::new_secure`) (APP-033)
+- [x] Core v0.3+ Breaking Changes & Archive Migration (`FileVoucherArchive::new_secure`) (APP-033)
 - [ ] Internationalization (i18n) - German/English (MVP)
-- [ ] Improve Session Timeout UX (Activity Log visibility etc.) (MVP)
+- [x] Improve Session Timeout UX (Activity Log visibility etc.) (APP-017)
 - [ ] L2 sync hardening (Post-MVP)
 - [ ] Trust level badges for contacts (Post-MVP)
 - [ ] BLE/NFC stranger discovery (Post-MVP)
@@ -442,3 +460,7 @@ still match. Terminal intents are cleaned up after resolution, and the manual
 
 Validation: `cargo test` in `src-tauri` passed (23 tests, including the three
 new intent reconciliation tests).
+
+### 2026-10-30 — v0.3.0: Encrypted Backups, Serverless-Ready L2 UX & Session Stabilization
+
+Bumped `human-money-app` to v0.3.0. Integrated Core encrypted backups (`.hmcbackup` / differential sync folder) and 2-path restore wizard (`APP-041`). Introduced serverless quiet mode for regional mesh renewal and intent reconciliation, 3-state network status badge, and network settings hardening (`APP-042`). Wired real WalletSeal anchor sync, network-backed rollback reconciliation, voucher L2 status queries, and durable PoS checkout recording (`APP-043`). Resolved session timeout state preservation and fixed immediate auto-lock when `sessionTimeoutSeconds = 0` (`APP-017`). All 31 Rust unit tests and TypeScript suites pass offline.

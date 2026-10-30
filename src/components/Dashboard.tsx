@@ -5,6 +5,7 @@ import { voucherService } from "../services/voucherService";
 import { transferService } from "../services/transferService";
 import { profileService } from "../services/profileService";
 import { contactService } from "../services/contactService";
+import { settingsService } from "../services/settingsService";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
@@ -22,7 +23,8 @@ import {
     Copy,
     CheckCircle2,
     Clock,
-    AlertCircle
+    AlertCircle,
+    Archive
 } from "lucide-react";
 import { truncateUserId } from "../utils/userIdHelper";
 import { stringifyError } from "../utils/errorHelper";
@@ -48,19 +50,21 @@ export function Dashboard() {
     const [isProfileComplete, setIsProfileComplete] = useState(true);
     const [voucherCountsByStandard, setVoucherCountsByStandard] = useState<Record<string, number>>({});
     const [showIntegrityModal, setShowIntegrityModal] = useState(false);
+    const [showBackupReminder, setShowBackupReminder] = useState(false);
 
     useEffect(() => {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, , voucherSummaries, userProfile, , eventHistory] = await Promise.all([
+                const [id, balanceList, , voucherSummaries, userProfile, , eventHistory, userSettings] = await Promise.all([
                     profileService.getUserId(),
                     voucherService.getTotalBalanceByCurrency(),
                     transferService.getHistory().catch(() => []),
                     voucherService.getSummaries().catch(() => []),
                     profileService.getProfile().catch(() => null),
                     contactService.getContacts().catch(() => []),
-                    transferService.getEventHistory(0, 5).catch(() => [])
+                    transferService.getEventHistory(0, 5).catch(() => []),
+                    settingsService.getSettings().catch(() => null)
                 ]);
                 setUserId(id);
                 setBalances(balanceList || []);
@@ -87,6 +91,11 @@ export function Dashboard() {
 
                 const profileComplete = userProfile && userProfile.firstName && userProfile.lastName && userProfile.address?.city;
                 setIsProfileComplete(!!profileComplete);
+
+                const hasRealActiveVouchers = (voucherSummaries || []).some(
+                    (v: VoucherSummary) => v.status === "active" && !v.isTestVoucher
+                );
+                setShowBackupReminder(hasRealActiveVouchers && !userSettings?.lastBackupAt);
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${stringifyError(e)}`;
                 console.error(msg);
@@ -263,6 +272,26 @@ export function Dashboard() {
                                 </div>
                             </div>
                             <ArrowUpRight size={18} className="opacity-30" />
+                        </Card>
+                    )}
+
+                    {showBackupReminder && (
+                        <Card 
+                            variant="glass" 
+                            className="py-2 px-4 flex items-center justify-between border-l-4 border-l-theme-primary"
+                            hover
+                            onClick={() => navigate({ view: 'settings' })}
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className="p-2 rounded-xl bg-theme-primary text-white">
+                                    <Archive size={20} />
+                                </div>
+                                <div>
+                                    <p className="font-bold text-sm text-theme-secondary">{t('dashboard.backupReminderTitle')}</p>
+                                    <p className="text-xs opacity-70">{t('dashboard.backupReminderDesc')}</p>
+                                </div>
+                            </div>
+                            <Button variant="primary" size="xs" className="shadow-none">{t('dashboard.backupReminderButton')}</Button>
                         </Card>
                     )}
                 </div>

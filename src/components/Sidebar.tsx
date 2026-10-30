@@ -50,12 +50,13 @@ export const INTERNAL_VIEWS = [
 
 export const Sidebar: React.FC = () => {
   const { t } = useTranslation();
-  const { isSessionActive, profileName, notifyLogout } = useSession();
+  const { isSessionActive, isAuthenticated, profileName, notifyLogout, protectAction } = useSession();
   const { appState, navigate, appVersion, isSidebarOpen, setSidebarOpen } = useNavigation();
   const currentView = appState.view;
+  const isLoggedIn = isAuthenticated ?? isSessionActive;
 
   // Only show sidebar for internal views when a session is active
-  if (!INTERNAL_VIEWS.includes(currentView) || !isSessionActive) {
+  if (!INTERNAL_VIEWS.includes(currentView) || !isLoggedIn) {
     return null;
   }
 
@@ -128,7 +129,21 @@ export const Sidebar: React.FC = () => {
         </div>
 
         {/* Profile Header */}
-        <div className="p-3 border-b border-theme-subtle bg-bg-app/30">
+        <div 
+          onClick={!isSessionActive ? () => { protectAction(async () => {}).catch(() => {}); } : undefined}
+          onKeyDown={!isSessionActive ? (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              protectAction(async () => {}).catch(() => {});
+            }
+          } : undefined}
+          role={!isSessionActive ? "button" : undefined}
+          tabIndex={!isSessionActive ? 0 : undefined}
+          title={!isSessionActive ? t('auth.sessionLocked') : undefined}
+          className={`p-3 border-b border-theme-subtle bg-bg-app/30 transition-colors ${
+            !isSessionActive ? "cursor-pointer hover:bg-theme-warning/10" : ""
+          }`}
+        >
           <div className="flex items-center gap-3">
             <div className="ring-2 ring-theme-primary/20 rounded-full p-0.5 shadow-sm">
               <Avatar

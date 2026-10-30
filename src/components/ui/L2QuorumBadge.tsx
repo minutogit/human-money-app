@@ -184,7 +184,7 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
     }[size];
 
     const quorumRatioText = effectiveSignerCount !== undefined
-        ? `${effectiveSignerCount}${effectiveActiveNodes !== undefined ? `/${effectiveActiveNodes}` : ''} Knoten`
+        ? `${effectiveSignerCount}${effectiveActiveNodes !== undefined ? `/${effectiveActiveNodes}` : ''} ${t('transfer.l2.nodes', 'Nodes')}`
         : null;
 
     const percentage = (effectiveSignerCount !== undefined && effectiveActiveNodes !== undefined && effectiveActiveNodes > 0)
@@ -245,7 +245,7 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
                         type="button"
                         onClick={() => setIsExpanded(!isExpanded)}
                         aria-expanded={isExpanded}
-                        aria-label="Layer-2 Details anzeigen"
+                        aria-label={t("transfer.l2.showDetails", "Show Layer 2 details")}
                         data-testid="l2-toggle-details"
                         className="p-1.5 rounded-xl hover:bg-white/80 active:bg-white text-theme-secondary transition-colors cursor-pointer flex items-center gap-1"
                         title={t("transfer.l2.infoTooltip", "Informationen zum Netzwerkschutz")}
@@ -293,7 +293,7 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
                                     {percentage !== null && (
                                         <div className="space-y-1">
                                             <div className="flex justify-between font-bold text-theme-secondary">
-                                                <span>Shard-Bestätigung</span>
+                                                <span>{t("transfer.l2.shardConfirmation", "Shard Confirmation")}</span>
                                                 <span className="font-mono">{effectiveSignerCount}/{effectiveActiveNodes} ({percentage}%)</span>
                                             </div>
                                             <div className="w-full bg-black/10 rounded-full h-1.5 overflow-hidden">
@@ -315,7 +315,7 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
                                         )}
                                         <span className="flex items-center gap-1">
                                             <ShieldCheck size={12} />
-                                            14/20 BFT Shard-Quorum
+                                            {t("transfer.l2.bftQuorum", "14/20 BFT Shard Quorum")}
                                         </span>
                                     </div>
 

@@ -8,9 +8,10 @@ import { INTERNAL_VIEWS } from "./Sidebar";
 
 export const Header: React.FC = () => {
     const { appState, setSidebarOpen } = useNavigation();
-    const { isSessionActive } = useSession();
+    const { isSessionActive, isAuthenticated } = useSession();
+    const isLoggedIn = isAuthenticated ?? isSessionActive;
 
-    if (!INTERNAL_VIEWS.includes(appState.view) || !isSessionActive) {
+    if (!INTERNAL_VIEWS.includes(appState.view) || !isLoggedIn) {
         return null;
     }
 

@@ -768,6 +768,15 @@
     },
     "source_text": "Dictionary"
   },
+  "common.done": {
+    "source_text": "Done",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "common.guest": {
     "ai_hint": "Fallback display name shown in the sidebar avatar when no profile name is set.",
     "status": {
@@ -807,6 +816,15 @@
       "it": "ai-translated"
     },
     "ai_hint": "UI text in the common domain."
+  },
+  "common.ok": {
+    "source_text": "OK",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "common.optional": {
     "source_text": "Optional",
@@ -1263,6 +1281,15 @@
       "it": "ai-translated"
     },
     "ai_hint": "Title header for double-spend conflict resolution view."
+  },
+  "conflict.ephemeralUnverifiedHint": {
+    "source_text": "Ephemeral Key / Unverified Local Hint",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "conflict.errorPrefix": {
     "source_text": "Error: {{error}}",
@@ -1724,6 +1751,15 @@
     },
     "ai_hint": "Label or status text in double-spend conflict resolver."
   },
+  "conflict.sstProvenIdentity": {
+    "source_text": "SST V4 Cryptographically Proven Identity",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "conflict.statusLocallySettled": {
     "source_text": "Resolved (Local Override)",
     "status": {
@@ -1793,6 +1829,15 @@
       "it": "ai-translated"
     },
     "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.unverifiedHintWarning": {
+    "source_text": "This identity is an unverified local hint from transaction metadata, not mathematically proven by an SST trap.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "conflict.verifySecurityDescription": {
     "source_text": "Please enter your wallet password to authorize this local conflict override.",
@@ -1883,6 +1928,24 @@
       "it": "ai-translated"
     },
     "ai_hint": "Descriptive paragraph text in conflict resolver."
+  },
+  "conflict.witnessDisclosed": {
+    "source_text": "Victim witness disclosure verified ({{count}} witness)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "conflict.witnessDisclosedPlural": {
+    "source_text": "Victim witness disclosure verified ({{count}} witnesses)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "contacts.addCustomTagPlaceholder": {
     "source_text": "Add custom tag...",
@@ -2243,6 +2306,33 @@
       "it": "ai-translated"
     },
     "ai_hint": "Field label for User ID / Decentralized Identifier (DID)."
+  },
+  "dashboard.backupReminderButton": {
+    "source_text": "Backup Settings",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.backupReminderDesc": {
+    "source_text": "You hold active vouchers on this device. Back up your wallet now to prevent loss if this device is damaged or lost.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.backupReminderTitle": {
+    "source_text": "Create a Wallet Backup",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "dashboard.conceptBackToLogin": {
     "source_text": "Back to Login",
@@ -3673,6 +3763,231 @@
     },
     "source_text": "Back"
   },
+  "profile.backupRestoreConfirmPasswordLabel": {
+    "source_text": "Confirm Password",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreDevicePasswordDesc": {
+    "source_text": "Choose the daily login password for this device.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreDevicePasswordTitle": {
+    "source_text": "Set Local Device Password",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreMnemonicTab": {
+    "source_text": "12/24 Recovery Words",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreNewPasswordLabel": {
+    "source_text": "New Password",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreNoFileLink": {
+    "source_text": "No backup file available? Recreate empty identity from recovery words only",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreOfflineNotice": {
+    "source_text": "Restored offline. No L2 reconciliation servers are configured yet.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreOpenWallet": {
+    "source_text": "Open Wallet",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestorePasswordTab": {
+    "source_text": "Backup Password",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreReconciledNotice": {
+    "source_text": "L2 reconciliation completed: {{active}} active vouchers verified, {{spent}} spent vouchers archived.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreRestoring": {
+    "source_text": "Restoring wallet state...",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreSelectFile": {
+    "source_text": "Select .hmcbackup File",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreSelectFileDesc": {
+    "source_text": "Restore from a single encrypted backup archive file.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreSelectFolder": {
+    "source_text": "Select Backup Sync Folder",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreSelectFolderDesc": {
+    "source_text": "Restore from an encrypted folder synced with USB or cloud.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreSourceTitle": {
+    "source_text": "Select Backup Source",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreSubmitButton": {
+    "source_text": "Restore Wallet Now",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreSubtitle": {
+    "source_text": "Restore your vouchers, contacts, and history from a .hmcbackup file or sync folder.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreSuccessDesc": {
+    "source_text": "Your profile, vouchers, and settings have been restored to this device.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreSuccessTitle": {
+    "source_text": "Wallet Successfully Restored!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreTitle": {
+    "source_text": "Restore Wallet from Backup",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreUnlockTitle": {
+    "source_text": "Unlock & Preview Backup",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreVerifiedBadge": {
+    "source_text": "Verified Backup Manifest",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreVerifyButton": {
+    "source_text": "Verify & Preview Backup",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreVerifying": {
+    "source_text": "Decrypting manifest...",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "profile.boundIdentity": {
     "ai_hint": "Label for the bound DID display after handover completion.",
     "status": {
@@ -4894,6 +5209,33 @@
     },
     "source_text": "Create profile here"
   },
+  "profile.recreateIdentityOnlyDesc": {
+    "source_text": "Because HuMoCo has no global blockchain, recreating your wallet from recovery words alone creates an empty identity without vouchers or contacts. If you previously backed up your wallet, restore from your backup instead!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.recreateIdentityOnlyNotice": {
+    "source_text": "Decentralized P2P System Notice",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.recreateSwitchToRestore": {
+    "source_text": "Restore from .hmcbackup File or Sync Folder",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "profile.repeatPassword": {
     "ai_hint": "Placeholder for confirming the password in profile creation.",
     "status": {
@@ -5351,6 +5693,24 @@
       "it": "ai-translated"
     }
   },
+  "settings.activeNetworkDesc": {
+    "source_text": "Select between production Mainnet and Testnet for development tests.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.activeNetworkLabel": {
+    "source_text": "Active Network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.activeSessionTitle": {
     "source_text": "Active Session",
     "status": {
@@ -5360,6 +5720,141 @@
       "it": "ai-translated"
     },
     "ai_hint": "Title header for app settings panel."
+  },
+  "settings.addRegionalSourceButton": {
+    "source_text": "Add Regional Source",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.addServerButton": {
+    "source_text": "Add Server",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.advancedNetworkToggle": {
+    "source_text": "Advanced Server & PoS Configuration",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.authTokenPlaceholder": {
+    "source_text": "Auth Token (optional)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupCardSubtitle": {
+    "source_text": "Protect your vouchers, contacts, and transaction history against device loss.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupCardTitle": {
+    "source_text": "Encrypted Wallet Backups",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupNever": {
+    "source_text": "No backup created yet",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupPasswordConfirmLabel": {
+    "source_text": "Confirm Backup Password",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupPasswordLabel": {
+    "source_text": "Backup Password",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupPasswordMinLength": {
+    "source_text": "Backup password must be at least 8 characters.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupPasswordMismatch": {
+    "source_text": "Backup passwords do not match.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupPasswordPlaceholder": {
+    "source_text": "Min. 8 characters",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.benchmarkButton": {
+    "source_text": "Test & Sort Servers by Latency",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.chooseFolderButton": {
+    "source_text": "Choose Folder",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.coldRefreshButton": {
+    "source_text": "Cold Refresh",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "settings.configuringEnvironment": {
     "source_text": "Configuring Environment...",
@@ -5381,6 +5876,15 @@
     },
     "ai_hint": "Action button label in settings."
   },
+  "settings.customServersTitle": {
+    "source_text": "Custom Servers & Trusted Peers",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.dataStewardshipTitle": {
     "source_text": "Data Stewardship",
     "status": {
@@ -5390,6 +5894,15 @@
       "it": "ai-translated"
     },
     "ai_hint": "Title header for app settings panel."
+  },
+  "settings.devModeUnlockedToast": {
+    "source_text": "Developer mode unlocked",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "settings.deviceBindingDescription": {
     "source_text": "This unique identifier binds your wallet cryptographic seals to this physical device installation to prevent unauthorized cloning.",
@@ -5421,6 +5934,69 @@
     },
     "ai_hint": "Title header for app settings panel."
   },
+  "settings.exclusiveServersDesc": {
+    "source_text": "When active, only the custom servers above are used — no public seed peers.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.exclusiveServersLabel": {
+    "source_text": "Exclusively use custom servers (Strictly private)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.exportFileButton": {
+    "source_text": "Export Backup File",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.exportFileDesc": {
+    "source_text": "Create a self-contained encrypted archive file you can save to a USB drive or transfer to another device.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.exportFileTitle": {
+    "source_text": "Export Single Backup File (.hmcbackup)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.exportSuccess": {
+    "source_text": "Backup exported successfully to {{path}} ({{count}} data blobs).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.exporting": {
+    "source_text": "Exporting backup...",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.fillAllFields": {
     "source_text": "Please fill in all fields.",
     "status": {
@@ -5450,6 +6026,51 @@
       "it": "ai-translated"
     },
     "ai_hint": "Label for input field in settings."
+  },
+  "settings.l2ModeConnectedDesc": {
+    "source_text": "Active servers provide blind collision lock registry queries, fast PoS checkouts, and WalletSeal backup anchors.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.l2ModeConnectedTitle": {
+    "source_text": "Layer 2 Gateway Network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.l2ModePureOfflineDesc": {
+    "source_text": "No public Human Money Node servers are active yet. Your wallet works 100% offline; transaction locks and WalletSeal state protection are ready and activate automatically as soon as servers become available.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.l2ModePureOfflineTitle": {
+    "source_text": "Pure Offline P2P Mode",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.l2ProtectionTitle": {
+    "source_text": "Network & L2 Protection",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "settings.languageDescription": {
     "source_text": "Choose the language for the user interface.",
@@ -5487,6 +6108,15 @@
       "it": "ai-translated"
     }
   },
+  "settings.lastBackup": {
+    "source_text": "Last Backup",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.loadFailed": {
     "source_text": "Failed to load settings: {{error}}",
     "status": {
@@ -5496,6 +6126,60 @@
       "it": "ai-translated"
     },
     "ai_hint": "Error message in settings view. Contains variables: {{error}}."
+  },
+  "settings.meshRefreshNone": {
+    "source_text": "No regional mesh sources configured.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.meshRefreshSuccess": {
+    "source_text": "Regional mesh views refreshed successfully.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.noCustomServers": {
+    "source_text": "No custom servers registered yet.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.noFolderSelected": {
+    "source_text": "No sync folder configured.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.noRegionalMesh": {
+    "source_text": "No regional observation sources configured yet.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.peerTokenPlaceholder": {
+    "source_text": "Peer Token (optional)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "settings.privacyModeInteractive": {
     "source_text": "Interactive",
@@ -5577,6 +6261,60 @@
     },
     "ai_hint": "Title header for app settings panel."
   },
+  "settings.protectionModeCustomPassword": {
+    "source_text": "Additional Backup Password",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.protectionModeCustomPasswordDesc": {
+    "source_text": "Dual recovery mode! The backup can be restored using either this specific backup password or your 12/24 recovery words.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.protectionModeMnemonic": {
+    "source_text": "12/24 Recovery Words Only (Recommended)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.protectionModeMnemonicDesc": {
+    "source_text": "Your login password is completely stripped from the backup. Even if cloud storage is compromised, your backup cannot be brute-forced without your physical recovery words.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.protectionModeTitle": {
+    "source_text": "Protection Mode",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.regionalMeshTitle": {
+    "source_text": "Regional Observation Sources (Regional Mesh)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.retrievingId": {
     "source_text": "Retrieving ID...",
     "status": {
@@ -5627,6 +6365,69 @@
     },
     "ai_hint": "Text or status label in settings."
   },
+  "settings.serverNamePlaceholder": {
+    "source_text": "Name (e.g. Peer A)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.serverUrlPlaceholder": {
+    "source_text": "URL (https://...)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.syncFolderDesc": {
+    "source_text": "Continuously sync updated and newly received vouchers to a local folder, USB drive, or cloud mount (e.g. Nextcloud).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.syncFolderNowButton": {
+    "source_text": "Sync Folder Now",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.syncFolderTitle": {
+    "source_text": "Differential Backup Sync Folder",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.syncSuccess": {
+    "source_text": "Sync completed: {{changed}} updated, {{reused}} unchanged.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.syncing": {
+    "source_text": "Syncing backup...",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.systemPreferencesDescription": {
     "source_text": "Manage your identity, security protocols and network defaults.",
     "status": {
@@ -5667,6 +6468,15 @@
     },
     "ai_hint": "Text or status label in settings."
   },
+  "settings.testing": {
+    "source_text": "Testing...",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.timeoutIntervalDescription": {
     "source_text": "Inactivity period before requiring re-authentication.",
     "status": {
@@ -5696,6 +6506,168 @@
       "it": "ai-translated"
     },
     "source_text": "Settings"
+  },
+  "settings.unreachable": {
+    "source_text": "unreachable",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.cleartext": {
+    "source_text": "Unencrypted (Cleartext)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.confirmImport": {
+    "source_text": "Import Standard",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.delete": {
+    "source_text": "Delete",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.deleteConfirm": {
+    "source_text": "Are you sure you want to delete this standard?",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.description": {
+    "source_text": "Manage installed voucher standards (.standard).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.encryption": {
+    "source_text": "Encryption",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.export": {
+    "source_text": "Export (.standard)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.exportModalTitle": {
+    "source_text": "Export Standard",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.formatDesc": {
+    "source_text": "Voucher Standard Definition (.standard)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.import": {
+    "source_text": "Import Standard (.standard)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.importModalTitle": {
+    "source_text": "Standard Preview & Import",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.importSuccess": {
+    "source_text": "Standard imported successfully!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.inUseError": {
+    "source_text": "This standard is still in use by active vouchers and cannot be deleted.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.password": {
+    "source_text": "Password",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.passwordEncrypted": {
+    "source_text": "Password Protected",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.rawToml": {
+    "source_text": "Raw File (.toml)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.title": {
+    "source_text": "Voucher Standards",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "transfer.all": {
     "source_text": "All",
@@ -5746,6 +6718,285 @@
       "it": "ai-translated"
     },
     "ai_hint": "Heading for the list of available vouchers in asset inventory."
+  },
+  "transfer.checkout.acceptOnTrustBtn": {
+    "source_text": "Accept payment on trust basis",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.acceptOnTrustButton": {
+    "source_text": "Accept Offline on Trust Basis (L1 Verified)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.acceptOnTrustDesc": {
+    "source_text": "No server connection. Payment relies on trust (e.g. regular customers or small amounts).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.acceptOnTrustTitle": {
+    "source_text": "Offline Payment (Trust Basis)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.acceptedOnTrust": {
+    "source_text": "Accepted on trust basis",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.approvalRequired": {
+    "source_text": "Manual Merchant Approval Required",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.approvalRequiredDesc": {
+    "source_text": "Payment is offline or unverified. Automatic goods release is disabled.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.approveBtn": {
+    "source_text": "Manually Approve Goods Release",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.approvedManually": {
+    "source_text": "Manually Approved by Merchant",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.cancelButton": {
+    "source_text": "Cancel",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.fallbackAcceptTrust": {
+    "source_text": "Accept on Trust Basis (L1 Verified)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.fallbackCancel": {
+    "source_text": "Cancel / Reject",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.fallbackCardTitle": {
+    "source_text": "L2 PoS Protection Unavailable",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.fallbackNoServersDesc": {
+    "source_text": "No L2 servers are configured to lock vouchers against double-spends in real time. You can still accept this transfer on a trust basis using pure Layer-1 math (SST V4).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.fallbackNotice": {
+    "source_text": "Offline transfers are cryptographically protected by SST V4 self-exposure if a double-spend is attempted.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.fallbackQuorumDesc": {
+    "source_text": "Could not reach an L2 quorum to verify lock status. You can either retry or accept on a trust basis (L1 verified).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.goodsBlocked": {
+    "source_text": "DO NOT HAND OVER GOODS!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.goodsBlockedDesc": {
+    "source_text": "Double-spend detected! This voucher has already been spent elsewhere.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.goodsReleased": {
+    "source_text": "Goods Release Authorized",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.goodsReleasedConfirmed": {
+    "source_text": "Safely hand over goods",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.goodsReleasedConfirmedDesc": {
+    "source_text": "Globally finalized and secured by a large server network.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.goodsReleasedDesc": {
+    "source_text": "Payment verified by server network. You may hand over the goods to the customer.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.goodsReleasedProvisional": {
+    "source_text": "Goods released",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.goodsReleasedProvisionalDesc": {
+    "source_text": "Payment secured against double-spending by server network.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.level1Tag": {
+    "source_text": "Level 1",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.level2Tag": {
+    "source_text": "Level 2",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.posFallbackTitle": {
+    "source_text": "PoS L2 Verification Unavailable",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.posNoServersDesc": {
+    "source_text": "No regional mesh sources or L2 gateways are currently configured. Live 14/20 shard verification cannot be performed.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.posQuorumUnavailableDesc": {
+    "source_text": "Layer 2 shard nodes are currently unreachable. Live 14/20 shard quorum could not be confirmed.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.replayDesc": {
+    "source_text": "This payment was already processed. Do not dispense goods again!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.checkout.replayTitle": {
+    "source_text": "Already Processed (Idempotent Replay)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "transfer.confirmAssets": {
     "source_text": "Assets",
@@ -6298,6 +7549,249 @@
     },
     "ai_hint": "Empty state text when no vouchers match the filter."
   },
+  "transfer.l2.bftQuorum": {
+    "source_text": "14/20 BFT Shard Quorum",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.conflictHint": {
+    "source_text": "Alert: Double-spend detected! This voucher has already been spent earlier or elsewhere. Do not hand over goods!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.conflictSub": {
+    "source_text": "Payment rejected",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.conflictTitle": {
+    "source_text": "Double-Spend Detected!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.finalHint": {
+    "source_text": "A large, global server network has finalized and secured the payment. Highest security level – fraud is practically impossible.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.finalSub": {
+    "source_text": "Large server network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.finalTitle": {
+    "source_text": "Maximum Security",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.infoTooltip": {
+    "source_text": "Network security information",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.merchantGuidance": {
+    "source_text": "Cashier Guidance",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.nodes": {
+    "source_text": "Nodes",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.offlineHint": {
+    "source_text": "No server connection. The payment was transferred directly from device to device. Recommended for trusted parties (e.g. regular customers, small amounts).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.offlineSub": {
+    "source_text": "Direct transfer (offline)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.offlineTitle": {
+    "source_text": "Offline Payment",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.provisionalHint": {
+    "source_text": "A smaller server network has verified and secured the payment. High security – fraud is extremely unlikely. Goods can be safely handed over.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.provisionalSub": {
+    "source_text": "Smaller server network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.provisionalTitle": {
+    "source_text": "High Security",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.shardConfirmation": {
+    "source_text": "Shard Confirmation",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.showDetails": {
+    "source_text": "Show Layer 2 details",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.technicalDiagnostics": {
+    "source_text": "Technical Diagnostics",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.unverifiedHint": {
+    "source_text": "No server connection. The payment was transferred directly from device to device. Recommended for trusted parties (e.g. regular customers, small amounts).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.unverifiedSub": {
+    "source_text": "Not verified on network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.unverifiedTitle": {
+    "source_text": "Offline Payment",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2DispatchedDesc": {
+    "source_text": "Cryptographic lock intent has been successfully broadcast to active Layer 2 nodes.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2DispatchedTitle": {
+    "source_text": "L2 Lock Intent Dispatched",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2PreparedOfflineDesc": {
+    "source_text": "Your voucher bundle is ready to share. A cryptographic L2 lock intent is safely stored in your wallet and will sync automatically once L2 servers become available.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2PreparedOfflineTitle": {
+    "source_text": "Ready for Offline Handover",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2TransportDisclaimer": {
+    "source_text": "Note: HTTP observation is transport verification and does not authorize automatic goods release without L2 consensus.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.mandatoryStandard": {
     "source_text": "Mandatory for selected standard",
     "status": {
@@ -6320,6 +7814,87 @@
   },
   "transfer.partialSend": {
     "source_text": "Partial Send",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.pillars.l1Badge": {
+    "source_text": "Authentic & valid",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.pillars.l1Desc": {
+    "source_text": "Voucher mathematically authentic & intact (100% verified offline)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.pillars.l1DescVictim": {
+    "source_text": "Voucher format intact (but blocked on network as double-spend)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.pillars.l1FormatOnly": {
+    "source_text": "Format intact",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.pillars.l1Title": {
+    "source_text": "1. Voucher Authenticity (L1)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.pillars.l1Valid": {
+    "source_text": "Authentic & valid",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.pillars.l2Prefix": {
+    "source_text": "2. Network Protection (L2)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.pillars.l2Title": {
+    "source_text": "2. Network Protection (L2 - Double-Spend Prevention)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.posModeToggle": {
+    "source_text": "PoS Cashier Mode (Point-of-Sale Checkout)",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6386,6 +7961,15 @@
       "it": "ai-translated"
     },
     "ai_hint": "Description of the public privacy mode."
+  },
+  "transfer.purchaseIdPlaceholder": {
+    "source_text": "Receipt / Purchase ID (optional)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "transfer.receive": {
     "source_text": "Receive",
@@ -7002,6 +8586,24 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.checkL2Status": {
+    "source_text": "Check L2 Lock Status",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.checkingL2Status": {
+    "source_text": "Checking L2...",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -7888,6 +9490,42 @@
       "it": "ai-translated"
     }
   },
+  "voucher.l2StatusNoServers": {
+    "source_text": "Offline Mode (No Servers)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.l2StatusOffline": {
+    "source_text": "L2 Unreachable",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.l2StatusSpent": {
+    "source_text": "Already Spent on L2 (Archived)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.l2StatusUnspent": {
+    "source_text": "Unspent on L2 (Available)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.legalNameLabel": {
     "source_text": "Legal Name",
     "status": {
@@ -8572,6 +10210,204 @@
       "it": "ai-translated"
     }
   },
+  "wallet.anchor.conflictLabel": {
+    "source_text": "Backup Conflict",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.conflictTooltip": {
+    "source_text": "Security warning: Backup conflict detected. Click to reconcile.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.mainnetTooltip": {
+    "source_text": "Mainnet mode: Production network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.modalDescription": {
+    "source_text": "An outdated backup was detected or a device conflict exists. Newer transactions already exist on Layer 2 for this wallet.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.modalTitle": {
+    "source_text": "Security Warning: Backup Conflict",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.offlineLabel": {
+    "source_text": "Offline",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.offlineTooltip": {
+    "source_text": "Payments possible offline",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.pendingLabel": {
+    "source_text": "Unsynchronized",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.pendingTooltip": {
+    "source_text": "Payments possible offline",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.reconcileArchivedDesc": {
+    "source_text": "Vouchers already spent on other devices will be archived.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.reconcileBtn": {
+    "source_text": "Verify & reconcile vouchers",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.reconcileHarmonizedDesc": {
+    "source_text": "Wallet state is harmonized with the L2 lock registry.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.reconcileRetainedDesc": {
+    "source_text": "All untouched, valid vouchers remain completely safe.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.reconcileSuccess": {
+    "source_text": "Successfully synchronized",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.reconciledArchivedLabel": {
+    "source_text": "Archived Vouchers:",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.reconciledNonceLabel": {
+    "source_text": "New Nonce Counter:",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.reconciledRetainedLabel": {
+    "source_text": "Preserved Vouchers:",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.reconciling": {
+    "source_text": "Synchronizing...",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.safetyGuaranteeTitle": {
+    "source_text": "Automatic reconciliation:",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.syncLabel": {
+    "source_text": "L2 synchronized",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.syncTooltip": {
+    "source_text": "State verified on Layer 2",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.testnetTooltip": {
+    "source_text": "Testnet mode: Transactions run on test network – no real mainnet funds. Network: testnet",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "wallet.description": {
     "source_text": "Manage your digital assets.",
     "status": {
@@ -8587,6 +10423,33 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.syncNoServers": {
+    "source_text": "Offline Mode",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.syncNoServersHint": {
+    "source_text": "No Human Money Node servers are currently active. All vouchers and P2P payments work 100% offline with mathematical double-spend self-exposure (SST V4). L2 locks are prepared automatically.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "wallet.syncServersUnreachable": {
+    "source_text": "L2 Unreachable",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },

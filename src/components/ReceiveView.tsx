@@ -19,7 +19,8 @@ import {
     VoucherStandardDefinition,
     AppSettings,
     ReceiveSuccessPayload,
-    VoucherDetails
+    VoucherDetails,
+    VoucherSummary
 } from '../types';
 import { PageLayout } from './ui/PageLayout';
 import { ImportStandardModal } from './ImportStandardModal';
@@ -73,6 +74,12 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     const [importStandardModalData, setImportStandardModalData] = useState<{
         containerBytes: number[];
         definition?: VoucherStandardDefinition;
+    } | null>(null);
+    const [pendingPosFallback, setPendingPosFallback] = useState<{
+        fileData: number[];
+        standardDefinitionsToml: Record<string, string>;
+        errorCode: string;
+        purchaseId: string;
     } | null>(null);
 
     useEffect(() => {
@@ -170,6 +177,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         setDroppedFileContent(null);
         setPendingPasswordImport(null);
         setImportStandardModalData(null);
+        setPendingPosFallback(null);
     }
 
     const [isDragOver, setIsDragOver] = useState(false);
@@ -265,27 +273,44 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     if (!purchaseId.trim()) {
                         setPurchaseId(activePurchaseId);
                     }
-                    const completion = await protectAction(async (walletPassword) => {
-                        return await transferService.checkoutReceivedBundle({
-                            purchaseId: activePurchaseId,
-                            bundleData: fileData,
-                            standardDefinitionsToml,
-                            password: password || walletPassword || undefined,
+                    try {
+                        const completion = await protectAction(async (walletPassword) => {
+                            return await transferService.checkoutReceivedBundle({
+                                purchaseId: activePurchaseId,
+                                bundleData: fileData,
+                                standardDefinitionsToml,
+                                password: password || walletPassword || undefined,
+                            });
                         });
-                    });
 
-                    if (completion) {
-                        const payload: ReceiveSuccessPayload = {
-                            senderId: "pos-terminal",
-                            transferSummary: { summableAmounts: {}, countableItems: {} },
-                            involvedVouchers: [],
-                            purchaseId: completion.purchaseId,
-                            newlyCommitted: completion.newlyCommitted,
-                            isReplay: !completion.newlyCommitted,
-                            checkoutVerdict: completion.verdict,
-                        };
-                        onReceiveSuccess(payload);
-                        return;
+                        if (completion) {
+                            const basePayload: ReceiveSuccessPayload = completion.receivePayload ?? {
+                                senderId: "pos-terminal",
+                                transferSummary: { summableAmounts: {}, countableItems: {} },
+                                involvedVouchers: [],
+                            };
+                            const payload: ReceiveSuccessPayload = {
+                                ...basePayload,
+                                purchaseId: completion.purchaseId,
+                                newlyCommitted: completion.newlyCommitted,
+                                isReplay: !completion.newlyCommitted,
+                                checkoutVerdict: completion.verdict,
+                            };
+                            onReceiveSuccess(payload);
+                            return;
+                        }
+                    } catch (posErr) {
+                        if (isBackendError(posErr) && (posErr.code === 'pos.noServersConfigured' || posErr.code === 'pos.quorumUnavailable')) {
+                            setPendingPosFallback({
+                                fileData,
+                                standardDefinitionsToml,
+                                errorCode: posErr.code,
+                                purchaseId: activePurchaseId,
+                            });
+                            setIsProcessing(false);
+                            return;
+                        }
+                        throw posErr;
                     }
                 }
 
@@ -304,12 +329,77 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 onReceiveSuccess(openedVoucher);
             } else if (type === 'sig') {
                 const standardDefinitionsToml: Record<string, string> = {};
-                voucherStandards.forEach(standard => {
-                    const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
+                const standardsList = voucherStandards.length > 0 ? voucherStandards : await standardsService.getStandards().catch(() => []);
+                standardsList.forEach(standard => {
+                    const uuidMatch = standard.content.match(/uuid\s*=\s*["']([^"']+)["']/);
                     if (uuidMatch && uuidMatch[1]) standardDefinitionsToml[uuidMatch[1]] = standard.content;
                 });
+
+                let targetVoucherId: string | null = null;
+                try {
+                    const jsonStr = new TextDecoder().decode(new Uint8Array(fileData));
+                    const container = JSON.parse(jsonStr);
+                    if (container.ciphertext && (!container.recipients || container.recipients.length === 0)) {
+                        try {
+                            const base64 = container.ciphertext.replace(/-/g, '+').replace(/_/g, '/');
+                            const payloadStr = window.atob(base64);
+                            const sigObj = JSON.parse(payloadStr);
+                            const inner = sigObj.Signature || sigObj;
+                            if (inner && inner.voucher_id) {
+                                targetVoucherId = inner.voucher_id;
+                            }
+                        } catch {
+                            // Ciphertext could be encrypted or non-base64 JSON
+                        }
+                    }
+                } catch {
+                    // Non-JSON container
+                }
+
+                let matchedStandardUuid: string | null = null;
+                const summaries = await voucherService.getSummaries().catch(() => [] as VoucherSummary[]);
+                const incompleteVouchers = summaries.filter(v => {
+                    const statusStr = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
+                    return statusStr?.toLowerCase() === 'incomplete';
+                });
+
+                if (targetVoucherId) {
+                    for (const v of incompleteVouchers) {
+                        try {
+                            const details = await voucherService.getDetails(v.localInstanceId);
+                            if (details?.voucher?.voucherId === targetVoucherId) {
+                                matchedStandardUuid = v.voucherStandardUuid || details.voucher.voucherStandard?.uuid || null;
+                                break;
+                            }
+                        } catch {
+                            // Ignore details fetch error
+                        }
+                    }
+                    if (!matchedStandardUuid) {
+                        for (const v of summaries) {
+                            try {
+                                const details = await voucherService.getDetails(v.localInstanceId);
+                                if (details?.voucher?.voucherId === targetVoucherId) {
+                                    matchedStandardUuid = v.voucherStandardUuid || details.voucher.voucherStandard?.uuid || null;
+                                    break;
+                                }
+                            } catch {
+                                // Ignore details fetch error
+                            }
+                        }
+                    }
+                }
+
+                if (!matchedStandardUuid && incompleteVouchers.length > 0) {
+                    const incompleteUuids = Array.from(new Set(incompleteVouchers.map(v => v.voucherStandardUuid).filter(Boolean)));
+                    if (incompleteUuids.length === 1) {
+                        matchedStandardUuid = incompleteUuids[0];
+                    }
+                }
                 
-                const standardTomlContent = Object.values(standardDefinitionsToml)[0];
+                const standardTomlContent = (matchedStandardUuid && standardDefinitionsToml[matchedStandardUuid])
+                    || Object.values(standardDefinitionsToml)[0]
+                    || "";
                 const updatedInstanceId = await protectAction(async (walletPassword) => {
                     return await voucherService.processAndAttachSignature(fileData, standardTomlContent, password || undefined, walletPassword || undefined);
                 });
@@ -432,6 +522,50 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         }
     }
 
+    const handleAcceptPosTrustFallback = async () => {
+        if (!pendingPosFallback) return;
+        setIsProcessing(true);
+        try {
+            const payload = await protectAction(async (walletPassword) => {
+                return await transferService.receiveBundle({
+                    bundleData: pendingPosFallback.fileData,
+                    standardDefinitionsToml: pendingPosFallback.standardDefinitionsToml,
+                    password: walletPassword || undefined,
+                    forceAcceptToleranceBundle: false
+                });
+            });
+
+            if (payload) {
+                const enrichedPayload: ReceiveSuccessPayload = {
+                    ...payload,
+                    purchaseId: pendingPosFallback.purchaseId,
+                    newlyCommitted: true,
+                    isReplay: false,
+                    checkoutVerdict: {
+                        outcome: pendingPosFallback.errorCode === 'pos.noServersConfigured' ? 'UnverifiedOffline' : 'QuorumUnavailable',
+                        canReleaseGoodsAutomatically: false,
+                        requiresMerchantApproval: true,
+                        isGoodsReleaseAuthorized: false,
+                        merchantWarning: pendingPosFallback.errorCode === 'pos.noServersConfigured'
+                            ? t('transfer.checkout.fallbackNoServersDesc', 'No L2 servers are configured to lock vouchers against double-spends in real time. You can still accept this transfer on a trust basis using pure Layer-1 math (SST V4).')
+                            : t('transfer.checkout.fallbackQuorumDesc', 'Could not reach an L2 quorum to verify lock status. You can either retry or accept on a trust basis (L1 verified).'),
+                    },
+                };
+                onReceiveSuccess(enrichedPayload);
+            }
+        } catch (e) {
+            setFeedbackMsg(translateError(e, t));
+        } finally {
+            setIsProcessing(false);
+            setPendingPosFallback(null);
+        }
+    };
+
+    const handleCancelPosFallback = () => {
+        setPendingPosFallback(null);
+        clearSelection();
+    };
+
     return (
         <PageLayout 
 
@@ -448,30 +582,70 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 )}
 
                 <div className="space-y-8">
-                    {/* PoS Mode Toggle */}
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
-                        <label className="flex items-center gap-3 cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={isPosMode}
-                                onChange={(e) => setIsPosMode(e.target.checked)}
-                                className="rounded accent-theme-primary h-4 w-4"
+                {/* PoS Mode Toggle */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
+                    <label className="flex items-center gap-3 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={isPosMode}
+                            onChange={(e) => setIsPosMode(e.target.checked)}
+                            className="rounded accent-theme-primary h-4 w-4"
+                        />
+                        <span className="text-xs font-bold text-theme-secondary">
+                            {t('transfer.posModeToggle', 'PoS Cashier Mode (Point-of-Sale Checkout)')}
+                        </span>
+                    </label>
+                    {isPosMode && (
+                        <div className="w-full sm:w-64">
+                            <Input
+                                placeholder={t('transfer.purchaseIdPlaceholder', 'Receipt / Purchase ID (optional)')}
+                                value={purchaseId}
+                                onChange={(e) => setPurchaseId(e.target.value)}
+                                className="text-xs font-mono py-1.5"
                             />
-                            <span className="text-xs font-bold text-theme-secondary">
-                                PoS Kassen-Modus (Point-of-Sale Checkout)
-                            </span>
-                        </label>
-                        {isPosMode && (
-                            <div className="w-full sm:w-64">
-                                <Input
-                                    placeholder="Bon- / Kauf-ID (optional)"
-                                    value={purchaseId}
-                                    onChange={(e) => setPurchaseId(e.target.value)}
-                                    className="text-xs font-mono py-1.5"
-                                />
+                        </div>
+                    )}
+                </div>
+
+                {/* PoS Trust Fallback Card */}
+                {pendingPosFallback && (
+                    <div data-testid="pos-fallback-card" className="p-6 bg-amber-500/10 border border-amber-500/30 rounded-3xl space-y-4 animate-in fade-in duration-300">
+                        <div className="flex items-start gap-3">
+                            <AlertCircle className="text-amber-600 shrink-0 mt-0.5" size={20} />
+                            <div className="space-y-1">
+                                <h4 className="text-base font-bold text-amber-900">
+                                    {t('transfer.checkout.fallbackCardTitle', 'L2 PoS Protection Unavailable')}
+                                </h4>
+                                <p className="text-xs text-amber-800 leading-relaxed">
+                                    {pendingPosFallback.errorCode === 'pos.noServersConfigured'
+                                        ? t('transfer.checkout.fallbackNoServersDesc', 'No L2 servers are configured to lock vouchers against double-spends in real time. You can still accept this transfer on a trust basis using pure Layer-1 math (SST V4).')
+                                        : t('transfer.checkout.fallbackQuorumDesc', 'Could not reach an L2 quorum to verify lock status. You can either retry or accept on a trust basis (L1 verified).')}
+                                </p>
+                                <p className="text-[11px] text-amber-700/80 font-medium">
+                                    {t('transfer.checkout.fallbackNotice', 'Offline transfers are cryptographically protected by SST V4 self-exposure if a double-spend is attempted.')}
+                                </p>
                             </div>
-                        )}
+                        </div>
+                        <div className="flex items-center justify-end gap-3 pt-2">
+                            <button
+                                type="button"
+                                onClick={handleCancelPosFallback}
+                                disabled={isProcessing}
+                                className="px-4 py-2 text-xs font-bold text-stone-600 hover:text-stone-900 transition-colors"
+                            >
+                                {t('transfer.checkout.fallbackCancel', 'Cancel / Reject')}
+                            </button>
+                            <Button
+                                type="button"
+                                onClick={handleAcceptPosTrustFallback}
+                                disabled={isProcessing}
+                                className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-md"
+                            >
+                                {isProcessing ? t('transfer.importFile.loading') : t('transfer.checkout.fallbackAcceptTrust', 'Accept on Trust Basis (L1 Verified)')}
+                            </Button>
+                        </div>
                     </div>
+                )}
 
                     <div
                         id="bundle-drop-zone"

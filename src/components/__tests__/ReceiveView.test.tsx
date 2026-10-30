@@ -43,6 +43,13 @@ vi.mock('react-i18next', () => ({
         'transfer.importFile.noPayload': 'No payload selected.',
         'transfer.importFile.unknownFormat': 'Unknown payload format.',
         'transfer.importFile.invalidFileType': 'Invalid file type dropped.',
+        'transfer.posModeToggle': 'PoS Cashier Mode (Point-of-Sale Checkout)',
+        'transfer.checkout.fallbackCardTitle': 'L2 PoS Protection Unavailable',
+        'transfer.checkout.fallbackNoServersDesc': 'No L2 servers configured.',
+        'transfer.checkout.fallbackQuorumDesc': 'Quorum unavailable.',
+        'transfer.checkout.fallbackAcceptTrust': 'Accept on Trust Basis (L1 Verified)',
+        'transfer.checkout.fallbackCancel': 'Cancel / Reject',
+        'transfer.checkout.fallbackNotice': 'Offline transfers protected by SST V4.',
       };
       return translations[key] || key;
     },
@@ -258,5 +265,142 @@ amount_decimal_places = 4`,
     const reImportButton = screen.getByRole('button', { name: 'Import' });
     expect(reImportButton).not.toBeDisabled();
     expect(reImportButton.textContent).not.toContain('common.processing');
+  });
+
+  it('selects matching standard for detached signature file', async () => {
+    (open as Mock).mockResolvedValue('/path/to/signature.sig');
+    const { readFile } = await import('@tauri-apps/plugin-fs');
+
+    const sigPayload = JSON.stringify({
+      Signature: {
+        voucher_id: 'v-123',
+        signature: 'sig-abc'
+      }
+    });
+    const container = {
+      ciphertext: window.btoa(sigPayload),
+      recipients: [],
+      c: 'DetachedSignature'
+    };
+    const containerBytes = new TextEncoder().encode(JSON.stringify(container));
+    (readFile as Mock).mockResolvedValue(containerBytes);
+
+    let attachedStandardToml = '';
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_voucher_standards') {
+        return Promise.resolve([
+          {
+            id: 'standard-other',
+            displayName: 'OtherStandard',
+            content: 'uuid = "std-uuid-other"\nname = "Other"',
+          },
+          {
+            id: 'standard-matching',
+            displayName: 'MatchingStandard',
+            content: 'uuid = "std-uuid-match"\nname = "Matching"',
+          }
+        ]);
+      }
+      if (cmd === 'get_app_settings') {
+        return Promise.resolve(mockSettings);
+      }
+      if (cmd === 'get_voucher_summaries') {
+        return Promise.resolve([
+          {
+            localInstanceId: 'inst-1',
+            status: 'incomplete',
+            voucherStandardUuid: 'std-uuid-match',
+          }
+        ]);
+      }
+      if (cmd === 'get_voucher_details') {
+        return Promise.resolve({
+          localInstanceId: 'inst-1',
+          status: 'incomplete',
+          voucher: {
+            voucherId: 'v-123',
+            voucherStandard: { uuid: 'std-uuid-match' }
+          }
+        });
+      }
+      if (cmd === 'process_and_attach_signature') {
+        attachedStandardToml = String(args?.standardTomlContent || '');
+        return Promise.resolve('inst-1');
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <ReceiveView onBack={mockOnBack} onReceiveSuccess={mockOnReceiveSuccess} />
+    );
+
+    const selectButton = screen.getByRole('button', { name: /Select File/i });
+    fireEvent.click(selectButton);
+
+    await waitFor(() => {
+      expect(attachedStandardToml).toContain('uuid = "std-uuid-match"');
+    });
+  });
+
+  it('displays PoS trust fallback card on pos.noServersConfigured and accepts offline on trust basis', async () => {
+    (open as Mock).mockResolvedValue('/path/to/payment.transfer');
+    const { readFile } = await import('@tauri-apps/plugin-fs');
+    (readFile as Mock).mockResolvedValue(new Uint8Array([1, 2, 3]));
+
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_standards') {
+        return Promise.resolve(mockStandards);
+      }
+      if (cmd === 'get_app_settings') {
+        return Promise.resolve(mockSettings);
+      }
+      if (cmd === 'checkout_received_bundle') {
+        return Promise.reject({
+          code: 'pos.noServersConfigured',
+          message: 'No L2 servers configured'
+        });
+      }
+      if (cmd === 'receive_bundle') {
+        return Promise.resolve({
+          senderId: 'did:key:sender',
+          transferSummary: { totalAmount: '10', unit: 'Taler' },
+          involvedVouchers: ['v-1'],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <ReceiveView onBack={mockOnBack} onReceiveSuccess={mockOnReceiveSuccess} />
+    );
+
+    // 1. Enable PoS Mode checkbox
+    const posCheckbox = screen.getByRole('checkbox');
+    fireEvent.click(posCheckbox);
+
+    // 2. Select file
+    const selectButton = screen.getByRole('button', { name: /Select File/i });
+    fireEvent.click(selectButton);
+
+    // 3. Pos fallback card should appear
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-fallback-card')).toBeInTheDocument();
+    });
+
+    // 4. Click Accept on Trust Basis
+    const acceptTrustButton = screen.getByRole('button', { name: /Accept on Trust Basis/i });
+    fireEvent.click(acceptTrustButton);
+
+    // 5. Assert onReceiveSuccess called with checkoutVerdict: 'UnverifiedOffline'
+    await waitFor(() => {
+      expect(mockOnReceiveSuccess).toHaveBeenCalledWith(
+        expect.objectContaining({
+          checkoutVerdict: expect.objectContaining({
+            outcome: 'UnverifiedOffline',
+          }),
+          newlyCommitted: true,
+        })
+      );
+    });
   });
 });

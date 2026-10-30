@@ -105,53 +105,61 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
     const isTestnet = activeNetwork?.toLowerCase() === "testnet";
 
     const badgeConfig = {
+        NoServers: {
+            label: t("wallet.syncNoServers", "Offline Mode"),
+            tooltip: t("wallet.syncNoServersHint", "No Human Money Node servers are currently active. All vouchers and P2P payments work 100% offline with mathematical double-spend self-exposure (SST V4). L2 locks are prepared automatically."),
+            containerStyle: "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-900/60 dark:text-slate-300 dark:border-slate-700 hover:bg-slate-200/80",
+            dotStyle: "bg-slate-400",
+            Icon: Shield,
+            iconColor: "text-slate-500 dark:text-slate-400",
+        },
         Synchronized: {
-            label: t("wallet.anchor.syncLabel", "L2 synchron"),
-            tooltip: t("wallet.anchor.syncTooltip", "Zustand auf Layer 2 verifiziert"),
+            label: t("wallet.anchor.syncLabel", "L2 Synchronized"),
+            tooltip: t("wallet.anchor.syncTooltip", "State verified on Layer 2"),
             containerStyle: "bg-emerald-50/90 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60 hover:bg-emerald-100/90",
             dotStyle: "bg-emerald-500",
             Icon: CheckCircle2,
             iconColor: "text-emerald-600 dark:text-emerald-400",
         },
         Offline: {
-            label: t("wallet.anchor.offlineLabel", "Offline"),
-            tooltip: t("wallet.anchor.offlineTooltip", "Zahlungen offline möglich"),
+            label: t("wallet.syncServersUnreachable", "L2 Unreachable"),
+            tooltip: t("wallet.anchor.offlineTooltip", "Gateways are configured but currently unreachable. Payments work offline."),
             containerStyle: "bg-amber-50/90 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60 hover:bg-amber-100/90",
             dotStyle: "bg-amber-500",
             Icon: Shield,
             iconColor: "text-amber-600 dark:text-amber-400",
         },
         PendingLeapLock: {
-            label: t("wallet.anchor.pendingLabel", "Nicht synchronisiert"),
-            tooltip: t("wallet.anchor.pendingTooltip", "Zahlungen offline möglich"),
+            label: t("wallet.anchor.pendingLabel", "Pending Sync"),
+            tooltip: t("wallet.anchor.pendingTooltip", "Pending leap lock waiting to sync."),
             containerStyle: "bg-amber-50/90 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60 hover:bg-amber-100/90",
             dotStyle: "bg-amber-500",
             Icon: Shield,
             iconColor: "text-amber-600 dark:text-amber-400",
         },
         RollbackDetected: {
-            label: t("wallet.anchor.conflictLabel", "Backup-Konflikt"),
-            tooltip: t("wallet.anchor.conflictTooltip", "Sicherheitswarnung: Backup-Konflikt erkannt. Klicken zur Bereinigung."),
+            label: t("wallet.anchor.conflictLabel", "Backup Conflict"),
+            tooltip: t("wallet.anchor.conflictTooltip", "Security Warning: Backup conflict detected. Click to reconcile."),
             containerStyle: "bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/50 dark:text-rose-200 dark:border-rose-700 hover:bg-rose-100 animate-pulse",
             dotStyle: "bg-rose-600",
             Icon: ShieldAlert,
             iconColor: "text-rose-600 dark:text-rose-400",
         },
         ForkConflict: {
-            label: t("wallet.anchor.conflictLabel", "Sicherheitswarnung"),
-            tooltip: t("wallet.anchor.conflictTooltip", "Sicherheitswarnung: Fork-Konflikt erkannt. Klicken zur Bereinigung."),
+            label: t("wallet.anchor.conflictLabel", "Fork Conflict"),
+            tooltip: t("wallet.anchor.conflictTooltip", "Security Warning: Fork conflict detected. Click to reconcile."),
             containerStyle: "bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/50 dark:text-rose-200 dark:border-rose-700 hover:bg-rose-100 animate-pulse",
             dotStyle: "bg-rose-600",
             Icon: ShieldAlert,
             iconColor: "text-rose-600 dark:text-rose-400",
         },
     }[status] || {
-        label: t("wallet.anchor.offlineLabel", "Offline"),
-        tooltip: t("wallet.anchor.offlineTooltip", "Zahlungen offline möglich"),
-        containerStyle: "bg-amber-50/90 text-amber-800 border-amber-200",
-        dotStyle: "bg-amber-500",
+        label: t("wallet.syncNoServers", "Offline Mode"),
+        tooltip: t("wallet.syncNoServersHint", "No Human Money Node servers are currently active. All vouchers and P2P payments work 100% offline with mathematical double-spend self-exposure (SST V4). L2 locks are prepared automatically."),
+        containerStyle: "bg-slate-100 text-slate-700 border-slate-300",
+        dotStyle: "bg-slate-400",
         Icon: Shield,
-        iconColor: "text-amber-600",
+        iconColor: "text-slate-500",
     };
 
     const IconComp = badgeConfig.Icon;
@@ -235,7 +243,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                             <button
                                 onClick={() => setIsModalOpen(false)}
                                 className="text-theme-placeholder hover:text-theme-primary p-1 rounded-lg hover:bg-bg-app transition-colors"
-                                aria-label="Schließen"
+                                aria-label={t("common.close", "Close")}
                             >
                                 <X size={18} />
                             </button>
@@ -246,18 +254,18 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                                 <p className="text-xs leading-relaxed text-theme-secondary">
                                     {t(
                                         "wallet.anchor.modalDescription",
-                                        "Ein veraltetes Backup wurde erkannt oder ein Gerätekonflikt liegt vor. Auf Layer 2 existieren bereits neuere Transaktionen für diese Wallet."
+                                        "An outdated backup was detected or a device conflict exists. Newer transactions already exist on Layer 2 for this wallet."
                                     )}
                                 </p>
                                 <div className="p-3 bg-bg-app rounded-xl text-xs space-y-1.5 border border-theme-subtle">
                                     <div className="flex items-center gap-2 font-semibold text-theme-primary">
                                         <Lock size={14} className="text-theme-primary" />
-                                        <span>{t("wallet.anchor.safetyGuaranteeTitle", "Automatische Bereinigung:")}</span>
+                                        <span>{t("wallet.anchor.safetyGuaranteeTitle", "Automatic Resolution:")}</span>
                                     </div>
                                     <ul className="list-disc list-inside space-y-1 text-theme-light text-[11px]">
-                                        <li>Bereits auf anderen Geräten ausgegebene Gutscheine werden archiviert.</li>
-                                        <li>Alle noch unberührten, gültigen Gutscheine bleiben vollständig erhalten.</li>
-                                        <li>Der Wallet-Zustand wird mit dem L2-Sperrregister harmonisiert.</li>
+                                        <li>{t("wallet.anchor.reconcileArchivedDesc", "Vouchers already spent on other devices will be archived.")}</li>
+                                        <li>{t("wallet.anchor.reconcileRetainedDesc", "All untouched, valid vouchers remain completely safe.")}</li>
+                                        <li>{t("wallet.anchor.reconcileHarmonizedDesc", "Wallet state is harmonized with the L2 lock registry.")}</li>
                                     </ul>
                                 </div>
 
@@ -275,7 +283,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                                         onClick={() => setIsModalOpen(false)}
                                         disabled={isReconciling}
                                     >
-                                        {t("common.cancel", "Abbrechen")}
+                                        {t("common.cancel", "Cancel")}
                                     </Button>
                                     <Button
                                         variant="primary"
@@ -287,10 +295,10 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                                         {isReconciling ? (
                                             <span className="flex items-center gap-1.5">
                                                 <RefreshCw size={14} className="animate-spin" />
-                                                {t("wallet.anchor.reconciling", "Synchronisiere...")}
+                                                {t("wallet.anchor.reconciling", "Synchronizing...")}
                                             </span>
                                         ) : (
-                                            t("wallet.anchor.reconcileBtn", "Gutscheine prüfen & synchronisieren")
+                                            t("wallet.anchor.reconcileBtn", "Verify & Synchronize Vouchers")
                                         )}
                                     </Button>
                                 </div>
@@ -300,25 +308,25 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                                 <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 text-emerald-800 dark:text-emerald-200 text-xs space-y-2">
                                     <div className="flex items-center gap-2 font-bold text-sm text-emerald-900 dark:text-emerald-100">
                                         <Check size={16} />
-                                        <span>{t("wallet.anchor.reconcileSuccess", "Erfolgreich synchronisiert")}</span>
+                                        <span>{t("wallet.anchor.reconcileSuccess", "Successfully synchronized")}</span>
                                     </div>
                                     <p className="text-[11px] leading-relaxed">
                                         {reconcileReport.message}
                                     </p>
                                     <div className="pt-2 border-t border-emerald-200/60 dark:border-emerald-800/60 flex justify-between text-[11px]">
-                                        <span>Archivierte Gutscheine:</span>
+                                        <span>{t("wallet.anchor.reconciledArchivedLabel", "Archived Vouchers:")}</span>
                                         <span className="font-bold">
                                             {reconcileReport.archivedVoucherIds?.length ?? reconcileReport.archived_voucher_ids?.length ?? 0}
                                         </span>
                                     </div>
                                     <div className="flex justify-between text-[11px]">
-                                        <span>Gesicherte Gutscheine:</span>
+                                        <span>{t("wallet.anchor.reconciledRetainedLabel", "Preserved Vouchers:")}</span>
                                         <span className="font-bold">
                                             {reconcileReport.retainedVoucherIds?.length ?? reconcileReport.retained_voucher_ids?.length ?? 0}
                                         </span>
                                     </div>
                                     <div className="flex justify-between text-[11px]">
-                                        <span>Neuer Nonce-Zähler:</span>
+                                        <span>{t("wallet.anchor.reconciledNonceLabel", "New Nonce Counter:")}</span>
                                         <span className="font-bold font-mono">
                                             {reconcileReport.newTxNonce ?? reconcileReport.new_tx_nonce ?? 0}
                                         </span>
@@ -334,7 +342,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                                             setReconcileReport(null);
                                         }}
                                     >
-                                        {t("common.done", "Fertig")}
+                                        {t("common.done", "Done")}
                                     </Button>
                                 </div>
                             </div>

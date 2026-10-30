@@ -17,7 +17,8 @@ import { AppRouter } from "./components/AppRouter";
 function AppContent() {
     const { t } = useTranslation();
     const { appState, navigate } = useNavigation();
-    const { isForkLocked, isRecoveryRequired, clearLocks, isSessionActive } = useSession();
+    const { isForkLocked, isRecoveryRequired, clearLocks, isSessionActive, isAuthenticated } = useSession();
+    const isLoggedIn = isAuthenticated ?? isSessionActive;
 
     useEffect(() => {
         if (isForkLocked || isRecoveryRequired) {
@@ -26,12 +27,12 @@ function AppContent() {
     }, [isForkLocked, isRecoveryRequired]);
 
     useEffect(() => {
-        const PUBLIC_VIEWS = ['loading', 'needs_profile', 'needs_login', 'recreate_profile', 'needs_recovery', 'concept'];
-        if (!isSessionActive && !PUBLIC_VIEWS.includes(appState.view)) {
+        const PUBLIC_VIEWS = ['loading', 'needs_profile', 'needs_login', 'recreate_profile', 'restore_backup', 'needs_recovery', 'concept'];
+        if (!isLoggedIn && !PUBLIC_VIEWS.includes(appState.view)) {
             logger.warn(`Session is inactive but view is "${appState.view}". Redirecting to "needs_login".`);
             navigate({ view: 'needs_login' });
         }
-    }, [isSessionActive, appState.view, navigate]);
+    }, [isLoggedIn, appState.view, navigate]);
 
     return (
         <div className="flex h-screen w-full bg-bg-app font-sans text-theme-secondary overflow-hidden">

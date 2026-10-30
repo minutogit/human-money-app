@@ -132,12 +132,34 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-6">
                     <div className="bg-bg-card-alternate rounded-lg border border-theme-subtle shadow-sm p-6">
-                        <h2 className="text-lg font-bold text-theme-primary mb-4 border-b border-theme-subtle pb-2">{t('conflict.offenderInfoTitle')}</h2>
+                        <div className="flex items-center justify-between mb-4 border-b border-theme-subtle pb-2">
+                            <h2 className="text-lg font-bold text-theme-primary">{t('conflict.offenderInfoTitle')}</h2>
+                            {proof.isCryptographicallyAttributed ? (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                    {t('conflict.sstProvenIdentity', 'Proven Identity (SST Cryptographic Trap)')}
+                                </span>
+                            ) : (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
+                                    {t('conflict.ephemeralUnverifiedHint', 'Ephemeral Key / Unverified Local Hint')}
+                                </span>
+                            )}
+                        </div>
                         <div className="space-y-4">
                             <div>
                                 <p className="text-xs font-semibold text-theme-light uppercase tracking-wider">{t('conflict.offenderIdLabel')}</p>
                                 <p className="font-mono text-sm break-all text-red-700 bg-red-50 p-2 rounded mt-1">{proof.offenderId}</p>
                             </div>
+                            {proof.isCryptographicallyAttributed ? (
+                                proof.hasVictimWitness && (
+                                    <p className="text-xs font-medium text-emerald-700 bg-emerald-50/60 p-2.5 rounded-lg border border-emerald-100">
+                                        {t((proof.victimWitnessCount ?? 0) > 1 ? 'conflict.witnessDisclosedPlural' : 'conflict.witnessDisclosed', { count: proof.victimWitnessCount ?? 1 })}
+                                    </p>
+                                )
+                            ) : (
+                                <p className="text-xs font-medium text-amber-700 bg-amber-50/60 p-2.5 rounded-lg border border-amber-100">
+                                    {t('conflict.unverifiedHintWarning', 'The reported spender address is an ephemeral session key. Mathematical SST identity attribution has not been completed yet; this hint is unverified.')}
+                                </p>
+                            )}
                             <p className="text-sm text-theme-light leading-relaxed italic">
                                 {t('conflict.offenderDescription')}
                             </p>

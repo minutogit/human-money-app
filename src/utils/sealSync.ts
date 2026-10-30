@@ -39,7 +39,7 @@ async function performSync() {
         if (status === "PendingUpload") {
             logger.info("Pending seal upload detected. Flushing L2 anchor sync...");
             
-            const success = await settingsService.flushPendingAnchorSync();
+            const success = await settingsService.flushPendingAnchorSync(null);
             if (success) {
                 logger.info("Wallet L2 anchor successfully synchronized.");
             }

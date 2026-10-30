@@ -181,10 +181,10 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                                 <Info className="text-blue-600 shrink-0" size={28} />
                                 <div>
                                     <h3 className="text-sm font-black text-blue-950 uppercase tracking-wider">
-                                        Bereits verbucht (Idempotente Wiederholung)
+                                        {t('transfer.checkout.replayTitle', 'Already Processed (Idempotent Replay)')}
                                     </h3>
                                     <p className="text-xs text-blue-800 font-medium">
-                                        Diese Zahlung wurde bereits verbucht. Keine erneute Warenausgabe durchführen!
+                                        {t('transfer.checkout.replayDesc', 'This payment was already processed. Do not dispense goods again!')}
                                     </p>
                                 </div>
                             </div>

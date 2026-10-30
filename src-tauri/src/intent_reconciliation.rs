@@ -35,7 +35,7 @@ async fn reconcile_due_intent(
             match service.retained_choice_target(local_id, now) {
                 Ok(tag) => Some(tag),
                 Err(error) => {
-                    log::warn!(
+                    log::debug!(
                         "Retained choice target unavailable for {}: {}",
                         local_id,
                         error
@@ -51,7 +51,7 @@ async fn reconcile_due_intent(
                     if let Err(error) = service.record_retained_choice_observation(
                         local_id, &bytes, now, None,
                     ) {
-                        log::warn!(
+                        log::debug!(
                             "Retained choice observation rejected for {}: {}",
                             local_id,
                             error
@@ -60,7 +60,7 @@ async fn reconcile_due_intent(
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    log::warn!("Retained choice fetch failed for {}: {}", local_id, error);
+                    log::debug!("Retained choice fetch failed for {}: {}", local_id, error);
                 }
             }
         }
@@ -96,7 +96,7 @@ async fn reconcile_due_intent(
     if let Err(error) = service.complete_intent_reconciliation(
         local_id, &proof, &views, now, None,
     ) {
-        log::warn!(
+        log::debug!(
             "Live intent reconciliation failed for {}: {}",
             local_id,
             error
@@ -121,7 +121,7 @@ pub async fn reconcile_due_intents(
         if let Err(error) =
             service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None)
         {
-            log::warn!(
+            log::debug!(
                 "Failed to clean up terminal L2 send intents: {}",
                 error
             );
@@ -146,12 +146,12 @@ pub async fn reconcile_due_intents(
         if now >= intent.root_valid_until_ms {
             let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
             if let Err(error) = service.expire_intent_if_overdue(&local_id, now, None) {
-                log::warn!("Failed to expire L2 send intent {}: {}", local_id, error);
+                log::debug!("Failed to expire L2 send intent {}: {}", local_id, error);
             }
             if let Err(error) =
                 service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None)
             {
-                log::warn!(
+                log::debug!(
                     "Failed to clean up terminal L2 send intents: {}",
                     error
                 );
@@ -161,6 +161,10 @@ pub async fn reconcile_due_intents(
         }
 
         if now < intent.created_at_ms.saturating_add(RECONCILIATION_DELAY_MS) {
+            continue;
+        }
+
+        if candidates.is_empty() || settings.regional_mesh_sources.is_empty() {
             continue;
         }
 
@@ -182,7 +186,7 @@ pub async fn reconcile_due_intents(
 
         match result {
             Ok(()) => handled += 1,
-            Err(error) => log::warn!(
+            Err(error) => log::debug!(
                 "L2 send intent reconciliation failed for {}: {}",
                 local_id,
                 error.message
@@ -209,7 +213,7 @@ pub fn spawn_intent_reconciliation_worker(app: tauri::AppHandle) {
                     log::info!("Reconciled {} unresolved L2 send intent(s)", count)
                 }
                 Err(error) => {
-                    log::warn!("L2 intent reconciliation failed: {}", error.message)
+                    log::debug!("L2 intent reconciliation failed: {}", error.message)
                 }
             }
         }
@@ -402,6 +406,39 @@ mod tests {
         assert_eq!(handled, 0);
         let service = state.service.lock().unwrap();
         assert!(!service
+            .with_wallet(|wallet| wallet.profile.l2_send_intents.contains_key(&local_id))
+            .unwrap());
+        drop(service);
+        drop(state);
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn skips_non_overdue_when_no_servers_or_sources_configured() {
+        let path = temp_path();
+        let password = "no-servers-intent-password";
+        let (state, local_id) = unlocked_fixture(&path, password);
+        let now = now_ms().unwrap();
+
+        {
+            let mut service = state.service.lock().unwrap();
+            let wallet = service.get_wallet_mut().unwrap();
+            let intent = wallet
+                .profile
+                .l2_send_intents
+                .get_mut(&local_id)
+                .unwrap();
+            intent.created_at_ms = now.saturating_sub(60_000);
+            intent.root_valid_until_ms = now.saturating_add(60_000);
+        }
+
+        let in_flight = Arc::new(Mutex::new(HashSet::new()));
+        let handled = reconcile_due_intents(&state, &in_flight).await.unwrap();
+
+        assert_eq!(handled, 0);
+
+        let service = state.service.lock().unwrap();
+        assert!(service
             .with_wallet(|wallet| wallet.profile.l2_send_intents.contains_key(&local_id))
             .unwrap());
         drop(service);

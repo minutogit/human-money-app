@@ -6,6 +6,7 @@ pub mod events;
 pub mod conflicts;
 pub mod standards;
 pub mod transfers;
+pub mod backup;
 
 pub use error::*;
 pub use voucher::*;
@@ -15,3 +16,4 @@ pub use events::*;
 pub use conflicts::*;
 pub use standards::*;
 pub use transfers::*;
+pub use backup::*;

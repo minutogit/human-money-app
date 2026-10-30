@@ -24,7 +24,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*};
+use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*};
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
 
@@ -161,10 +161,13 @@ pub fn run() {
             // WalletSeal / Sync
             get_seal_sync_status, get_seal_for_upload, acknowledge_seal_sync,
             check_anchor_sync, reconcile_rollback, flush_pending_anchor_sync,
+            check_voucher_l2_status,
             benchmark_l2_servers,
             refresh_l2_gateway_cache, refresh_regional_mesh_views,
             // Integrity
-            check_wallet_integrity, repair_wallet_integrity
+            check_wallet_integrity, repair_wallet_integrity,
+            // Wallet Backups
+            probe_wallet_backup, export_wallet_backup_file, sync_wallet_backup_folder, inspect_wallet_backup, restore_wallet_backup
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -179,13 +182,20 @@ fn spawn_regional_view_renewal_worker(app: tauri::AppHandle) {
         loop {
             interval.tick().await;
             let state = app.state::<AppState>();
+            let settings = match state.get_cached_settings() {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if settings.regional_mesh_sources.is_empty() {
+                continue;
+            }
             let unlocked = match state.service.lock() {
                 Ok(service) => service.with_wallet(|_| ()).is_ok(),
                 Err(_) => false,
             };
             if unlocked {
                 if let Err(error) = crate::checkout::ensure_cached_views(state.inner()).await {
-                    log::warn!("Regional view renewal failed: {}", error.message);
+                    log::debug!("Regional view renewal failed: {}", error.message);
                 }
             }
         }
