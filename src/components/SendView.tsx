@@ -29,7 +29,7 @@ import { useSession } from "../context/SessionContext";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { PageLayout } from "./ui/PageLayout";
 import { formatAmount } from "../utils/format";
-import { readText } from "@tauri-apps/plugin-clipboard-manager";
+import { readFromClipboard } from "../utils/clipboard";
 import { parsePaymentRequest } from "../utils/humocoUri";
 import { 
     Shield, 
@@ -267,6 +267,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     if (targetVoucher) {
                         const stdId = [...newIdMap.entries()].find(([, uuid]) => uuid === targetVoucher.voucherStandardUuid)?.[0] || targetVoucher.voucherStandardUuid;
                         dispatch({ type: 'SET_STANDARD', id: stdId, isTest: targetVoucher.isTestVoucher });
+                        dispatch({ type: 'SET_TARGET_AMOUNT', amount: targetVoucher.currentAmount });
                         toggleVoucher(targetVoucher.localInstanceId, targetVoucher.currentAmount);
                     }
                 } else if (activeClasses.length > 0) {
@@ -360,14 +361,11 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
         const parsed = parsePaymentRequest(rawText);
         if (!parsed) return false;
 
+        dispatch({ type: 'SET_FEEDBACK', msg: '' });
         dispatch({ type: 'SET_RECIPIENT', id: parsed.to });
 
         if (parsed.note) {
             dispatch({ type: 'SET_NOTES', notes: parsed.note });
-        }
-
-        if (parsed.amount) {
-            handleTargetAmountChange(parsed.amount);
         }
 
         let matchedStandardId: string | null = null;
@@ -389,6 +387,10 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
             dispatch({ type: 'SET_STANDARD', id: state.selectedStandardId, isTest: parsed.isTest });
         }
 
+        if (parsed.amount) {
+            dispatch({ type: 'SET_TARGET_AMOUNT', amount: parsed.amount });
+        }
+
         setPaymentRequestSuccessMsg(t('transfer.paymentRequestApplied'));
         setTimeout(() => setPaymentRequestSuccessMsg(null), 3500);
         return true;
@@ -396,15 +398,22 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
 
     const handlePastePaymentRequest = async () => {
         try {
-            const text = await readText();
-            if (text) {
-                const success = applyPaymentRequest(text);
-                if (!success) {
-                    dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.invalidPaymentRequest') });
-                }
+            const { text, error } = await readFromClipboard();
+            if (error) {
+                dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.clipboardReadFailed') });
+                return;
+            }
+            if (!text.trim()) {
+                dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.emptyClipboard') });
+                return;
+            }
+            const success = applyPaymentRequest(text);
+            if (!success) {
+                dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.invalidPaymentRequest') });
             }
         } catch (e) {
             logger.error(`Failed to read clipboard for payment request: ${stringifyError(e)}`);
+            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.clipboardReadFailed') });
         }
     };
 
@@ -516,10 +525,11 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                 <Button
                     variant="secondary"
                     onClick={handlePastePaymentRequest}
-                    className="gap-2 text-xs py-2 px-3.5 shadow-sm"
+                    title={t('transfer.pastePaymentRequestHint')}
+                    className="gap-2 text-xs py-2 px-3.5 shadow-sm whitespace-normal text-left"
                 >
-                    <Clipboard size={16} />
-                    {t('transfer.pastePaymentRequest')}
+                    <Clipboard size={16} className="shrink-0" />
+                    <span>{t('transfer.pastePaymentRequest')}</span>
                 </Button>
             }
         >
@@ -606,7 +616,10 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                             onRecipientChange={(e) => {
                                 const rawVal = e.target.value;
                                 if (rawVal.includes('humoco://pay')) {
-                                    applyPaymentRequest(rawVal);
+                                    const ok = applyPaymentRequest(rawVal);
+                                    if (!ok) {
+                                        dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.invalidPaymentRequest') });
+                                    }
                                     return;
                                 }
                                 const val = rawVal.replace(/\s+/g, '');
@@ -667,8 +680,8 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                         {currentPlan && (
                             <Card className="p-5 bg-amber-50/50 border border-amber-200/60 rounded-[32px] space-y-3 animate-in fade-in duration-300">
                                 <div className="flex items-center justify-between">
-                                    <h4 className="text-[10px] font-black text-amber-700 uppercase tracking-widest">Gravitations-Plan ({currentPlan.planReason})</h4>
-                                    {currentPlan.needsSplit && <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-2 py-1 rounded-full">Split erforderlich</span>}
+                                    <h4 className="text-[10px] font-black text-amber-700 uppercase tracking-widest">{t('transfer.planTitle')}</h4>
+                                    {currentPlan.needsSplit && <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-2 py-1 rounded-full">{t('transfer.planSplitRequired')}</span>}
                                 </div>
                                 <div className="grid grid-cols-3 gap-2 text-xs">
                                     <div className="bg-white rounded-xl p-2 border border-amber-100">
@@ -693,14 +706,19 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                                     </div>
                                 </div>
                                 <div className="space-y-1">
-                                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Involvierte Voucher</p>
+                                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planInvolvedVouchers')}</p>
                                     <div className="space-y-1 max-h-32 overflow-auto pr-1">
-                                        {currentPlan.selected.map((rv) => (
-                                            <div key={rv.localInstanceId} className="flex justify-between items-center bg-white rounded-lg px-2 py-1 border border-slate-100 text-[11px]">
-                                                <span className="font-mono text-slate-600 truncate max-w-[140px]">{rv.localInstanceId.slice(0,8)}… {rv.amount}</span>
-                                                <span className="font-bold text-slate-500">Score {rv.score} · {rv.reason}</span>
-                                            </div>
-                                        ))}
+                                        {currentPlan.selected.map((rv) => {
+                                            const voucher = filteredVouchers.find(v => v.localInstanceId === rv.localInstanceId);
+                                            const label = voucher?.displayStandardName ? `${voucher.displayStandardName} (${rv.localInstanceId.slice(0, 6)}…)` : `${rv.localInstanceId.slice(0, 8)}…`;
+                                            const currency = voucher?.displayCurrency || filteredVouchers[0]?.displayCurrency || '';
+                                            return (
+                                                <div key={rv.localInstanceId} className="flex justify-between items-center bg-white rounded-lg px-2 py-1 border border-slate-100 text-[11px]">
+                                                    <span className="font-mono text-slate-600 truncate max-w-[160px]">{label}</span>
+                                                    <span className="font-bold text-slate-700">{formatAmount(rv.amount)} {currency}</span>
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 </div>
                                 {currentPlan.needsSplit && (
@@ -797,6 +815,8 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                             <button
                                 type="button"
                                 onClick={() => { setShowContactPicker(false); setContactSearchQuery(""); }}
+                                title={t('common.close')}
+                                aria-label={t('common.close')}
                                 className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition-colors"
                             >
                                 <X size={20} />

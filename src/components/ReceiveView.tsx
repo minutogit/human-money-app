@@ -11,7 +11,7 @@ import { contactService } from '../services/contactService';
 import ContactDialog from './ContactDialog';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
-import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { copyToClipboard } from '../utils/clipboard';
 import { profileService } from '../services/profileService';
 import { buildPaymentRequestText } from '../utils/humocoUri';
 import { logger } from '../utils/log';
@@ -332,8 +332,17 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
         setFeedbackMsg('');
         try {
             if (type === 'transfer') {
+                let currentStandards = voucherStandards;
+                if (currentStandards.length === 0) {
+                    try {
+                        currentStandards = await standardsService.getStandards();
+                        setVoucherStandards(currentStandards);
+                    } catch {
+                        // ignore error
+                    }
+                }
                 const standardDefinitionsToml: Record<string, string> = {};
-                voucherStandards.forEach(standard => {
+                currentStandards.forEach(standard => {
                     const uuidMatch = standard.content.match(/uuid\s*=\s*"([^"]+)"/);
                     if (uuidMatch && uuidMatch[1]) standardDefinitionsToml[uuidMatch[1]] = standard.content;
                 });
@@ -715,12 +724,18 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
     });
 
     const handleCopyPaymentRequest = async () => {
+        setFeedbackMsg('');
         try {
-            await writeText(generatedPaymentRequest);
+            const success = await copyToClipboard(generatedPaymentRequest);
+            if (!success) {
+                setFeedbackMsg(t('transfer.requestPayment.copyFailed'));
+                return;
+            }
             setCopiedRequest(true);
             setTimeout(() => setCopiedRequest(false), 2500);
         } catch (err) {
             logger.error(`Failed to copy payment request: ${stringifyError(err)}`);
+            setFeedbackMsg(t('transfer.requestPayment.copyFailed'));
         }
     };
 
@@ -972,8 +987,8 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                                     <h3 className="text-xl font-black text-theme-primary tracking-tight mb-2">
                                         {isProcessing ? t('transfer.importFile.loading') : t('transfer.importFile.fileDetected')}
                                     </h3>
-                                    <div className="flex flex-col items-center gap-1.5">
-                                        <p className="text-xs font-mono font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">
+                                    <div className="flex flex-col items-center gap-1.5 max-w-full">
+                                        <p className="text-xs font-mono font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100 max-w-full truncate break-all">
                                             {bundleName}
                                         </p>
                                         <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mt-2">

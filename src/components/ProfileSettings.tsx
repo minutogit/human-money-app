@@ -10,7 +10,7 @@ import { PublicProfile, Address } from '../types';
 import { useSession } from '../context/SessionContext';
 import { normalizeCoordinates, geocodeAddress, getCurrentLocation } from '../utils/geoUtils';
 import { translateError, stringifyError } from '../utils/errorHelper';
-import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { copyToClipboard } from '../utils/clipboard';
 import { 
     User, 
     MapPin, 
@@ -45,9 +45,11 @@ export function ProfileSettings() {
     const handleCopyUserId = async () => {
         if (!userId) return;
         try {
-            await writeText(userId);
-            setCopiedId(true);
-            setTimeout(() => setCopiedId(false), 2000);
+            const success = await copyToClipboard(userId);
+            if (success) {
+                setCopiedId(true);
+                setTimeout(() => setCopiedId(false), 2000);
+            }
         } catch (e) {
             logger.warn(`Failed to copy DID: ${stringifyError(e)}`);
         }
@@ -322,9 +324,9 @@ export function ProfileSettings() {
                             />
                         </div>
                         <div className="space-y-2">
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.coordinates')}</label>
-                                <div className="flex gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
                                     <button
                                         type="button"
                                         onClick={handleUseGPS}

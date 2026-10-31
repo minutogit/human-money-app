@@ -69,7 +69,7 @@ describe('WalletSyncBadge Component', () => {
         });
     });
 
-    it('renders "Offline Mode" neutral badge with SST V4 tooltip when status is NoServers', async () => {
+    it('renders "Offline Mode" neutral badge with online sync tooltip when status is NoServers', async () => {
         (settingsService.checkAnchorSync as any).mockResolvedValue('NoServers');
 
         render(<WalletSyncBadge />);
@@ -80,35 +80,35 @@ describe('WalletSyncBadge Component', () => {
 
         const badgeButton = screen.getByRole('button', { name: /L2 Status: Offline Mode/i });
         expect(badgeButton).toBeInTheDocument();
-        expect(badgeButton.getAttribute('title')).toContain('No Human Money Node servers are currently active');
+        expect(badgeButton.getAttribute('title')).toContain('No online sync configured');
     });
 
-    it('renders "L2 Unreachable" amber badge when status is Offline', async () => {
+    it('renders "Online Sync Unreachable" amber badge when status is Offline', async () => {
         (settingsService.checkAnchorSync as any).mockResolvedValue('Offline');
 
         render(<WalletSyncBadge />);
 
         await waitFor(() => {
-            expect(screen.getByText('L2 Unreachable')).toBeInTheDocument();
+            expect(screen.getByText('Online Sync Unreachable')).toBeInTheDocument();
         });
 
-        const badgeButton = screen.getByRole('button', { name: /L2 Status: L2 Unreachable/i });
+        const badgeButton = screen.getByRole('button', { name: /L2 Status: Online Sync Unreachable/i });
         expect(badgeButton).toBeInTheDocument();
-        expect(badgeButton.getAttribute('title')).toContain('Payments possible offline');
+        expect(badgeButton.getAttribute('title')).toContain('Online sync servers are currently unreachable');
     });
 
-    it('renders "L2 Synchronized" emerald badge when status is Synchronized', async () => {
+    it('renders "Online Sync Active" emerald badge when status is Synchronized', async () => {
         (settingsService.checkAnchorSync as any).mockResolvedValue('Synchronized');
 
         render(<WalletSyncBadge />);
 
         await waitFor(() => {
-            expect(screen.getByText(/L2 Synchronized/i)).toBeInTheDocument();
+            expect(screen.getByText(/Online Sync Active/i)).toBeInTheDocument();
         });
 
-        const badgeButton = screen.getByRole('button', { name: /L2 Status: L2 Synchronized/i });
+        const badgeButton = screen.getByRole('button', { name: /L2 Status: Online Sync Active/i });
         expect(badgeButton).toBeInTheDocument();
-        expect(badgeButton.getAttribute('title')).toContain('State verified on Layer 2');
+        expect(badgeButton.getAttribute('title')).toContain('Your wallet is verified with online protection.');
     });
 
     it('displays Testnet pill when active network is testnet', async () => {

@@ -184,19 +184,20 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
 
     return (
         <div className="flex flex-col h-full">
-            <header className="flex items-center gap-4 border-b border-theme-subtle px-6 py-4 bg-bg-card">
-                <button
-                    onClick={onBack}
-                    className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
-                    title={t('common.back')}
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                    </svg>
-                </button>
-                <h1 className="text-2xl font-bold text-theme-primary">{t('conflict.title')}</h1>
-                <div className="flex-grow"></div>
-                <div className="flex items-center gap-4">
+            <header className="flex flex-wrap items-center justify-between gap-3 border-b border-theme-subtle px-4 sm:px-6 py-4 bg-bg-card">
+                <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
+                    <button
+                        onClick={onBack}
+                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95 shrink-0"
+                        title={t('common.back')}
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                        </svg>
+                    </button>
+                    <h1 className="text-xl sm:text-2xl font-bold text-theme-primary break-words">{t('conflict.title')}</h1>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <Button
                         size="sm"
                         variant="secondary"

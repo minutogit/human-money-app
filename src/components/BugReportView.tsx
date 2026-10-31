@@ -9,6 +9,7 @@ import { Button } from './ui/Button';
 import { Terminal, Copy, ExternalLink, AlertTriangle, Check, Loader2 } from 'lucide-react';
 import { logger } from '../utils/log';
 import { translateError, stringifyError } from '../utils/errorHelper';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface BugReportViewProps {
     onBack: () => void;
@@ -39,11 +40,16 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
 
     const handleCopy = async () => {
         try {
-            await navigator.clipboard.writeText(logs);
+            const success = await copyToClipboard(logs);
+            if (!success) {
+                setError(t('common.copyError'));
+                return;
+            }
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
         } catch (err) {
             logger.error(`Failed to copy logs to clipboard: ${stringifyError(err)}`);
+            setError(t('common.copyError'));
         }
     };
 

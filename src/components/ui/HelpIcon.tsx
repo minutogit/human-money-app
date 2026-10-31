@@ -16,7 +16,7 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
     const { t } = useTranslation();
     const [isHovered, setIsHovered] = useState(false);
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+    const [coords, setCoords] = useState<{ top: number; left: number; placement: 'top' | 'bottom' } | null>(null);
     const buttonRef = useRef<HTMLButtonElement>(null);
 
     // Map topics to their respective i18n keys based on the domains
@@ -108,9 +108,13 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
     const updateCoords = () => {
         if (buttonRef.current) {
             const rect = buttonRef.current.getBoundingClientRect();
+            const placement: 'top' | 'bottom' = rect.top < 190 ? 'bottom' : 'top';
+            const innerWidth = typeof window !== 'undefined' ? window.innerWidth : 1024;
+            const clampedLeft = Math.max(150, Math.min(rect.left + rect.width / 2, innerWidth - 150));
             setCoords({
-                top: rect.top + window.scrollY,
-                left: rect.left + rect.width / 2 + window.scrollX
+                top: placement === 'bottom' ? rect.bottom + 8 : rect.top - 8,
+                left: clampedLeft,
+                placement,
             });
         }
     };
@@ -154,17 +158,20 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
             {isHovered && coords && createPortal(
                 <div 
                     style={{
-                        position: 'absolute',
+                        position: 'fixed',
                         top: `${coords.top}px`,
                         left: `${coords.left}px`,
-                        transform: 'translate(-50%, -100%)',
-                        marginTop: '-8px',
+                        transform: coords.placement === 'bottom' ? 'translate(-50%, 0)' : 'translate(-50%, -100%)',
                     }}
                     className="w-64 bg-slate-900 text-white text-xs rounded-xl p-3 shadow-lg z-[9999] pointer-events-none animate-in fade-in zoom-in-95 duration-200 text-center"
                 >
                     <p className="font-semibold mb-1">{keys.title}</p>
                     <p className="opacity-90">{keys.short}</p>
-                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
+                    {coords.placement === 'bottom' ? (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-slate-900" />
+                    ) : (
+                        <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
+                    )}
                 </div>,
                 document.body
             )}

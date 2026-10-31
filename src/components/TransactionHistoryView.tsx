@@ -7,7 +7,7 @@ import { logger } from '../utils/log';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
-import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { copyToClipboard } from '../utils/clipboard';
 import { Button } from './ui/Button';
 import { TransactionRecord, Contact } from '../types';
 import { PageLayout } from './ui/PageLayout';
@@ -190,9 +190,11 @@ export function TransactionHistoryView() {
 
     async function handleCopy(text: string, key: string) {
         try {
-            await writeText(text);
-            setCopiedKey(key);
-            setTimeout(() => setCopiedKey(null), 2000);
+            const success = await copyToClipboard(text);
+            if (success) {
+                setCopiedKey(key);
+                setTimeout(() => setCopiedKey(null), 2000);
+            }
         } catch (e) {
             logger.error(`Failed to copy: ${stringifyError(e)}`);
         }
@@ -298,7 +300,7 @@ export function TransactionHistoryView() {
                         disabled={filteredHistory.length === 0}
                     >
                         <FileSpreadsheet size={14} />
-                        <span>{t('history.exportCsv')}</span>
+                        <span className="hidden sm:inline">{t('history.exportCsv')}</span>
                     </Button>
                 </div>
             }
@@ -549,7 +551,11 @@ export function TransactionHistoryView() {
                                                 </span>
                                             </div>
 
-                                            <div className="text-theme-light/40 hover:text-theme-primary transition-colors">
+                                            <div 
+                                                className="text-theme-light/40 hover:text-theme-primary transition-colors"
+                                                title={t('common.details')}
+                                                aria-label={t('common.details')}
+                                            >
                                                 {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
                                             </div>
                                         </div>
@@ -719,7 +725,7 @@ export function TransactionHistoryView() {
                                                                     <tr key={idx} className="hover:bg-bg-app/40 transition-colors">
                                                                         <td className="px-3.5 py-2 font-bold text-theme-secondary">{detail.standardName}</td>
                                                                         <td className="px-3.5 py-2 font-mono font-bold text-theme-primary text-right">{detail.amount} {detail.displayCurrency}</td>
-                                                                        <td className="px-3.5 py-2 font-mono text-theme-light opacity-60 text-[11px]">{detail.localInstanceId.slice(0, 10)}...</td>
+                                                                        <td className="px-3.5 py-2 font-mono text-theme-light opacity-60 text-[11px]" title={detail.localInstanceId}>{detail.localInstanceId.slice(0, 10)}...</td>
                                                                     </tr>
                                                                 ))}
                                                             </tbody>

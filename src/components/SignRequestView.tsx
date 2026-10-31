@@ -60,6 +60,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
     const [savedSigFilePath, setSavedSigFilePath] = useState<string | null>(null);
     const [selectedGender, setSelectedGender] = useState<string>("1");
     const [isSavingGender, setIsSavingGender] = useState(false);
+    const [standardsLoaded, setStandardsLoaded] = useState(false);
 
 
 
@@ -115,6 +116,8 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
             } catch (e) {
                 setFeedbackMsg(t('voucher.signRequest.initError', { error: translateError(e, t) }));
                 setFeedbackType('error');
+            } finally {
+                setStandardsLoaded(true);
             }
         }
         fetchData();
@@ -343,10 +346,23 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                         <div className="space-y-6">
                             <div className="space-y-3">
                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.signRequest.selectRole')}</label>
-                                {allowedRoles.length === 0 ? (
+                                {!standardsLoaded ? (
                                     <div className="py-2 animate-pulse flex items-center gap-2">
                                         <div className="h-4 w-4 bg-theme-subtle rounded-full"></div>
                                         <div className="h-4 w-32 bg-theme-subtle rounded-full"></div>
+                                    </div>
+                                ) : allowedRoles.length === 0 ? (
+                                    <div className="space-y-3">
+                                        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3 leading-relaxed">
+                                            {t('voucher.unknownStandardRoleHint')}
+                                        </p>
+                                        <input
+                                            type="text"
+                                            value={selectedRole}
+                                            onChange={(e) => setSelectedRole(e.target.value)}
+                                            placeholder={t('voucher.customRole')}
+                                            className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all"
+                                        />
                                     </div>
                                 ) : allowedRoles.length === 1 ? (
                                     <div className="p-4 bg-white border-2 border-theme-primary rounded-2xl flex items-center justify-between shadow-sm">

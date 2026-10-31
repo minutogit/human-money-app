@@ -289,4 +289,41 @@ amount_decimal_places = 4`,
       expect(parsedTomlContent).toContain('name = "FreeTaler"');
     });
   });
+
+  it('applies payment request from recipient input preserving target amount', async () => {
+    render(<SendView />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/did:key:z/i)).toBeInTheDocument());
+
+    const recipientInput = screen.getByPlaceholderText(/did:key:z/i);
+    const payUri = 'humoco://pay?to=did:key:z999&amount=42.50&std=FreeTaler&note=Honey';
+    fireEvent.change(recipientInput, { target: { value: payUri } });
+
+    await waitFor(() => {
+      expect(recipientInput).toHaveValue('did:key:z999');
+    });
+
+    const targetAmountInput = screen.getByPlaceholderText('0.00');
+    expect(targetAmountInput).toHaveValue(42.5);
+    expect(screen.getByPlaceholderText(/note or reference/i)).toHaveValue('Honey');
+  });
+
+  it('sets target amount when initialVoucherId is provided', async () => {
+    render(<SendView initialVoucherId="voucher1" />);
+    await waitFor(() => {
+      const targetAmountInput = screen.getByPlaceholderText('0.00');
+      expect(targetAmountInput).toHaveValue(100);
+    });
+  });
+
+  it('shows error feedback on invalid payment request in recipient input', async () => {
+    render(<SendView />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/did:key:z/i)).toBeInTheDocument());
+
+    const recipientInput = screen.getByPlaceholderText(/did:key:z/i);
+    fireEvent.change(recipientInput, { target: { value: 'humoco://pay?invalid=true' } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/No valid payment request/i)).toBeInTheDocument();
+    });
+  });
 });

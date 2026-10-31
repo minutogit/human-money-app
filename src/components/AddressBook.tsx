@@ -8,7 +8,7 @@ import { wotService } from '../services/wotService';
 import { settingsService } from '../services/settingsService';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeFile, readFile } from '@tauri-apps/plugin-fs';
-import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { copyToClipboard } from '../utils/clipboard';
 import { HelpIcon } from './ui/HelpIcon';
 import { Contact, WotSummaryDto } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
@@ -197,12 +197,17 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             ]);
             if (!did) {
                 logger.warn("No user ID found for contact card");
+                setFeedbackMsg({ type: 'error', message: t('contacts.noOwnDidError') });
                 return;
             }
             const nameParts = [profile?.firstName, profile?.lastName].filter(Boolean);
             const name = nameParts.length > 0 ? nameParts.join(' ') : profile?.organization;
             const cardText = buildContactCardText({ did, name: name || undefined });
-            await writeText(cardText);
+            const success = await copyToClipboard(cardText);
+            if (!success) {
+                setFeedbackMsg({ type: 'error', message: t('contacts.copyContactCardFailed') });
+                return;
+            }
             setCopiedContactCard(true);
             setTimeout(() => setCopiedContactCard(false), 2500);
         } catch (err) {
@@ -301,10 +306,12 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                         variant="secondary"
                         onClick={handleCopyContactCard}
                         className="gap-2"
-                        title={t('contacts.copyContactCard')}
+                        title={copiedContactCard ? t('contacts.copiedContactCard') : t('contacts.copyContactCard')}
                     >
                         {copiedContactCard ? <Check size={18} className="text-emerald-500" /> : <Copy size={18} />}
-                        {copiedContactCard ? t('contacts.copiedContactCard') : t('contacts.copyContactCard')}
+                        <span className="hidden sm:inline">
+                            {copiedContactCard ? t('contacts.copiedContactCard') : t('contacts.copyContactCard')}
+                        </span>
                     </Button>
                     <Button
                         onClick={() => {
@@ -312,9 +319,10 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                             setIsDialogOpen(true);
                         }}
                         className="gap-2"
+                        title={t('contacts.newContact')}
                     >
                         <UserPlus size={18} />
-                        {t('contacts.newContact')}
+                        <span>{t('contacts.newContact')}</span>
                     </Button>
                 </div>
             }
@@ -331,6 +339,8 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                             type="button"
                             onClick={() => setFeedbackMsg(null)}
                             className="p-1 rounded-lg hover:bg-black/5 text-current transition-colors"
+                            title={t('common.close')}
+                            aria-label={t('common.close')}
                         >
                             <X size={14} />
                         </button>
@@ -526,7 +536,9 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
 
                                         {/* Trust Rating & Synced Peer List Pills */}
                                         <div className="flex items-center gap-1.5 flex-wrap mb-3">
-                                            <span className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider border shadow-sm ${
+                                            <span 
+                                                title={t('contacts.trustLevelHint')}
+                                                className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider border shadow-sm ${
                                                 contact.trustLevel === 3
                                                     ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                                                     : contact.trustLevel === 2

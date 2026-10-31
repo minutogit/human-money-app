@@ -107,23 +107,23 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
     const badgeConfig = {
         NoServers: {
             label: t("wallet.syncNoServers", "Offline Mode"),
-            tooltip: t("wallet.syncNoServersHint", "No Human Money Node servers are currently active. All vouchers and P2P payments work 100% offline with mathematical double-spend self-exposure (SST V4). L2 locks are prepared automatically."),
+            tooltip: t("wallet.syncNoServersHint", "No online sync configured. You can still send and receive vouchers safely offline at any time."),
             containerStyle: "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-900/60 dark:text-slate-300 dark:border-slate-700 hover:bg-slate-200/80",
             dotStyle: "bg-slate-400",
             Icon: Shield,
             iconColor: "text-slate-500 dark:text-slate-400",
         },
         Synchronized: {
-            label: t("wallet.anchor.syncLabel", "L2 Synchronized"),
-            tooltip: t("wallet.anchor.syncTooltip", "State verified on Layer 2"),
+            label: t("wallet.anchor.syncLabel", "Online Sync Active"),
+            tooltip: t("wallet.anchor.syncTooltip", "Your wallet is verified with online protection."),
             containerStyle: "bg-emerald-50/90 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60 hover:bg-emerald-100/90",
             dotStyle: "bg-emerald-500",
             Icon: CheckCircle2,
             iconColor: "text-emerald-600 dark:text-emerald-400",
         },
         Offline: {
-            label: t("wallet.syncServersUnreachable", "L2 Unreachable"),
-            tooltip: t("wallet.anchor.offlineTooltip", "Gateways are configured but currently unreachable. Payments work offline."),
+            label: t("wallet.syncServersUnreachable", "Online Sync Unreachable"),
+            tooltip: t("wallet.anchor.offlineTooltip", "Online sync servers are currently unreachable. Offline payments still work normally."),
             containerStyle: "bg-amber-50/90 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60 hover:bg-amber-100/90",
             dotStyle: "bg-amber-500",
             Icon: Shield,
@@ -131,7 +131,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
         },
         PendingLeapLock: {
             label: t("wallet.anchor.pendingLabel", "Pending Sync"),
-            tooltip: t("wallet.anchor.pendingTooltip", "Pending leap lock waiting to sync."),
+            tooltip: t("wallet.anchor.pendingTooltip", "Pending online sync – will complete automatically once connected."),
             containerStyle: "bg-amber-50/90 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60 hover:bg-amber-100/90",
             dotStyle: "bg-amber-500",
             Icon: Shield,
@@ -155,7 +155,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
         },
     }[status] || {
         label: t("wallet.syncNoServers", "Offline Mode"),
-        tooltip: t("wallet.syncNoServersHint", "No Human Money Node servers are currently active. All vouchers and P2P payments work 100% offline with mathematical double-spend self-exposure (SST V4). L2 locks are prepared automatically."),
+        tooltip: t("wallet.syncNoServersHint", "No online sync configured. You can still send and receive vouchers safely offline at any time."),
         containerStyle: "bg-slate-100 text-slate-700 border-slate-300",
         dotStyle: "bg-slate-400",
         Icon: Shield,
@@ -195,10 +195,10 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                         }
                     }}
                 >
-                    <span className={`w-2 h-2 rounded-full ${badgeConfig.dotStyle} ${isConflict ? "animate-ping" : ""}`} />
-                    <IconComp size={14} className={badgeConfig.iconColor} />
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${badgeConfig.dotStyle} ${isConflict ? "animate-ping" : ""}`} />
+                    <IconComp size={14} className={`shrink-0 ${badgeConfig.iconColor}`} />
                     {!compact && (
-                        <span className="font-semibold truncate">
+                        <span className="font-semibold truncate hidden sm:inline">
                             {badgeConfig.label}
                         </span>
                     )}
@@ -254,7 +254,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                                 <p className="text-xs leading-relaxed text-theme-secondary">
                                     {t(
                                         "wallet.anchor.modalDescription",
-                                        "An outdated backup was detected or a device conflict exists. Newer transactions already exist on Layer 2 for this wallet."
+                                        "An outdated backup was detected or a device conflict exists. Newer transactions already exist in online protection for this wallet."
                                     )}
                                 </p>
                                 <div className="p-3 bg-bg-app rounded-xl text-xs space-y-1.5 border border-theme-subtle">
@@ -265,7 +265,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                                     <ul className="list-disc list-inside space-y-1 text-theme-light text-[11px]">
                                         <li>{t("wallet.anchor.reconcileArchivedDesc", "Vouchers already spent on other devices will be archived.")}</li>
                                         <li>{t("wallet.anchor.reconcileRetainedDesc", "All untouched, valid vouchers remain completely safe.")}</li>
-                                        <li>{t("wallet.anchor.reconcileHarmonizedDesc", "Wallet state is harmonized with the L2 lock registry.")}</li>
+                                        <li>{t("wallet.anchor.reconcileHarmonizedDesc", "Your wallet state is being aligned with online protection.")}</li>
                                     </ul>
                                 </div>
 

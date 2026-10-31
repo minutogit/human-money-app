@@ -183,8 +183,21 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
         },
     }[size];
 
+    const statusLabels: Record<L2VerdictState, string> = {
+        final: t('transfer.l2.statusFinal'),
+        provisional: t('transfer.l2.statusProvisional'),
+        conflict: t('transfer.l2.statusConflict'),
+        offline: t('transfer.l2.statusOffline'),
+        unverified: t('transfer.l2.statusUnverified'),
+    };
+
+    const currentStatusLabel = statusLabels[effectiveStatus];
+    const displayStatus = (currentStatusLabel && !currentStatusLabel.startsWith('transfer.l2.'))
+        ? currentStatusLabel
+        : effectiveStatus;
+
     const quorumRatioText = effectiveSignerCount !== undefined
-        ? `${effectiveSignerCount}${effectiveActiveNodes !== undefined ? `/${effectiveActiveNodes}` : ''} ${t('transfer.l2.nodes', 'Nodes')}`
+        ? t('transfer.l2.serverConfirmations', `${effectiveSignerCount}${effectiveActiveNodes !== undefined ? `/${effectiveActiveNodes}` : ''} Nodes`, { count: effectiveSignerCount, total: effectiveActiveNodes })
         : null;
 
     const percentage = (effectiveSignerCount !== undefined && effectiveActiveNodes !== undefined && effectiveActiveNodes > 0)
@@ -220,7 +233,7 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
                                 <span className="font-mono text-[11px] tracking-tight" aria-hidden="true">
                                     {config.levelDots}
                                 </span>
-                                <span>{effectiveStatus}</span>
+                                <span>{displayStatus}</span>
                             </span>
                         </div>
                         <p className={`text-[11px] font-medium truncate ${config.textStyle}`}>
@@ -310,7 +323,7 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
                                     <div className="flex items-center gap-3 font-medium opacity-85">
                                         {effectiveShardId !== undefined && (
                                             <span className="bg-white/70 px-2 py-0.5 rounded-md border border-current/10 font-mono">
-                                                Shard #{effectiveShardId}
+                                                {t('transfer.l2.partitionLabel', `Shard #${effectiveShardId}`, { id: effectiveShardId })}
                                             </span>
                                         )}
                                         <span className="flex items-center gap-1">

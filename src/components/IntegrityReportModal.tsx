@@ -117,9 +117,9 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
                             <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-3">{t('integrity.affectedItemsTitle')}</h3>
                             <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl p-4 border border-gray-100 dark:border-gray-800 max-h-48 overflow-y-auto font-mono text-sm">
                                 {details.items.map((item, i) => (
-                                    <div key={i} className="py-1 flex items-center gap-2">
-                                        <span className="opacity-30">•</span>
-                                        <span className="text-gray-700 dark:text-gray-200">{item}</span>
+                                    <div key={i} className="py-1 flex items-start gap-2 min-w-0">
+                                        <span className="opacity-30 shrink-0">•</span>
+                                        <span className="text-gray-700 dark:text-gray-200 break-all min-w-0">{item}</span>
                                     </div>
                                 ))}
                             </div>

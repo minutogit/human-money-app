@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { BugReportView } from '../BugReportView';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
+import { writeText as tauriWriteText } from '@tauri-apps/plugin-clipboard-manager';
 
 // Mock the Tauri opener plugin
 vi.mock('@tauri-apps/plugin-opener', () => ({
@@ -85,7 +86,7 @@ describe('BugReportView Component', () => {
 
     fireEvent.click(copyButton);
 
-    expect(writeTextMock).toHaveBeenCalledWith(mockLogs);
+    expect(tauriWriteText).toHaveBeenCalledWith(mockLogs);
     
     // Check that button shows "Copied!" feedback
     await waitFor(() => {

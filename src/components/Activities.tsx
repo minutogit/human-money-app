@@ -99,9 +99,10 @@ export function Activities() {
                     size="xs"
                     onClick={() => navigate({ view: 'transaction_history' })}
                     className="flex items-center gap-1.5 rounded-xl text-xs"
+                    title={t('history.backToStatement')}
                 >
                     <History size={14} />
-                    <span>{t('history.backToStatement')}</span>
+                    <span className="hidden sm:inline">{t('history.backToStatement')}</span>
                 </Button>
             }
         >

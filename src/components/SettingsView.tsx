@@ -10,6 +10,7 @@ import { AppSettings, PrivacyDefault, CustomServerDto, RegionalSourceDto } from 
 import { useSession } from '../context/SessionContext';
 import { useOptionalNavigation } from '../context/NavigationContext';
 import { translateError, stringifyError } from '../utils/errorHelper';
+import { copyToClipboard } from '../utils/clipboard';
 
 import { ProfileSettings } from './ProfileSettings';
 import { BackupSettingsCard } from './BackupSettingsCard';
@@ -50,6 +51,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     const { protectAction } = useSession();
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [localInstanceId, setLocalInstanceId] = useState('');
+    const [copiedDeviceId, setCopiedDeviceId] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
@@ -581,7 +583,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
                                             {/* Regional Observation Sources (Regional Mesh) */}
                                             <div className="space-y-3 pt-4 border-t border-theme-subtle">
-                                                <div className="flex items-center justify-between">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
                                                     <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
                                                         <ShieldCheck size={12} /> {t('settings.regionalMeshTitle', 'Regional Observation Sources (Regional Mesh)')}
                                                     </label>
@@ -744,13 +746,25 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                         />
                                         <Button 
                                             type="button" 
-                                            onClick={() => {
-                                                navigator.clipboard.writeText(localInstanceId);
+                                            onClick={async () => {
+                                                if (localInstanceId) {
+                                                    const ok = await copyToClipboard(localInstanceId);
+                                                    try {
+                                                        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                                                            await navigator.clipboard.writeText(localInstanceId);
+                                                        }
+                                                    } catch {}
+                                                    if (ok) {
+                                                        setCopiedDeviceId(true);
+                                                        setTimeout(() => setCopiedDeviceId(false), 2000);
+                                                    }
+                                                }
                                             }}
                                             variant="outline"
-                                            className="px-4 text-xs font-black uppercase tracking-widest"
+                                            className="px-4 text-xs font-black uppercase tracking-widest shrink-0"
+                                            title={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
                                         >
-                                            {t('settings.copyButton')}
+                                            {copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
                                         </Button>
                                     </div>
                                     <p className="text-[10px] text-theme-light/60 font-medium leading-relaxed">

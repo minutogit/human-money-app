@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Shield, ShieldCheck, ShieldAlert, ArrowRight } from 'lucide-react';
 import { VoucherTrustDto } from '../../types';
@@ -16,6 +17,75 @@ export const TrustBadge: React.FC<TrustBadgeProps> = ({
 }) => {
   const { t } = useTranslation();
   const [showPopover, setShowPopover] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number; isAbove: boolean }>({
+    top: 0,
+    left: 12,
+    isAbove: false,
+  });
+  const badgeRef = useRef<HTMLSpanElement>(null);
+  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const updateCoords = useCallback(() => {
+    if (badgeRef.current) {
+      const rect = badgeRef.current.getBoundingClientRect();
+      const isAbove = rect.top > 220;
+      const innerWidth = typeof window !== 'undefined' ? window.innerWidth : 1024;
+      const left = Math.max(12, Math.min(rect.left, innerWidth - 300));
+      const top = isAbove ? rect.top - 8 : rect.bottom + 8;
+      setCoords({ top, left, isAbove });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!showPopover) return;
+    updateCoords();
+    window.addEventListener('resize', updateCoords);
+    window.addEventListener('scroll', updateCoords, true);
+    return () => {
+      window.removeEventListener('resize', updateCoords);
+      window.removeEventListener('scroll', updateCoords, true);
+    };
+  }, [showPopover, updateCoords]);
+
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleMouseEnter = () => {
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
+    }
+    updateCoords();
+    setShowPopover(true);
+  };
+
+  const handleMouseLeave = () => {
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+    }
+    closeTimeoutRef.current = setTimeout(() => {
+      setShowPopover(false);
+    }, 120);
+  };
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
+    }
+    if (!showPopover) {
+      updateCoords();
+      setShowPopover(true);
+    } else {
+      setShowPopover(false);
+    }
+  };
 
   if (!trust) {
     return null;
@@ -84,13 +154,11 @@ export const TrustBadge: React.FC<TrustBadgeProps> = ({
   return (
     <div className="relative inline-flex items-center">
       <span
+        ref={badgeRef}
         data-testid="trust-badge"
-        onClick={(e) => {
-          e.stopPropagation();
-          setShowPopover(!showPopover);
-        }}
-        onMouseEnter={() => setShowPopover(true)}
-        onMouseLeave={() => setShowPopover(false)}
+        onClick={handleClick}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
         className={`inline-flex items-center font-bold rounded-full border select-none transition-colors cursor-pointer ${sizeClasses} ${colorClasses} ${className}`}
         role="button"
         tabIndex={0}
@@ -99,13 +167,19 @@ export const TrustBadge: React.FC<TrustBadgeProps> = ({
         <span className="truncate">{label}</span>
       </span>
 
-      {showPopover && (
+      {showPopover && createPortal(
         <div
           data-testid="trust-badge-popover"
           onClick={(e) => e.stopPropagation()}
-          onMouseEnter={() => setShowPopover(true)}
-          onMouseLeave={() => setShowPopover(false)}
-          className="absolute left-0 bottom-full mb-2 z-50 w-72 p-3 bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border border-white/20 text-xs space-y-2 pointer-events-auto"
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+          style={{
+            position: 'fixed',
+            top: `${coords.top}px`,
+            left: `${coords.left}px`,
+            transform: coords.isAbove ? 'translateY(-100%)' : undefined,
+          }}
+          className="z-[9999] w-72 p-3 bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border border-white/20 text-xs space-y-2 pointer-events-auto"
         >
           <div className="font-bold border-b border-white/10 pb-1 flex items-center justify-between text-white/90">
             <span>{t('voucher.trustBadgeModalTitle')}</span>
@@ -144,7 +218,8 @@ export const TrustBadge: React.FC<TrustBadgeProps> = ({
               {t('voucher.trustAdditionalPathsCount', { count: trust.additionalPathsCount })}
             </div>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

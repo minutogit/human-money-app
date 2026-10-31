@@ -159,20 +159,20 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
 
     return (
         <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-12">
-            <header className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-4">
+            <header className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
                     <button
                         onClick={onBack}
-                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
+                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95 shrink-0"
                         title={t('common.back')}
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                         </svg>
                     </button>
-                    <h1 className="text-2xl font-bold text-theme-primary flex items-center gap-2">
+                    <h1 className="text-xl sm:text-2xl font-bold text-theme-primary flex items-center gap-2 break-words">
                         <span>{conflictRole === 'victim' ? '🛑' : '👁️'}</span> 
-                        {conflictRole === 'victim' ? t('conflict.criticalConflictTitle') : t('conflict.observationReportTitle')}
+                        <span className="break-words">{conflictRole === 'victim' ? t('conflict.criticalConflictTitle') : t('conflict.observationReportTitle')}</span>
                     </h1>
                 </div>
                 <Button
@@ -242,7 +242,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-6">
                     <div className="bg-bg-card-alternate rounded-lg border border-theme-subtle shadow-sm p-6">
-                        <div className="flex items-center justify-between mb-4 border-b border-theme-subtle pb-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-4 border-b border-theme-subtle pb-2">
                             <h2 className="text-lg font-bold text-theme-primary">{t('conflict.offenderInfoTitle')}</h2>
                             {proof.isCryptographicallyAttributed ? (
                                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
@@ -354,7 +354,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                                     <span className="text-sm font-bold">{tx.amount}</span>
                                 </div>
                                 <div className="space-y-1 text-[10px] font-mono text-theme-light">
-                                    <p><strong>{t('conflict.evidenceId')}</strong> {tx.tId}</p>
+                                    <p className="break-all"><strong>{t('conflict.evidenceId')}</strong> {tx.tId}</p>
                                     <p><strong>{t('conflict.evidenceTime')}</strong> {formatDateTime(tx.tTime)}</p>
                                     <p><strong>{t('conflict.evidenceRecipient')}</strong> {tx.recipientId.slice(0, 20)}...</p>
                                 </div>

@@ -14,7 +14,7 @@ describe('ReceiveSuccessView payment evidence', () => {
   it.each([undefined, { status: 'final', signerCount: 15, activeNodesCount: 20, shardId: 1 }])(
     'does not confirm payment from bundle import or a claimed quorum', (l2Quorum) => {
       render(<ReceiveSuccessView payload={{ ...payload, l2Quorum: l2Quorum as L2QuorumInfo | undefined }} onDone={vi.fn()} />);
-      expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('unverified');
+      expect(screen.getByTestId('l2-status-pill')).toHaveTextContent(/Unverified|Ungeprüft/i);
       expect(screen.queryByTestId('l2-quorum-count')).not.toBeInTheDocument();
       fireEvent.click(screen.getByTestId('l2-toggle-details'));
       expect(screen.getByText(/Keine Server-Verbindung|No server connection/)).toBeInTheDocument();
@@ -31,7 +31,7 @@ describe('ReceiveSuccessView payment evidence', () => {
 
   it('retains detected conflict warnings', () => {
     render(<ReceiveSuccessView payload={{ ...payload, verifiableConflicts: { conflict: [] } }} onDone={vi.fn()} />);
-    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('conflict');
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent(/Conflict|Konflikt/i);
     expect(screen.getByTestId('pillar-1-l1')).toHaveTextContent(/Format intakt|Format intact/i);
   });
 
@@ -50,7 +50,7 @@ describe('ReceiveSuccessView payment evidence', () => {
         onDone={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('final');
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent(/Confirmed|Bestätigt/i);
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('●●');
     const goodsCard = screen.getByTestId('goods-release-card');
     expect(goodsCard).toHaveTextContent(/Ware sicher herausgeben|Safely hand over goods/i);
@@ -74,7 +74,7 @@ describe('ReceiveSuccessView payment evidence', () => {
         onDone={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('provisional');
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent(/Pending|Vorläufig/i);
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('●○');
     const goodsCard = screen.getByTestId('goods-release-card');
     expect(goodsCard).toHaveTextContent(/Ware freigegeben|Goods released/i);
@@ -98,7 +98,7 @@ describe('ReceiveSuccessView payment evidence', () => {
         onDone={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('unverified');
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent(/Unverified|Ungeprüft/i);
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('○○');
     const goodsCard = screen.getByTestId('goods-release-card');
     expect(goodsCard).toHaveTextContent(/Vertrauensbasis|Trust Basis/i);
@@ -127,7 +127,7 @@ describe('ReceiveSuccessView payment evidence', () => {
         onDone={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('conflict');
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent(/Conflict|Konflikt/i);
     expect(screen.getByTestId('goods-release-card')).toHaveTextContent(/WARE NICHT HERAUSGEBEN|DO NOT HAND OVER GOODS|Ware keinesfalls herausgeben/i);
     expect(screen.queryByTestId('merchant-approve-btn')).not.toBeInTheDocument();
   });
@@ -148,7 +148,7 @@ describe('ReceiveSuccessView payment evidence', () => {
         onDone={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('unverified');
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent(/Unverified|Ungeprüft/i);
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('○○');
     expect(screen.queryByTestId('l2-quorum-count')).not.toBeInTheDocument();
     expect(screen.getByTestId('merchant-approve-btn')).toBeInTheDocument();

@@ -44,12 +44,15 @@ export function RecipientSelector({
   const currentContact = contacts.find(c => c.did === recipientId);
 
   return (
-    <Card header={
-      <div className="flex items-center gap-2">
-        <User size={18} className="text-theme-primary"/>
-        <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.recipient')}</span>
-      </div>
-    }>
+    <Card 
+      className="!overflow-visible"
+      header={
+        <div className="flex items-center gap-2">
+          <User size={18} className="text-theme-primary"/>
+          <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.recipient')}</span>
+        </div>
+      }
+    >
       <div className="space-y-6">
         <div className="space-y-3">
           <label htmlFor="recipientId" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
@@ -66,6 +69,8 @@ export function RecipientSelector({
                 <button 
                   type="button" 
                   onClick={onClearRecipient} 
+                  title={t('common.clear')}
+                  aria-label={t('common.clear')}
                   className="p-2 hover:bg-rose-50 text-theme-light hover:text-rose-500 rounded-xl transition-all"
                 >
                   <X size={20}/>
@@ -87,7 +92,7 @@ export function RecipientSelector({
                 </div>
                 
                 {showSuggestions && (
-                  <div className="absolute z-30 w-full mt-2 bg-white/90 backdrop-blur-xl border border-theme-subtle rounded-3xl shadow-premium-lg overflow-hidden animate-in slide-in-from-top-2 duration-200">
+                  <div className="absolute z-40 w-full mt-2 bg-white/90 backdrop-blur-xl border border-theme-subtle rounded-3xl shadow-premium-lg overflow-hidden animate-in slide-in-from-top-2 duration-200">
                     {suggestions.map(contact => (
                       <button 
                         key={contact.did} 

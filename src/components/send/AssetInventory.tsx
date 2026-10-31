@@ -91,9 +91,9 @@ export function AssetInventory({
         <div className="space-y-3 pt-4 border-t border-theme-subtle/40">
           <div className="flex items-center justify-between">
             <h3 className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.availableVouchers')}</h3>
-            <button type="button" className="text-theme-primary hover:underline flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest">
+            <span title={t('transfer.sortOptimalHint')} className="text-theme-light flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest cursor-help">
               <Filter size={10}/> {t('transfer.sortOptimal')}
-            </button>
+            </span>
           </div>
           
           <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-theme-subtle">

@@ -121,13 +121,13 @@ export const VoucherCard = React.memo(({
                     
                     <div className="flex-grow flex flex-col">
                         {/* Top Section: Standard & Meta */}
-                        <div className="px-6 py-4 flex items-center justify-between border-b border-theme-subtle/30 bg-white/50">
-                            <div className="flex items-center gap-3">
-                                <span className="text-[10px] font-black text-theme-light uppercase tracking-widest">
+                        <div className="px-6 py-4 flex flex-wrap items-center justify-between gap-2 border-b border-theme-subtle/30 bg-white/50">
+                            <div className="flex items-center gap-3 min-w-0">
+                                <span className="text-[10px] font-black text-theme-light uppercase tracking-widest truncate">
                                     {voucher.displayStandardName}
                                 </span>
                                 {voucher.isTestVoucher && (
-                                    <span className="text-[9px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full uppercase tracking-tighter">
+                                    <span className="text-[9px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full uppercase tracking-tighter shrink-0">
                                         {t('voucher.testVoucher')}
                                     </span>
                                 )}

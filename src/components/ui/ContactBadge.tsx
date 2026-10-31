@@ -1,5 +1,6 @@
 // src/components/ui/ContactBadge.tsx
 import React from "react";
+import { useTranslation } from "react-i18next";
 import Avatar from "boring-avatars";
 import { Contact } from "../../types";
 
@@ -17,6 +18,7 @@ const truncateDid = (did: string | null | undefined) => {
 };
 
 export const ContactBadge: React.FC<ContactBadgeProps> = ({ did, contacts, size = 'md', onEdit }) => {
+    const { t } = useTranslation();
     if (!did) {
         return <span className={`font-mono ${size === 'sm' ? 'text-[10px]' : 'text-xs'} text-theme-light italic`}>Anonymous</span>;
     }
@@ -50,25 +52,36 @@ export const ContactBadge: React.FC<ContactBadgeProps> = ({ did, contacts, size 
     const config = sizeConfig[size];
 
     if (contact) {
+        const contactName = contact.profile.firstName || contact.profile.lastName
+            ? `${contact.profile.firstName || ''} ${contact.profile.lastName || ''}`.trim()
+            : contact.profile.organization || 'Anonymous';
+
         return (
             <div className={`flex items-center ${config.gap} ${config.padding} bg-theme-primary/5 border border-theme-primary/10 rounded-2xl shadow-inner-soft`}>
                 <div className="rounded-xl overflow-hidden flex-shrink-0 border border-theme-primary/20 bg-white">
                     <Avatar size={config.avatar} name={contact.did} variant="beam" colors={["#E63946", "#2B1B17", "#E76F51", "#F4A261", "#2A9D8F"]} />
                 </div>
                 <div className="flex-1 min-w-0 flex flex-col">
-                    <p className={`${config.name} font-black text-theme-secondary truncate uppercase tracking-tight`}>
-                        {contact.profile.firstName || contact.profile.lastName
-                            ? `${contact.profile.firstName || ''} ${contact.profile.lastName || ''}`.trim()
-                            : contact.profile.organization || 'Anonymous'}
+                    <p 
+                        className={`${config.name} font-black text-theme-secondary truncate uppercase tracking-tight`}
+                        title={contactName}
+                    >
+                        {contactName}
                     </p>
-                    <p className={`${config.text} text-theme-light font-mono opacity-60`}>{truncateDid(contact.did)}</p>
+                    <p 
+                        className={`${config.text} text-theme-light font-mono opacity-60 truncate`}
+                        title={contact.did}
+                    >
+                        {truncateDid(contact.did)}
+                    </p>
                 </div>
                 {onEdit && (
                     <button
                         type="button"
                         onClick={onEdit}
                         className="flex-shrink-0 p-1.5 rounded-xl hover:bg-theme-primary/10 text-theme-light hover:text-theme-primary transition-all"
-                        title="Edit contact"
+                        title={t('contacts.editContact', 'Edit contact')}
+                        aria-label={t('contacts.editContact', 'Edit contact')}
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
@@ -84,7 +97,12 @@ export const ContactBadge: React.FC<ContactBadgeProps> = ({ did, contacts, size 
             <div className="rounded-xl overflow-hidden flex-shrink-0 border border-slate-300 bg-white opacity-40">
                 <Avatar size={config.avatar} name={did} variant="beam" />
             </div>
-            <p className={`${config.text} text-theme-light font-mono font-bold break-all`}>{truncateDid(did)}</p>
+            <p 
+                className={`${config.text} text-theme-light font-mono font-bold break-all`}
+                title={did}
+            >
+                {truncateDid(did)}
+            </p>
         </div>
     );
 };

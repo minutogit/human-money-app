@@ -335,7 +335,7 @@ export function VoucherDetailsView() {
             description={details.displayStandardName}
             onBack={goBack}
             actions={
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
                     {canRedeemAtIssuer && (
                         <Button 
                             variant="secondary" 
@@ -367,6 +367,8 @@ export function VoucherDetailsView() {
                     <button 
                         onClick={() => setShowJson(!showJson)}
                         className={`p-2 rounded-xl transition-all ${showJson ? 'bg-theme-secondary text-white' : 'bg-white text-theme-light hover:bg-white/80 border border-theme-subtle/50 shadow-sm'}`}
+                        title={t('voucher.toggleJson')}
+                        aria-label={t('voucher.toggleJson')}
                     >
                         <Json size={18} />
                     </button>
@@ -388,6 +390,8 @@ export function VoucherDetailsView() {
                         <button
                             onClick={() => setSignatureImportFeedback(null)}
                             className="p-1 rounded-lg hover:bg-black/5"
+                            title={t('common.close')}
+                            aria-label={t('common.close')}
                         >
                             <X size={16} />
                         </button>
@@ -416,6 +420,8 @@ export function VoucherDetailsView() {
                             <button
                                 onClick={() => setSavedAskFilePath(null)}
                                 className="p-1.5 text-emerald-700 hover:text-emerald-900 rounded-lg hover:bg-emerald-100/50"
+                                title={t('common.close')}
+                                aria-label={t('common.close')}
                             >
                                 <X size={16} />
                             </button>

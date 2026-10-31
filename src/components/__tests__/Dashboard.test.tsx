@@ -172,4 +172,12 @@ describe('Dashboard Component', () => {
             });
         }
     });
+
+    it('provides copy user ID button with title attribute', async () => {
+        render(<Dashboard />);
+        await waitFor(() => {
+            const copyBtn = screen.getByTitle(/dashboard\.copyUserIdHint/i);
+            expect(copyBtn).toBeInTheDocument();
+        });
+    });
 });

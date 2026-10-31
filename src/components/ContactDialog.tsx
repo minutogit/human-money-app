@@ -4,7 +4,7 @@ import { Contact, PublicProfile } from '../types';
 import Avatar from 'boring-avatars';
 import { translateError } from '../utils/errorHelper';
 import { HelpIcon } from './ui/HelpIcon';
-import { readText } from '@tauri-apps/plugin-clipboard-manager';
+import { readFromClipboard } from '../utils/clipboard';
 import { parseContactCard } from '../utils/humocoUri';
 import { Clipboard } from 'lucide-react';
 
@@ -90,13 +90,26 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     };
 
     const handlePasteFromClipboard = async () => {
+        setError(null);
         try {
-            const text = await readText();
-            if (text) {
-                applyContactCard(text);
+            const { text, error: readError } = await readFromClipboard();
+            if (readError) {
+                setError(t('contacts.clipboardReadFailed'));
+                return;
             }
+            if (!text || !text.trim()) {
+                setError(t('contacts.emptyClipboard'));
+                return;
+            }
+            const parsed = parseContactCard(text);
+            if (!parsed) {
+                setError(t('contacts.invalidClipboardContent'));
+                return;
+            }
+            applyContactCard(text);
         } catch (e) {
             console.error("Failed to read from clipboard:", e);
+            setError(t('contacts.clipboardReadFailed'));
         }
     };
 
@@ -153,7 +166,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
             <div className="bg-bg-app border border-theme-subtle rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
                 <div className="p-6 border-b border-theme-subtle flex items-center gap-4 bg-white">
-                    <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-theme-subtle bg-bg-app">
+                    <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-theme-subtle bg-bg-app shrink-0">
                         <Avatar
                             size={64}
                             name={did || "default"}
@@ -161,11 +174,11 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                             colors={["#E63946", "#2B1B17", "#E76F51", "#F4A261", "#2A9D8F"]}
                         />
                     </div>
-                    <div>
+                    <div className="min-w-0 flex-1">
                         <h2 className="text-xl font-extrabold text-theme-secondary">
                             {existingContact ? t('contacts.editContact') : t('contacts.addNewContact')}
                         </h2>
-                        <p className="text-theme-light text-sm font-mono truncate max-w-[280px]">
+                        <p className="text-theme-light text-sm font-mono truncate w-full">
                             {did || t('contacts.enterDidBelow')}
                         </p>
                     </div>

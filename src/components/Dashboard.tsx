@@ -1,12 +1,13 @@
 // src/components/Dashboard.tsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { voucherService } from "../services/voucherService";
 import { transferService } from "../services/transferService";
 import { profileService } from "../services/profileService";
 import { contactService } from "../services/contactService";
 import { settingsService } from "../services/settingsService";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { copyToClipboard } from "../utils/clipboard";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
@@ -55,6 +56,45 @@ export function Dashboard() {
     const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
     const [balanceViewMode, setBalanceViewMode] = useState<'spendable' | 'net'>('spendable');
     const [activeInfoPopover, setActiveInfoPopover] = useState<string | null>(null);
+    const [popoverAnchorRect, setPopoverAnchorRect] = useState<DOMRect | null>(null);
+    const popoverRef = useRef<HTMLDivElement | null>(null);
+    const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!activeInfoPopover) return;
+
+        const handleScrollOrResize = () => {
+            if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+            setActiveInfoPopover(null);
+            setPopoverAnchorRect(null);
+        };
+
+        const handlePointerDown = (e: MouseEvent | TouchEvent) => {
+            const isTrigger = (e.target as Element)?.closest?.('[data-popover-trigger]');
+            if (isTrigger) return;
+            if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+                if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+                setActiveInfoPopover(null);
+                setPopoverAnchorRect(null);
+            }
+        };
+
+        window.addEventListener('scroll', handleScrollOrResize, true);
+        window.addEventListener('resize', handleScrollOrResize);
+        document.addEventListener('pointerdown', handlePointerDown);
+
+        return () => {
+            window.removeEventListener('scroll', handleScrollOrResize, true);
+            window.removeEventListener('resize', handleScrollOrResize);
+            document.removeEventListener('pointerdown', handlePointerDown);
+        };
+    }, [activeInfoPopover]);
 
     useEffect(() => {
         logger.info("Dashboard component displayed");
@@ -147,14 +187,49 @@ export function Dashboard() {
     async function handleCopyUserId() {
         if (!userId) return;
         try {
-            await writeText(userId);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
+            const ok = await copyToClipboard(userId);
+            if (ok) {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+            } else {
+                setFeedbackMsg("Error: Failed to copy User ID");
+            }
         } catch (e) {
             const msg = `Failed to copy User ID: ${stringifyError(e)}`;
             console.error(msg);
             setFeedbackMsg(`Error: ${msg}`);
         }
+    }
+
+    function calculatePopoverPosition(rect: DOMRect, popoverEl?: HTMLElement | null): { top: number; left: number } {
+        const popoverWidth = popoverEl?.offsetWidth || 256;
+        const popoverHeight = popoverEl?.offsetHeight || 180;
+        const margin = 12;
+
+        let left = rect.right - popoverWidth;
+        if (left < margin) {
+            left = margin;
+        }
+        if (typeof window !== 'undefined' && left + popoverWidth > window.innerWidth - margin) {
+            left = window.innerWidth - popoverWidth - margin;
+        }
+
+        const spaceBelow = typeof window !== 'undefined' ? window.innerHeight - rect.bottom - margin : 300;
+        let top: number;
+        if (spaceBelow < popoverHeight && rect.top > popoverHeight + margin) {
+            top = rect.top - popoverHeight - 8;
+        } else {
+            top = rect.bottom + 8;
+        }
+
+        if (top < margin) {
+            top = margin;
+        }
+        if (typeof window !== 'undefined' && top + popoverHeight > window.innerHeight - margin) {
+            top = window.innerHeight - popoverHeight - margin;
+        }
+
+        return { top, left };
     }
 
     function formatAmount(amountStr: string): string {
@@ -215,20 +290,21 @@ export function Dashboard() {
             customHeader={
                 <header className="flex-shrink-0 sticky top-0 z-30 px-6 py-2 glass-panel border-b-0 rounded-b-3xl mb-4">
                     <div className="flex items-center justify-between gap-3 text-[10px] sm:text-xs font-bold text-theme-light">
-                        <div className="flex items-center gap-3">
-                            <span className="relative flex h-2 w-2">
+                        <div className="flex items-center gap-3 min-w-0">
+                            <span className="relative flex h-2 w-2 shrink-0">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                                 <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
                             </span>
-                            <div className="flex items-center gap-1.5 px-2 py-1 bg-white/50 rounded-full border border-theme-subtle/30 shadow-inner-soft">
-                                <UserCircle size={12} className="text-theme-primary" />
-                                <span className="text-theme-secondary">{profileName}</span>
+                            <div className="flex items-center gap-1.5 px-2 py-1 bg-white/50 rounded-full border border-theme-subtle/30 shadow-inner-soft min-w-0">
+                                <UserCircle size={12} className="text-theme-primary shrink-0" />
+                                <span className="text-theme-secondary truncate">{profileName}</span>
                             </div>
                         </div>
                         
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 shrink-0">
                             <button 
                                 onClick={handleCopyUserId}
+                                title={t('dashboard.copyUserIdHint', { id: userId })}
                                 className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-all duration-300 border ${
                                     copied 
                                     ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
@@ -325,20 +401,20 @@ export function Dashboard() {
                     {showBackupReminder && (
                         <Card 
                             variant="glass" 
-                            className="py-2 px-4 flex items-center justify-between border-l-4 border-l-theme-primary"
+                            className="py-2 px-4 flex flex-wrap gap-3 items-center justify-between border-l-4 border-l-theme-primary"
                             hover
                             onClick={() => navigate({ view: 'settings' })}
                         >
-                            <div className="flex items-center gap-4">
-                                <div className="p-2 rounded-xl bg-theme-primary text-white">
+                            <div className="flex items-center gap-4 min-w-0">
+                                <div className="p-2 rounded-xl bg-theme-primary text-white shrink-0">
                                     <Archive size={20} />
                                 </div>
-                                <div>
-                                    <p className="font-bold text-sm text-theme-secondary">{t('dashboard.backupReminderTitle')}</p>
-                                    <p className="text-xs opacity-70">{t('dashboard.backupReminderDesc')}</p>
+                                <div className="min-w-0">
+                                    <p className="font-bold text-sm text-theme-secondary truncate">{t('dashboard.backupReminderTitle')}</p>
+                                    <p className="text-xs opacity-70 truncate">{t('dashboard.backupReminderDesc')}</p>
                                 </div>
                             </div>
-                            <Button variant="primary" size="xs" className="shadow-none">{t('dashboard.backupReminderButton')}</Button>
+                            <Button variant="primary" size="xs" className="shadow-none shrink-0">{t('dashboard.backupReminderButton')}</Button>
                         </Card>
                     )}
                 </div>
@@ -413,52 +489,37 @@ export function Dashboard() {
                                                 <div className="relative">
                                                     <button
                                                         type="button"
+                                                        data-popover-trigger={balance.standardUuid}
                                                         onClick={(e) => {
                                                             e.stopPropagation();
-                                                            setActiveInfoPopover(prev => prev === balance.standardUuid ? null : balance.standardUuid);
+                                                            if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+                                                            const rect = e.currentTarget.getBoundingClientRect();
+                                                            if (activeInfoPopover === balance.standardUuid) {
+                                                                setActiveInfoPopover(null);
+                                                                setPopoverAnchorRect(null);
+                                                            } else {
+                                                                setActiveInfoPopover(balance.standardUuid);
+                                                                setPopoverAnchorRect(rect);
+                                                            }
                                                         }}
-                                                        onMouseEnter={() => setActiveInfoPopover(balance.standardUuid)}
-                                                        onMouseLeave={() => setActiveInfoPopover(null)}
+                                                        onMouseEnter={(e) => {
+                                                            if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+                                                            const rect = e.currentTarget.getBoundingClientRect();
+                                                            setActiveInfoPopover(balance.standardUuid);
+                                                            setPopoverAnchorRect(rect);
+                                                        }}
+                                                        onMouseLeave={() => {
+                                                            closeTimerRef.current = setTimeout(() => {
+                                                                setActiveInfoPopover(null);
+                                                                setPopoverAnchorRect(null);
+                                                            }, 200);
+                                                        }}
                                                         className="p-1 rounded-full bg-white/20 hover:bg-white/30 text-white transition-colors"
                                                         title={t('dashboard.balanceDetailsTooltip')}
                                                         aria-label={t('dashboard.balanceDetailsTooltip')}
                                                     >
                                                         <Info size={14} />
                                                     </button>
-                                                    {activeInfoPopover === balance.standardUuid && (
-                                                        <div 
-                                                            onClick={(e) => e.stopPropagation()}
-                                                            className="absolute right-0 top-7 z-50 w-64 p-3 bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border border-white/20 text-xs space-y-2 pointer-events-auto"
-                                                        >
-                                                            <div className="font-bold border-b border-white/10 pb-1 text-white/90">
-                                                                {t('dashboard.balanceBreakdownTitle')}
-                                                            </div>
-                                                            <div className="flex justify-between items-center text-white/80">
-                                                                <span>{t('dashboard.breakdownReceived')}:</span>
-                                                                <span className="font-mono font-bold text-emerald-400">
-                                                                    +{formatAmount(balance.receivedAmount || balance.totalAmount)}
-                                                                </span>
-                                                            </div>
-                                                            <div className="flex justify-between items-center text-white/80">
-                                                                <span>{t('dashboard.breakdownOwnAvailable')}:</span>
-                                                                <span className="font-mono font-bold text-sky-400">
-                                                                    +{formatAmount(balance.ownAvailableAmount || "0")}
-                                                                </span>
-                                                            </div>
-                                                            <div className="flex justify-between items-center text-white/80">
-                                                                <span>{t('dashboard.breakdownOwnCirculating')}:</span>
-                                                                <span className="font-mono font-bold text-amber-400">
-                                                                    -{formatAmount(balance.ownCirculatingAmount || "0")}
-                                                                </span>
-                                                            </div>
-                                                            <div className="border-t border-white/10 pt-1 flex justify-between items-center font-bold">
-                                                                <span className="text-white/90">{t('dashboard.breakdownNet')}:</span>
-                                                                <span className={`font-mono ${parseFloat(balance.netBalance || "0") < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                                                                    {formatNetBalance(balance.netBalance || balance.totalAmount)}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                    )}
                                                 </div>
                                             </div>
                                         </div>
@@ -622,6 +683,59 @@ export function Dashboard() {
                     onClose={() => setShowIntegrityModal(false)} 
                 />
             )}
+
+            {activeInfoPopover && popoverAnchorRect && typeof document !== 'undefined' && (() => {
+                const activeBalance = balances.find(b => b.standardUuid === activeInfoPopover);
+                if (!activeBalance) return null;
+                const pos = calculatePopoverPosition(popoverAnchorRect, popoverRef.current);
+
+                return createPortal(
+                    <div 
+                        ref={popoverRef}
+                        style={{ top: `${pos.top}px`, left: `${pos.left}px` }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseEnter={() => {
+                            if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+                        }}
+                        onMouseLeave={() => {
+                            closeTimerRef.current = setTimeout(() => {
+                                setActiveInfoPopover(null);
+                                setPopoverAnchorRect(null);
+                            }, 200);
+                        }}
+                        className="fixed z-[9999] w-64 p-3 bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border border-white/20 text-xs space-y-2 pointer-events-auto animate-in fade-in zoom-in-95 duration-150"
+                    >
+                        <div className="font-bold border-b border-white/10 pb-1 text-white/90">
+                            {t('dashboard.balanceBreakdownTitle')}
+                        </div>
+                        <div className="flex justify-between items-center text-white/80">
+                            <span>{t('dashboard.breakdownReceived')}:</span>
+                            <span className="font-mono font-bold text-emerald-400">
+                                +{formatAmount(activeBalance.receivedAmount || activeBalance.totalAmount)}
+                            </span>
+                        </div>
+                        <div className="flex justify-between items-center text-white/80">
+                            <span>{t('dashboard.breakdownOwnAvailable')}:</span>
+                            <span className="font-mono font-bold text-sky-400">
+                                +{formatAmount(activeBalance.ownAvailableAmount || "0")}
+                            </span>
+                        </div>
+                        <div className="flex justify-between items-center text-white/80">
+                            <span>{t('dashboard.breakdownOwnCirculating')}:</span>
+                            <span className="font-mono font-bold text-amber-400">
+                                -{formatAmount(activeBalance.ownCirculatingAmount || "0")}
+                            </span>
+                        </div>
+                        <div className="border-t border-white/10 pt-1 flex justify-between items-center font-bold">
+                            <span className="text-white/90">{t('dashboard.breakdownNet')}:</span>
+                            <span className={`font-mono ${parseFloat(activeBalance.netBalance || "0") < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                {formatNetBalance(activeBalance.netBalance || activeBalance.totalAmount)}
+                            </span>
+                        </div>
+                    </div>,
+                    document.body
+                );
+            })()}
         </PageLayout>
     );
 }
