@@ -404,6 +404,7 @@ mod tests {
             contacts: Mutex::new(Some(Default::default())),
             settings: Mutex::new(Some(AppSettings::default())),
             regional_views: Mutex::new(None),
+            wot: Mutex::new(None),
         };
 
         // We can't call the command directly easily because of tauri::State, 

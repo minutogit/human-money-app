@@ -24,7 +24,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*};
+use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*};
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
 
@@ -99,6 +99,7 @@ pub fn run() {
                 contacts: Mutex::new(None),
                 settings: Mutex::new(None),
                 regional_views: Mutex::new(None),
+                wot: Mutex::new(None),
             });
             spawn_regional_view_renewal_worker(app.handle().clone());
             crate::intent_reconciliation::spawn_intent_reconciliation_worker(app.handle().clone());
@@ -167,7 +168,9 @@ pub fn run() {
             // Integrity
             check_wallet_integrity, repair_wallet_integrity,
             // Wallet Backups
-            probe_wallet_backup, export_wallet_backup_file, sync_wallet_backup_folder, inspect_wallet_backup, restore_wallet_backup
+            probe_wallet_backup, export_wallet_backup_file, sync_wallet_backup_folder, inspect_wallet_backup, restore_wallet_backup,
+            // Web of Trust (WoT)
+            get_wot_summary, export_wot_package, import_wot_package, evaluate_voucher_trust_preview
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

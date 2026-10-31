@@ -276,6 +276,8 @@ pub struct ReceiveSuccessPayload {
     pub newly_committed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_replay: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wot_imported_lists: Option<usize>,
 }
 
 #[derive(Serialize, Clone, Debug)]

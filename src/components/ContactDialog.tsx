@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Contact, PublicProfile } from '../types';
 import Avatar from 'boring-avatars';
 import { translateError } from '../utils/errorHelper';
+import { HelpIcon } from './ui/HelpIcon';
 
 interface ContactDialogProps {
     isOpen: boolean;
@@ -29,10 +30,12 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [tags, setTags] = useState<string[]>([]);
     const [notes, setNotes] = useState('');
     const [newTag, setNewTag] = useState('');
+    const [trustLevel, setTrustLevel] = useState<number | null>(existingContact?.trustLevel ?? null);
+    const [desiredHops, setDesiredHops] = useState<number>(existingContact?.desiredHops ?? 3);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    const predefinedTags = ["Friends", "Business", "Favorites", "Trusted"];
+    const predefinedTags = ["Friends", "Business", "Favorites"];
     const availableTags = Array.from(new Set([...predefinedTags, ...tags]));
 
     useEffect(() => {
@@ -43,11 +46,17 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setOrganization(existingContact.profile.organization || '');
             setTags(existingContact.tags);
             setNotes(existingContact.notes || '');
+            setTrustLevel(existingContact.trustLevel ?? null);
+            setDesiredHops(existingContact.desiredHops ?? 3);
         } else if (initialProfile) {
             setFirstName(initialProfile.firstName || '');
             setLastName(initialProfile.lastName || '');
             setOrganization(initialProfile.organization || '');
             if (initialDid) setDid(initialDid);
+            setTags([]);
+            setNotes('');
+            setTrustLevel(null);
+            setDesiredHops(3);
         } else {
             // Reset for new contact
             setDid(initialDid || '');
@@ -56,6 +65,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setOrganization('');
             setTags([]);
             setNotes('');
+            setTrustLevel(null);
+            setDesiredHops(3);
         }
     }, [existingContact, initialProfile, initialDid, isOpen]);
 
@@ -78,6 +89,10 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 tags,
                 notes: notes.trim() || undefined,
                 addedAt: existingContact?.addedAt || new Date().toISOString(),
+                trustLevel: trustLevel,
+                desiredHops: trustLevel === null ? null : (trustLevel === 0 ? 0 : desiredHops),
+                hasPeerList: existingContact?.hasPeerList,
+                peerListUpdatedAt: existingContact?.peerListUpdatedAt,
             };
             await onSave(contact);
             onClose();
@@ -175,6 +190,111 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                             placeholder={t('contacts.organizationPlaceholder')}
                             className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm"
                         />
+                    </div>
+
+                    {/* Personal Trust Rating */}
+                    <div className="space-y-2 pt-1 border-t border-theme-subtle/50">
+                        <div className="flex items-center gap-1.5">
+                            <label className="text-xs font-bold text-theme-light uppercase tracking-widest">
+                                {t('contacts.trustSectionLabel')}
+                            </label>
+                            <HelpIcon topic="wotNetwork" size={14} />
+                        </div>
+                        <p className="text-[11px] text-theme-light leading-tight">
+                            {t('contacts.trustNetworkHint')}
+                        </p>
+                        <div className="space-y-1.5 pt-1">
+                            {[
+                                {
+                                    level: null,
+                                    labelKey: 'contacts.trustLevelUnrated',
+                                    descKey: 'contacts.trustLevelUnratedDesc',
+                                    colorClass: 'border-slate-200 hover:border-slate-300',
+                                    activeClass: 'border-slate-400 bg-slate-50 text-slate-800 ring-2 ring-slate-400/20 shadow-sm'
+                                },
+                                {
+                                    level: 0,
+                                    labelKey: 'contacts.trustLevel0',
+                                    descKey: 'contacts.trustLevel0Desc',
+                                    colorClass: 'border-sky-200 hover:border-sky-300',
+                                    activeClass: 'border-sky-500 bg-sky-50/70 text-sky-900 ring-2 ring-sky-400/20 shadow-sm'
+                                },
+                                {
+                                    level: 1,
+                                    labelKey: 'contacts.trustLevel1',
+                                    descKey: 'contacts.trustLevel1Desc',
+                                    colorClass: 'border-amber-200 hover:border-amber-300',
+                                    activeClass: 'border-amber-500 bg-amber-50/70 text-amber-900 ring-2 ring-amber-400/20 shadow-sm'
+                                },
+                                {
+                                    level: 2,
+                                    labelKey: 'contacts.trustLevel2',
+                                    descKey: 'contacts.trustLevel2Desc',
+                                    colorClass: 'border-teal-200 hover:border-teal-300',
+                                    activeClass: 'border-teal-500 bg-teal-50/70 text-teal-900 ring-2 ring-teal-400/20 shadow-sm'
+                                },
+                                {
+                                    level: 3,
+                                    labelKey: 'contacts.trustLevel3',
+                                    descKey: 'contacts.trustLevel3Desc',
+                                    colorClass: 'border-emerald-300 hover:border-emerald-400',
+                                    activeClass: 'border-emerald-600 bg-emerald-50 text-emerald-950 ring-2 ring-emerald-500/20 shadow-sm'
+                                }
+                            ].map((opt) => {
+                                const isSelected = trustLevel === opt.level;
+                                return (
+                                    <button
+                                        key={opt.level ?? 'unrated'}
+                                        type="button"
+                                        onClick={() => setTrustLevel(opt.level)}
+                                        className={`w-full text-left p-2.5 rounded-xl border transition-all text-xs flex flex-col gap-0.5 ${
+                                            isSelected ? opt.activeClass : `bg-white ${opt.colorClass} text-theme-secondary`
+                                        }`}
+                                    >
+                                        <span className="font-bold flex items-center justify-between">
+                                            <span>{t(opt.labelKey)}</span>
+                                            {isSelected && <span className="text-[10px] font-black uppercase tracking-wider opacity-75">✓</span>}
+                                        </span>
+                                        <span className="text-[11px] opacity-80 font-normal">
+                                            {t(opt.descKey)}
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {/* Recommendation Reach Selector */}
+                        {trustLevel !== null && trustLevel >= 1 && (
+                            <div className="space-y-1.5 pt-2 animate-in fade-in duration-200">
+                                <label className="block text-xs font-bold text-theme-light uppercase tracking-widest">
+                                    {t('contacts.reachabilityLabel')}
+                                </label>
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                    {[
+                                        { hops: 0, labelKey: 'contacts.reachPrivate' },
+                                        { hops: 1, labelKey: 'contacts.reachDirect' },
+                                        { hops: 3, labelKey: 'contacts.reachStandard' },
+                                        { hops: 6, labelKey: 'contacts.reachWide' }
+                                    ].map(({ hops, labelKey }) => {
+                                        const isSelected = desiredHops === hops;
+                                        return (
+                                            <button
+                                                key={hops}
+                                                type="button"
+                                                onClick={() => setDesiredHops(hops)}
+                                                className={`py-2 px-2.5 rounded-xl text-xs font-bold border text-center transition-all ${
+                                                    isSelected
+                                                        ? 'bg-theme-secondary border-theme-secondary text-white shadow-sm'
+                                                        : 'bg-white border-theme-subtle text-theme-light hover:border-theme-primary/30'
+                                                }`}
+                                            >
+                                                {t(labelKey)}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     <div>

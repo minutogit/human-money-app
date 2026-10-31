@@ -3,10 +3,16 @@ project: human-money-app
 version: "0.3.0"
 phase: "beta"
 health: "green"
-last_updated: "2026-10-30"
+last_updated: "2026-10-31"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-044"
+    title: "Full Offline-First Web of Trust Integration (Contacts, Voucher TrustBadges, .wot Exchange, Piggybacking & s_wot)"
+    status: "completed"
+    priority: "high"
+    depends_on: ["CORE-001", "CORE-010", "WOT-005"]
+    description: "Integrated `humoco-wot` end-to-end across Tauri backend and React 19 UI (EN/DE/ES/FR/IT): encrypted `wot_register` synchronized atomically with `AddressBook` (canonical DID deduplication, zero auto-migration of legacy tags), human-semantic contact trust levels & reach selector in `ContactDialog`, `<TrustBadge />` (color + percentage + primary bridge contact + path view) across `VoucherCard`, `VoucherDetailsView`, `ReceiveSuccessView`, and `SignRequestView`, authenticated `.wot` file export/import (`TargetDid` & `Password`), automatic 2-phase delta piggybacking in Public & Stealth transfers for `level >= 1` contacts, recipient-perspective `s_wot` coin selection, and 1-click conflict trust revocation in `ConflictDetailsView`."
   - id: "APP-043"
     title: "Real WalletSeal Anchor Upload, L2 Voucher Reconciliation, PoS Trust Fallback & SST V4 Forensics"
     status: "completed"
@@ -116,11 +122,11 @@ priority_tasks:
     depends_on: []
     description: "Centralized application state and navigation logic into React Contexts. Eliminated prop-drilling across the core view hierarchy for improved maintainability."
   - id: "APP-002"
-    title: "Trust level display for contacts"
-    status: "open"
-    priority: "low"
+    title: "Trust level display for contacts & vouchers"
+    status: "completed"
+    priority: "high"
     depends_on: ["CORE-001", "WOT-005"]
-    description: "Visual trust badges and verification status in contact views (Post-MVP)"
+    description: "Delivered in APP-044: Human-semantic contact trust ratings, network overview banner, and color/percentage/bridge-contact <TrustBadge /> across contact, voucher, sign-request, and receive views."
   - id: "APP-003"
     title: "Stranger discovery workflow (BLE/NFC)"
     status: "open"
@@ -277,20 +283,19 @@ priority_tasks:
 
 ## Current Focus
 
-Tauri v2 desktop wallet prototype. Core voucher workflows (create, send, receive) are functional. Needs stabilization and WoT-based contact management.
+Tauri v2 desktop/mobile wallet (`v0.3.0` Beta). Core voucher workflows, L2 PoS checkout & reconciliation, encrypted differential backups, and full Offline-First Web of Trust (`humoco-wot`) contact ratings, `<TrustBadge />` scoring, `.wot` file exchange, and transaction piggybacking are integrated across 5 locales.
 
 ## Architecture
 
 - **Frontend**: React 19 + TypeScript + Tailwind CSS v4
-- **Backend**: Rust (Tauri v2), thin bridge to `human_money_core` via Tauri commands
-- **Core dependency**: `human_money_core` via git in `Cargo.toml`. Local development uses git-ignored `src-tauri/.cargo/config.toml` for `[patch]` to ensure CI compatibility.
-- **13 UI components**: Dashboard, CreateVoucher, SendView, ReceiveView, TransactionHistory, Settings, Login, etc.
-- **5 Tauri command modules**: actions, auth, queries, utils
+- **Backend**: Rust (Tauri v2), thin bridge to `human_money_core` and `humoco_wot` via Tauri commands
+- **Core & WoT dependencies**: `human_money_core` and `humoco-wot` via git in `Cargo.toml`. Local development uses git-ignored `src-tauri/.cargo/config.toml` for `[patch]` to ensure CI compatibility.
+- **UI components**: Dashboard, CreateVoucher, SendView, ReceiveView, VoucherDetailsView, AddressBook, SignRequestView, ConflictDetailsView, TransactionHistory, Settings, Login, etc.
+- **Tauri command modules**: auth, backups, contacts, profile, queries, settings, standards, transfers, vouchers, wallet, wot
 
 ## Known Issues
 
-- No WoT integration (depends on CORE-001 and WOT-005)
-- Alpha stability — some UI edge cases unpolished
+- Optional BLE/NFC face-to-face stranger discovery (`APP-003`) remains Post-MVP (standalone `.wot` files and transaction piggybacking cover offline/online MVP exchange).
 
 ## Recent Milestones
 
@@ -464,3 +469,7 @@ new intent reconciliation tests).
 ### 2026-10-30 — v0.3.0: Encrypted Backups, Serverless-Ready L2 UX & Session Stabilization
 
 Bumped `human-money-app` to v0.3.0. Integrated Core encrypted backups (`.hmcbackup` / differential sync folder) and 2-path restore wizard (`APP-041`). Introduced serverless quiet mode for regional mesh renewal and intent reconciliation, 3-state network status badge, and network settings hardening (`APP-042`). Wired real WalletSeal anchor sync, network-backed rollback reconciliation, voucher L2 status queries, and durable PoS checkout recording (`APP-043`). Resolved session timeout state preservation and fixed immediate auto-lock when `sessionTimeoutSeconds = 0` (`APP-017`). All 31 Rust unit tests and TypeScript suites pass offline.
+
+### 2026-10-31 — Full Offline-First Web of Trust Integration (`APP-002` / `APP-044`)
+
+Integrated `humoco-wot` across the Tauri host and React 19 UI in all 5 locales (EN, DE, ES, FR, IT). Added encrypted `wot_register` state synchronized atomically with `AddressBook` (canonical DID matching, no auto-migration of free-text tags), human-semantic contact trust ratings and recommendation reach controls, `<TrustBadge />` (color + percentage + primary bridge contact + connection path) across voucher cards/details/receive/sign-request views, Ed25519-authenticated `.wot` trust file export/import (`TargetDid` & `Password`), automatic 2-phase delta piggybacking inside Public & Stealth `TransactionBundle`s for rated (`level >= 1`) contacts, `s_wot` Gravitational Coin Selection bonus, and 1-click trust revocation on verified double-spend conflicts.

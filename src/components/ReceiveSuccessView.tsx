@@ -1,11 +1,13 @@
 // src/components/ReceiveSuccessView.tsx
 import { useEffect, useState } from "react";
-import { ReceiveSuccessPayload, TrustStatus, L2QuorumInfo } from "../types";
+import { ReceiveSuccessPayload, TrustStatus, L2QuorumInfo, VoucherTrustDto } from "../types";
 import { Button } from "./ui/Button";
 import { L2QuorumBadge } from "./ui/L2QuorumBadge";
+import { TrustBadge } from "./ui/TrustBadge";
 import { logger } from '../utils/log';
 import { stringifyError } from '../utils/errorHelper';
 import { profileService } from "../services/profileService";
+import { voucherService } from "../services/voucherService";
 import { useTranslation } from "react-i18next";
 import { 
     CheckCircle2, 
@@ -29,6 +31,23 @@ interface ReceiveSuccessViewProps {
 export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps) {
     const { t } = useTranslation();
     const [trustStatus, setTrustStatus] = useState<TrustStatus>("clean");
+    const [trustByLocalId, setTrustByLocalId] = useState<Record<string, VoucherTrustDto>>({});
+
+    useEffect(() => {
+        if (payload.involvedVouchers && payload.involvedVouchers.length > 0) {
+            voucherService.getSummaries()
+                .then(summaries => {
+                    const map: Record<string, VoucherTrustDto> = {};
+                    for (const s of summaries) {
+                        if (s.trust) {
+                            map[s.localInstanceId] = s.trust;
+                        }
+                    }
+                    setTrustByLocalId(map);
+                })
+                .catch(e => logger.error(`Failed to fetch voucher trust summaries: ${stringifyError(e)}`));
+        }
+    }, [payload.involvedVouchers]);
 
     function formatAmount(amountStr: string): string {
         const num = parseFloat(amountStr);
@@ -303,6 +322,13 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                                 </p>
                             </div>
                             
+                            {(payload.wotImportedLists ?? 0) > 0 && (
+                                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-800 rounded-xl border border-emerald-200 text-[10px] font-bold">
+                                    <ShieldCheck size={13} className="text-emerald-600 shrink-0" />
+                                    <span>{t('transfer.receiveSuccess.wotSyncedBadge')}</span>
+                                </div>
+                            )}
+
                             {/* Reputation Warning */}
                             {typeof trustStatus === 'object' && 'knownOffender' in trustStatus && (
                                 <div className="flex items-center gap-2 px-3 py-2 bg-rose-50 rounded-xl border border-rose-100">
@@ -338,9 +364,12 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                                             <div className="w-1.5 h-1.5 rounded-full bg-theme-primary/40"></div>
                                             <span className="text-[11px] font-bold text-theme-secondary">{detail.standardName}</span>
                                         </div>
-                                        <span className="text-[11px] font-black text-theme-primary">
-                                            {detail.amount} {detail.unit}
-                                        </span>
+                                        <div className="flex items-center gap-2">
+                                            <TrustBadge trust={trustByLocalId[detail.localInstanceId]} size="sm" />
+                                            <span className="text-[11px] font-black text-theme-primary">
+                                                {detail.amount} {detail.unit}
+                                            </span>
+                                        </div>
                                     </div>
                                 ))}
                             </div>

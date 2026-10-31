@@ -8,6 +8,7 @@ use crate::settings::{AppSettings, SETTINGS_KEY};
 
 pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
 pub const CONTACTS_DATA_NAME: &str = "address_book";
+pub const WOT_DATA_NAME: &str = "wot_register";
 
 pub struct AppState {
     pub service: Mutex<AppService>,
@@ -16,6 +17,7 @@ pub struct AppState {
     pub contacts: Mutex<Option<crate::models::FrontendAddressBook>>,
     pub settings: Mutex<Option<AppSettings>>,
     pub(crate) regional_views: Mutex<Option<crate::checkout::RegionalViewCache>>,
+    pub wot: Mutex<Option<humoco_wot::TrustRegister>>,
 }
 
 impl AppState {
@@ -62,7 +64,11 @@ impl AppState {
     pub fn get_cached_contacts(&self) -> Result<Vec<FrontendContact>, AppFacadeError> {
         let cache = self.contacts.lock().unwrap();
         if let Some(book) = cache.as_ref() {
+            let wot_guard = self.wot.lock().unwrap();
             let mut contacts: Vec<FrontendContact> = book.contacts.values().cloned().collect();
+            for c in contacts.iter_mut() {
+                enrich_contact_with_wot(c, wot_guard.as_ref());
+            }
             contacts.sort_by(|a, b| {
                 let name_a = a.profile.first_name.as_deref().unwrap_or("");
                 let name_b = b.profile.first_name.as_deref().unwrap_or("");
@@ -86,7 +92,11 @@ impl AppState {
 
                 *self.contacts.lock().unwrap() = Some(address_book.clone());
 
+                let wot_guard = self.wot.lock().unwrap();
                 let mut contacts: Vec<FrontendContact> = address_book.contacts.into_values().collect();
+                for c in contacts.iter_mut() {
+                    enrich_contact_with_wot(c, wot_guard.as_ref());
+                }
                 contacts.sort_by(|a, b| {
                     let name_a = a.profile.first_name.as_deref().unwrap_or("");
                     let name_b = b.profile.first_name.as_deref().unwrap_or("");
@@ -111,7 +121,7 @@ impl AppState {
         }
     }
 
-    pub fn save_contact(&self, service: &mut AppService, contact: FrontendContact, password: Option<&str>) -> Result<(), AppFacadeError> {
+    pub fn save_contact(&self, service: &mut AppService, mut contact: FrontendContact, password: Option<&str>) -> Result<(), AppFacadeError> {
         let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
             Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data).unwrap_or_default(),
             Err(e) => {
@@ -121,6 +131,61 @@ impl AppState {
                 FrontendAddressBook::default()
             }
         };
+
+        let can_did = canonicalize_did(&contact.did)
+            .map_err(|e| AppFacadeError::Generic(format!("Invalid contact DID: {}", e)))?;
+
+        // Deduplicate address_book.contacts by canonical DID
+        let keys_to_remove: Vec<String> = address_book.contacts.keys()
+            .filter(|k| {
+                if *k == &contact.did {
+                    false
+                } else if let Ok(k_can) = canonicalize_did(k) {
+                    k_can == can_did
+                } else {
+                    false
+                }
+            })
+            .cloned()
+            .collect();
+
+        for k in keys_to_remove {
+            if let Some(old) = address_book.contacts.remove(&k) {
+                if contact.added_at.is_empty() {
+                    contact.added_at = old.added_at;
+                }
+            }
+        }
+
+        // Synchronize TrustRegister if wallet is unlocked
+        if service.with_wallet(|_| ()).is_ok() {
+            let mut reg = self.get_or_load_wot_register(service, password)?;
+            let now_secs = Utc::now().timestamp() as u64;
+
+            if let Some(level) = contact.trust_level {
+                if level > 3 {
+                    return Err(AppFacadeError::Generic(format!("Invalid trust level: {}", level)));
+                }
+                let hops = if level == 0 { 0 } else { contact.desired_hops.unwrap_or(3).min(8) };
+                reg.set_contact_trust(&can_did, level, hops, now_secs)
+                    .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
+                reg.prune_unreachable_lists();
+                self.ensure_wot_list_signed(service, &mut reg)?;
+                self.save_wot_register(service, &reg, password)?;
+                contact.trust_level = Some(level);
+                contact.desired_hops = Some(hops);
+            } else {
+                let removed = reg.remove_contact_trust(&can_did)
+                    .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
+                if removed {
+                    reg.prune_unreachable_lists();
+                    if reg.own_list_dirty {
+                        self.ensure_wot_list_signed(service, &mut reg)?;
+                    }
+                    self.save_wot_register(service, &reg, password)?;
+                }
+            }
+        }
 
         address_book.contacts.insert(contact.did.clone(), contact);
 
@@ -145,7 +210,20 @@ impl AppState {
             }
         };
 
-        if address_book.contacts.remove(did).is_some() {
+        let can_target = canonicalize_did(did).ok();
+        let keys_to_remove: Vec<String> = address_book.contacts.keys()
+            .filter(|k| *k == did || (can_target.is_some() && canonicalize_did(k).ok() == can_target))
+            .cloned()
+            .collect();
+
+        let mut changed = false;
+        for k in keys_to_remove {
+            if address_book.contacts.remove(&k).is_some() {
+                changed = true;
+            }
+        }
+
+        if changed {
             let data = serde_json::to_vec(&address_book)
                 .map_err(|e| AppFacadeError::Json(format!("Failed to serialize address book: {}", e)))?;
 
@@ -154,6 +232,22 @@ impl AppState {
 
             *self.contacts.lock().unwrap() = Some(address_book);
         }
+
+        if service.with_wallet(|_| ()).is_ok() {
+            if let Ok(mut reg) = self.get_or_load_wot_register(service, password) {
+                let target_key = can_target.as_deref().unwrap_or(did);
+                if let Ok(removed) = reg.remove_contact_trust(target_key) {
+                    if removed {
+                        reg.prune_unreachable_lists();
+                        if reg.own_list_dirty {
+                            self.ensure_wot_list_signed(service, &mut reg)?;
+                        }
+                        self.save_wot_register(service, &reg, password)?;
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -223,10 +317,11 @@ impl AppState {
         *self.events.lock().unwrap() = None;
         *self.contacts.lock().unwrap() = None;
         *self.settings.lock().unwrap() = None;
+        *self.wot.lock().unwrap() = None;
     }
 
     /// Central session initializer — called after Login, Create Profile, Recovery, and Handover.
-    /// Loads all caches (Settings, History, Events, Contacts) and starts the session timer.
+    /// Loads all caches (Settings, History, Events, Contacts, WoT) and starts the session timer.
     pub fn initialize_profile_session(
         &self,
         service: &mut AppService,
@@ -279,6 +374,344 @@ impl AppState {
         // 5. Load the address book
         let _ = self.load_contacts(service, Some(password));
 
+        // 6. Load the Web of Trust register
+        self.load_wot_register(service, Some(password))?;
+
         Ok(())
+    }
+
+    // 7. Web of Trust (WoT) Helpers
+    pub fn ensure_wot_list_signed(
+        &self,
+        service: &mut AppService,
+        reg: &mut humoco_wot::TrustRegister,
+    ) -> Result<bool, AppFacadeError> {
+        let now_secs = Utc::now().timestamp() as u64;
+        service.with_wallet_and_identity(|_wallet, identity| {
+            let signer = CoreIdentitySigner::new(identity);
+            reg.ensure_own_list_signed(&signer, now_secs)
+                .map_err(|e| AppFacadeError::Generic(format!("Failed to sign WoT trust list: {}", e)))
+        })?
+    }
+
+    pub fn load_wot_register(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<humoco_wot::TrustRegister, AppFacadeError> {
+        info!("Loading WoT register from disk...");
+        let own_user_id = service.with_wallet(|w| w.get_user_id().to_string())?;
+        let own_can_did = canonicalize_did(&own_user_id)
+            .map_err(|e| AppFacadeError::Generic(format!("Invalid own wallet DID: {}", e)))?;
+        let reg = match service.load_encrypted_data(WOT_DATA_NAME, password) {
+            Ok(data) => {
+                serde_json::from_slice::<humoco_wot::TrustRegister>(&data)
+                    .map_err(|e| AppFacadeError::Json(format!("Failed to deserialize TrustRegister: {}", e)))?
+            }
+            Err(e) => {
+                if matches!(&e, AppFacadeError::Storage(human_money_core::StorageError::NotFound)) {
+                    info!("No WoT register found, creating new one for {}", own_can_did);
+                    humoco_wot::TrustRegister::new(&own_can_did, humoco_wot::WotPolicy::default())
+                        .map_err(|e| AppFacadeError::Generic(format!("Failed to initialize TrustRegister: {}", e)))?
+                } else if matches!(&e, AppFacadeError::WalletLocked | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                    return Err(e);
+                } else {
+                    info!("Error loading WoT register ({:?}), creating fallback.", e);
+                    humoco_wot::TrustRegister::new(&own_can_did, humoco_wot::WotPolicy::default())
+                        .map_err(|e| AppFacadeError::Generic(format!("Failed to initialize TrustRegister: {}", e)))?
+                }
+            }
+        };
+
+        *self.wot.lock().unwrap() = Some(reg.clone());
+        Ok(reg)
+    }
+
+    pub fn get_or_load_wot_register(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<humoco_wot::TrustRegister, AppFacadeError> {
+        if let Some(reg) = self.wot.lock().unwrap().as_ref() {
+            return Ok(reg.clone());
+        }
+        self.load_wot_register(service, password)
+    }
+
+    pub fn save_wot_register(
+        &self,
+        service: &mut AppService,
+        reg: &humoco_wot::TrustRegister,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
+        let bytes = serde_json::to_vec(reg)
+            .map_err(|e| AppFacadeError::Json(format!("Failed to serialize TrustRegister: {}", e)))?;
+        service.save_encrypted_data(WOT_DATA_NAME, &bytes, password)
+            .map_err(|e| AppFacadeError::Generic(format!("Failed to save TrustRegister: {}", e)))?;
+        *self.wot.lock().unwrap() = Some(reg.clone());
+        Ok(())
+    }
+
+    pub fn evaluate_voucher_trust_internal(
+        &self,
+        wallet: &human_money_core::wallet::Wallet,
+        creator_id: &str,
+        guarantor_ids: &[&str],
+    ) -> crate::models::FrontendVoucherTrustDto {
+        use human_money_core::models::conflict::TrustStatus;
+        use crate::models::FrontendVoucherTrustDto;
+
+        let own_did_can = canonicalize_did(wallet.get_user_id()).ok();
+        let creator_can = canonicalize_did(creator_id).ok();
+
+        if let (Some(own), Some(creator)) = (&own_did_can, &creator_can) {
+            if own == creator {
+                return FrontendVoucherTrustDto {
+                    score: 1.0,
+                    trust_percent: 100,
+                    is_own_voucher: true,
+                    shortest_hops: Some(0),
+                    ..Default::default()
+                };
+            }
+        }
+
+        let is_offender = matches!(wallet.check_reputation(creator_id), TrustStatus::KnownOffender(_));
+        if is_offender {
+            return FrontendVoucherTrustDto {
+                score: 0.0,
+                trust_percent: 0,
+                is_own_voucher: false,
+                blocked_by_offender: true,
+                ..Default::default()
+            };
+        }
+
+        let valid_guarantors: Vec<&str> = guarantor_ids.iter().copied()
+            .filter(|gid| !matches!(wallet.check_reputation(gid), TrustStatus::KnownOffender(_)))
+            .collect();
+
+        let guarantor_canonical_set: std::collections::HashSet<String> = valid_guarantors.iter()
+            .filter_map(|gid| canonicalize_did(gid).ok())
+            .collect();
+
+        let wot_guard = self.wot.lock().unwrap();
+        let reg = match wot_guard.as_ref() {
+            Some(r) => r,
+            None => return FrontendVoucherTrustDto::default(),
+        };
+
+        let creator_canonical = creator_can.as_deref().unwrap_or(creator_id);
+        let valid_guarantor_canonicals: Vec<String> = valid_guarantors.iter()
+            .map(|gid| canonicalize_did(gid).unwrap_or_else(|_| gid.to_string()))
+            .collect();
+        let valid_guarantor_refs: Vec<&str> = valid_guarantor_canonicals.iter().map(|s| s.as_str()).collect();
+
+        let now_secs = Utc::now().timestamp() as u64;
+        let eval = match reg.evaluate_voucher(creator_canonical, &valid_guarantor_refs, false, Some(now_secs)) {
+            Ok(e) => e,
+            Err(_) => return FrontendVoucherTrustDto::default(),
+        };
+
+        let score = eval.score;
+        let trust_percent = (score * 100.0).round().clamp(0.0, 100.0) as u8;
+        let shortest_hops = eval.shortest_hops;
+        let additional_paths_count = eval.paths.len().saturating_sub(1);
+
+        let contacts_cache = self.contacts.lock().unwrap();
+        let contacts_ref = contacts_cache.as_ref();
+
+        let mut primary_bridge_did = None;
+        let mut primary_bridge_name = None;
+        let mut via_guarantor = false;
+        let mut best_path_names = Vec::new();
+
+        if let Some(best_path) = eval.paths.first() {
+            let hops = &best_path.hops;
+            if hops.len() >= 2 {
+                let hop1 = &hops[1];
+                primary_bridge_did = Some(hop1.clone());
+                primary_bridge_name = lookup_contact_name(contacts_ref, hop1);
+
+                if hops.len() >= 3 {
+                    let penultimate = &hops[hops.len() - 2];
+                    if let Ok(pen_can) = canonicalize_did(penultimate) {
+                        if guarantor_canonical_set.contains(&pen_can) {
+                            via_guarantor = true;
+                        }
+                    }
+                }
+            }
+
+            if hops.len() > 2 {
+                for hop in &hops[1..hops.len() - 1] {
+                    let name = lookup_contact_name(contacts_ref, hop)
+                        .unwrap_or_else(|| truncate_did(hop));
+                    best_path_names.push(name);
+                }
+            }
+        }
+
+        FrontendVoucherTrustDto {
+            score,
+            trust_percent,
+            is_own_voucher: false,
+            blocked_by_offender: false,
+            shortest_hops,
+            primary_bridge_did,
+            primary_bridge_name,
+            additional_paths_count,
+            via_guarantor,
+            best_path_names,
+        }
+    }
+
+    pub fn evaluate_voucher_trust(
+        &self,
+        wallet: &human_money_core::wallet::Wallet,
+        creator_id: &str,
+        signatures: &[human_money_core::models::voucher::VoucherSignature],
+    ) -> crate::models::FrontendVoucherTrustDto {
+        let guarantor_ids: Vec<&str> = signatures.iter()
+            .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
+            .map(|s| s.signer_id.as_str())
+            .collect();
+        self.evaluate_voucher_trust_internal(wallet, creator_id, &guarantor_ids)
+    }
+
+    pub fn evaluate_voucher_trust_preview(
+        &self,
+        wallet: &human_money_core::wallet::Wallet,
+        creator_id: &str,
+        guarantor_ids: &[String],
+    ) -> crate::models::FrontendVoucherTrustDto {
+        let refs: Vec<&str> = guarantor_ids.iter().map(|s| s.as_str()).collect();
+        self.evaluate_voucher_trust_internal(wallet, creator_id, &refs)
+    }
+
+    pub fn try_import_piggybacked_wot(
+        &self,
+        service: &mut AppService,
+        wot_sync_json: &str,
+        bundle_sender_id: &str,
+        password: Option<&str>,
+    ) -> Option<usize> {
+        let pkg: humoco_wot::WotSyncPackage = match serde_json::from_str(wot_sync_json) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("Malformed piggybacked WoT sync package: {}", e);
+                return None;
+            }
+        };
+
+        let direct_sender = canonicalize_did(bundle_sender_id).ok();
+        let now_secs = Utc::now().timestamp() as u64;
+
+        let mut reg = match self.get_or_load_wot_register(service, password) {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("Could not load WoT register for piggybacked import: {}", e);
+                return None;
+            }
+        };
+
+        let stats = match reg.import_sync_package(&pkg, direct_sender.as_deref(), now_secs) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("Failed to import piggybacked WoT package: {}", e);
+                return None;
+            }
+        };
+
+        if reg.own_list_dirty {
+            let _ = self.ensure_wot_list_signed(service, &mut reg);
+        }
+
+        if let Err(e) = self.save_wot_register(service, &reg, password) {
+            log::warn!("Failed to save WoT register after piggybacked import: {}", e);
+        }
+
+        Some(stats.imported + stats.updated + stats.merged)
+    }
+}
+
+pub fn canonicalize_did(input: &str) -> Result<String, humoco_wot::WotError> {
+    let trimmed = input.trim();
+    let did_part = if let Some((_, did)) = trimmed.split_once('@') {
+        did
+    } else {
+        trimmed
+    };
+    humoco_wot::canonicalize_did(did_part)
+}
+
+pub struct CoreIdentitySigner<'a> {
+    pub identity: &'a human_money_core::models::profile::UserIdentity,
+    pub canonical_did: String,
+}
+
+impl<'a> CoreIdentitySigner<'a> {
+    pub fn new(identity: &'a human_money_core::models::profile::UserIdentity) -> Self {
+        let canonical_did = canonicalize_did(&identity.user_id).unwrap_or_else(|_| {
+            identity
+                .user_id
+                .split_once('@')
+                .map(|(_, did)| did.to_string())
+                .unwrap_or_else(|| identity.user_id.clone())
+        });
+        Self {
+            identity,
+            canonical_did,
+        }
+    }
+}
+
+impl<'a> humoco_wot::WotSigner for CoreIdentitySigner<'a> {
+    fn did(&self) -> &str {
+        &self.canonical_did
+    }
+
+    fn sign(&self, message: &[u8]) -> [u8; 64] {
+        human_money_core::services::crypto::sign_ed25519(&self.identity.signing_key, message).to_bytes()
+    }
+}
+
+fn enrich_contact_with_wot(contact: &mut FrontendContact, wot_opt: Option<&humoco_wot::TrustRegister>) {
+    if let Some(reg) = wot_opt {
+        if let Ok(can_did) = canonicalize_did(&contact.did) {
+            contact.trust_level = reg.own_contacts.get(&can_did).map(|e| e.level);
+            contact.desired_hops = reg.own_contacts.get(&can_did).map(|e| e.desired_hops);
+            contact.has_peer_list = reg.raw_list_store.contains_key(&can_did);
+            contact.peer_list_updated_at = reg.raw_list_store.get(&can_did).map(|l| l.iat);
+        }
+    }
+}
+
+fn lookup_contact_name(contacts_map: Option<&FrontendAddressBook>, target_did: &str) -> Option<String> {
+    let book = contacts_map?;
+    let can_target = canonicalize_did(target_did).ok()?;
+    for (k, c) in &book.contacts {
+        if k == target_did || canonicalize_did(k).ok().as_ref() == Some(&can_target) {
+            let first = c.profile.first_name.as_deref().unwrap_or("").trim();
+            let last = c.profile.last_name.as_deref().unwrap_or("").trim();
+            let name = match (first.is_empty(), last.is_empty()) {
+                (false, false) => format!("{} {}", first, last),
+                (false, true) => first.to_string(),
+                (true, false) => last.to_string(),
+                (true, true) => c.profile.organization.as_deref().unwrap_or("").trim().to_string(),
+            };
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+fn truncate_did(did: &str) -> String {
+    if did.len() > 16 {
+        format!("{}…{}", &did[..8], &did[did.len() - 4..])
+    } else {
+        did.to_string()
     }
 }

@@ -105,6 +105,7 @@ pub fn open_voucher_signing_request(
                 display_currency,
                 display_standard_name,
                 is_test_voucher,
+                trust: Default::default(),
             })
         }
         Err(e) => Err(FrontendError::from(e))

@@ -115,13 +115,16 @@ fn format_bff_name(raw_name: &str, is_test: bool) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_receive_payload_and_record(
-    service: &human_money_core::app_service::AppService,
+    state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
     purchase_id: &str,
     bundle_data: &[u8],
     standards: &HashMap<String, String>,
     newly_committed: bool,
     verdict: crate::models::FrontendCheckoutReleaseVerdict,
+    password: Option<&str>,
 ) -> Result<(crate::models::ReceiveSuccessPayload, Option<crate::models::TransactionRecord>), FrontendError> {
     let (opened_bundle, recipient_id) = service.with_wallet_and_identity(|wallet, identity| {
         let bundle = human_money_core::services::bundle_processor::open_and_verify_bundle(identity, bundle_data)?;
@@ -205,6 +208,13 @@ fn build_receive_payload_and_record(
         sender_profile_name: opened_bundle.sender_profile_name.clone(),
     };
 
+    let mut wot_imported_lists = None;
+    if newly_committed {
+        if let Some(ref wot_json) = opened_bundle.wot_sync_json {
+            wot_imported_lists = state.try_import_piggybacked_wot(service, wot_json, &opened_bundle.sender_id, password);
+        }
+    }
+
     let payload = crate::models::ReceiveSuccessPayload {
         sender_id: opened_bundle.sender_id,
         sender_profile_name: opened_bundle.sender_profile_name,
@@ -218,6 +228,7 @@ fn build_receive_payload_and_record(
         purchase_id: Some(purchase_id.to_string()),
         newly_committed: Some(newly_committed),
         is_replay: Some(!newly_committed),
+        wot_imported_lists,
     };
 
     Ok((payload, Some(record)))
@@ -230,16 +241,18 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
     // If the purchase is already durably completed in the wallet, return
     // newly_committed=false with authorized verdict WITHOUT requiring a new network proof.
     {
-        let service = state.service.lock().map_err(|_| fail("Wallet service unavailable"))?;
+        let mut service = state.service.lock().map_err(|_| fail("Wallet service unavailable"))?;
         if let Some(completion) = service.replay_checkout_purchase(purchase_id, bundle).map_err(FrontendError::from)? {
             log::info!("Purchase {} already completed; returning idempotent replay result without network request", purchase_id);
             let receive_payload = build_receive_payload_and_record(
-                &service,
+                state,
+                &mut service,
                 purchase_id,
                 bundle,
                 standards,
                 false,
                 completion.verdict.clone().into(),
+                password,
             ).map(|(payload, _)| payload).ok();
 
             return Ok(PurchaseCompletion {
@@ -272,12 +285,14 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
     if let Err(error)=state.refresh_events_cache(&mut service,password) {log::warn!("Checkout committed; event cache refresh failed: {}",error);}
 
     let (receive_payload, record_opt) = build_receive_payload_and_record(
-        &service,
+        state,
+        &mut service,
         purchase_id,
         bundle,
         standards,
         completion.newly_committed,
         completion.verdict.clone().into(),
+        password,
     )?;
 
     if completion.newly_committed {
@@ -320,6 +335,7 @@ mod tests {
             contacts:Mutex::new(None),
             settings:Mutex::new(None),
             regional_views:Mutex::new(cache),
+            wot: Mutex::new(None),
         }
     }
 
@@ -361,6 +377,7 @@ mod tests {
             contacts: Mutex::new(None),
             settings: Mutex::new(Some(AppSettings::default())),
             regional_views: Mutex::new(None),
+            wot: Mutex::new(None),
         };
         let error = checkout_bundle(&state, "p1", b"fake_bundle", &HashMap::new(), None).await.expect_err("must fail");
         assert_eq!(error.message, "pos.noServersConfigured");

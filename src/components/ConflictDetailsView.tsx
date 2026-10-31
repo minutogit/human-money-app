@@ -1,10 +1,13 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { integrityService } from "../services/integrityService";
+import { contactService } from "../services/contactService";
+import { useSession } from "../context/SessionContext";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
-import { FullProofDetails } from "../types";
+import { FullProofDetails, Contact } from "../types";
 import { translateError, stringifyError } from "../utils/errorHelper";
+import { ShieldAlert, CheckCircle2 } from "lucide-react";
 
 interface ConflictDetailsViewProps {
     proofId: string;
@@ -22,6 +25,47 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
     const [password, setPassword] = useState("");
     const [localNote, setLocalNote] = useState("");
     const [overrideError, setOverrideError] = useState("");
+
+    const { protectAction } = useSession();
+    const [matchedContact, setMatchedContact] = useState<Contact | null>(null);
+    const [trustRevoked, setTrustRevoked] = useState(false);
+    const [isRevoking, setIsRevoking] = useState(false);
+
+    useEffect(() => {
+        if (!details?.proof?.offenderId) return;
+        const offenderId = details.proof.offenderId;
+        const offenderBare = offenderId.split('@').pop();
+
+        contactService.getContacts()
+            .then(contacts => {
+                const found = contacts.find(c => {
+                    if (c.trustLevel == null || c.trustLevel < 0) return false;
+                    const contactBare = c.did.split('@').pop();
+                    return c.did === offenderId || (offenderBare && contactBare === offenderBare);
+                });
+                setMatchedContact(found || null);
+            })
+            .catch(e => logger.error(`Failed to load contacts for offender check: ${stringifyError(e)}`));
+    }, [details?.proof?.offenderId]);
+
+    const handleRevokeContactTrust = async () => {
+        if (!matchedContact) return;
+        setIsRevoking(true);
+        try {
+            await protectAction(async (pwd) => {
+                await contactService.saveContact({
+                    ...matchedContact,
+                    trustLevel: null,
+                    desiredHops: null,
+                }, pwd || undefined);
+            });
+            setTrustRevoked(true);
+        } catch (e) {
+            logger.error(`Failed to revoke contact trust: ${stringifyError(e)}`);
+        } finally {
+            setIsRevoking(false);
+        }
+    };
 
     useEffect(() => {
         async function fetchProof() {
@@ -163,6 +207,33 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                             <p className="text-sm text-theme-light leading-relaxed italic">
                                 {t('conflict.offenderDescription')}
                             </p>
+                            {matchedContact && (
+                                <div className="mt-4 p-4 bg-rose-50 border-2 border-rose-200 rounded-2xl space-y-3">
+                                    <div className="flex items-center gap-2 text-rose-900 font-bold text-sm">
+                                        <ShieldAlert size={18} className="text-rose-600 shrink-0" />
+                                        <span>{t('conflict.revokeContactTrustTitle')}</span>
+                                    </div>
+                                    <p className="text-xs text-rose-800 leading-relaxed font-medium">
+                                        {t('conflict.revokeContactTrustDesc')}
+                                    </p>
+                                    {!trustRevoked ? (
+                                        <Button
+                                            variant="danger"
+                                            size="sm"
+                                            onClick={handleRevokeContactTrust}
+                                            disabled={isRevoking}
+                                            className="w-full font-bold"
+                                        >
+                                            {isRevoking ? t('common.processing') : t('conflict.revokeContactTrustBtn')}
+                                        </Button>
+                                    ) : (
+                                        <div className="p-2.5 bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold flex items-center gap-2">
+                                            <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                                            <span>{t('conflict.revokeContactTrustDone')}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     </div>
 

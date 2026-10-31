@@ -11,6 +11,8 @@ pub struct FrontendScoreBreakdown {
     pub s_age: i64,
     pub s_chain: i64,
     pub s_fit: i64,
+    #[serde(default)]
+    pub s_wot: i64,
 }
 
 impl From<ScoreBreakdown> for FrontendScoreBreakdown {
@@ -22,6 +24,7 @@ impl From<ScoreBreakdown> for FrontendScoreBreakdown {
             s_age: b.s_age,
             s_chain: b.s_chain,
             s_fit: b.s_fit,
+            s_wot: b.s_wot,
         }
     }
 }
@@ -35,6 +38,7 @@ impl From<FrontendScoreBreakdown> for ScoreBreakdown {
             s_age: b.s_age,
             s_chain: b.s_chain,
             s_fit: b.s_fit,
+            s_wot: b.s_wot,
         }
     }
 }

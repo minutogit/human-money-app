@@ -7,6 +7,7 @@ pub mod conflicts;
 pub mod standards;
 pub mod transfers;
 pub mod backup;
+pub mod wot;
 
 pub use error::*;
 pub use voucher::*;
@@ -17,3 +18,4 @@ pub use conflicts::*;
 pub use standards::*;
 pub use transfers::*;
 pub use backup::*;
+pub use wot::*;

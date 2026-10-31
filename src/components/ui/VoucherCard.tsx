@@ -11,6 +11,7 @@ import {
 import { VoucherSummary, VoucherStatus } from "../../types";
 import { Card } from "./Card";
 import { Button } from "./Button";
+import { TrustBadge } from "./TrustBadge";
 import { formatAmount, formatDate } from "../../utils/format";
 import Avatar from "boring-avatars";
 
@@ -132,7 +133,8 @@ export const VoucherCard = React.memo(({
                                     </span>
                                 )}
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <TrustBadge trust={voucher.trust} size="sm" />
                                 {showStatus && (
                                     <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-black uppercase ${bgColor} ${color}`}>
                                         <StatusIcon size={12} />

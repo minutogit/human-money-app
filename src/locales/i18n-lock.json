@@ -1731,6 +1731,42 @@
     },
     "ai_hint": "Label or status text in double-spend conflict resolver."
   },
+  "conflict.revokeContactTrustBtn": {
+    "source_text": "Revoke Trust Rating Now",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "conflict.revokeContactTrustDesc": {
+    "source_text": "Remove your trust rating so your network no longer treats this identity as a trusted connection.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "conflict.revokeContactTrustDone": {
+    "source_text": "Trust rating removed from your address book.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "conflict.revokeContactTrustTitle": {
+    "source_text": "This person is currently rated as trusted in your address book",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "conflict.securityInsight": {
     "source_text": "Security Insight",
     "status": {
@@ -2097,6 +2133,51 @@
     },
     "ai_hint": "Placeholder subtitle in contact dialog before DID is typed."
   },
+  "contacts.exportWotButton": {
+    "source_text": "Share Trust File",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.exportWotModalDesc": {
+    "source_text": "Protect this .wot file with a password and share the password separately with your contact.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.exportWotModalTitle": {
+    "source_text": "Create Password-Protected Trust File",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.exportWotPasswordPlaceholder": {
+    "source_text": "Choose a password for the file...",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.exportWotSuccess": {
+    "source_text": "Trust file saved successfully.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "contacts.filterAll": {
     "source_text": "All",
     "status": {
@@ -2126,6 +2207,33 @@
       "it": "ai-translated"
     },
     "ai_hint": "Input placeholder for first name."
+  },
+  "contacts.helpWotLong": {
+    "source_text": "In Human Money there is no central bank or global credit score. Instead, you decide locally whom you trust.\n\nWhen you send payments to trusted contacts or share a trust file (.wot), recommendations are passed on end-to-end encrypted. Your contact names stay private—your wallet simply checks in the background which shared contacts connect an unfamiliar voucher to you.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.helpWotShort": {
+    "source_text": "When you honestly rate your contacts, your app automatically recognizes whether shared trusted people stand behind unfamiliar vouchers.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.helpWotTitle": {
+    "source_text": "How Your Trust Network Helps",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "contacts.lastName": {
     "source_text": "Last Name",
@@ -2217,6 +2325,60 @@
     },
     "ai_hint": "Input placeholder for organization name."
   },
+  "contacts.peerListSynced": {
+    "source_text": "Recommendations synced",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.reachDirect": {
+    "source_text": "Direct contacts only",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.reachPrivate": {
+    "source_text": "Keep private (only for me)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.reachStandard": {
+    "source_text": "Standard circle (recommended)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.reachWide": {
+    "source_text": "Wide community network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.reachabilityLabel": {
+    "source_text": "Recommendation Reach",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "contacts.removeContact": {
     "source_text": "Remove Contact",
     "status": {
@@ -2257,6 +2419,15 @@
     },
     "ai_hint": "Placeholder in the search input on the Address Book page."
   },
+  "contacts.shareWotForContact": {
+    "source_text": "Create encrypted trust file for this contact",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "contacts.tags": {
     "source_text": "Tags",
     "status": {
@@ -2276,6 +2447,114 @@
       "it": "ai-translated"
     },
     "ai_hint": "Page title of the Address Book view."
+  },
+  "contacts.trustLevel0": {
+    "source_text": "Real Person",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.trustLevel0Desc": {
+    "source_text": "Met in person (real human), without vouching for financial reliability yet.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.trustLevel1": {
+    "source_text": "Acquaintance",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.trustLevel1Desc": {
+    "source_text": "Casual everyday contact whom you consider generally reliable.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.trustLevel2": {
+    "source_text": "Good Contact",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.trustLevel2Desc": {
+    "source_text": "Reliable person known from regular exchange or collaboration.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.trustLevel3": {
+    "source_text": "Close Confidant",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.trustLevel3Desc": {
+    "source_text": "Very close person whose word and judgment you strongly rely on.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.trustLevelUnrated": {
+    "source_text": "Not rated yet",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.trustLevelUnratedDesc": {
+    "source_text": "Saved in your address book without a recommendation for the network yet.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.trustNetworkHint": {
+    "source_text": "Your honest rating helps you and your contacts immediately recognize reliable vouchers in everyday life.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.trustSectionLabel": {
+    "source_text": "Personal Trust Rating",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "contacts.unnamedIdentity": {
     "source_text": "Unnamed Identity",
@@ -2306,6 +2585,33 @@
       "it": "ai-translated"
     },
     "ai_hint": "Field label for User ID / Decentralized Identifier (DID)."
+  },
+  "contacts.wotBannerEmpty": {
+    "source_text": "Rate contacts you know personally so your app can automatically evaluate unfamiliar vouchers for you.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.wotBannerStats": {
+    "source_text": "{{rated}} rated contacts · {{lists}} network recommendations received",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.wotBannerTitle": {
+    "source_text": "Your Trust Network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "dashboard.backupReminderButton": {
     "source_text": "Backup Settings",
@@ -7539,6 +7845,15 @@
       "it": "ai-translated"
     }
   },
+  "transfer.importFile.wotFilter": {
+    "source_text": "Trust File (.wot)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.inventoryDepleted": {
     "source_text": "No available balance",
     "status": {
@@ -8178,6 +8493,15 @@
       "it": "ai-translated"
     }
   },
+  "transfer.receiveSuccess.wotSyncedBadge": {
+    "source_text": "Trust network updated automatically",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.recipient": {
     "source_text": "Recipient",
     "status": {
@@ -8507,6 +8831,51 @@
       "it": "ai-translated"
     },
     "ai_hint": "Count of selected vouchers in transfer summary. Contains variables: {{count}}."
+  },
+  "transfer.wotImport.fromSender": {
+    "source_text": "Received verified trust recommendations from {{name}}.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.wotImport.rateContactAction": {
+    "source_text": "Save & Rate Contact",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.wotImport.stats": {
+    "source_text": "{{imported}} new · {{updated}} updated",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.wotImport.title": {
+    "source_text": "Trust Network Updated",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.wotImport.updateContactAction": {
+    "source_text": "Adjust Trust Rating",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "voucher.accessPasswordPlaceholder": {
     "source_text": "Access Password",
@@ -9400,6 +9769,33 @@
       "it": "ai-translated"
     }
   },
+  "voucher.helpTrustLong": {
+    "source_text": "Every voucher is a personal promise of real goods, time, or services. The percentage shows how closely the issuer or guarantors are connected to you through your personal contacts.\n\nGray ('Unknown') simply means there is no connection in your address book yet—the voucher is still valid. Red warns of a proven fraud attempt.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.helpTrustShort": {
+    "source_text": "Shows at a glance how strongly the issuer or guarantors are backed through people you personally trust.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.helpTrustTitle": {
+    "source_text": "What Does the Trust Display Mean?",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.helpWithLabel": {
     "source_text": "I can help with...",
     "status": {
@@ -9841,6 +10237,15 @@
       "it": "ai-translated"
     }
   },
+  "voucher.signRequest.guarantorHumanHint": {
+    "source_text": "As a guarantor, you stand with your good name toward your contacts that this issuer is real, reliable, and honors their promise.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.signRequest.impactEvaluation": {
     "source_text": "Impact Evaluation",
     "status": {
@@ -9910,6 +10315,15 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.signRequest.requesterTrustLabel": {
+    "source_text": "Your connection to the issuer",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -10171,6 +10585,114 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustCardTitle": {
+    "source_text": "Trust in Your Network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustDirect": {
+    "source_text": "{{percent}}% · Direct contact",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustNoPathHint": {
+    "source_text": "No connection known through your rated contacts yet. If you know the issuer personally, you can rate them in your address book.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustOffender": {
+    "source_text": "Warning · Fraud Proof",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustOwn": {
+    "source_text": "Own Voucher",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustPathIssuer": {
+    "source_text": "Issuer",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustPathLabel": {
+    "source_text": "Connection",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustPathYou": {
+    "source_text": "You",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustUnknown": {
+    "source_text": "Unknown",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustViaContact": {
+    "source_text": "{{percent}}% · via {{name}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustViaGuarantor": {
+    "source_text": "{{percent}}% · Backed by {{name}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustViaNetwork": {
+    "source_text": "{{percent}}% · Trust network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },

@@ -8,3 +8,6 @@ pub mod contacts;
 pub mod integrity;
 pub mod standards;
 pub mod backup;
+pub mod wot;
+
+pub use wot::*;

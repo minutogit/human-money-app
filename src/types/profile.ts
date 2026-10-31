@@ -51,6 +51,10 @@ export interface Contact {
     tags: string[];
     addedAt: string;
     notes?: string;
+    trustLevel?: number | null;
+    desiredHops?: number | null;
+    hasPeerList?: boolean;
+    peerListUpdatedAt?: number | null;
 }
 
 export interface CreatorData {

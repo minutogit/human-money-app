@@ -32,6 +32,7 @@ export interface ScoreBreakdown {
     sAge: number;
     sChain: number;
     sFit: number;
+    sWot?: number;
 }
 
 export interface RankedVoucher {

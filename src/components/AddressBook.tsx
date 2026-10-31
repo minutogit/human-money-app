@@ -4,11 +4,17 @@ import { useTranslation } from 'react-i18next';
 import { PageLayout } from './ui/PageLayout';
 import { Button } from './ui/Button';
 import { contactService } from '../services/contactService';
-import { Contact } from '../types';
+import { wotService } from '../services/wotService';
+import { settingsService } from '../services/settingsService';
+import { save } from '@tauri-apps/plugin-dialog';
+import { writeFile } from '@tauri-apps/plugin-fs';
+import { HelpIcon } from './ui/HelpIcon';
+import { Contact, WotSummaryDto } from '../types';
+import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import Avatar from 'boring-avatars';
 import ContactDialog from './ContactDialog';
 import { logger } from '../utils/log';
-import { stringifyError } from '../utils/errorHelper';
+import { stringifyError, translateError } from '../utils/errorHelper';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { useSession } from '../context/SessionContext';
 import { 
@@ -20,7 +26,9 @@ import {
     Shield, 
     Building2, 
     Users,
-    X
+    X,
+    Share2,
+    Download
 } from 'lucide-react';
 
 interface AddressBookProps {
@@ -32,18 +40,30 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const { t } = useTranslation();
     const { protectAction } = useSession();
     const [contacts, setContacts] = useState<Contact[]>([]);
+    const [wotSummary, setWotSummary] = useState<WotSummaryDto | null>(null);
     const [searchQuery, setSearchQuery] = useState(initialSearchQuery || '');
     const [selectedTag, setSelectedTag] = useState<string | null>(null);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingContact, setEditingContact] = useState<Contact | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [deleteRequest, setDeleteRequest] = useState<string | null>(null);
+    const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+    const [exportPassword, setExportPassword] = useState('');
+    const [isExporting, setIsExporting] = useState(false);
+    const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
     const loadContacts = useCallback(async () => {
         setIsLoading(true);
         try {
-            const result: Contact[] = await contactService.getContacts();
-            setContacts(result);
+            const [contactsResult, summaryResult] = await Promise.all([
+                contactService.getContacts(),
+                wotService.getSummary().catch(e => {
+                    logger.warn("Failed to load WoT summary: " + stringifyError(e));
+                    return null;
+                })
+            ]);
+            setContacts(contactsResult);
+            setWotSummary(summaryResult ?? null);
         } catch (err) {
             logger.error("Failed to load contacts: " + stringifyError(err));
         } finally {
@@ -60,7 +80,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             setSearchQuery(initialSearchQuery);
         }
     }, [initialSearchQuery]);
-
 
     const handleSaveContact = async (contact: Contact) => {
         try {
@@ -88,6 +107,74 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             logger.error("Failed to delete contact: " + stringifyError(err));
         } finally {
             setDeleteRequest(null);
+        }
+    };
+
+    const handleExportOpenWot = async () => {
+        setIsExporting(true);
+        try {
+            const bytes = await protectAction(async (walletPassword) => {
+                return await wotService.exportPackage({
+                    containerPassword: exportPassword.trim() || null,
+                    password: walletPassword || null,
+                });
+            });
+            setIsExportModalOpen(false);
+            setExportPassword('');
+            if (bytes && bytes.length > 0) {
+                const settings = await settingsService.getSettings().catch(() => null);
+                const filePath = await save({
+                    defaultPath: settings?.lastUsedDirectory
+                        ? `${settings.lastUsedDirectory}/trust-network.wot`
+                        : 'trust-network.wot',
+                    filters: [{ name: t('transfer.importFile.wotFilter'), extensions: ['wot'] }]
+                });
+                if (filePath) {
+                    await writeFile(filePath, new Uint8Array(bytes));
+                    if (settings) {
+                        await updateLastUsedDirectory(filePath, settings, protectAction).catch(() => {});
+                    }
+                    setFeedbackMsg({ type: 'success', message: t('contacts.exportWotSuccess') });
+                    await loadContacts();
+                }
+            }
+        } catch (err) {
+            logger.error("Failed to export WoT package: " + stringifyError(err));
+            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsExporting(false);
+        }
+    };
+
+    const handleShareContactWot = async (contact: Contact) => {
+        try {
+            const bytes = await protectAction(async (walletPassword) => {
+                return await wotService.exportPackage({
+                    recipientDid: contact.did,
+                    password: walletPassword || null,
+                });
+            });
+            if (bytes && bytes.length > 0) {
+                const settings = await settingsService.getSettings().catch(() => null);
+                const safeName = (contact.profile.firstName || 'contact').toLowerCase().replace(/\s+/g, '-');
+                const filePath = await save({
+                    defaultPath: settings?.lastUsedDirectory
+                        ? `${settings.lastUsedDirectory}/trust-${safeName}.wot`
+                        : `trust-${safeName}.wot`,
+                    filters: [{ name: t('transfer.importFile.wotFilter'), extensions: ['wot'] }]
+                });
+                if (filePath) {
+                    await writeFile(filePath, new Uint8Array(bytes));
+                    if (settings) {
+                        await updateLastUsedDirectory(filePath, settings, protectAction).catch(() => {});
+                    }
+                    setFeedbackMsg({ type: 'success', message: t('contacts.exportWotSuccess') });
+                    await loadContacts();
+                }
+            }
+        } catch (err) {
+            logger.error("Failed to export contact WoT package: " + stringifyError(err));
+            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
         }
     };
 
@@ -129,6 +216,52 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             }
         >
             <div className="max-w-6xl mx-auto space-y-8">
+                {feedbackMsg && (
+                    <div className={`p-4 rounded-2xl border flex items-center justify-between gap-3 animate-in fade-in duration-200 ${
+                        feedbackMsg.type === 'success'
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                            : 'bg-rose-50 border-rose-200 text-rose-800'
+                    }`}>
+                        <p className="text-xs font-bold leading-tight">{feedbackMsg.message}</p>
+                        <button
+                            type="button"
+                            onClick={() => setFeedbackMsg(null)}
+                            className="p-1 rounded-lg hover:bg-black/5 text-current transition-colors"
+                        >
+                            <X size={14} />
+                        </button>
+                    </div>
+                )}
+
+                {/* Trust Network Banner */}
+                <div className="bg-white/60 backdrop-blur-sm border border-theme-subtle rounded-3xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                            <h4 className="text-sm font-black text-theme-secondary tracking-tight">
+                                {t('contacts.wotBannerTitle')}
+                            </h4>
+                            <HelpIcon topic="wotNetwork" size={15} />
+                        </div>
+                        <p className="text-xs text-theme-light font-medium">
+                            {wotSummary && (wotSummary.ratedContactsCount > 0 || wotSummary.importedPeerListsCount > 0)
+                                ? t('contacts.wotBannerStats', {
+                                      rated: wotSummary.ratedContactsCount,
+                                      lists: wotSummary.importedPeerListsCount
+                                  })
+                                : t('contacts.wotBannerEmpty')}
+                        </p>
+                    </div>
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => setIsExportModalOpen(true)}
+                        className="self-start sm:self-auto rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
+                    >
+                        <Download size={14} />
+                        {t('contacts.exportWotButton')}
+                    </Button>
+                </div>
+
                 {/* Search and Filters */}
                 <div className="flex flex-col md:flex-row gap-6">
                     <div className="relative flex-1 group">
@@ -226,6 +359,13 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                         </div>
                                         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                             <button 
+                                                onClick={() => handleShareContactWot(contact)}
+                                                className="p-2 hover:bg-theme-subtle/20 rounded-xl text-theme-light hover:text-theme-primary transition-all"
+                                                title={t('contacts.shareWotForContact')}
+                                            >
+                                                <Share2 size={18} />
+                                            </button>
+                                            <button
                                                 onClick={() => {
                                                     setEditingContact(contact);
                                                     setIsDialogOpen(true);
@@ -268,6 +408,36 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                             </div>
                                         )}
 
+                                        {/* Trust Rating & Synced Peer List Pills */}
+                                        <div className="flex items-center gap-1.5 flex-wrap mb-3">
+                                            <span className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider border shadow-sm ${
+                                                contact.trustLevel === 3
+                                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                                    : contact.trustLevel === 2
+                                                        ? 'bg-teal-50 text-teal-800 border-teal-200'
+                                                        : contact.trustLevel === 1
+                                                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                                            : contact.trustLevel === 0
+                                                                ? 'bg-sky-50 text-sky-800 border-sky-200'
+                                                                : 'bg-slate-50 text-slate-500 border-slate-200'
+                                            }`}>
+                                                {contact.trustLevel === 3
+                                                    ? t('contacts.trustLevel3')
+                                                    : contact.trustLevel === 2
+                                                        ? t('contacts.trustLevel2')
+                                                        : contact.trustLevel === 1
+                                                            ? t('contacts.trustLevel1')
+                                                            : contact.trustLevel === 0
+                                                                ? t('contacts.trustLevel0')
+                                                                : t('contacts.trustLevelUnrated')}
+                                            </span>
+                                            {contact.hasPeerList && (
+                                                <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-sm">
+                                                    {t('contacts.peerListSynced')}
+                                                </span>
+                                            )}
+                                        </div>
+
                                         <div className="flex flex-wrap gap-1.5 mt-auto">
                                             {contact.tags.map(tag => (
                                                 <span key={tag} className="flex items-center gap-1 px-2.5 py-1 bg-white border border-theme-subtle/50 rounded-lg text-[9px] uppercase tracking-widest font-black text-theme-light shadow-sm">
@@ -303,6 +473,52 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                 onConfirm={handleDeleteContact}
                 onCancel={() => setDeleteRequest(null)}
             />
+
+            {isExportModalOpen && (
+                <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
+                    <div className="bg-bg-app border border-theme-subtle rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+                        <div className="p-6 border-b border-theme-subtle bg-white">
+                            <h3 className="text-lg font-black text-theme-secondary">
+                                {t('contacts.exportWotModalTitle')}
+                            </h3>
+                            <p className="text-xs text-theme-light mt-1">
+                                {t('contacts.exportWotModalDesc')}
+                            </p>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            <input
+                                type="password"
+                                value={exportPassword}
+                                onChange={(e) => setExportPassword(e.target.value)}
+                                placeholder={t('contacts.exportWotPasswordPlaceholder')}
+                                className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 text-sm shadow-sm"
+                                autoFocus
+                            />
+                        </div>
+                        <div className="p-4 bg-white border-t border-theme-subtle flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setIsExportModalOpen(false);
+                                    setExportPassword('');
+                                }}
+                                disabled={isExporting}
+                                className="py-2 px-4 rounded-xl border border-theme-subtle text-theme-light font-bold text-xs hover:bg-bg-app transition-colors"
+                            >
+                                {t('common.cancel')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleExportOpenWot}
+                                disabled={isExporting}
+                                className="py-2 px-4 rounded-xl bg-theme-primary text-white font-bold text-xs hover:bg-theme-accent transition-all shadow-md disabled:opacity-50"
+                            >
+                                {isExporting ? t('common.loading') : t('contacts.exportWotButton')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </PageLayout>
     );
 };

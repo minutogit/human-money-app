@@ -83,18 +83,54 @@ pub async fn create_transfer_bundle(
         })
         .collect();
 
-    let request = MultiTransferRequest {
-        recipient_id,
-        sources: source_transfers,
-        notes,
-        sender_profile_name,
-        use_privacy_mode,
-    };
-
     let (result,intents) = {
         let mut service=state.service.lock().map_err(|_|FrontendError::from("Wallet service unavailable".to_string()))?;
+
+        let mut wot_sync_json: Option<String> = None;
+        let mut pending_receipt: Option<humoco_wot::SyncReceipt> = None;
+
+        if let Ok(can_recipient) = crate::state::canonicalize_did(&recipient_id) {
+            if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
+                if reg.own_contacts.get(&can_recipient).is_some_and(|e| e.level >= 1) {
+                    if let Ok(changed) = state.ensure_wot_list_signed(&mut service, &mut reg) {
+                        if changed {
+                            let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
+                        }
+                    }
+                    if let Ok((pkg, receipt)) = reg.prepare_sync_package(Some(&can_recipient), Some(48_000), false) {
+                        if !pkg.lists.is_empty() {
+                            if let Ok(json) = serde_json::to_string(&pkg) {
+                                wot_sync_json = Some(json);
+                                pending_receipt = Some(receipt);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let request = MultiTransferRequest {
+            recipient_id,
+            sources: source_transfers,
+            notes,
+            sender_profile_name,
+            use_privacy_mode,
+            wot_sync_json,
+        };
+
         let archive = open_wallet_archive(&app, &service);
         let result=service.create_transfer_bundle_with_l2_intents(request,&standard_definitions_toml,archive.as_ref(),password.as_deref(),network).map_err(FrontendError::from)?;
+
+        if let Some(receipt) = pending_receipt {
+            if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
+                let now_secs = chrono::Utc::now().timestamp() as u64;
+                reg.commit_sync_receipt(receipt, now_secs);
+                if let Err(e) = state.save_wot_register(&mut service, &reg, password.as_deref()) {
+                    log::warn!("Failed to save WoT register after committing sync receipt: {}", e);
+                }
+            }
+        }
+
         let mut intents = Vec::with_capacity(result.involved_sources_details.len());
         for source in &result.involved_sources_details {
             match service.pending_l2_send_intent(&source.local_instance_id) {
@@ -176,6 +212,12 @@ pub fn receive_bundle(
                 error!("Failed to refresh events cache after receive_bundle: {}", e);
             }
 
+            let wot_imported_lists = if let Some(ref wot_json) = result.wot_sync_json {
+                state.try_import_piggybacked_wot(&mut service, wot_json, &result.header.sender_id, password.as_deref())
+            } else {
+                None
+            };
+
             Ok(ReceiveSuccessPayload {
                 sender_id: result.header.sender_id,
                 sender_profile_name,
@@ -189,6 +231,7 @@ pub fn receive_bundle(
                 purchase_id: None,
                 newly_committed: None,
                 is_replay: None,
+                wot_imported_lists,
             })
         }
         Err(e) => {
@@ -217,6 +260,48 @@ pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<Fron
     Ok(history.iter().map(|r| r.into()).collect())
 }
 
+fn compute_wot_bonuses(
+    state: &AppState,
+    wallet: &human_money_core::wallet::Wallet,
+    recipient_id: &str,
+) -> HashMap<String, i64> {
+    use human_money_core::models::conflict::TrustStatus;
+    let mut bonuses = HashMap::new();
+
+    if crate::state::canonicalize_did(recipient_id).is_err() {
+        return bonuses;
+    }
+
+    let wot_guard = state.wot.lock().unwrap();
+    let reg = match wot_guard.as_ref() {
+        Some(r) => r,
+        None => return bonuses,
+    };
+
+    let now_secs = chrono::Utc::now().timestamp() as u64;
+
+    for (local_id, instance) in &wallet.voucher_store.vouchers {
+        if instance.status != human_money_core::wallet::instance::VoucherStatus::Active {
+            continue;
+        }
+
+        let creator_id = instance.voucher.creator_profile.id.as_deref().unwrap_or("");
+        let is_offender = matches!(wallet.check_reputation(creator_id), TrustStatus::KnownOffender(_));
+
+        let guarantor_refs: Vec<&str> = instance.voucher.signatures.iter()
+            .filter(|s| s.role.eq_ignore_ascii_case("guarantor") && !matches!(wallet.check_reputation(&s.signer_id), TrustStatus::KnownOffender(_)))
+            .map(|s| s.signer_id.as_str())
+            .collect();
+
+        if let Ok(eval) = reg.evaluate_voucher_for_observer(recipient_id, creator_id, &guarantor_refs, is_offender, Some(now_secs)) {
+            let bonus = (eval.score * 1500.0).round() as i64;
+            bonuses.insert(local_id.clone(), bonus);
+        }
+    }
+
+    bonuses
+}
+
 #[tauri::command]
 pub fn prepare_transfer_plan(
     target_amount: String,
@@ -230,9 +315,10 @@ pub fn prepare_transfer_plan(
         recipient_id, target_amount, standard_uuid_filter
     );
     let service = state.service.lock().unwrap();
+    let bonuses = service.with_wallet(|w| compute_wot_bonuses(&state, w, &recipient_id))
+        .map_err(FrontendError::from)?;
     let plan = service
-        .with_wallet(|w| w.prepare_transfer(&target_amount, standard_uuid_filter.as_deref(), &recipient_id))
-        .map_err(FrontendError::from)?
+        .prepare_transfer_with_wot(&target_amount, standard_uuid_filter.as_deref(), &recipient_id, Some(&bonuses))
         .map_err(FrontendError::from)?;
     Ok(plan.into())
 }
@@ -250,9 +336,10 @@ pub fn rank_vouchers_for_recipient(
         recipient_id, target_amount, standard_uuid_filter
     );
     let service = state.service.lock().unwrap();
+    let bonuses = service.with_wallet(|w| compute_wot_bonuses(&state, w, &recipient_id))
+        .map_err(FrontendError::from)?;
     let ranked = service
-        .with_wallet(|w| w.rank_vouchers(&target_amount, standard_uuid_filter.as_deref(), &recipient_id))
-        .map_err(FrontendError::from)?
+        .rank_vouchers_with_wot(&target_amount, standard_uuid_filter.as_deref(), &recipient_id, Some(&bonuses))
         .map_err(FrontendError::from)?;
     Ok(ranked.into_iter().map(|r| r.into()).collect())
 }

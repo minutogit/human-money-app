@@ -10,6 +10,8 @@ import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
+import { TrustBadge } from "./ui/TrustBadge";
+import { HelpIcon } from "./ui/HelpIcon";
 import { useSession } from "../context/SessionContext";
 import { useTranslation } from "react-i18next";
 import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardDefinition, VoucherL2StatusDto } from "../types";
@@ -286,6 +288,7 @@ export function VoucherDetailsView() {
                                 <div className="flex flex-wrap items-center gap-2 mt-2">
                                     <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${statusInfo?.bgColor} ${statusInfo?.color}`}>{statusInfo?.label}</span>
                                     {details.isTestVoucher && <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-500 text-white shadow-lg shadow-rose-200">{t('voucher.testVoucher')}</span>}
+                                    <TrustBadge trust={details.trust} size="md" />
                                     {l2Status && (
                                         <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
                                             l2Status.status === 'unspent'
@@ -387,6 +390,42 @@ export function VoucherDetailsView() {
 
                         <div className="space-y-6">
                             <Card className="border-none shadow-premium" header={
+                                <div className="flex items-center justify-between w-full">
+                                    <div className="flex items-center gap-2">
+                                        <Shield size={16} className="text-theme-primary" />
+                                        <span className="font-black text-xs uppercase tracking-widest">{t('voucher.trustCardTitle')}</span>
+                                    </div>
+                                    <HelpIcon topic="voucherTrust" size={13} />
+                                </div>
+                            }>
+                                <div className="space-y-4">
+                                    <div>
+                                        <TrustBadge trust={details.trust} size="md" />
+                                    </div>
+                                    {!details.trust?.isOwnVoucher && !details.trust?.blockedByOffender && (
+                                        <div className="pt-3 border-t border-theme-subtle/30 text-xs">
+                                            {details.trust && details.trust.shortestHops != null && details.trust.trustPercent > 0 ? (
+                                                <div>
+                                                    <p className="text-[10px] font-black uppercase text-theme-light mb-1.5">{t('voucher.trustPathLabel')}</p>
+                                                    <p className="font-medium text-theme-secondary flex items-center flex-wrap gap-1 leading-relaxed">
+                                                        {[
+                                                            t('voucher.trustPathYou'),
+                                                            ...(details.trust.bestPathNames || []),
+                                                            `${voucher.creator.firstName || ''} ${voucher.creator.lastName || ''}`.trim() || t('voucher.trustPathIssuer')
+                                                        ].join(' → ')}
+                                                    </p>
+                                                </div>
+                                            ) : (
+                                                <p className="text-theme-light italic text-xs leading-relaxed">
+                                                    {t('voucher.trustNoPathHint')}
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </Card>
+
+                            <Card className="border-none shadow-premium" header={
                                 <div className="flex items-center gap-2">
                                     <Info size={16} className="text-theme-primary" />
                                     <span className="font-black text-xs uppercase tracking-widest">{t('voucher.detailsHeader')}</span>
@@ -428,6 +467,7 @@ export function VoucherDetailsView() {
                     await protectAction(async (pwd) => {
                         await contactService.saveContact(contact, pwd || undefined);
                         await contactService.getContacts().then(setContacts);
+                        await refreshDetails();
                     });
                 }}
                 existingContact={existingContact}

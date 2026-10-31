@@ -505,6 +505,7 @@ pub async fn check_anchor_sync(
         human_money_core::services::l2_gateway::AnchorSyncVerdict::ForkConflict { .. } => "ForkConflict",
         human_money_core::services::l2_gateway::AnchorSyncVerdict::PendingLeapLock { .. } => "PendingLeapLock",
         human_money_core::services::l2_gateway::AnchorSyncVerdict::GenesisRequired => "PendingLeapLock",
+        human_money_core::services::l2_gateway::AnchorSyncVerdict::Inconclusive => "Inconclusive",
     };
 
     log::debug!("Anchor sync check evaluated to: {}", status_str);
@@ -527,11 +528,11 @@ pub async fn reconcile_rollback(
 
     let voucher_queries = {
         let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        service.with_wallet(|wallet| {
+        service.with_wallet_and_identity(|wallet, identity| {
             let mut queries = Vec::new();
             for (id, instance) in &wallet.voucher_store.vouchers {
                 if instance.status == human_money_core::wallet::instance::VoucherStatus::Active {
-                    if let Ok(mut query) = wallet.build_voucher_status_query(id, 1) {
+                    if let Ok(mut query) = wallet.build_voucher_status_query(identity, id, 1) {
                         query.read_quorum = 1;
                         queries.push((id.clone(), query));
                     }
@@ -741,11 +742,11 @@ pub async fn check_voucher_l2_status(
 ) -> Result<FrontendVoucherL2StatusDto, FrontendError> {
     let (query, is_currently_archived) = {
         let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        service.with_wallet(|wallet| {
+        service.with_wallet_and_identity(|wallet, identity| {
             let instance = wallet.voucher_store.vouchers.get(&local_instance_id)
                 .ok_or_else(|| human_money_core::Error::App(human_money_core::error::AppError::InvariantViolation { message: "Voucher not found".into() }))?;
             let is_archived = matches!(instance.status, human_money_core::wallet::instance::VoucherStatus::Archived);
-            let mut query = wallet.build_voucher_status_query(&local_instance_id, 1)?;
+            let mut query = wallet.build_voucher_status_query(identity, &local_instance_id, 1)?;
             query.read_quorum = 1;
             Ok::<_, human_money_core::Error>((query, is_archived))
         }).map_err(FrontendError::from)?

@@ -4,6 +4,7 @@ export * from './types/profile';
 export * from './types/voucher';
 export * from './types/transaction';
 export * from './types/api';
+export * from './types/wot';
 
 declare module './types/api' {
   interface AppSettings {

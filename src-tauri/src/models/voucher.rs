@@ -110,6 +110,8 @@ pub struct FrontendVoucherSummary {
     pub display_currency: String,
     pub display_standard_name: String,
     pub allow_partial_transfers: bool,
+    #[serde(default)]
+    pub trust: super::wot::FrontendVoucherTrustDto,
 }
 
 impl From<human_money_core::wallet::types::VoucherSummary> for FrontendVoucherSummary {
@@ -143,6 +145,7 @@ impl From<human_money_core::wallet::types::VoucherSummary> for FrontendVoucherSu
             display_currency: s.display_currency,
             display_standard_name: s.display_standard_name,
             allow_partial_transfers: true,
+            trust: super::wot::FrontendVoucherTrustDto::default(),
         }
     }
 }
@@ -156,6 +159,8 @@ pub struct FrontendVoucherDetails {
     pub display_currency: String,
     pub display_standard_name: String,
     pub is_test_voucher: bool,
+    #[serde(default)]
+    pub trust: super::wot::FrontendVoucherTrustDto,
 }
 
 impl From<human_money_core::wallet::types::VoucherDetails> for FrontendVoucherDetails {
@@ -176,6 +181,7 @@ impl From<human_money_core::wallet::types::VoucherDetails> for FrontendVoucherDe
             display_currency: d.display_currency,
             display_standard_name: d.display_standard_name,
             is_test_voucher: d.is_test_voucher,
+            trust: super::wot::FrontendVoucherTrustDto::default(),
         }
     }
 }

@@ -2341,6 +2341,7 @@ dependencies = [
  "ed25519-dalek",
  "fs_extra",
  "human_money_core",
+ "humoco-wot",
  "log",
  "machine-uid",
  "reqwest",
@@ -2412,6 +2413,21 @@ dependencies = [
  "blake3",
  "ed25519-dalek",
  "serde",
+]
+
+[[package]]
+name = "humoco-wot"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bs58",
+ "ed25519-dalek",
+ "getrandom 0.2.17",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

@@ -171,6 +171,10 @@ mod tests {
             tags: vec![],
             added_at: Utc::now().to_rfc3339(),
             notes: None,
+            trust_level: None,
+            desired_hops: None,
+            has_peer_list: false,
+            peer_list_updated_at: None,
         });
 
         let state_raw = AppState {
@@ -180,6 +184,7 @@ mod tests {
             contacts: Mutex::new(Some(book)),
             settings: Mutex::new(None),
             regional_views: Mutex::new(None),
+            wot: Mutex::new(None),
         };
 
         let cache = state_raw.contacts.lock().unwrap();

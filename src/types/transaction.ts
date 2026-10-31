@@ -102,6 +102,7 @@ export interface ReceiveSuccessPayload {
     purchaseId?: string;
     newlyCommitted?: boolean;
     isReplay?: boolean;
+    wotImportedLists?: number;
 }
 
 export interface TransactionFingerprint {

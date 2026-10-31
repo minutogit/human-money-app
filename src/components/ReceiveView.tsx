@@ -5,6 +5,9 @@ import { transferService } from '../services/transferService';
 import { settingsService } from '../services/settingsService';
 import { voucherService } from '../services/voucherService';
 import { standardsService } from '../services/standardsService';
+import { wotService } from '../services/wotService';
+import { contactService } from '../services/contactService';
+import ContactDialog from './ContactDialog';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../utils/log';
@@ -20,7 +23,9 @@ import {
     AppSettings,
     ReceiveSuccessPayload,
     VoucherDetails,
-    VoucherSummary
+    VoucherSummary,
+    Contact,
+    WotImportResultDto
 } from '../types';
 import { PageLayout } from './ui/PageLayout';
 import { ImportStandardModal } from './ImportStandardModal';
@@ -68,9 +73,12 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     const [confirmText, setConfirmText] = useState("");
     const [pendingPasswordImport, setPendingPasswordImport] = useState<{
         fileData: number[];
-        type: 'transfer' | 'ask' | 'sig';
+        type: 'transfer' | 'ask' | 'sig' | 'wot';
         name: string;
     } | null>(null);
+    const [wotImportModalData, setWotImportModalData] = useState<WotImportResultDto | null>(null);
+    const [wotContactDialogOpen, setWotContactDialogOpen] = useState(false);
+    const [wotExistingContact, setWotExistingContact] = useState<Contact | null>(null);
     const [importStandardModalData, setImportStandardModalData] = useState<{
         containerBytes: number[];
         definition?: VoucherStandardDefinition;
@@ -123,11 +131,12 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 multiple: false,
                 defaultPath: settings?.lastUsedDirectory,
                 filters: [
-                    { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'standard', 'toml', 'humocoreq', 'humocosig'] },
+                    { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'standard', 'toml', 'humocoreq', 'humocosig', 'wot'] },
                     { name: 'Transfer File (.transfer)', extensions: ['transfer'] },
                     { name: 'Signature Request (.ask)', extensions: ['ask', 'humocoreq'] },
                     { name: 'Signature Response (.sig)', extensions: ['sig', 'humocosig'] },
                     { name: 'Voucher Standard (.standard, .toml)', extensions: ['standard', 'toml'] },
+                    { name: t('transfer.importFile.wotFilter'), extensions: ['wot'] },
                     { name: 'All Files', extensions: ['*'] }
                 ]
             });
@@ -151,13 +160,15 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 if (fileName.endsWith('.standard') || fileName.endsWith('.toml')) {
                     await processStandardFile(fileData);
                 } else {
-                    let detectedType: 'transfer' | 'ask' | 'sig' | null = null;
+                    let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | null = null;
                     if (fileName.endsWith('.transfer')) {
                         detectedType = 'transfer';
                     } else if (fileName.endsWith('.ask') || fileName.endsWith('.humocoreq')) {
                         detectedType = 'ask';
                     } else if (fileName.endsWith('.sig') || fileName.endsWith('.humocosig')) {
                         detectedType = 'sig';
+                    } else if (fileName.endsWith('.wot')) {
+                        detectedType = 'wot';
                     }
 
                     if (detectedType) {
@@ -178,6 +189,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         setPendingPasswordImport(null);
         setImportStandardModalData(null);
         setPendingPosFallback(null);
+        setWotImportModalData(null);
     }
 
     const [isDragOver, setIsDragOver] = useState(false);
@@ -220,7 +232,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             const file = files[0];
-            const validExtensions = ['.transfer', '.ask', '.sig', '.standard', '.toml', '.humocoreq', '.humocosig'];
+            const validExtensions = ['.transfer', '.ask', '.sig', '.standard', '.toml', '.humocoreq', '.humocosig', '.wot'];
             if (validExtensions.some(ext => file.name.endsWith(ext))) {
                 try {
                     const fileBuffer = await file.arrayBuffer();
@@ -234,10 +246,11 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     if (file.name.endsWith('.standard') || file.name.endsWith('.toml')) {
                         await processStandardFile(bundleData);
                     } else {
-                        let detectedType: 'transfer' | 'ask' | 'sig' | null = null;
+                        let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | null = null;
                         if (file.name.endsWith('.transfer')) detectedType = 'transfer';
                         else if (file.name.endsWith('.ask') || file.name.endsWith('.humocoreq')) detectedType = 'ask';
                         else if (file.name.endsWith('.sig') || file.name.endsWith('.humocosig')) detectedType = 'sig';
+                        else if (file.name.endsWith('.wot')) detectedType = 'wot';
 
                         if (detectedType) {
                             executeReceiveDirectly(bundleData, detectedType, file.name);
@@ -254,7 +267,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
     async function executeReceiveDirectly(
         fileData: number[],
-        type: 'transfer' | 'ask' | 'sig',
+        type: 'transfer' | 'ask' | 'sig' | 'wot',
         name: string,
         password?: string
     ) {
@@ -413,6 +426,18 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                         voucherId: updatedInstanceId
                     });
                 }
+            } else if (type === 'wot') {
+                const wotResult = await protectAction(async (walletPassword) => {
+                    return await wotService.importPackage({
+                        containerBytes: fileData,
+                        containerPassword: password || null,
+                        password: walletPassword || null,
+                    });
+                });
+
+                if (wotResult) {
+                    setWotImportModalData(wotResult);
+                }
             }
         } catch (e) {
             const errorStr = stringifyError(e);
@@ -563,6 +588,39 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
     const handleCancelPosFallback = () => {
         setPendingPosFallback(null);
+        clearSelection();
+    };
+
+    const senderProfile = wotImportModalData?.senderProfile;
+    const senderDisplayName = senderProfile
+        ? (senderProfile.firstName || senderProfile.lastName
+            ? `${senderProfile.firstName || ''} ${senderProfile.lastName || ''}`.trim()
+            : senderProfile.organization || wotImportModalData?.senderDid || '')
+        : (wotImportModalData?.senderDid || '');
+
+    const handleOpenContactFromWot = async () => {
+        if (!wotImportModalData) return;
+        try {
+            const allContacts = await contactService.getContacts();
+            const found = allContacts.find(c => c.did === wotImportModalData.senderDid) || null;
+            setWotExistingContact(found);
+        } catch {
+            setWotExistingContact(null);
+        }
+        setWotContactDialogOpen(true);
+    };
+
+    const handleSaveContactFromWot = async (contact: Contact) => {
+        await protectAction(async (pwd) => {
+            await contactService.saveContact(contact, pwd || undefined);
+        });
+        setWotContactDialogOpen(false);
+        setWotImportModalData(null);
+        clearSelection();
+    };
+
+    const handleCloseWotModal = () => {
+        setWotImportModalData(null);
         clearSelection();
     };
 
@@ -749,7 +807,9 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                         ? t('transfer.importFile.importModalTitleTransfer') 
                         : pendingPasswordImport?.type === 'ask' 
                             ? t('transfer.importFile.importModalTitleAsk') 
-                            : t('transfer.importFile.importModalTitleSig')
+                            : pendingPasswordImport?.type === 'sig'
+                                ? t('transfer.importFile.importModalTitleSig')
+                                : t('transfer.wotImport.title')
                 }
                 description={
                     <div className="space-y-6 pt-2">
@@ -874,6 +934,66 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                         });
                         standardsService.getStandards().then(setVoucherStandards).catch(() => {});
                     }}
+                />
+            )}
+
+            {wotImportModalData && (
+                <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
+                    <div className="bg-bg-app border border-theme-subtle rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+                        <div className="p-6 border-b border-theme-subtle bg-white">
+                            <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-3 border border-emerald-100">
+                                <CheckCircle2 size={24} />
+                            </div>
+                            <h3 className="text-lg font-black text-theme-secondary tracking-tight">
+                                {t('transfer.wotImport.title')}
+                            </h3>
+                            <p className="text-xs text-theme-light mt-1 font-medium">
+                                {t('transfer.wotImport.fromSender', { name: senderDisplayName })}
+                            </p>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            <div className="p-4 bg-white rounded-2xl border border-theme-subtle/60 shadow-sm">
+                                <p className="text-sm font-semibold text-theme-secondary">
+                                    {t('transfer.wotImport.stats', {
+                                        imported: wotImportModalData.imported,
+                                        updated: wotImportModalData.updated,
+                                    })}
+                                </p>
+                                <p className="text-[10px] font-mono text-theme-light/60 mt-2 truncate" title={wotImportModalData.senderDid}>
+                                    {wotImportModalData.senderDid}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="p-4 bg-white border-t border-theme-subtle flex gap-3">
+                            <button
+                                type="button"
+                                onClick={handleCloseWotModal}
+                                className="flex-1 py-2.5 px-4 rounded-xl border border-theme-subtle text-theme-light font-bold text-xs hover:bg-bg-app transition-colors"
+                            >
+                                {t('common.close')}
+                            </button>
+                            <Button
+                                type="button"
+                                onClick={handleOpenContactFromWot}
+                                className="flex-[2] py-2.5 px-4 rounded-xl text-xs font-bold"
+                            >
+                                {wotImportModalData.isKnownContact
+                                    ? t('transfer.wotImport.updateContactAction')
+                                    : t('transfer.wotImport.rateContactAction')}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {wotContactDialogOpen && (
+                <ContactDialog
+                    isOpen={wotContactDialogOpen}
+                    onClose={() => setWotContactDialogOpen(false)}
+                    onSave={handleSaveContactFromWot}
+                    existingContact={wotExistingContact}
+                    initialDid={wotImportModalData?.senderDid}
+                    initialProfile={wotImportModalData?.senderProfile}
                 />
             )}
         </PageLayout>

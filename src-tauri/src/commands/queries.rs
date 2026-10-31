@@ -55,17 +55,33 @@ pub fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<Ve
 #[tauri::command]
 pub fn get_voucher_summaries(test_filter: Option<bool>, state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendVoucherSummary>, FrontendError> {
     let service = state.service.lock().unwrap();
-    let summaries = service.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, test_filter)).map_err(FrontendError::from)?;
-    Ok(summaries.into_iter().map(|s| s.into()).collect())
+    let summaries = service.with_wallet_and_identity(|w, id| {
+        let raw_summaries = w.list_vouchers(Some(id), None, None, test_filter);
+        let mut enriched = Vec::with_capacity(raw_summaries.len());
+        for s in raw_summaries {
+            let mut summary: crate::models::FrontendVoucherSummary = s.into();
+            if let Some(instance) = w.voucher_store.vouchers.get(&summary.local_instance_id) {
+                summary.trust = state.evaluate_voucher_trust(w, &summary.creator_id, &instance.voucher.signatures);
+            }
+            enriched.push(summary);
+        }
+        enriched
+    }).map_err(FrontendError::from)?;
+    Ok(summaries)
 }
 
 #[tauri::command]
 pub fn get_voucher_details(local_id: String, state: tauri::State<AppState>) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     let service = state.service.lock().unwrap();
-    let details = service.with_wallet(|w| w.get_voucher_details(&local_id))
-        .map_err(FrontendError::from)?
-        .map_err(FrontendError::from)?;
-    Ok(details.into())
+    let details = service.with_wallet(|w| -> Result<crate::models::FrontendVoucherDetails, human_money_core::Error> {
+        let raw_details = w.get_voucher_details(&local_id)?;
+        let mut frontend_details: crate::models::FrontendVoucherDetails = raw_details.clone().into();
+        let creator_id = raw_details.voucher.creator_profile.id.as_deref().unwrap_or("");
+        frontend_details.trust = state.evaluate_voucher_trust(w, creator_id, &raw_details.voucher.signatures);
+        Ok(frontend_details)
+    }).map_err(FrontendError::from)?
+    .map_err(FrontendError::from)?;
+    Ok(details)
 }
 
 #[tauri::command]
@@ -168,6 +184,7 @@ mod tests {
             contacts: Mutex::new(None),
             settings: Mutex::new(None),
             regional_views: Mutex::new(None),
+            wot: Mutex::new(None),
         };
         
         let events = state_raw.events.lock().unwrap();

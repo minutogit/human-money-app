@@ -1,6 +1,8 @@
 // src/types/voucher.ts
 
 import { PublicProfile, CreatorData } from './profile';
+import { VoucherTrustDto } from './wot';
+export type { VoucherTrustDto } from './wot';
 
 export type VoucherStatus = 
     | "active" 
@@ -37,6 +39,7 @@ export interface VoucherSummary {
     displayCurrency: string;
     displayStandardName: string;
     allowPartialTransfers: boolean;
+    trust?: VoucherTrustDto;
 }
 
 export interface VoucherStandardInfo {
@@ -221,6 +224,7 @@ export interface VoucherDetails {
     displayCurrency: string;
     displayStandardName: string;
     isTestVoucher: boolean;
+    trust?: VoucherTrustDto;
 }
 
 export interface SignatureImpact {

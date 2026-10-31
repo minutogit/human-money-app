@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendAddressData {
     #[serde(default)]
@@ -43,7 +43,7 @@ impl From<FrontendAddressData> for human_money_core::models::voucher::Address {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendUserProfile {
     pub protocol_version: Option<String>,
@@ -63,6 +63,28 @@ pub struct FrontendUserProfile {
     pub picture_url: Option<String>,
 }
 
+impl From<human_money_core::models::profile::PublicProfile> for FrontendUserProfile {
+    fn from(p: human_money_core::models::profile::PublicProfile) -> Self {
+        Self {
+            protocol_version: p.protocol_version,
+            id: p.id,
+            first_name: p.first_name,
+            last_name: p.last_name,
+            organization: p.organization,
+            community: p.community,
+            address: p.address.map(|a| a.into()),
+            gender: p.gender,
+            email: p.email,
+            phone: p.phone,
+            coordinates: p.coordinates,
+            url: p.url,
+            service_offer: p.service_offer,
+            needs: p.needs,
+            picture_url: None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendContact {
@@ -71,6 +93,14 @@ pub struct FrontendContact {
     pub tags: Vec<String>,
     pub added_at: String,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub trust_level: Option<u8>,
+    #[serde(default)]
+    pub desired_hops: Option<u8>,
+    #[serde(default)]
+    pub has_peer_list: bool,
+    #[serde(default)]
+    pub peer_list_updated_at: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

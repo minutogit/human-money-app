@@ -254,6 +254,7 @@ mod tests {
             contacts: Mutex::new(None),
             settings: Mutex::new(settings),
             regional_views: Mutex::new(None),
+            wot: Mutex::new(None),
         }
     }
 

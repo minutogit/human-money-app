@@ -2,15 +2,17 @@ import { useState, useEffect, useRef } from 'react';
 import { voucherService } from '../services/voucherService';
 import { settingsService } from '../services/settingsService';
 import { standardsService } from '../services/standardsService';
+import { wotService } from '../services/wotService';
 import { save } from '@tauri-apps/plugin-dialog';
 import { logger } from '../utils/log';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { translateRuleMessage, translateGentleHint } from '../utils/signatureHints';
-import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact } from '../types';
+import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact, VoucherTrustDto } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { PageLayout } from './ui/PageLayout';
+import { TrustBadge } from './ui/TrustBadge';
 import { useTranslation } from 'react-i18next';
 import { useSession } from '../context/SessionContext';
 import { 
@@ -47,6 +49,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
     const [standardContent, setStandardContent] = useState<string | null>(null);
     const [impact, setImpact] = useState<SignatureImpact | null>(null);
     const [isImpactLoading, setIsImpactLoading] = useState(false);
+    const [previewTrust, setPreviewTrust] = useState<VoucherTrustDto | null>(null);
 
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -57,6 +60,19 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
             }
         };
     }, []);
+
+    useEffect(() => {
+        const creatorId = voucherData.voucher?.creator?.id;
+        if (!creatorId) return;
+
+        const guarantorIds = (voucherData.voucher.signatures || [])
+            .filter(s => s.role && s.role.toLowerCase() === 'guarantor')
+            .map(s => s.signerId);
+
+        wotService.evaluateVoucherTrustPreview(creatorId, guarantorIds)
+            .then(setPreviewTrust)
+            .catch(e => logger.error(`Failed to evaluate trust preview: ${stringifyError(e)}`));
+    }, [voucherData.voucher]);
 
     useEffect(() => {
         async function fetchData() {
@@ -224,6 +240,10 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                     <span className="text-theme-light flex items-center gap-1.5"><Calendar size={14}/> {t('voucher.signRequest.created')}</span>
                                     <span className="text-theme-secondary font-bold">{formatDateTime(voucherData.voucher.creationDate)}</span>
                                 </div>
+                                <div className="flex items-center justify-between text-xs font-medium">
+                                    <span className="text-theme-light flex items-center gap-1.5"><ShieldCheck size={14}/> {t('voucher.signRequest.requesterTrustLabel')}</span>
+                                    <TrustBadge trust={previewTrust} size="sm" />
+                                </div>
                             </div>
                         </div>
                     </Card>
@@ -278,6 +298,15 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                     <span className="block text-[10px] text-theme-light font-medium">{t('voucher.signRequest.embedProfileData')}</span>
                                 </div>
                             </label>
+
+                            {selectedRole.toLowerCase() === 'guarantor' && (
+                                <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-2xl flex items-start gap-3">
+                                    <Info size={18} className="text-amber-700 shrink-0 mt-0.5" />
+                                    <p className="text-xs font-medium text-amber-900 leading-relaxed">
+                                        {t('voucher.signRequest.guarantorHumanHint').replace(/guarantor/gi, (m) => m[0] + '\u200B' + m.slice(1))}
+                                    </p>
+                                </div>
+                            )}
                         </div>
                     </Card>
                 </div>
