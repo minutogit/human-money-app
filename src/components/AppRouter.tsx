@@ -77,7 +77,7 @@ export const AppRouter: React.FC = () => {
                 onBack={() => navigate({ view: "needs_login" })}
             />;
         case "settings":
-            return <SettingsView onBack={() => navigate({ view: "logged_in" })} />;
+            return <SettingsView onBack={goBack} />;
         case "support":
             return <SupportView onBack={goBack} />;
         case "bug_report":
@@ -113,7 +113,7 @@ export const AppRouter: React.FC = () => {
         case "receive_bundle":
             return <ReceiveView
                 droppedFile={appState.droppedFile}
-                onBack={() => navigate({ view: "logged_in" })}
+                onBack={goBack}
                 onReceiveSuccess={(payload) => {
                     if ('localInstanceId' in payload) {
                         navigate({ view: "sign_request", voucherData: payload as VoucherDetails });
@@ -141,7 +141,7 @@ export const AppRouter: React.FC = () => {
         case "sign_request":
             return <SignRequestView
                 voucherData={appState.voucherData}
-                onBack={() => navigate({ view: "logged_in" })}
+                onBack={goBack}
             />;
         case "conflict_details":
             return <ConflictDetailsView
@@ -150,7 +150,7 @@ export const AppRouter: React.FC = () => {
             />;
         case "conflict_list":
             return <ConflictListView
-                onBack={() => navigate({ view: "logged_in" })}
+                onBack={goBack}
                 onViewConflict={(proofId) => navigate({ view: "conflict_details", proofId, previousView: { view: "conflict_list" } })}
             />;
         case "wallet":

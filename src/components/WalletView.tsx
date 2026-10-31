@@ -144,7 +144,7 @@ export function WalletView() {
             description={t('wallet.description')} 
             onBack={goBack}
             actions={
-                <Button onClick={() => navigate({ view: 'create_voucher' })} size="sm" className="gap-2 px-6">
+                <Button onClick={() => navigate({ view: 'create_voucher' })} size="sm" className="gap-2">
                     <Plus size={18} />
                     {t('common.create')}
                 </Button>

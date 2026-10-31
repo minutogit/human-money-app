@@ -5,6 +5,9 @@ import { contactService } from "../services/contactService";
 import { useSession } from "../context/SessionContext";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
+import { PageLayout } from "./ui/PageLayout";
+import { AlertBanner } from "./ui/AlertBanner";
+import { PageLoadingState, PageEmptyState, PageErrorState } from "./ui/PageState";
 import { FullProofDetails, Contact } from "../types";
 import { translateError, stringifyError } from "../utils/errorHelper";
 import { ShieldAlert, CheckCircle2, Download, FolderOpen } from "lucide-react";
@@ -138,14 +141,27 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
         }
     };
 
-    if (isLoading) return <div className="text-center p-8 text-theme-light">{t('conflict.loadingDetails')}</div>;
-    if (errorMsg) return (
-        <div className="p-8 text-center">
-            <p className="text-red-500 font-bold mb-4">{t('conflict.errorPrefix', { error: errorMsg })}</p>
-            <Button onClick={onBack}>{t('common.back')}</Button>
-        </div>
-    );
-    if (!details) return <div className="text-center p-8 text-theme-light">{t('conflict.proofNotFound')}</div>;
+    if (isLoading) {
+        return (
+            <PageLayout title={t('conflict.title')} onBack={onBack} maxWidth="4xl">
+                <PageLoadingState message={t('conflict.loadingDetails')} />
+            </PageLayout>
+        );
+    }
+    if (errorMsg && !details) {
+        return (
+            <PageLayout title={t('conflict.title')} onBack={onBack} maxWidth="4xl">
+                <PageErrorState message={t('conflict.errorPrefix', { error: errorMsg })} />
+            </PageLayout>
+        );
+    }
+    if (!details) {
+        return (
+            <PageLayout title={t('conflict.title')} onBack={onBack} maxWidth="4xl">
+                <PageEmptyState title={t('conflict.proofNotFound')} />
+            </PageLayout>
+        );
+    }
 
     const { proof, localOverride, conflictRole } = details;
     const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : 'N/A';
@@ -158,58 +174,54 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
     });
 
     return (
-        <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-12">
-            <header className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
-                    <button
-                        onClick={onBack}
-                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95 shrink-0"
-                        title={t('common.back')}
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                        </svg>
-                    </button>
-                    <h1 className="text-xl sm:text-2xl font-bold text-theme-primary flex items-center gap-2 break-words">
-                        <span>{conflictRole === 'victim' ? '🛑' : '👁️'}</span> 
-                        <span className="break-words">{conflictRole === 'victim' ? t('conflict.criticalConflictTitle') : t('conflict.observationReportTitle')}</span>
-                    </h1>
-                </div>
+        <PageLayout
+            title={
+                <span className="inline-flex items-center gap-2">
+                    <span>{conflictRole === 'victim' ? '🛑' : '👁️'}</span>
+                    <span>{conflictRole === 'victim' ? t('conflict.criticalConflictTitle') : t('conflict.observationReportTitle')}</span>
+                </span>
+            }
+            onBack={onBack}
+            maxWidth="4xl"
+            actions={
                 <Button
                     variant="outline"
+                    size="sm"
                     onClick={handleExportProof}
                     disabled={isExporting}
-                    className="flex items-center gap-2 text-xs font-bold shrink-0"
+                    className="gap-2 text-xs font-bold"
                 >
                     <Download size={16} />
                     {isExporting ? t('common.loading') : t('conflict.exportProofBtn')}
                 </Button>
-            </header>
+            }
+        >
+            <div className="space-y-6 animate-in fade-in duration-500 pb-12">
+                {errorMsg && (
+                    <AlertBanner variant="error" onDismiss={() => setErrorMsg('')}>
+                        {errorMsg}
+                    </AlertBanner>
+                )}
 
-            {exportedProofPath && (
-                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3 animate-in fade-in duration-300">
-                    <div className="flex items-center gap-3">
-                        <CheckCircle2 size={20} className="text-emerald-600 shrink-0" />
-                        <div>
-                            <p className="text-xs font-black uppercase tracking-wider text-emerald-900">
-                                {t('conflict.proofExportedTitle')}
-                            </p>
-                            <p className="text-xs font-mono text-emerald-800 break-all">
-                                {exportedProofPath}
-                            </p>
-                        </div>
-                    </div>
-                    <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => revealItemInDir(exportedProofPath).catch(() => {})}
-                        className="flex items-center gap-1.5 text-xs font-bold shrink-0"
+                {exportedProofPath && (
+                    <AlertBanner
+                        variant="success"
+                        title={t('conflict.proofExportedTitle')}
+                        action={
+                            <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => revealItemInDir(exportedProofPath).catch(() => {})}
+                                className="gap-1.5 text-xs font-bold"
+                            >
+                                <FolderOpen size={14} />
+                                {t('transfer.success.revealInFolder')}
+                            </Button>
+                        }
                     >
-                        <FolderOpen size={14} />
-                        {t('transfer.success.revealInFolder')}
-                    </Button>
-                </div>
-            )}
+                        <span className="font-mono text-xs">{exportedProofPath}</span>
+                    </AlertBanner>
+                )}
 
             {conflictRole === 'victim' ? (
                 <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-lg">
@@ -460,6 +472,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                     </div>
                 </div>
             )}
-        </div>
+            </div>
+        </PageLayout>
     );
 }

@@ -7,6 +7,8 @@ import { AuthLayout } from './AuthLayout';
 import { PageLayout } from './ui/PageLayout';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
+import { SegmentedTabs } from './ui/SegmentedTabs';
+import { BackButton } from './ui/BackButton';
 import { 
     BookOpen, 
     ChevronLeft, 
@@ -135,30 +137,16 @@ export const ConceptView: React.FC = () => {
     };
 
     const renderTabs = () => (
-        <div className="flex border-b border-theme-subtle/50 mb-6 bg-slate-50 dark:bg-slate-900/30 p-1.5 rounded-2xl">
-            <button
-                type="button"
-                onClick={() => setActiveTab('short')}
-                className={`flex-1 py-3 text-center text-sm font-bold rounded-xl transition-all cursor-pointer ${
-                    activeTab === 'short'
-                        ? 'bg-white dark:bg-gray-800 text-theme-primary shadow-sm'
-                        : 'text-theme-light hover:text-theme-secondary'
-                }`}
-            >
-                {t('dashboard.conceptTabShort')}
-            </button>
-            <button
-                type="button"
-                onClick={() => setActiveTab('detailed')}
-                className={`flex-1 py-3 text-center text-sm font-bold rounded-xl transition-all cursor-pointer ${
-                    activeTab === 'detailed'
-                        ? 'bg-white dark:bg-gray-800 text-theme-primary shadow-sm'
-                        : 'text-theme-light hover:text-theme-secondary'
-                }`}
-            >
-                {t('dashboard.conceptTabDetailed')}
-            </button>
-        </div>
+        <SegmentedTabs<'short' | 'detailed'>
+            fullWidth
+            className="mb-6"
+            activeTab={activeTab}
+            onChange={setActiveTab}
+            tabs={[
+                { id: 'short', label: t('dashboard.conceptTabShort') },
+                { id: 'detailed', label: t('dashboard.conceptTabDetailed') }
+            ]}
+        />
     );
 
     const renderShortVersion = () => {
@@ -293,7 +281,7 @@ export const ConceptView: React.FC = () => {
         return (
             <AuthLayout maxWidth="max-w-3xl">
                 <div className="space-y-6">
-                    <div className="flex items-center justify-between pb-4 border-b border-theme-subtle/50">
+                    <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-theme-subtle/50">
                         <div className="flex items-center gap-3">
                             <div className="w-10 h-10 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center">
                                 <BookOpen size={20} />
@@ -307,15 +295,7 @@ export const ConceptView: React.FC = () => {
                                 </p>
                             </div>
                         </div>
-                        <Button 
-                            type="button" 
-                            variant="secondary" 
-                            onClick={handleBack}
-                            className="rounded-2xl px-4 py-2 text-xs flex items-center gap-1 cursor-pointer"
-                        >
-                            <ChevronLeft size={16} />
-                            {t('dashboard.conceptBackToLogin')}
-                        </Button>
+                        <BackButton onClick={handleBack} label={t('dashboard.conceptBackToLogin')} />
                     </div>
                     {viewContent}
                 </div>

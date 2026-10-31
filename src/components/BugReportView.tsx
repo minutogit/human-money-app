@@ -6,7 +6,8 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { PageLayout } from './ui/PageLayout';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
-import { Terminal, Copy, ExternalLink, AlertTriangle, Check, Loader2 } from 'lucide-react';
+import { AlertBanner } from './ui/AlertBanner';
+import { Terminal, Copy, ExternalLink, Check, Loader2 } from 'lucide-react';
 import { logger } from '../utils/log';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { copyToClipboard } from '../utils/clipboard';
@@ -69,13 +70,9 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
         >
             <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-10">
                 {/* Privacy Warning Banner */}
-                <div className="flex gap-4 p-5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-900 dark:text-amber-200">
-                    <AlertTriangle className="w-6 h-6 text-amber-500 shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                        <h4 className="font-black text-sm tracking-tight">{t('common.bugReportWarnTitle')}</h4>
-                        <p className="text-xs leading-relaxed opacity-90">{t('common.bugReportWarnDesc')}</p>
-                    </div>
-                </div>
+                <AlertBanner variant="warning" title={t('common.bugReportWarnTitle')}>
+                    {t('common.bugReportWarnDesc')}
+                </AlertBanner>
 
                 {/* Log Viewer Card */}
                 <Card 

@@ -1,7 +1,9 @@
+import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
+import { ModalShell } from './ModalShell';
 
-interface ConfirmationModalProps {
+export interface ConfirmationModalProps {
     isOpen: boolean;
     title: string;
     description: React.ReactNode;
@@ -27,22 +29,34 @@ export function ConfirmationModal({
     confirmDisabled = false
 }: ConfirmationModalProps) {
     const { t } = useTranslation();
-    if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-            <div className="w-full max-w-md rounded-lg bg-bg-card border border-theme-subtle p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-                <h2 className="text-xl font-bold text-theme-primary mb-2">{title}</h2>
-                <div className="text-sm text-theme-light mb-6">{description}</div>
+        <ModalShell
+            isOpen={isOpen}
+            onClose={isProcessing ? undefined : onCancel}
+            maxWidth="md"
+            title={<h2 className="text-xl font-bold text-theme-primary mb-2">{title}</h2>}
+            description={description}
+            footer={
                 <div className="grid grid-cols-2 gap-3">
-                    <Button variant="secondary" onClick={onCancel} disabled={isProcessing} className="w-full">
+                    <Button
+                        variant="secondary"
+                        onClick={onCancel}
+                        disabled={isProcessing}
+                        className="w-full"
+                    >
                         {cancelText || t('common.cancel')}
                     </Button>
-                    <Button variant={confirmVariant} onClick={onConfirm} disabled={isProcessing || confirmDisabled} className="w-full">
+                    <Button
+                        variant={confirmVariant}
+                        onClick={onConfirm}
+                        disabled={isProcessing || confirmDisabled}
+                        className="w-full"
+                    >
                         {isProcessing ? t('common.processing') : (confirmText || t('common.confirm'))}
                     </Button>
                 </div>
-            </div>
-        </div>
+            }
+        />
     );
 }

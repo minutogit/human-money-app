@@ -21,6 +21,10 @@ import { useSession } from '../context/SessionContext';
 import { profileService } from '../services/profileService';
 import { voucherService } from '../services/voucherService';
 import { buildContactCardText } from '../utils/humocoUri';
+import { AlertBanner } from './ui/AlertBanner';
+import { ModalShell } from './ui/ModalShell';
+import { PageLoadingState, PageEmptyState } from './ui/PageState';
+import { truncateUserId } from '../utils/userIdHelper';
 import { 
     UserPlus, 
     Search, 
@@ -290,20 +294,16 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         return matchesSearch && matchesTag;
     });
 
-    const truncateDid = (did: string) => {
-        if (did.length <= 20) return did;
-        return `${did.substring(0, 12)}...${did.substring(did.length - 8)}`;
-    };
-
     return (
         <PageLayout 
             title={t('contacts.title')} 
             description={t('contacts.description')} 
             onBack={onBack}
             actions={
-                <div className="flex items-center gap-3">
+                <>
                     <Button
                         variant="secondary"
+                        size="sm"
                         onClick={handleCopyContactCard}
                         className="gap-2"
                         title={copiedContactCard ? t('contacts.copiedContactCard') : t('contacts.copyContactCard')}
@@ -314,6 +314,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                         </span>
                     </Button>
                     <Button
+                        size="sm"
                         onClick={() => {
                             setEditingContact(null);
                             setIsDialogOpen(true);
@@ -324,27 +325,17 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                         <UserPlus size={18} />
                         <span>{t('contacts.newContact')}</span>
                     </Button>
-                </div>
+                </>
             }
         >
             <div className="max-w-6xl mx-auto space-y-8">
                 {feedbackMsg && (
-                    <div className={`p-4 rounded-2xl border flex items-center justify-between gap-3 animate-in fade-in duration-200 ${
-                        feedbackMsg.type === 'success'
-                            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                            : 'bg-rose-50 border-rose-200 text-rose-800'
-                    }`}>
-                        <p className="text-xs font-bold leading-tight">{feedbackMsg.message}</p>
-                        <button
-                            type="button"
-                            onClick={() => setFeedbackMsg(null)}
-                            className="p-1 rounded-lg hover:bg-black/5 text-current transition-colors"
-                            title={t('common.close')}
-                            aria-label={t('common.close')}
-                        >
-                            <X size={14} />
-                        </button>
-                    </div>
+                    <AlertBanner
+                        variant={feedbackMsg.type}
+                        onDismiss={() => setFeedbackMsg(null)}
+                    >
+                        {feedbackMsg.message}
+                    </AlertBanner>
                 )}
 
                 {/* Trust Network Banner */}
@@ -441,27 +432,24 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
 
                 {/* Contact List */}
                 {isLoading ? (
-                    <div className="py-20 text-center animate-pulse text-theme-light font-black uppercase tracking-[0.2em]">
-                        {t('contacts.loading')}
-                    </div>
+                    <PageLoadingState message={t('contacts.loading')} />
                 ) : filteredContacts.length === 0 ? (
-                    <div className="py-24 flex flex-col items-center justify-center text-center bg-white/30 backdrop-blur-sm rounded-[40px] border-2 border-dashed border-theme-subtle/50">
-                        <div className="p-6 bg-theme-subtle/10 rounded-full text-theme-light mb-6">
-                            <Users size={48} />
-                        </div>
-                        <h3 className="text-2xl font-black text-theme-primary tracking-tight">{t('contacts.emptyTitle')}</h3>
-                        <p className="text-theme-light mt-2 max-w-sm font-medium">{t('contacts.emptyDescription')}</p>
-                        <Button
-                            variant="secondary"
-                            onClick={() => {
-                                setEditingContact(null);
-                                setIsDialogOpen(true);
-                            }}
-                            className="mt-8 rounded-2xl"
-                        >
-                            {t('contacts.addFirstContact')}
-                        </Button>
-                    </div>
+                    <PageEmptyState
+                        icon={<Users size={32} />}
+                        title={contacts.length === 0 ? t('contacts.emptyTitle') : t('contacts.noContactsFound')}
+                        description={t('contacts.emptyDescription')}
+                        action={
+                            <Button
+                                variant="secondary"
+                                onClick={() => {
+                                    setEditingContact(null);
+                                    setIsDialogOpen(true);
+                                }}
+                            >
+                                {t('contacts.addFirstContact')}
+                            </Button>
+                        }
+                    />
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {filteredContacts.map(contact => (
@@ -521,7 +509,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                         <div className="flex items-center gap-1.5 mt-2 mb-4">
                                             <Shield size={12} className="text-theme-light/60" />
                                             <p className="text-[10px] font-mono font-bold text-theme-light/60 truncate" title={contact.did}>
-                                                {truncateDid(contact.did)}
+                                                {truncateUserId(contact.did)}
                                             </p>
                                         </div>
 
@@ -602,102 +590,101 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                 onCancel={() => setDeleteRequest(null)}
             />
 
-            {isExportModalOpen && (
-                <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
-                    <div className="bg-bg-app border border-theme-subtle rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
-                        <div className="p-6 border-b border-theme-subtle bg-white">
-                            <h3 className="text-lg font-black text-theme-secondary">
-                                {t('contacts.exportWotModalTitle')}
-                            </h3>
-                            <p className="text-xs text-theme-light mt-1">
-                                {t('contacts.exportWotModalDesc')}
-                            </p>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <input
-                                type="password"
-                                value={exportPassword}
-                                onChange={(e) => setExportPassword(e.target.value)}
-                                placeholder={t('contacts.exportWotPasswordPlaceholder')}
-                                className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 text-sm shadow-sm"
-                                autoFocus
-                            />
-                        </div>
-                        <div className="p-4 bg-white border-t border-theme-subtle flex justify-end gap-3">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setIsExportModalOpen(false);
-                                    setExportPassword('');
-                                }}
-                                disabled={isExporting}
-                                className="py-2 px-4 rounded-xl border border-theme-subtle text-theme-light font-bold text-xs hover:bg-bg-app transition-colors"
-                            >
-                                {t('common.cancel')}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={handleExportOpenWot}
-                                disabled={isExporting}
-                                className="py-2 px-4 rounded-xl bg-theme-primary text-white font-bold text-xs hover:bg-theme-accent transition-all shadow-md disabled:opacity-50"
-                            >
-                                {isExporting ? t('common.loading') : t('contacts.exportWotButton')}
-                            </button>
-                        </div>
+            <ModalShell
+                isOpen={isExportModalOpen}
+                onClose={() => {
+                    setIsExportModalOpen(false);
+                    setExportPassword('');
+                }}
+                title={t('contacts.exportWotModalTitle')}
+                description={t('contacts.exportWotModalDesc')}
+                footer={
+                    <div className="flex justify-end gap-3">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                                setIsExportModalOpen(false);
+                                setExportPassword('');
+                            }}
+                            disabled={isExporting}
+                        >
+                            {t('common.cancel')}
+                        </Button>
+                        <Button
+                            type="button"
+                            size="sm"
+                            onClick={handleExportOpenWot}
+                            disabled={isExporting}
+                        >
+                            {isExporting ? t('common.loading') : t('contacts.exportWotButton')}
+                        </Button>
                     </div>
+                }
+            >
+                <div className="space-y-4">
+                    <input
+                        type="password"
+                        value={exportPassword}
+                        onChange={(e) => setExportPassword(e.target.value)}
+                        placeholder={t('contacts.exportWotPasswordPlaceholder')}
+                        className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 text-sm shadow-sm"
+                        autoFocus
+                    />
                 </div>
-            )}
+            </ModalShell>
 
-            {isWotPasswordModalOpen && (
-                <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
-                    <div className="bg-bg-app border border-theme-subtle rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
-                        <div className="p-6 border-b border-theme-subtle bg-white">
-                            <h3 className="text-lg font-black text-theme-secondary">
-                                {t('transfer.wotImport.title')}
-                            </h3>
-                            <p className="text-xs text-theme-light mt-1">
-                                {t('transfer.importFile.passwordPlaceholder')}
-                            </p>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <input
-                                type="password"
-                                value={wotContainerPassword}
-                                onChange={(e) => setWotContainerPassword(e.target.value)}
-                                placeholder={t('transfer.importFile.passwordPlaceholder')}
-                                className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 text-sm shadow-sm"
-                                autoFocus
-                            />
-                        </div>
-                        <div className="p-4 bg-white border-t border-theme-subtle flex justify-end gap-3">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setIsWotPasswordModalOpen(false);
-                                    setWotContainerPassword('');
-                                    setPendingWotImportBytes(null);
-                                }}
-                                disabled={isImportingWot}
-                                className="py-2 px-4 rounded-xl border border-theme-subtle text-theme-light font-bold text-xs hover:bg-bg-app transition-colors"
-                            >
-                                {t('common.cancel')}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    if (pendingWotImportBytes) {
-                                        executeImportWot(pendingWotImportBytes, wotContainerPassword);
-                                    }
-                                }}
-                                disabled={isImportingWot}
-                                className="py-2 px-4 rounded-xl bg-theme-primary text-white font-bold text-xs hover:bg-theme-accent transition-all shadow-md disabled:opacity-50"
-                            >
-                                {isImportingWot ? t('common.loading') : t('transfer.importFile.confirmImport')}
-                            </button>
-                        </div>
+            <ModalShell
+                isOpen={isWotPasswordModalOpen}
+                onClose={() => {
+                    setIsWotPasswordModalOpen(false);
+                    setWotContainerPassword('');
+                    setPendingWotImportBytes(null);
+                }}
+                title={t('transfer.wotImport.title')}
+                description={t('transfer.importFile.passwordPlaceholder')}
+                footer={
+                    <div className="flex justify-end gap-3">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                                setIsWotPasswordModalOpen(false);
+                                setWotContainerPassword('');
+                                setPendingWotImportBytes(null);
+                            }}
+                            disabled={isImportingWot}
+                        >
+                            {t('common.cancel')}
+                        </Button>
+                        <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => {
+                                if (pendingWotImportBytes) {
+                                    executeImportWot(pendingWotImportBytes, wotContainerPassword);
+                                }
+                            }}
+                            disabled={isImportingWot}
+                        >
+                            {isImportingWot ? t('common.loading') : t('transfer.importFile.confirmImport')}
+                        </Button>
                     </div>
+                }
+            >
+                <div className="space-y-4">
+                    <input
+                        type="password"
+                        value={wotContainerPassword}
+                        onChange={(e) => setWotContainerPassword(e.target.value)}
+                        placeholder={t('transfer.importFile.passwordPlaceholder')}
+                        className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 text-sm shadow-sm"
+                        autoFocus
+                    />
                 </div>
-            )}
+            </ModalShell>
         </PageLayout>
     );
 };

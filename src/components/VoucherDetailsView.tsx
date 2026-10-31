@@ -20,6 +20,8 @@ import { getMissingProfileHint } from "../utils/signatureHints";
 import { stringifyError, translateError } from "../utils/errorHelper";
 import ContactDialog from "./ContactDialog";
 import { PageLayout } from "./ui/PageLayout";
+import { PageLoadingState, PageErrorState } from "./ui/PageState";
+import { AlertBanner } from "./ui/AlertBanner";
 import { InfoRow } from "./ui/InfoRow";
 import { 
     Shield, 
@@ -195,8 +197,20 @@ export function VoucherDetailsView() {
     const statusInfo = details ? getStatusInfo(details) : null;
     const StatusIcon = statusInfo?.icon;
 
-    if (isLoading) return <div className="text-center p-20 text-theme-light animate-pulse font-black uppercase tracking-[0.2em]">{t('voucher.loadingDetails')}</div>;
-    if (errorMsg || !details || !voucher) return <div className="p-10 text-center text-rose-500 font-bold">{errorMsg || t('voucher.notFound')}</div>;
+    if (isLoading) {
+        return (
+            <PageLayout title={t('voucher.detailsTitle')} onBack={goBack}>
+                <PageLoadingState message={t('common.loading')} />
+            </PageLayout>
+        );
+    }
+    if (errorMsg || !details || !voucher) {
+        return (
+            <PageLayout title={t('voucher.detailsTitle')} onBack={goBack}>
+                <PageErrorState message={errorMsg || t('voucher.notFound')} />
+            </PageLayout>
+        );
+    }
 
     const signatureHint = statusInfo?.id === 'incomplete' && userProfile
         ? (() => {
@@ -335,7 +349,7 @@ export function VoucherDetailsView() {
             description={details.displayStandardName}
             onBack={goBack}
             actions={
-                <div className="flex flex-wrap items-center justify-end gap-2">
+                <>
                     {canRedeemAtIssuer && (
                         <Button 
                             variant="secondary" 
@@ -372,30 +386,18 @@ export function VoucherDetailsView() {
                     >
                         <Json size={18} />
                     </button>
-                </div>
+                </>
             }
         >
 
             <div className="max-w-5xl mx-auto space-y-6">
                 {signatureImportFeedback && (
-                    <div className={`p-4 rounded-2xl flex items-center justify-between gap-3 border shadow-sm animate-in zoom-in duration-300 ${
-                        signatureImportFeedback.type === 'error'
-                            ? 'bg-rose-50 border-rose-100 text-rose-800'
-                            : 'bg-emerald-50 border-emerald-100 text-emerald-800'
-                    }`}>
-                        <div className="flex items-center gap-3">
-                            {signatureImportFeedback.type === 'error' ? <ShieldAlert size={20} className="shrink-0 text-rose-600" /> : <CheckCircle2 size={20} className="shrink-0 text-emerald-600" />}
-                            <p className="text-sm font-bold">{signatureImportFeedback.msg}</p>
-                        </div>
-                        <button
-                            onClick={() => setSignatureImportFeedback(null)}
-                            className="p-1 rounded-lg hover:bg-black/5"
-                            title={t('common.close')}
-                            aria-label={t('common.close')}
-                        >
-                            <X size={16} />
-                        </button>
-                    </div>
+                    <AlertBanner 
+                        variant={signatureImportFeedback.type} 
+                        onDismiss={() => setSignatureImportFeedback(null)}
+                    >
+                        {signatureImportFeedback.msg}
+                    </AlertBanner>
                 )}
 
                 {savedAskFilePath && (

@@ -3,10 +3,16 @@ project: human-money-app
 version: "0.4.0"
 phase: "beta"
 health: "green"
-last_updated: "2026-10-31"
+last_updated: "2026-11-01"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-051"
+    title: "Unified Page Header, Navigation History & Shared UI Primitives Consolidation"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-050"]
+    description: "Fixed header title column squishing ('Adressbuch' single-character wrap), button overlaps, double-scrollbars, and sticky header collisions by establishing a single scroll container in `App.tsx`, anti-squish flex-basis guarantees in `PageLayout` + reusable `BackButton`, a 20-entry `NavigationContext` history stack across all views, and shared `AlertBanner`, `SegmentedTabs`, `ModalShell`, and `PageState` primitives migrated across 16+ views with 41 new unit tests (325 total passing)."
   - id: "APP-050"
     title: "Guided Guarantor Workflow, Issuer Redemption Shortcut & Double-Spend Proof Export/Import"
     status: "completed"

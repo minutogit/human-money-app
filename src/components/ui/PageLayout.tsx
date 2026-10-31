@@ -1,15 +1,25 @@
 import React from 'react';
-import { useTranslation } from 'react-i18next';
+import { BackButton } from './BackButton';
 
-interface PageLayoutProps {
+export interface PageLayoutProps {
     title?: string | React.ReactNode;
     description?: string;
     onBack?: () => void;
     actions?: React.ReactNode;
     customHeader?: React.ReactNode;
+    maxWidth?: '3xl' | '4xl' | '5xl' | '6xl' | 'full';
     children: React.ReactNode;
     className?: string;
+    contentClassName?: string;
 }
+
+const MAX_WIDTH_MAP: Record<NonNullable<PageLayoutProps['maxWidth']>, string> = {
+    '3xl': 'max-w-3xl',
+    '4xl': 'max-w-4xl',
+    '5xl': 'max-w-5xl',
+    '6xl': 'max-w-6xl',
+    'full': 'max-w-full',
+};
 
 export function PageLayout({
     title,
@@ -17,46 +27,37 @@ export function PageLayout({
     onBack,
     actions,
     customHeader,
+    maxWidth,
     children,
-    className = ""
+    className = '',
+    contentClassName = '',
 }: PageLayoutProps) {
-    const { t } = useTranslation();
+    const maxWidthClass = maxWidth ? MAX_WIDTH_MAP[maxWidth] : '';
 
     return (
-        <div className={`flex flex-col h-full ${className}`}>
+        <div className={`flex flex-col min-h-full ${className}`.trim()}>
             {customHeader ? (
                 customHeader
-            ) : (title || onBack) ? (
-                <header className="flex-shrink-0 sticky top-0 z-20 px-6 py-4 mb-2 glass-panel border-b-0 rounded-b-3xl">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                            {onBack && (
-                                <button
-                                    onClick={onBack}
-                                    className="p-2.5 rounded-full bg-white/50 border border-theme-subtle hover:bg-theme-primary hover:text-white transition-all text-theme-light shadow-sm active:scale-90 shrink-0"
-                                    title={t('common.back', 'Back')}
-                                    aria-label={t('common.back', 'Back')}
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                                    </svg>
-                                </button>
-                            )}
+            ) : (title || onBack || actions) ? (
+                <header className="flex-shrink-0 sticky top-0 z-20 px-4 sm:px-6 py-3.5 mb-5 glass-panel border-b-0 rounded-b-3xl">
+                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+                        <div className="flex items-center gap-3 min-w-[min(100%,14rem)] flex-[1_1_14rem]">
+                            {onBack && <BackButton onClick={onBack} />}
                             {title && (
                                 <div className="flex flex-col min-w-0">
                                     {typeof title === 'string' ? (
-                                        <h1 className="text-2xl font-black text-theme-primary tracking-tight break-words">{title}</h1>
+                                        <h1 className="text-xl sm:text-2xl font-black text-theme-primary tracking-tight leading-tight [overflow-wrap:anywhere]">{title}</h1>
                                     ) : (
                                         title
                                     )}
                                     {description && (
-                                        <p className="text-xs font-medium text-theme-light uppercase tracking-widest opacity-70">{description}</p>
+                                        <p className="text-[11px] sm:text-xs font-medium text-theme-light uppercase tracking-wider opacity-75 mt-0.5 leading-snug">{description}</p>
                                     )}
                                 </div>
                             )}
                         </div>
                         {actions && (
-                            <div className="flex flex-wrap items-center justify-end gap-2 shrink-0 max-w-full">
+                            <div className="flex flex-wrap items-center gap-2 sm:justify-end shrink-0 max-w-full ml-auto">
                                 {actions}
                             </div>
                         )}
@@ -64,9 +65,17 @@ export function PageLayout({
                 </header>
             ) : null}
 
-            <div className="flex-grow overflow-y-auto px-6 py-4">
-                {children}
+            <div className={`flex-grow py-2 ${contentClassName}`.trim()}>
+                {maxWidthClass ? (
+                    <div className={`${maxWidthClass} mx-auto w-full`}>
+                        {children}
+                    </div>
+                ) : (
+                    children
+                )}
             </div>
         </div>
     );
 }
+
+export default PageLayout;

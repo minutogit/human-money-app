@@ -11,6 +11,7 @@ import { copyToClipboard } from '../utils/clipboard';
 import { Button } from './ui/Button';
 import { TransactionRecord, Contact } from '../types';
 import { PageLayout } from './ui/PageLayout';
+import { AlertBanner } from './ui/AlertBanner';
 import { formatDateTime, formatSummary, formatAmount } from '../utils/format';
 import { buildStatementCsv } from '../utils/csvExport';
 import ContactDialog from './ContactDialog';
@@ -280,12 +281,12 @@ export function TransactionHistoryView() {
             description={t('history.auditDescription')} 
             onBack={goBack}
             actions={
-                <div className="flex items-center gap-2">
+                <>
                     <Button 
                         variant="secondary"
-                        size="xs"
+                        size="sm"
                         onClick={() => navigate({ view: 'activities', previousView: { view: 'transaction_history' } })}
-                        className="flex items-center gap-1.5 rounded-xl text-xs shadow-sm"
+                        className="gap-1.5 text-xs"
                         title={t('history.eventLogButton')}
                     >
                         <ClipboardList size={14} />
@@ -293,31 +294,25 @@ export function TransactionHistoryView() {
                     </Button>
                     <Button
                         variant="secondary"
-                        size="xs"
+                        size="sm"
                         onClick={handleExportCsv}
-                        className="flex items-center gap-1.5 rounded-xl text-xs bg-theme-primary/10 text-theme-primary hover:bg-theme-primary/20 border-theme-primary/20 shadow-sm"
+                        className="gap-1.5 text-xs"
                         title={t('history.exportCsv')}
                         disabled={filteredHistory.length === 0}
                     >
                         <FileSpreadsheet size={14} />
                         <span className="hidden sm:inline">{t('history.exportCsv')}</span>
                     </Button>
-                </div>
+                </>
             }
         >
             <div className="max-w-4xl mx-auto space-y-5">
                 {/* Export Feedback Banners */}
                 {exportSuccessMsg && (
-                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-2 text-xs font-bold text-emerald-700 animate-in fade-in">
-                        <CheckCircle2 size={16} className="text-emerald-500 shrink-0" />
-                        <span>{exportSuccessMsg}</span>
-                    </div>
+                    <AlertBanner variant="success">{exportSuccessMsg}</AlertBanner>
                 )}
                 {exportErrorMsg && (
-                    <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-2 text-xs font-bold text-rose-700 animate-in fade-in">
-                        <Info size={16} className="text-rose-500 shrink-0" />
-                        <span>{exportErrorMsg}</span>
-                    </div>
+                    <AlertBanner variant="error">{exportErrorMsg}</AlertBanner>
                 )}
 
                 {/* Filter and Search Section */}

@@ -6,10 +6,10 @@ import { useSession } from "../context/SessionContext";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { translateError } from "../utils/errorHelper";
 import { PageLayout } from "./ui/PageLayout";
+import { AlertBanner } from "./ui/AlertBanner";
 import { 
     ShieldAlert, 
     Info, 
-    CheckCircle2,
     Clock,
     AlertCircle,
     Lock, 
@@ -144,10 +144,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         >
             <div className="max-w-5xl mx-auto space-y-8 pb-20">
                 {feedback && (
-                    <div className={`p-5 rounded-3xl flex items-start gap-3 border shadow-sm animate-in zoom-in duration-300 ${feedback.type === 'error' ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
-                        {feedback.type === 'error' ? <ShieldAlert className="shrink-0" size={20}/> : <CheckCircle2 className="shrink-0" size={20}/>}
-                        <p className="text-sm font-bold leading-tight">{feedback.msg}</p>
-                    </div>
+                    <AlertBanner variant={feedback.type}>{feedback.msg}</AlertBanner>
                 )}
 
                 <form onSubmit={handleCreateClick} className="space-y-8">
@@ -189,17 +186,13 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         onCollateralChange={setCollateral}
                     />
 
-                    <div className="bg-amber-500/10 border border-amber-500/20 p-6 rounded-[32px] flex items-start gap-5 shadow-sm">
-                        <div className="p-3 bg-white rounded-2xl shadow-sm text-amber-600">
-                            <Info size={24} />
-                        </div>
-                        <div>
-                            <h3 className="text-sm font-black text-amber-900 uppercase tracking-widest mb-1">{t('voucher.create.publicDataNotice')}</h3>
-                            <p className="text-xs text-amber-800/80 font-medium leading-relaxed">
-                                {t('voucher.create.publicDataNoticeDesc')}
-                            </p>
-                        </div>
-                    </div>
+                    <AlertBanner 
+                        variant="warning" 
+                        icon={<Info size={20} className="text-amber-600" />} 
+                        title={t('voucher.create.publicDataNotice')}
+                    >
+                        {t('voucher.create.publicDataNoticeDesc')}
+                    </AlertBanner>
 
                     <div className="flex flex-col items-center gap-4 py-4">
                         {Object.values(errors).some(v => v) && (

@@ -16,6 +16,8 @@ import { ProfileSettings } from './ProfileSettings';
 import { BackupSettingsCard } from './BackupSettingsCard';
 import { StandardsManager } from './StandardsManager';
 import { PageLayout } from './ui/PageLayout';
+import { SegmentedTabs } from './ui/SegmentedTabs';
+import { AlertBanner } from './ui/AlertBanner';
 import { authService } from '../services/authService';
 import { LanguageSelector } from './ui/LanguageSelector';
 import { 
@@ -270,22 +272,16 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         >
             <div className="max-w-4xl mx-auto">
                 {/* Tab Navigation */}
-                <div className="flex bg-white/30 backdrop-blur-md p-1.5 rounded-2xl border border-theme-subtle mb-10 shadow-inner-soft">
-                    <button 
-                        onClick={() => setActiveTab('profile')}
-                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'profile' ? 'bg-white text-theme-primary shadow-premium' : 'text-theme-light hover:text-theme-secondary hover:bg-white/40'}`}
-                    >
-                        <User size={14} />
-                        {t('settings.tabIdentityProfile')}
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('app')}
-                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'app' ? 'bg-white text-theme-primary shadow-premium' : 'text-theme-light hover:text-theme-secondary hover:bg-white/40'}`}
-                    >
-                        <SettingsIcon size={14} />
-                        {t('settings.tabSecurityOps')}
-                    </button>
-                </div>
+                <SegmentedTabs<'profile' | 'app'>
+                    fullWidth
+                    className="mb-10"
+                    activeTab={activeTab}
+                    onChange={setActiveTab}
+                    tabs={[
+                        { id: 'profile', label: t('settings.tabIdentityProfile'), icon: <User size={14} /> },
+                        { id: 'app', label: t('settings.tabSecurityOps'), icon: <SettingsIcon size={14} /> }
+                    ]}
+                />
 
                 {activeTab === 'profile' ? (
                     <ProfileSettings />
@@ -807,8 +803,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                 {isSaving ? <Clock className="animate-spin" size={18} /> : <Save size={18} />}
                                 {isSaving ? t('settings.saving') : t('settings.saveButton')}
                             </Button>
-                            {error && <p className="text-sm font-bold text-rose-500 animate-bounce">{error}</p>}
-                            {success && <p className="text-sm font-bold text-emerald-500 flex items-center gap-2"><CheckCircle2 size={16}/> {success}</p>}
+                            {error && <AlertBanner variant="error" className="w-full max-w-md">{error}</AlertBanner>}
+                            {success && <AlertBanner variant="success" className="w-full max-w-md">{success}</AlertBanner>}
                             {/* Hidden version trigger */}
                             <span
                                 onClick={handleDevModeClick}

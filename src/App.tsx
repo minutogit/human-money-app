@@ -40,10 +40,9 @@ function AppContent() {
                 <Sidebar />
 
                 <GlobalFileDropZone>
-                    <div className="flex flex-1 flex-col overflow-y-auto">
+                    <div className="flex flex-1 flex-col min-w-0 h-full overflow-hidden">
                         <Header />
-
-                        <main className="w-full flex-grow p-4 md:p-6 lg:p-8">
+                        <main className="w-full flex-1 min-h-0 overflow-y-auto px-3 sm:px-5 lg:px-8 pb-6">
                             <AppRouter />
                         </main>
                     </div>

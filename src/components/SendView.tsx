@@ -28,18 +28,18 @@ import { HelpIcon } from "./ui/HelpIcon";
 import { useSession } from "../context/SessionContext";
 import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { PageLayout } from "./ui/PageLayout";
+import { AlertBanner } from "./ui/AlertBanner";
+import { ModalShell } from "./ui/ModalShell";
 import { formatAmount } from "../utils/format";
 import { readFromClipboard } from "../utils/clipboard";
 import { parsePaymentRequest } from "../utils/humocoUri";
 import { 
     Shield, 
     BookOpen,
-    AlertTriangle,
     UserCheck,
     Search,
     X,
-    Clipboard,
-    CheckCircle2
+    Clipboard
 } from "lucide-react";
 import Avatar from "boring-avatars";
 
@@ -524,9 +524,10 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
             actions={
                 <Button
                     variant="secondary"
+                    size="sm"
                     onClick={handlePastePaymentRequest}
                     title={t('transfer.pastePaymentRequestHint')}
-                    className="gap-2 text-xs py-2 px-3.5 shadow-sm whitespace-normal text-left"
+                    className="gap-2 text-xs shadow-sm"
                 >
                     <Clipboard size={16} className="shrink-0" />
                     <span>{t('transfer.pastePaymentRequest')}</span>
@@ -535,17 +536,15 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
         >
             <div className="max-w-5xl mx-auto space-y-8 pb-32">
                 {paymentRequestSuccessMsg && (
-                    <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-3 animate-in slide-in-from-top-2">
-                        <CheckCircle2 className="text-emerald-600 shrink-0" size={18} />
-                        <p className="text-sm font-bold text-emerald-800 leading-tight">{paymentRequestSuccessMsg}</p>
-                    </div>
+                    <AlertBanner variant="success">
+                        {paymentRequestSuccessMsg}
+                    </AlertBanner>
                 )}
 
                 {state.feedbackMsg && (
-                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3 animate-in slide-in-from-top-2">
-                        <AlertTriangle className="text-rose-500 shrink-0" size={18} />
-                        <p className="text-sm font-bold text-rose-800 leading-tight">{state.feedbackMsg}</p>
-                    </div>
+                    <AlertBanner variant="error">
+                        {state.feedbackMsg}
+                    </AlertBanner>
                 )}
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -805,80 +804,81 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
             />
 
             {/* Contact Picker Modal */}
-            {showContactPicker && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-white rounded-[32px] p-6 max-w-lg w-full max-h-[85vh] flex flex-col shadow-2xl border border-theme-subtle">
-                        <div className="flex items-center justify-between pb-4 border-b border-theme-subtle">
-                            <h3 className="text-base font-black text-theme-secondary uppercase tracking-wider">
-                                {t('contacts.selectContactTitle')}
-                            </h3>
-                            <button
-                                type="button"
-                                onClick={() => { setShowContactPicker(false); setContactSearchQuery(""); }}
-                                title={t('common.close')}
-                                aria-label={t('common.close')}
-                                className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition-colors"
-                            >
-                                <X size={20} />
-                            </button>
-                        </div>
-
-                        <div className="py-4">
-                            <div className="relative">
-                                <Input
-                                    value={contactSearchQuery}
-                                    onChange={(e) => setContactSearchQuery(e.target.value)}
-                                    placeholder={t('contacts.searchPlaceholder', 'Search contacts...')}
-                                    className="pl-10 text-xs rounded-2xl"
-                                    autoFocus
-                                />
-                                <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-theme-light" />
-                            </div>
-                        </div>
-
-                        <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                            {(() => {
-                                const q = contactSearchQuery.toLowerCase().trim();
-                                const filtered = contacts.filter(c =>
-                                    !q ||
-                                    c.did.toLowerCase().includes(q) ||
-                                    (c.profile.firstName || '').toLowerCase().includes(q) ||
-                                    (c.profile.lastName || '').toLowerCase().includes(q) ||
-                                    (c.profile.organization || '').toLowerCase().includes(q)
-                                );
-                                if (filtered.length === 0) {
-                                    return (
-                                        <div className="text-center py-8 text-theme-light text-xs font-medium">
-                                            {contacts.length === 0 ? t('contacts.emptyContacts') : t('contacts.noContactsFound')}
-                                        </div>
-                                    );
-                                }
-                                return filtered.map(c => {
-                                    const name = [(c.profile.firstName || ''), (c.profile.lastName || '')].join(' ').trim() || c.profile.organization || t('transfer.anonymous');
-                                    return (
-                                        <button
-                                            key={c.did}
-                                            type="button"
-                                            onClick={() => {
-                                                dispatch({ type: 'SET_RECIPIENT', id: c.did });
-                                                setShowContactPicker(false);
-                                                setContactSearchQuery("");
-                                            }}
-                                            className="w-full flex items-center gap-3.5 p-3 hover:bg-theme-primary/5 rounded-2xl text-left border border-transparent hover:border-theme-primary/20 transition-all cursor-pointer"
-                                        >
-                                            <Avatar size={36} name={c.did} variant="beam" />
-                                            <div className="min-w-0 flex-1">
-                                                <p className="text-sm font-bold text-theme-secondary truncate">{name}</p>
-                                                <p className="text-[10px] font-mono text-theme-light truncate">{c.did}</p>
-                                            </div>
-                                        </button>
-                                    );
-                                });
-                            })()}
-                        </div>
+            <ModalShell
+                isOpen={showContactPicker}
+                onClose={() => { setShowContactPicker(false); setContactSearchQuery(""); }}
+                maxWidth="md"
+                title={
+                    <div className="flex items-center justify-between pb-2 border-b border-theme-subtle">
+                        <h3 className="text-base font-black text-theme-secondary uppercase tracking-wider">
+                            {t('contacts.selectContactTitle')}
+                        </h3>
+                        <button
+                            type="button"
+                            onClick={() => { setShowContactPicker(false); setContactSearchQuery(""); }}
+                            title={t('common.close')}
+                            aria-label={t('common.close')}
+                            className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                        >
+                            <X size={20} />
+                        </button>
+                    </div>
+                }
+            >
+                <div className="py-2">
+                    <div className="relative">
+                        <Input
+                            value={contactSearchQuery}
+                            onChange={(e) => setContactSearchQuery(e.target.value)}
+                            placeholder={t('contacts.searchPlaceholder', 'Search contacts...')}
+                            className="pl-10 text-xs rounded-2xl"
+                            autoFocus
+                        />
+                        <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-theme-light" />
                     </div>
                 </div>
-            )}
+
+                <div className="space-y-2 pr-1">
+                    {(() => {
+                        const q = contactSearchQuery.toLowerCase().trim();
+                        const filtered = contacts.filter(c =>
+                            !q ||
+                            c.did.toLowerCase().includes(q) ||
+                            (c.profile.firstName || '').toLowerCase().includes(q) ||
+                            (c.profile.lastName || '').toLowerCase().includes(q) ||
+                            (c.profile.organization || '').toLowerCase().includes(q)
+                        );
+                        if (filtered.length === 0) {
+                            return (
+                                <div className="text-center py-8 text-theme-light text-xs font-medium">
+                                    {contacts.length === 0 ? t('contacts.emptyContacts') : t('contacts.noContactsFound')}
+                                </div>
+                            );
+                        }
+                        return filtered.map(c => {
+                            const name = [(c.profile.firstName || ''), (c.profile.lastName || '')].join(' ').trim() || c.profile.organization || t('transfer.anonymous');
+                            return (
+                                <button
+                                    key={c.did}
+                                    type="button"
+                                    onClick={() => {
+                                        dispatch({ type: 'SET_RECIPIENT', id: c.did });
+                                        setShowContactPicker(false);
+                                        setContactSearchQuery("");
+                                    }}
+                                    className="w-full flex items-center gap-3.5 p-3 hover:bg-theme-primary/5 rounded-2xl text-left border border-transparent hover:border-theme-primary/20 transition-all cursor-pointer"
+                                >
+                                    <Avatar size={36} name={c.did} variant="beam" />
+                                    <div className="min-w-0 flex-1">
+                                        <p className="text-sm font-bold text-theme-secondary truncate">{name}</p>
+                                        <p className="text-[10px] font-mono text-theme-light truncate">{c.did}</p>
+                                    </div>
+                                </button>
+                            );
+                        });
+                    })()}
+                </div>
+            </ModalShell>
         </PageLayout>
     );
 }

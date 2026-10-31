@@ -14,6 +14,7 @@ import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { PageLayout } from './ui/PageLayout';
+import { AlertBanner } from './ui/AlertBanner';
 import { TrustBadge } from './ui/TrustBadge';
 import { useTranslation } from 'react-i18next';
 import { useSession } from '../context/SessionContext';
@@ -290,10 +291,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
         >
             <div className="max-w-4xl mx-auto space-y-8 pb-10">
                 {feedbackMsg && (
-                    <div className={`p-5 rounded-3xl flex items-start gap-3 border shadow-sm animate-in zoom-in duration-300 ${feedbackType === 'error' ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
-                        {feedbackType === 'error' ? <ShieldAlert className="shrink-0" size={20}/> : <CheckCircle2 className="shrink-0" size={20}/>}
-                        <p className="text-sm font-bold leading-tight">{feedbackMsg}</p>
-                    </div>
+                    <AlertBanner variant={feedbackType || undefined}>{feedbackMsg}</AlertBanner>
                 )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">

@@ -35,6 +35,9 @@ import {
     PublicProfile
 } from '../types';
 import { PageLayout } from './ui/PageLayout';
+import { SegmentedTabs } from './ui/SegmentedTabs';
+import { AlertBanner } from './ui/AlertBanner';
+import { ModalShell } from './ui/ModalShell';
 import { ImportStandardModal } from './ImportStandardModal';
 import { 
     UploadCloud, 
@@ -747,38 +750,21 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
         >
             <div className="max-w-3xl mx-auto space-y-8">
                 {/* Mode Tabs */}
-                <div className="flex items-center justify-center">
-                    <div className="p-1.5 bg-slate-100 rounded-2xl flex items-center gap-1 border border-theme-subtle/50">
-                        <button
-                            type="button"
-                            onClick={() => setActiveTab('import')}
-                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${
-                                activeTab === 'import'
-                                    ? 'bg-white text-theme-primary shadow-sm'
-                                    : 'text-theme-light hover:text-theme-secondary'
-                            }`}
-                        >
-                            {t('transfer.receiveTabs.importFile')}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setActiveTab('request')}
-                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${
-                                activeTab === 'request'
-                                    ? 'bg-white text-theme-primary shadow-sm'
-                                    : 'text-theme-light hover:text-theme-secondary'
-                            }`}
-                        >
-                            {t('transfer.receiveTabs.requestPayment')}
-                        </button>
-                    </div>
+                <div className="flex justify-center">
+                    <SegmentedTabs<'import' | 'request'>
+                        activeTab={activeTab}
+                        onChange={setActiveTab}
+                        tabs={[
+                            { id: 'import', label: t('transfer.receiveTabs.importFile') },
+                            { id: 'request', label: t('transfer.receiveTabs.requestPayment') }
+                        ]}
+                    />
                 </div>
 
                 {feedbackMsg && (
-                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-start gap-3 animate-in shake duration-500">
-                        <AlertCircle className="text-rose-500 shrink-0" size={18} />
-                        <p className="text-sm font-bold text-rose-800 leading-tight">{feedbackMsg}</p>
-                    </div>
+                    <AlertBanner variant="error">
+                        {feedbackMsg}
+                    </AlertBanner>
                 )}
 
                 {activeTab === 'request' ? (
@@ -1194,54 +1180,58 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                 />
             )}
 
-            {wotImportModalData && (
-                <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
-                    <div className="bg-bg-app border border-theme-subtle rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
-                        <div className="p-6 border-b border-theme-subtle bg-white">
-                            <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-3 border border-emerald-100">
-                                <CheckCircle2 size={24} />
-                            </div>
-                            <h3 className="text-lg font-black text-theme-secondary tracking-tight">
-                                {t('transfer.wotImport.title')}
-                            </h3>
-                            <p className="text-xs text-theme-light mt-1 font-medium">
-                                {t('transfer.wotImport.fromSender', { name: senderDisplayName })}
+            <ModalShell
+                isOpen={!!wotImportModalData}
+                onClose={handleCloseWotModal}
+                maxWidth="md"
+                title={
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-100">
+                            <CheckCircle2 size={20} />
+                        </div>
+                        <h3 className="text-lg font-black text-theme-secondary tracking-tight">
+                            {t('transfer.wotImport.title')}
+                        </h3>
+                    </div>
+                }
+                description={t('transfer.wotImport.fromSender', { name: senderDisplayName })}
+                footer={
+                    <div className="flex gap-3">
+                        <button
+                            type="button"
+                            onClick={handleCloseWotModal}
+                            className="flex-1 py-2.5 px-4 rounded-xl border border-theme-subtle text-theme-light font-bold text-xs hover:bg-bg-app transition-colors cursor-pointer"
+                        >
+                            {t('common.close')}
+                        </button>
+                        <Button
+                            type="button"
+                            onClick={handleOpenContactFromWot}
+                            className="flex-[2] py-2.5 px-4 rounded-xl text-xs font-bold"
+                        >
+                            {wotImportModalData?.isKnownContact
+                                ? t('transfer.wotImport.updateContactAction')
+                                : t('transfer.wotImport.rateContactAction')}
+                        </Button>
+                    </div>
+                }
+            >
+                {wotImportModalData && (
+                    <div className="space-y-4">
+                        <div className="p-4 bg-white rounded-2xl border border-theme-subtle/60 shadow-sm">
+                            <p className="text-sm font-semibold text-theme-secondary">
+                                {t('transfer.wotImport.stats', {
+                                    imported: wotImportModalData.imported,
+                                    updated: wotImportModalData.updated,
+                                })}
+                            </p>
+                            <p className="text-[10px] font-mono text-theme-light/60 mt-2 truncate" title={wotImportModalData.senderDid}>
+                                {wotImportModalData.senderDid}
                             </p>
                         </div>
-                        <div className="p-6 space-y-4">
-                            <div className="p-4 bg-white rounded-2xl border border-theme-subtle/60 shadow-sm">
-                                <p className="text-sm font-semibold text-theme-secondary">
-                                    {t('transfer.wotImport.stats', {
-                                        imported: wotImportModalData.imported,
-                                        updated: wotImportModalData.updated,
-                                    })}
-                                </p>
-                                <p className="text-[10px] font-mono text-theme-light/60 mt-2 truncate" title={wotImportModalData.senderDid}>
-                                    {wotImportModalData.senderDid}
-                                </p>
-                            </div>
-                        </div>
-                        <div className="p-4 bg-white border-t border-theme-subtle flex gap-3">
-                            <button
-                                type="button"
-                                onClick={handleCloseWotModal}
-                                className="flex-1 py-2.5 px-4 rounded-xl border border-theme-subtle text-theme-light font-bold text-xs hover:bg-bg-app transition-colors"
-                            >
-                                {t('common.close')}
-                            </button>
-                            <Button
-                                type="button"
-                                onClick={handleOpenContactFromWot}
-                                className="flex-[2] py-2.5 px-4 rounded-xl text-xs font-bold"
-                            >
-                                {wotImportModalData.isKnownContact
-                                    ? t('transfer.wotImport.updateContactAction')
-                                    : t('transfer.wotImport.rateContactAction')}
-                            </Button>
-                        </div>
                     </div>
-                </div>
-            )}
+                )}
+            </ModalShell>
 
             {wotContactDialogOpen && (
                 <ContactDialog

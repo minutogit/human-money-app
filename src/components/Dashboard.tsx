@@ -288,8 +288,8 @@ export function Dashboard() {
     return (
         <PageLayout 
             customHeader={
-                <header className="flex-shrink-0 sticky top-0 z-30 px-6 py-2 glass-panel border-b-0 rounded-b-3xl mb-4">
-                    <div className="flex items-center justify-between gap-3 text-[10px] sm:text-xs font-bold text-theme-light">
+                <header className="flex-shrink-0 sticky top-0 z-20 px-4 sm:px-6 py-2.5 glass-panel border-b-0 rounded-b-3xl mb-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3 text-[10px] sm:text-xs font-bold text-theme-light">
                         <div className="flex items-center gap-3 min-w-0">
                             <span className="relative flex h-2 w-2 shrink-0">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>

@@ -5,6 +5,8 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { AuthLayout } from './AuthLayout';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
+import { BackButton } from './ui/BackButton';
+import { AlertBanner } from './ui/AlertBanner';
 import { Input } from './ui/Input';
 import { Textarea } from './ui/Textarea';
 import { backupService } from '../services/backupService';
@@ -19,9 +21,7 @@ import {
     KeyRound, 
     Lock, 
     CheckCircle2, 
-    AlertCircle, 
     ShieldCheck, 
-    ArrowLeft, 
     ArrowRight, 
     RefreshCw,
     Folder,
@@ -251,16 +251,24 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
     return (
         <AuthLayout maxWidth="max-w-3xl">
             {/* Header */}
-            <div className="flex items-center justify-between pb-2 border-b border-theme-subtle">
-                <button
-                    type="button"
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-theme-subtle">
+                <div
                     data-testid="restore-back-btn"
-                    onClick={step === 'unlock_and_inspect' ? () => setStep('select_source') : onBack}
-                    className="flex items-center gap-2 text-xs font-bold text-theme-light hover:text-theme-primary transition-colors cursor-pointer"
+                    onClick={(e) => {
+                        if (e.target === e.currentTarget) {
+                            if (step === 'unlock_and_inspect') {
+                                setStep('select_source');
+                            } else {
+                                onBack();
+                            }
+                        }
+                    }}
                 >
-                    <ArrowLeft size={16} />
-                    <span>{t('common.back')}</span>
-                </button>
+                    <BackButton
+                        onClick={step === 'unlock_and_inspect' ? () => setStep('select_source') : onBack}
+                        label={t('common.back')}
+                    />
+                </div>
                 <div className="text-right">
                     <span className="text-[10px] font-black uppercase tracking-widest text-theme-primary">
                         HuMoCo Backup L1
@@ -298,20 +306,9 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
 
             {/* Feedback Alert */}
             {feedback && (
-                <div
-                    className={`p-4 rounded-2xl border flex items-start gap-3 text-xs font-semibold ${
-                        feedback.type === 'success'
-                            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                            : 'bg-rose-50 border-rose-200 text-rose-800'
-                    }`}
-                >
-                    {feedback.type === 'success' ? (
-                        <CheckCircle2 size={16} className="text-emerald-500 shrink-0 mt-0.5" />
-                    ) : (
-                        <AlertCircle size={16} className="text-rose-500 shrink-0 mt-0.5" />
-                    )}
-                    <span className="leading-snug">{feedback.message}</span>
-                </div>
+                <AlertBanner variant={feedback.type}>
+                    {feedback.message}
+                </AlertBanner>
             )}
 
             {/* STEP 1: Select Backup Source */}

@@ -4,8 +4,12 @@ import { integrityService } from "../services/integrityService";
 import { useSession } from "../context/SessionContext";
 import { logger } from "../utils/log";
 import { translateError, stringifyError } from "../utils/errorHelper";
+import { truncateUserId } from "../utils/userIdHelper";
 import { ProofOfDoubleSpendSummary } from "../types";
+import { PageLayout } from "./ui/PageLayout";
 import { Button } from "./ui/Button";
+import { AlertBanner } from "./ui/AlertBanner";
+import { PageLoadingState, PageEmptyState, PageErrorState } from "./ui/PageState";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { Upload } from "lucide-react";
@@ -75,32 +79,6 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
         return new Date(isoString).toLocaleString();
     }
 
-    function truncateId(id: string): string {
-        return `${id.substring(0, 12)}...${id.substring(id.length - 8)}`;
-    }
-
-    if (isLoading) {
-        return (
-            <div className="flex h-full items-center justify-center">
-                <p className="text-theme-light">{t('conflict.loading')}</p>
-            </div>
-        );
-    }
-
-    if (errorMsg) {
-        return (
-            <div className="p-6">
-                <div className="text-center p-8 text-theme-error bg-red-100 rounded-lg">
-                    <p className="font-bold">{t('conflict.loadErrorTitle')}</p>
-                    <p className="text-sm mt-2 font-mono">{errorMsg}</p>
-                    <Button onClick={onBack} variant="secondary" className="mt-4">
-                        {t('common.back')}
-                    </Button>
-                </div>
-            </div>
-        );
-    }
-
     const victimConflicts = conflicts.filter(c => c.conflictRole === "victim");
     const witnessConflicts = conflicts.filter(c => c.conflictRole === "witness");
 
@@ -155,10 +133,10 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                              </div>
                         )}
                         <p className="text-sm text-theme-light">
-                            {t('conflict.idLabel')} <span className="font-mono text-xs">{truncateId(conflict.proofId)}</span>
+                            {t('conflict.idLabel')} <span className="font-mono text-xs">{truncateUserId(conflict.proofId)}</span>
                         </p>
                         <p className="text-sm text-theme-light">
-                            {t('conflict.offenderLabel')} <span className="font-mono text-xs">{truncateId(conflict.offenderId)}</span>
+                            {t('conflict.offenderLabel')} <span className="font-mono text-xs">{truncateUserId(conflict.offenderId)}</span>
                         </p>
                         <p className="text-sm text-theme-light">
                             {t('conflict.reportedLabel', { date: formatTimestamp(conflict.reportTimestamp) })}
@@ -175,7 +153,7 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                 </div>
                 <div className="border-t border-theme-subtle pt-3">
                     <p className="text-xs text-theme-light">
-                        <strong>{t('conflict.forkPointLabel')}</strong> <span className="font-mono">{truncateId(conflict.forkPointPrevHash)}</span>
+                        <strong>{t('conflict.forkPointLabel')}</strong> <span className="font-mono">{truncateUserId(conflict.forkPointPrevHash)}</span>
                     </p>
                 </div>
             </div>
@@ -183,79 +161,86 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
     );
 
     return (
-        <div className="flex flex-col h-full">
-            <header className="flex flex-wrap items-center justify-between gap-3 border-b border-theme-subtle px-4 sm:px-6 py-4 bg-bg-card">
-                <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
-                    <button
-                        onClick={onBack}
-                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95 shrink-0"
-                        title={t('common.back')}
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                        </svg>
-                    </button>
-                    <h1 className="text-xl sm:text-2xl font-bold text-theme-primary break-words">{t('conflict.title')}</h1>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
+        <PageLayout
+            title={t('conflict.title')}
+            onBack={onBack}
+            maxWidth="4xl"
+            actions={
+                <>
                     <Button
                         size="sm"
                         variant="secondary"
                         onClick={handleImportProof}
                         disabled={isImporting}
-                        className="flex items-center gap-1.5 text-xs font-bold"
+                        className="gap-1.5 text-xs font-bold"
                     >
                         <Upload size={14} />
                         {isImporting ? t('common.loading') : t('conflict.importProofBtn')}
                     </Button>
-                    <div className="text-sm text-theme-light">
-                        {conflicts.length === 1 ? t('conflict.reportTotalCount', { count: conflicts.length }) : t('conflict.reportsTotalCount', { count: conflicts.length })}
-                    </div>
-                </div>
-            </header>
+                    {!isLoading && !errorMsg && (
+                        <span className="text-xs font-semibold text-theme-light px-2">
+                            {conflicts.length === 1
+                                ? t('conflict.reportTotalCount', { count: conflicts.length })
+                                : t('conflict.reportsTotalCount', { count: conflicts.length })}
+                        </span>
+                    )}
+                </>
+            }
+        >
+            {isLoading ? (
+                <PageLoadingState message={t('conflict.loading')} />
+            ) : errorMsg && conflicts.length === 0 ? (
+                <PageErrorState title={t('conflict.loadErrorTitle')} message={errorMsg} />
+            ) : (
+                <div className="space-y-8">
+                    {errorMsg && (
+                        <AlertBanner variant="error" onDismiss={() => setErrorMsg('')}>
+                            {errorMsg}
+                        </AlertBanner>
+                    )}
 
-            <div className="flex-grow overflow-y-auto p-4 sm:p-6 bg-bg-main">
-                {conflicts.length === 0 ? (
-                    <div className="text-center py-12">
-                        <div className="text-6xl mb-4">✅</div>
-                        <h2 className="text-xl font-semibold text-theme-primary mb-2">{t('conflict.noConflictsTitle')}</h2>
-                        <p className="text-theme-light">{t('conflict.noConflictsDescription')}</p>
-                    </div>
-                ) : (
-                    <div className="max-w-4xl mx-auto space-y-8">
-                        {victimConflicts.length > 0 && (
-                            <section className="space-y-4">
-                                <h2 className="text-lg font-bold text-red-700 flex items-center gap-2">
-                                    <span className="flex h-3 w-3 rounded-full bg-red-600 animate-pulse"></span>
-                                    {t('conflict.victimConflictsHeader', { count: victimConflicts.length })}
-                                </h2>
-                                <div className="space-y-4">
-                                    {victimConflicts.map(c => <ConflictCard key={c.proofId} conflict={c} />)}
-                                </div>
-                            </section>
-                        )}
-
-                        {witnessConflicts.length > 0 && (
-                            <section className="space-y-4">
-                                <h2 className="text-lg font-bold text-theme-light flex items-center gap-2">
-                                    {t('conflict.witnessConflictsHeader', { count: witnessConflicts.length })}
-                                </h2>
-                                <details className="group">
-                                    <summary className="list-none cursor-pointer flex items-center gap-2 text-theme-light hover:text-theme-primary transition-colors py-2 font-medium">
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 transform group-open:rotate-180 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                        </svg>
-                                        {t('conflict.showWitnessConflicts')}
-                                    </summary>
-                                    <div className="space-y-4 mt-4 pt-4 border-t border-theme-subtle">
-                                        {witnessConflicts.map(c => <ConflictCard key={c.proofId} conflict={c} />)}
+                    {conflicts.length === 0 ? (
+                        <PageEmptyState
+                            icon={<span className="text-3xl">✅</span>}
+                            title={t('conflict.noConflictsTitle')}
+                            description={t('conflict.noConflictsDescription')}
+                        />
+                    ) : (
+                        <>
+                            {victimConflicts.length > 0 && (
+                                <section className="space-y-4">
+                                    <h2 className="text-lg font-bold text-red-700 flex items-center gap-2">
+                                        <span className="flex h-3 w-3 rounded-full bg-red-600 animate-pulse"></span>
+                                        {t('conflict.victimConflictsHeader', { count: victimConflicts.length })}
+                                    </h2>
+                                    <div className="space-y-4">
+                                        {victimConflicts.map(c => <ConflictCard key={c.proofId} conflict={c} />)}
                                     </div>
-                                </details>
-                            </section>
-                        )}
-                    </div>
-                )}
-            </div>
-        </div>
+                                </section>
+                            )}
+
+                            {witnessConflicts.length > 0 && (
+                                <section className="space-y-4">
+                                    <h2 className="text-lg font-bold text-theme-light flex items-center gap-2">
+                                        {t('conflict.witnessConflictsHeader', { count: witnessConflicts.length })}
+                                    </h2>
+                                    <details className="group">
+                                        <summary className="list-none cursor-pointer flex items-center gap-2 text-theme-light hover:text-theme-primary transition-colors py-2 font-medium">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 transform group-open:rotate-180 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                            </svg>
+                                            {t('conflict.showWitnessConflicts')}
+                                        </summary>
+                                        <div className="space-y-4 mt-4 pt-4 border-t border-theme-subtle">
+                                            {witnessConflicts.map(c => <ConflictCard key={c.proofId} conflict={c} />)}
+                                        </div>
+                                    </details>
+                                </section>
+                            )}
+                        </>
+                    )}
+                </div>
+            )}
+        </PageLayout>
     );
 }

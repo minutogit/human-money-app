@@ -7,6 +7,8 @@ import { stringifyError } from '../utils/errorHelper';
 import { WalletEvent } from '../types';
 import { PageLayout } from './ui/PageLayout';
 import { Button } from './ui/Button';
+import { PageLoadingState, PageEmptyState } from './ui/PageState';
+import { AlertBanner } from './ui/AlertBanner';
 import { formatDateTime } from '../utils/format';
 import { 
     PlusCircle, 
@@ -96,9 +98,9 @@ export function Activities() {
             actions={
                 <Button
                     variant="secondary"
-                    size="xs"
+                    size="sm"
                     onClick={() => navigate({ view: 'transaction_history' })}
-                    className="flex items-center gap-1.5 rounded-xl text-xs"
+                    className="gap-1.5 text-xs"
                     title={t('history.backToStatement')}
                 >
                     <History size={14} />
@@ -108,15 +110,11 @@ export function Activities() {
         >
             <div className="max-w-4xl mx-auto space-y-6">
                 {isLoading && (
-                    <div className="py-20 text-center animate-pulse text-theme-light font-black uppercase tracking-[0.2em]">
-                        {t('history.loadingActivities')}
-                    </div>
+                    <PageLoadingState message={t('history.loadingActivities')} />
                 )}
                 
                 {error && (
-                    <div className="p-8 text-center bg-rose-50 border border-rose-100 rounded-3xl text-rose-500 font-bold">
-                        {error}
-                    </div>
+                    <AlertBanner variant="error">{error}</AlertBanner>
                 )}
 
                 {!isLoading && !error && (
@@ -171,13 +169,11 @@ export function Activities() {
                                 </button>
                             );
                         }) : (
-                            <div className="py-24 flex flex-col items-center justify-center text-center bg-white/30 backdrop-blur-sm rounded-[40px] border-2 border-dashed border-theme-subtle/50">
-                                <div className="p-6 bg-theme-subtle/10 rounded-full text-theme-light mb-6">
-                                    <Clock size={48} />
-                                </div>
-                                <h3 className="text-2xl font-black text-theme-primary tracking-tight">{t('history.noEvents')}</h3>
-                                <p className="text-theme-light mt-2 max-w-sm font-medium">{t('history.noEventsDetail')}</p>
-                            </div>
+                            <PageEmptyState 
+                                icon={<History size={32} />} 
+                                title={t('history.noEvents')} 
+                                description={t('history.noEventsDetail')} 
+                            />
                         )}
                     </div>
                 )}

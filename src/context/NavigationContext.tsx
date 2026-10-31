@@ -43,17 +43,40 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
         notifyLoginRef.current = notifyLogin;
     }, [notifyLogin]);
 
+    const historyRef = useRef<AppState[]>([]);
+    const appStateRef = useRef<AppState>(appState);
+    appStateRef.current = appState;
+
     const navigate = useCallback((newState: AppState) => {
+        const current = appStateRef.current;
+        if (newState.view === 'logged_in' || newState.view === 'needs_login' || newState.view === 'loading') {
+            historyRef.current = [];
+        } else if (current.view !== 'loading' && current.view !== newState.view) {
+            historyRef.current.push(current);
+            if (historyRef.current.length > 20) {
+                historyRef.current.shift();
+            }
+        }
+        appStateRef.current = newState;
         setAppState(newState);
     }, []);
 
     const goBack = useCallback(() => {
-        setAppState(current => {
-            if ('previousView' in current && current.previousView) {
-                return current.previousView;
+        const current = appStateRef.current;
+        let nextState: AppState;
+        if ('previousView' in current && current.previousView) {
+            nextState = current.previousView;
+            const last = historyRef.current[historyRef.current.length - 1];
+            if (last && last.view === nextState.view) {
+                historyRef.current.pop();
             }
-            return { view: "logged_in" };
-        });
+        } else if (historyRef.current.length > 0) {
+            nextState = historyRef.current.pop()!;
+        } else {
+            nextState = { view: "logged_in" };
+        }
+        appStateRef.current = nextState;
+        setAppState(nextState);
     }, []);
 
     const checkProfile = useCallback(async () => {
@@ -65,6 +88,7 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
                 const displayName = profile.firstName || profile.id;
                 logger.info(`Auto-login successful for profile: ${displayName}`);
                 notifyLoginRef.current(displayName);
+                historyRef.current = [];
                 setAppState({ view: "logged_in" });
                 return;
             } catch {
@@ -72,9 +96,11 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
             }
 
             await authService.listProfiles();
+            historyRef.current = [];
             setAppState({ view: "needs_login" });
         } catch (e) {
             error(`Failed to check if profile exists: ${stringifyError(e)}`);
+            historyRef.current = [];
             setAppState({ view: "needs_login" });
         }
     }, []);
