@@ -132,6 +132,12 @@ amount_decimal_places = 4`,
   });
 
   it('focuses the first invalid field when form is submitted without data', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_user_profile') return Promise.resolve({});
+      return Promise.resolve(undefined);
+    });
+
     render(
       <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
     );
@@ -159,6 +165,18 @@ amount_decimal_places = 4`,
 
     // scrollIntoView should have been called
     expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('automatically pre-populates creator details from existing profile on mount', async () => {
+    render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    const firstNameInput = await screen.findByLabelText(/First Name \(Required\)/i);
+    await waitFor(() => {
+      expect(firstNameInput).toHaveValue('John');
+    });
+    expect(screen.getByLabelText(/Last Name \(Required\)/i)).toHaveValue('Doe');
   });
 
   it('updates validity duration when standard is selected', async () => {

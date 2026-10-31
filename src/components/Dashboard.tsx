@@ -10,7 +10,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
-import { AggregatedBalance, VoucherSummary, WalletEvent } from "../types";
+import { AggregatedBalance, VoucherSummary, WalletEvent, AppSettings } from "../types";
 import { useSession } from "../context/SessionContext";
 import { IntegrityReportModal } from "./IntegrityReportModal";
 import { PageLayout } from "./ui/PageLayout";
@@ -24,7 +24,8 @@ import {
     CheckCircle2,
     Clock,
     AlertCircle,
-    Archive
+    Archive,
+    Info
 } from "lucide-react";
 import { truncateUserId } from "../utils/userIdHelper";
 import { stringifyError } from "../utils/errorHelper";
@@ -46,17 +47,20 @@ export function Dashboard() {
     const [activeVouchersCount, setActiveVouchersCount] = useState(0);
     const [incompleteCount, setIncompleteCount] = useState(0);
     const [quarantinedCount, setQuarantinedCount] = useState(0);
+    const [expiringSoonCount, setExpiringSoonCount] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
-    const [isProfileComplete, setIsProfileComplete] = useState(true);
     const [voucherCountsByStandard, setVoucherCountsByStandard] = useState<Record<string, number>>({});
     const [showIntegrityModal, setShowIntegrityModal] = useState(false);
     const [showBackupReminder, setShowBackupReminder] = useState(false);
+    const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+    const [balanceViewMode, setBalanceViewMode] = useState<'spendable' | 'net'>('spendable');
+    const [activeInfoPopover, setActiveInfoPopover] = useState<string | null>(null);
 
     useEffect(() => {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, , voucherSummaries, userProfile, , eventHistory, userSettings] = await Promise.all([
+                const [id, balanceList, , voucherSummaries, , , eventHistory, userSettings] = await Promise.all([
                     profileService.getUserId(),
                     voucherService.getTotalBalanceByCurrency(),
                     transferService.getHistory().catch(() => []),
@@ -89,13 +93,32 @@ export function Dashboard() {
                 setIncompleteCount(incompleteCount);
                 setQuarantinedCount(quarantinedCount);
 
-                const profileComplete = userProfile && userProfile.firstName && userProfile.lastName && userProfile.address?.city;
-                setIsProfileComplete(!!profileComplete);
+                const now = new Date();
+                const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+                const expiringCount = (voucherSummaries || []).filter((v: VoucherSummary) => {
+                    if (v.status !== 'active' || !v.validUntil) return false;
+                    const exp = new Date(v.validUntil);
+                    return exp > now && exp <= thirtyDays;
+                }).length;
+                setExpiringSoonCount(expiringCount);
+
+                setAppSettings(userSettings);
+                const initialMode = (userSettings?.balanceViewMode as 'spendable' | 'net') || 
+                    (localStorage.getItem('hmc_balance_view_mode') as 'spendable' | 'net') || 
+                    'spendable';
+                setBalanceViewMode(initialMode);
 
                 const hasRealActiveVouchers = (voucherSummaries || []).some(
                     (v: VoucherSummary) => v.status === "active" && !v.isTestVoucher
                 );
-                setShowBackupReminder(hasRealActiveVouchers && !userSettings?.lastBackupAt);
+                const isBackupOutdatedOrMissing = !userSettings?.lastBackupAt || (() => {
+                    const backupDate = new Date(userSettings.lastBackupAt);
+                    if (isNaN(backupDate.getTime())) return true;
+                    const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+                    return backupDate < fourteenDaysAgo;
+                })();
+                const needsBackup = !userSettings?.backupSyncFolder && isBackupOutdatedOrMissing;
+                setShowBackupReminder(hasRealActiveVouchers && needsBackup);
             } catch (e) {
                 const msg = `Failed to fetch dashboard data: ${stringifyError(e)}`;
                 console.error(msg);
@@ -106,6 +129,20 @@ export function Dashboard() {
         }
         fetchData();
     }, []);
+
+    async function handleViewModeChange(mode: 'spendable' | 'net') {
+        setBalanceViewMode(mode);
+        try {
+            localStorage.setItem('hmc_balance_view_mode', mode);
+            if (appSettings) {
+                const updated = { ...appSettings, balanceViewMode: mode };
+                setAppSettings(updated);
+                await settingsService.saveSettings(updated).catch(() => {});
+            }
+        } catch {
+            // ignore best-effort storage
+        }
+    }
 
     async function handleCopyUserId() {
         if (!userId) return;
@@ -124,6 +161,16 @@ export function Dashboard() {
         const num = parseFloat(amountStr);
         if (isNaN(num)) return amountStr;
         return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function formatNetBalance(amountStr?: string): string {
+        if (!amountStr) return "0.00";
+        const num = parseFloat(amountStr);
+        if (isNaN(num)) return amountStr;
+        const formatted = Math.abs(num).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        if (num > 0) return `+${formatted}`;
+        if (num < 0) return `-${formatted}`;
+        return `0.00`;
     }
 
     function formatTimestamp(isoString: string): string {
@@ -235,26 +282,6 @@ export function Dashboard() {
                         </Card>
                     )}
 
-                    {!isProfileComplete && (
-                        <Card 
-                            variant="glass" 
-                            className="py-2 px-4 flex items-center justify-between border-l-4 border-l-amber-500"
-                            hover
-                            onClick={() => navigate({ view: 'settings' })}
-                        >
-                            <div className="flex items-center gap-4">
-                                <div className="p-2 rounded-xl bg-amber-500 text-white">
-                                    <UserCircle size={20} />
-                                </div>
-                                <div>
-                                    <p className="font-bold text-sm text-theme-secondary">{t('dashboard.profileIncomplete')}</p>
-                                    <p className="text-xs opacity-70">{t('dashboard.profileIncompleteDesc')}</p>
-                                </div>
-                            </div>
-                            <Button variant="primary" size="xs" className="shadow-none">{t('dashboard.fixNow')}</Button>
-                        </Card>
-                    )}
-
                     {quarantinedCount > 0 && (
                         <Card 
                             variant="glass" 
@@ -269,6 +296,26 @@ export function Dashboard() {
                                 <div>
                                     <p className="font-bold text-sm text-theme-secondary">{t('dashboard.quarantineLocked', { count: quarantinedCount })}</p>
                                     <p className="text-xs opacity-70">{t('dashboard.quarantineDesc')}</p>
+                                </div>
+                            </div>
+                            <ArrowUpRight size={18} className="opacity-30" />
+                        </Card>
+                    )}
+
+                    {expiringSoonCount > 0 && (
+                        <Card 
+                            variant="glass" 
+                            className="py-2 px-4 flex items-center justify-between border-l-4 border-l-amber-500 cursor-pointer"
+                            hover
+                            onClick={() => navigate({ view: 'wallet', initialStatusFilter: 'active', initialFilter: 'expiringSoon' })}
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className="p-2 rounded-xl bg-amber-500 text-white">
+                                    <Clock size={20} />
+                                </div>
+                                <div>
+                                    <p className="font-bold text-sm text-theme-secondary">{t('dashboard.expiringSoonTitle', { count: expiringSoonCount })}</p>
+                                    <p className="text-xs opacity-70">{t('dashboard.expiringSoonDesc')}</p>
                                 </div>
                             </div>
                             <ArrowUpRight size={18} className="opacity-30" />
@@ -300,6 +347,30 @@ export function Dashboard() {
                 <section>
                     <div className="flex items-center justify-between mb-4 px-2">
                         <h2 className="text-xs font-black text-theme-light uppercase tracking-[0.2em]">{t('dashboard.yourBalances')}</h2>
+                        <div className="flex items-center bg-white/40 p-0.5 rounded-xl border border-theme-subtle/50 text-xs shadow-inner-soft">
+                            <button
+                                type="button"
+                                onClick={() => handleViewModeChange('spendable')}
+                                className={`px-3 py-1 rounded-lg font-bold transition-all text-[11px] ${
+                                    balanceViewMode === 'spendable'
+                                        ? 'bg-white text-theme-primary shadow-sm'
+                                        : 'text-theme-light hover:text-theme-secondary'
+                                }`}
+                            >
+                                {t('dashboard.modeSpendable')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleViewModeChange('net')}
+                                className={`px-3 py-1 rounded-lg font-bold transition-all text-[11px] ${
+                                    balanceViewMode === 'net'
+                                        ? 'bg-white text-theme-primary shadow-sm'
+                                        : 'text-theme-light hover:text-theme-secondary'
+                                }`}
+                            >
+                                {t('dashboard.modeNet')}
+                            </button>
+                        </div>
                     </div>
                     
                     {isLoading ? (
@@ -335,15 +406,76 @@ export function Dashboard() {
                                                     {balance.displayCurrency}
                                                 </h3>
                                             </div>
-                                            <div className="px-2 py-1 bg-white/20 backdrop-blur-md rounded-lg border border-white/20 text-[10px] font-bold text-white">
-                                                {t('dashboard.vouchersCount', { count })}
+                                            <div className="flex items-center gap-2">
+                                                <div className="px-2 py-1 bg-white/20 backdrop-blur-md rounded-lg border border-white/20 text-[10px] font-bold text-white">
+                                                    {t('dashboard.vouchersCount', { count })}
+                                                </div>
+                                                <div className="relative">
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setActiveInfoPopover(prev => prev === balance.standardUuid ? null : balance.standardUuid);
+                                                        }}
+                                                        onMouseEnter={() => setActiveInfoPopover(balance.standardUuid)}
+                                                        onMouseLeave={() => setActiveInfoPopover(null)}
+                                                        className="p-1 rounded-full bg-white/20 hover:bg-white/30 text-white transition-colors"
+                                                        title={t('dashboard.balanceDetailsTooltip')}
+                                                        aria-label={t('dashboard.balanceDetailsTooltip')}
+                                                    >
+                                                        <Info size={14} />
+                                                    </button>
+                                                    {activeInfoPopover === balance.standardUuid && (
+                                                        <div 
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            className="absolute right-0 top-7 z-50 w-64 p-3 bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border border-white/20 text-xs space-y-2 pointer-events-auto"
+                                                        >
+                                                            <div className="font-bold border-b border-white/10 pb-1 text-white/90">
+                                                                {t('dashboard.balanceBreakdownTitle')}
+                                                            </div>
+                                                            <div className="flex justify-between items-center text-white/80">
+                                                                <span>{t('dashboard.breakdownReceived')}:</span>
+                                                                <span className="font-mono font-bold text-emerald-400">
+                                                                    +{formatAmount(balance.receivedAmount || balance.totalAmount)}
+                                                                </span>
+                                                            </div>
+                                                            <div className="flex justify-between items-center text-white/80">
+                                                                <span>{t('dashboard.breakdownOwnAvailable')}:</span>
+                                                                <span className="font-mono font-bold text-sky-400">
+                                                                    +{formatAmount(balance.ownAvailableAmount || "0")}
+                                                                </span>
+                                                            </div>
+                                                            <div className="flex justify-between items-center text-white/80">
+                                                                <span>{t('dashboard.breakdownOwnCirculating')}:</span>
+                                                                <span className="font-mono font-bold text-amber-400">
+                                                                    -{formatAmount(balance.ownCirculatingAmount || "0")}
+                                                                </span>
+                                                            </div>
+                                                            <div className="border-t border-white/10 pt-1 flex justify-between items-center font-bold">
+                                                                <span className="text-white/90">{t('dashboard.breakdownNet')}:</span>
+                                                                <span className={`font-mono ${parseFloat(balance.netBalance || "0") < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                                                    {formatNetBalance(balance.netBalance || balance.totalAmount)}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
 
-                                        <div className="relative z-10 flex items-baseline gap-2">
-                                            <span className="text-4xl font-black text-white tracking-tighter">
-                                                {formatAmount(balance.totalAmount)}
-                                            </span>
+                                        <div className="relative z-10 flex flex-col items-start">
+                                            <div className="flex items-baseline gap-2">
+                                                <span className="text-4xl font-black text-white tracking-tighter">
+                                                    {balanceViewMode === 'net' 
+                                                        ? formatNetBalance(balance.netBalance || balance.totalAmount) 
+                                                        : formatAmount(balance.totalAmount)}
+                                                </span>
+                                            </div>
+                                            {balanceViewMode === 'net' && balance.ownAvailableAmount && parseFloat(balance.ownAvailableAmount) > 0 && (
+                                                <span className="text-[11px] font-medium text-white/80 mt-1">
+                                                    {t('dashboard.ownFrameAvailable', { amount: formatAmount(balance.ownAvailableAmount) })}
+                                                </span>
+                                            )}
                                         </div>
 
                                         <div className="relative z-10 flex justify-end">
@@ -430,7 +562,7 @@ export function Dashboard() {
                     <div className="flex items-center justify-between mb-6 px-2">
                         <h2 className="text-xs font-black text-theme-light uppercase tracking-[0.2em]">{t('dashboard.recentActivity')}</h2>
                         <button 
-                            onClick={() => navigate({ view: 'activities' })}
+                            onClick={() => navigate({ view: 'transaction_history' })}
                             className="text-[10px] font-black text-theme-accent uppercase tracking-widest hover:underline"
                         >
                             {t('dashboard.historyLink')}

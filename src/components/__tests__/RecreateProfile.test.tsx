@@ -751,6 +751,9 @@ describe('RecreateProfile Component', () => {
         expect(screen.getByText('Step 2: Secure Your Profile')).toBeInTheDocument();
       }, { timeout: 3000 });
 
+      const profileNameInput = screen.getByTestId('profile-name-input');
+      fireEvent.change(profileNameInput, { target: { value: 'my_device' } });
+
       const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });
 
@@ -769,6 +772,60 @@ describe('RecreateProfile Component', () => {
           mnemonic: mockSeed12,
           passphrase: undefined,
           userPrefix: 'my_device',
+          password: 'password123',
+          localInstanceId: 'test-instance-id',
+          language: 'english',
+        });
+      }, { timeout: 3000 });
+
+      await waitFor(() => {
+        expect(mockOnProfileCreated).toHaveBeenCalled();
+      }, { timeout: 3000 });
+    });
+
+    it('successfully recreates root profile without device prefix (userPrefix: undefined)', async () => {
+      render(
+        <RecreateProfile
+          onProfileCreated={mockOnProfileCreated}
+          onSwitchToLogin={mockOnSwitchToLogin}
+        />
+      );
+
+      // Navigate to step 2
+      const words = mockSeed12.split(' ');
+      const wordInputs = screen.getAllByTestId(/word-input-/);
+      wordInputs.forEach((input, index) => {
+        fireEvent.change(input, { target: { value: words[index] } });
+      });
+
+      await waitFor(() => {
+        const nextButton = screen.getByText('Next');
+        expect(nextButton).not.toBeDisabled();
+        fireEvent.click(nextButton);
+      }, { timeout: 3000 });
+
+      await waitFor(() => {
+        expect(screen.getByText('Step 2: Secure Your Profile')).toBeInTheDocument();
+      }, { timeout: 3000 });
+
+      const profileNameInput = screen.getByTestId('profile-name-input');
+      fireEvent.change(profileNameInput, { target: { value: 'Main Root Wallet' } });
+
+      const passwordInput = screen.getByPlaceholderText('Minimum 8 characters');
+      fireEvent.change(passwordInput, { target: { value: 'password123' } });
+
+      const confirmPasswordInput = screen.getByPlaceholderText('Repeat your password');
+      fireEvent.change(confirmPasswordInput, { target: { value: 'password123' } });
+
+      const createButton = screen.getByText('Create & Encrypt Profile');
+      fireEvent.click(createButton);
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('create_profile', {
+          profileName: 'Main Root Wallet',
+          mnemonic: mockSeed12,
+          passphrase: undefined,
+          userPrefix: undefined,
           password: 'password123',
           localInstanceId: 'test-instance-id',
           language: 'english',
@@ -820,6 +877,9 @@ describe('RecreateProfile Component', () => {
       await waitFor(() => {
         expect(screen.getByText('Step 2: Secure Your Profile')).toBeInTheDocument();
       }, { timeout: 3000 });
+
+      const profileNameInput = screen.getByTestId('profile-name-input');
+      fireEvent.change(profileNameInput, { target: { value: 'my_device' } });
 
       const userPrefixInput = screen.getByPlaceholderText(/e.g. laptop, phone, or my-company/i);
       fireEvent.change(userPrefixInput, { target: { value: 'my_device' } });

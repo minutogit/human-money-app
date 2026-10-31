@@ -10,6 +10,10 @@ export interface AggregatedBalance {
     displayCurrency: string;
     displayStandardName: string;
     isTestVoucher: boolean;
+    receivedAmount?: string;
+    ownAvailableAmount?: string;
+    ownCirculatingAmount?: string;
+    netBalance?: string;
 }
 
 export interface InvolvedVoucherInfo {

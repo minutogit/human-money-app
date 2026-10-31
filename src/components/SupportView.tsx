@@ -9,7 +9,11 @@ import { Heart, Globe, MessageSquare, Award } from 'lucide-react';
 import { logger } from '../utils/log';
 import { stringifyError } from '../utils/errorHelper';
 
-export const SupportView: React.FC = () => {
+interface SupportViewProps {
+    onBack?: () => void;
+}
+
+export const SupportView: React.FC<SupportViewProps> = ({ onBack }) => {
     const { t } = useTranslation();
 
     const handleOpenWebsite = async () => {
@@ -24,6 +28,7 @@ export const SupportView: React.FC = () => {
         <PageLayout
             title={t('common.supportTitle')}
             description={t('common.supportMenu')}
+            onBack={onBack}
         >
             <div className="max-w-3xl mx-auto flex flex-col items-center justify-center py-8">
                 {/* Large animated heart icon */}

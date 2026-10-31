@@ -1,13 +1,15 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { voucherService } from '../services/voucherService';
 import { settingsService } from '../services/settingsService';
 import { standardsService } from '../services/standardsService';
+import { profileService } from '../services/profileService';
 import { wotService } from '../services/wotService';
 import { save } from '@tauri-apps/plugin-dialog';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { logger } from '../utils/log';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { translateRuleMessage, translateGentleHint } from '../utils/signatureHints';
-import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact, VoucherTrustDto } from '../types';
+import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact, VoucherTrustDto, PublicProfile, VoucherStandardDefinition } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
@@ -28,7 +30,10 @@ import {
     UserCheck,
     FileText,
     ArrowRight,
-    Lock
+    Lock,
+    AlertTriangle,
+    AlertCircle,
+    FolderOpen
 } from 'lucide-react';
 
 interface SignRequestViewProps {
@@ -47,19 +52,17 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
     const [isSigning, setIsSigning] = useState(false);
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [standardContent, setStandardContent] = useState<string | null>(null);
+    const [parsedStandard, setParsedStandard] = useState<VoucherStandardDefinition | null>(null);
+    const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
     const [impact, setImpact] = useState<SignatureImpact | null>(null);
     const [isImpactLoading, setIsImpactLoading] = useState(false);
     const [previewTrust, setPreviewTrust] = useState<VoucherTrustDto | null>(null);
+    const [savedSigFilePath, setSavedSigFilePath] = useState<string | null>(null);
+    const [selectedGender, setSelectedGender] = useState<string>("1");
+    const [isSavingGender, setIsSavingGender] = useState(false);
 
-    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    useEffect(() => {
-        return () => {
-            if (timerRef.current) {
-                clearTimeout(timerRef.current);
-            }
-        };
-    }, []);
+
 
     useEffect(() => {
         const creatorId = voucherData.voucher?.creator?.id;
@@ -78,11 +81,16 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
         async function fetchData() {
             try {
                 logger.info("SignRequestView opened, fetching standards and roles.");
-                const [standards, currentSettings] = await Promise.all([
+                const [standards, currentSettings, profile] = await Promise.all([
                     standardsService.getStandards(),
-                    settingsService.getSettings().catch(() => null)
+                    settingsService.getSettings().catch(() => null),
+                    profileService.getProfile().catch(() => null)
                 ]);
                 setSettings(currentSettings);
+                setUserProfile(profile);
+                if (profile?.gender === '1' || profile?.gender === '2') {
+                    setSelectedGender(profile.gender);
+                }
 
                 const matchingStandard = standards.find((s: VoucherStandardInfo) => {
                     const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
@@ -93,6 +101,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     setStandardContent(matchingStandard.content);
                     try {
                         const parsed = await standardsService.parseStandard(matchingStandard.content);
+                        setParsedStandard(parsed);
                         
                         // Extract roles from allowedSignatureRoles
                         const roles = parsed.immutable.issuance?.allowedSignatureRoles || [];
@@ -110,6 +119,40 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
         }
         fetchData();
     }, [voucherData.voucher.voucherStandard.uuid, t]);
+
+    const requiresGender = useMemo(() => {
+        if (!parsedStandard) return false;
+        const customRules = parsedStandard.immutable?.customRules || {};
+        return Object.values(customRules).some(r => r.expression?.includes('details.gender'));
+    }, [parsedStandard]);
+
+    const hasValidGender = userProfile?.gender === '1' || userProfile?.gender === '2';
+
+    const handleSaveGenderToProfile = async () => {
+        setIsSavingGender(true);
+        try {
+            await protectAction(async (pwd) => {
+                const updated: PublicProfile = {
+                    ...(userProfile || { id: "" }),
+                    gender: selectedGender
+                };
+                await profileService.saveProfile(updated, pwd || undefined);
+                setUserProfile(updated);
+            });
+            if (selectedRole && standardContent) {
+                setIsImpactLoading(true);
+                standardsService.evaluateSignatureSuitability({
+                    voucher: voucherData.voucher,
+                    role: selectedRole,
+                    standardTomlContent: standardContent
+                }).then(setImpact).finally(() => setIsImpactLoading(false));
+            }
+        } catch (e) {
+            logger.error(`Failed to save gender to profile: ${stringifyError(e)}`);
+        } finally {
+            setIsSavingGender(false);
+        }
+    };
 
     useEffect(() => {
         if (!selectedRole || !standardContent) {
@@ -180,9 +223,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                     });
                 }
 
-                setFeedbackMsg(t('voucher.signRequest.signatureGenerated'));
-                setFeedbackType('success');
-                timerRef.current = setTimeout(() => onBack(), 2000);
+                setSavedSigFilePath(filePath);
             }
         } catch (e) {
             setFeedbackMsg(t('voucher.signRequest.signFailed', { error: translateError(e, t) }));
@@ -192,7 +233,51 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
         }
     }
 
+
     const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : t('common.na');
+
+    if (savedSigFilePath) {
+        return (
+            <PageLayout 
+                title={t('voucher.signRequest.signatureSavedTitle')} 
+                description={t('voucher.signRequest.signatureSavedDesc')} 
+                onBack={onBack}
+            >
+                <div className="max-w-xl mx-auto space-y-6 py-12 text-center">
+                    <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-3xl mx-auto flex items-center justify-center shadow-premium-sm border border-emerald-200">
+                        <CheckCircle2 size={40} />
+                    </div>
+                    <div className="space-y-2">
+                        <h2 className="text-2xl font-black text-theme-primary">
+                            {t('voucher.signRequest.signatureSavedTitle')}
+                        </h2>
+                        <p className="text-sm font-medium text-theme-secondary max-w-md mx-auto leading-relaxed">
+                            {t('voucher.signRequest.signatureSavedDesc')}
+                        </p>
+                    </div>
+                    <div className="p-4 bg-white/60 border border-theme-subtle rounded-2xl break-all font-mono text-xs text-theme-secondary">
+                        {savedSigFilePath}
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
+                        <Button
+                            variant="secondary"
+                            onClick={() => revealItemInDir(savedSigFilePath).catch(() => {})}
+                            className="flex items-center justify-center gap-2"
+                        >
+                            <FolderOpen size={18} />
+                            {t('transfer.success.revealInFolder')}
+                        </Button>
+                        <Button
+                            onClick={onBack}
+                            className="flex items-center justify-center gap-2"
+                        >
+                            {t('common.done')}
+                        </Button>
+                    </div>
+                </div>
+            </PageLayout>
+        );
+    }
 
     return (
         <PageLayout 
@@ -298,6 +383,51 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
                                     <span className="block text-[10px] text-theme-light font-medium">{t('voucher.signRequest.embedProfileData')}</span>
                                 </div>
                             </label>
+
+                            {/* Schutz 1: Wenn requiresGender && !includeDetails */}
+                            {requiresGender && !includeDetails && (
+                                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3">
+                                    <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                                    <p className="text-xs font-bold text-amber-800 leading-relaxed">
+                                        {t('voucher.signRequest.warnDetailsRequiredForGender')}
+                                    </p>
+                                </div>
+                            )}
+
+                            {/* Schutz 2: Wenn requiresGender && includeDetails && !hasValidGender */}
+                            {requiresGender && includeDetails && !hasValidGender && (
+                                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl space-y-3">
+                                    <div className="flex items-start gap-3">
+                                        <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                                        <div>
+                                            <p className="text-xs font-black uppercase tracking-wider text-amber-900">
+                                                {t('voucher.signRequest.genderRequiredTitle')}
+                                            </p>
+                                            <p className="text-xs font-medium text-amber-800 mt-0.5">
+                                                {t('voucher.signRequest.genderRequiredDesc')}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3 pt-1">
+                                        <select
+                                            value={selectedGender}
+                                            onChange={(e) => setSelectedGender(e.target.value)}
+                                            className="flex-1 bg-white border border-amber-300 rounded-xl px-3 py-2 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-amber-400 outline-none"
+                                        >
+                                            <option value="1">{t('profile.genderMale', { defaultValue: 'Männlich' })}</option>
+                                            <option value="2">{t('profile.genderFemale', { defaultValue: 'Weiblich' })}</option>
+                                        </select>
+                                        <Button
+                                            size="sm"
+                                            onClick={handleSaveGenderToProfile}
+                                            disabled={isSavingGender}
+                                            className="text-xs shrink-0"
+                                        >
+                                            {isSavingGender ? t('common.loading') : t('voucher.signRequest.saveGenderAndVerify')}
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
 
                             {selectedRole.toLowerCase() === 'guarantor' && (
                                 <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-2xl flex items-start gap-3">

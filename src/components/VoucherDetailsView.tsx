@@ -1,11 +1,12 @@
-// src/components/VoucherDetailsView.tsx
 import { useState, useEffect } from "react";
-import { voucherService, SigningRequestConfig } from "../services/voucherService";
+import { voucherService } from "../services/voucherService";
 import { settingsService } from "../services/settingsService";
 import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
 import { contactService } from "../services/contactService";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
@@ -15,7 +16,6 @@ import { HelpIcon } from "./ui/HelpIcon";
 import { useSession } from "../context/SessionContext";
 import { useTranslation } from "react-i18next";
 import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardDefinition, VoucherL2StatusDto } from "../types";
-import { updateLastUsedDirectory } from "../utils/settingsUtils";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import { stringifyError, translateError } from "../utils/errorHelper";
 import ContactDialog from "./ContactDialog";
@@ -30,14 +30,17 @@ import {
     Terminal as Json,
     CheckCircle2,
     Clock,
-    ShieldAlert
+    ShieldAlert,
+    Store,
+    FolderOpen,
+    X
 } from "lucide-react";
 
 // Modular Components
 import { CreatorSection } from "./voucher/CreatorSection";
 import { PolicySection } from "./voucher/PolicySection";
 import { TimelineSection } from "./voucher/TimelineSection";
-import { ExportDialog } from "./voucher/ExportDialog";
+import { ExportSigningRequestModal } from "./voucher/ExportSigningRequestModal";
 import { SignatureRequestBanner } from "./voucher/SignatureRequestBanner";
 
 import { useNavigation } from "../context/NavigationContext";
@@ -56,8 +59,6 @@ export function VoucherDetailsView() {
     const [errorMsg, setErrorMsg] = useState("");
     const [showJson, setShowJson] = useState(false);
     const [showExportModal, setShowExportModal] = useState(false);
-    const [isExporting, setIsExporting] = useState(false);
-    const [exportError, setExportError] = useState("");
     const [showContactDialog, setShowContactDialog] = useState(false);
     const [pendingContactDID, setPendingContactDID] = useState<string | null>(null);
     const [existingContact, setExistingContact] = useState<Contact | null>(null);
@@ -69,9 +70,16 @@ export function VoucherDetailsView() {
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
     const [parsedStandards, setParsedStandards] = useState<Record<string, VoucherStandardDefinition>>({});
     const [contacts, setContacts] = useState<Contact[]>([]);
+    const [ownUserId, setOwnUserId] = useState<string>("");
+    const [savedAskFilePath, setSavedAskFilePath] = useState<string | null>(null);
+    const [signatureImportFeedback, setSignatureImportFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+    const [pendingSigImport, setPendingSigImport] = useState<{ fileBytes: Uint8Array; standardToml: string } | null>(null);
+    const [sigContainerPassword, setSigContainerPassword] = useState("");
+    const [sigPasswordError, setSigPasswordError] = useState("");
     const [isCheckingL2, setIsCheckingL2] = useState(false);
     const [l2Status, setL2Status] = useState<VoucherL2StatusDto | null>(null);
     const [l2Error, setL2Error] = useState<string | null>(null);
+
 
     const voucher = details?.voucher;
     const isQuarantined = details && details.status === 'quarantined';
@@ -89,15 +97,17 @@ export function VoucherDetailsView() {
             setIsLoading(true);
             setErrorMsg("");
             try {
-                const [result, currentSettings, profile, standards] = await Promise.all([
+                const [result, currentSettings, profile, standards, uid] = await Promise.all([
                     voucherService.getDetails(voucherId),
                     settingsService.getSettings().catch(() => null),
                     profileService.getProfile().catch(() => null),
-                    standardsService.getStandards().catch(() => [])
+                    standardsService.getStandards().catch(() => []),
+                    profileService.getUserId().catch(() => "")
                 ]);
                 setDetails(result);
                 setSettings(currentSettings);
                 setUserProfile(profile);
+                setOwnUserId(uid || "");
 
                 const parsed: Record<string, VoucherStandardDefinition> = {};
                 for (const s of standards) {
@@ -195,31 +205,110 @@ export function VoucherDetailsView() {
             return standard ? getMissingProfileHint(standard, userProfile, t) : null;
         })() : null;
 
-    const handleExport = async (config: SigningRequestConfig) => {
-        setIsExporting(true);
-        setExportError("");
-        try {
-            const bundleBytes = await voucherService.createSigningRequest(voucherId, config);
-            const filePath = await save({
-                defaultPath: settings?.lastUsedDirectory 
-                    ? `${settings.lastUsedDirectory}/signature-request-${voucherId.slice(0, 8)}.ask`
-                    : `signature-request-${voucherId.slice(0, 8)}.ask`,
-                filters: [{ name: 'Signature Request (.ask)', extensions: ['ask'] }]
-            });
+    const guarantorProgress = (() => {
+        if (statusInfo?.id !== 'incomplete' || !voucher) return null;
+        const targetUuid = voucher.voucherStandard.uuid;
+        const standard = parsedStandards[targetUuid] || Object.values(parsedStandards).find(s => s.immutable.identity.uuid === targetUuid);
+        const minRequired = standard?.immutable?.issuance?.additionalSignaturesRange?.[0] ?? 0;
+        const customRules = standard?.immutable?.customRules || {};
+        const hasGenderMale = Object.values(customRules).some(r => r.expression?.includes("gender == '1'"));
+        const hasGenderFemale = Object.values(customRules).some(r => r.expression?.includes("gender == '2'"));
 
-            if (filePath) {
-                const { writeFile } = await import("@tauri-apps/plugin-fs");
-                await writeFile(filePath, new Uint8Array(bundleBytes));
-                if (settings) {
-                    await updateLastUsedDirectory(filePath, settings, protectAction);
-                    settingsService.getSettings().then(setSettings).catch(() => {});
-                }
-                setShowExportModal(false);
+        const nonCreatorSigs = (voucher.signatures || []).filter(s => s.role !== 'creator');
+        if (hasGenderMale && hasGenderFemale && minRequired === 2) {
+            const maleCount = nonCreatorSigs.filter(s => s.details?.gender === '1').length;
+            const femaleCount = nonCreatorSigs.filter(s => s.details?.gender === '2').length;
+            if (maleCount >= 1 && femaleCount >= 1) {
+                return t('voucher.guarantorStatusBothPresent');
+            } else if (maleCount >= 1 && femaleCount === 0) {
+                return t('voucher.guarantorStatusMaleDoneFemaleMissing');
+            } else if (maleCount === 0 && femaleCount >= 1) {
+                return t('voucher.guarantorStatusFemaleDoneMaleMissing');
+            } else {
+                return t('voucher.guarantorStatusBothMissing');
+            }
+        } else if (minRequired > 0) {
+            return t('voucher.guarantorStatusCount', { current: nonCreatorSigs.length, required: minRequired });
+        }
+        return null;
+    })();
+
+    const isOwnVoucher = Boolean(voucher?.creator.id && ownUserId && voucher.creator.id === ownUserId);
+    const canRedeemAtIssuer = statusInfo?.id === 'active' && !isOwnVoucher && Boolean(voucher?.creator.id);
+
+    const handleRedeemAtIssuer = () => {
+        if (!voucher || !details) return;
+        navigate({
+            view: 'send_vouchers',
+            initialRecipientId: voucher.creator.id,
+            initialVoucherId: details.localInstanceId,
+            initialNote: t('voucher.redeemNoteDefault', { voucherId: voucher.voucherId.slice(0, 8) })
+        });
+    };
+
+    const handleImportSignatureFile = async () => {
+        try {
+            setSignatureImportFeedback(null);
+            const selectedPath = await open({
+                filters: [
+                    { name: t('voucher.signRequest.signatureResponseFilter'), extensions: ['sig', 'humocosig'] },
+                    { name: t('voucher.export.allFiles'), extensions: ['*'] }
+                ]
+            });
+            if (!selectedPath || typeof selectedPath !== 'string') return;
+
+            const fileBytes = await readFile(selectedPath);
+            const targetUuid = voucher.voucherStandard.uuid;
+            const standardsList = await standardsService.getStandards();
+            const matchingStd = standardsList.find(s => {
+                const match = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
+                return match && match[1] === targetUuid;
+            });
+            const standardTomlContent = matchingStd?.content || "";
+
+            await executeSignatureAttachment(new Uint8Array(fileBytes), standardTomlContent);
+        } catch (e) {
+            setSignatureImportFeedback({ type: 'error', msg: `${t('voucher.signatureAttachFailed')}: ${translateError(e, t)}` });
+        }
+    };
+
+    const executeSignatureAttachment = async (fileBytes: Uint8Array, standardToml: string, containerPwd?: string) => {
+        try {
+            await protectAction(async (walletPassword) => {
+                return await voucherService.processAndAttachSignature(
+                    Array.from(fileBytes),
+                    standardToml,
+                    containerPwd || undefined,
+                    walletPassword || undefined
+                );
+            });
+            
+            const updatedDetails = await voucherService.getDetails(voucherId);
+            setDetails(updatedDetails);
+            setPendingSigImport(null);
+            setSigContainerPassword("");
+            setSigPasswordError("");
+
+            if (updatedDetails.status === 'active') {
+                setSignatureImportFeedback({
+                    type: 'success',
+                    msg: t('voucher.allSignaturesComplete')
+                });
+            } else {
+                setSignatureImportFeedback({
+                    type: 'success',
+                    msg: t('voucher.signatureAttachedTitle')
+                });
             }
         } catch (e) {
-            setExportError(`${t('voucher.exportFailed')}: ${stringifyError(e)}`);
-        } finally {
-            setIsExporting(false);
+            const errStr = stringifyError(e);
+            const isPasswordRequired = errStr.includes("Password required") || errStr.toLowerCase().includes("decrypt") || errStr.includes("SymmetricEncryption") || errStr.includes("MacError");
+            if (isPasswordRequired && !containerPwd) {
+                setPendingSigImport({ fileBytes, standardToml });
+                setSigPasswordError("");
+            } else {
+                setSignatureImportFeedback({ type: 'error', msg: `${t('voucher.signatureAttachFailed')}: ${translateError(e, t)}` });
+            }
         }
     };
 
@@ -247,6 +336,17 @@ export function VoucherDetailsView() {
             onBack={goBack}
             actions={
                 <div className="flex items-center gap-2">
+                    {canRedeemAtIssuer && (
+                        <Button 
+                            variant="secondary" 
+                            size="sm" 
+                            onClick={handleRedeemAtIssuer} 
+                            className="gap-2 text-xs font-bold bg-white text-theme-primary border border-theme-subtle hover:bg-theme-subtle/20 shadow-sm"
+                        >
+                            <Store size={15} />
+                            {t('voucher.redeemAtIssuerBtn')}
+                        </Button>
+                    )}
                     {statusInfo?.id === 'active' && (
                         <Button 
                             variant="outline" 
@@ -273,7 +373,56 @@ export function VoucherDetailsView() {
                 </div>
             }
         >
+
             <div className="max-w-5xl mx-auto space-y-6">
+                {signatureImportFeedback && (
+                    <div className={`p-4 rounded-2xl flex items-center justify-between gap-3 border shadow-sm animate-in zoom-in duration-300 ${
+                        signatureImportFeedback.type === 'error'
+                            ? 'bg-rose-50 border-rose-100 text-rose-800'
+                            : 'bg-emerald-50 border-emerald-100 text-emerald-800'
+                    }`}>
+                        <div className="flex items-center gap-3">
+                            {signatureImportFeedback.type === 'error' ? <ShieldAlert size={20} className="shrink-0 text-rose-600" /> : <CheckCircle2 size={20} className="shrink-0 text-emerald-600" />}
+                            <p className="text-sm font-bold">{signatureImportFeedback.msg}</p>
+                        </div>
+                        <button
+                            onClick={() => setSignatureImportFeedback(null)}
+                            className="p-1 rounded-lg hover:bg-black/5"
+                        >
+                            <X size={16} />
+                        </button>
+                    </div>
+                )}
+
+                {savedAskFilePath && (
+                    <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-emerald-900 animate-in fade-in duration-300">
+                        <div className="flex items-start gap-3">
+                            <CheckCircle2 size={20} className="text-emerald-600 shrink-0 mt-0.5" />
+                            <div>
+                                <p className="font-bold text-sm text-emerald-950">{t('voucher.askSavedSuccessTitle')}</p>
+                                <p className="text-xs text-emerald-800/90 mt-0.5 leading-relaxed">{t('voucher.askSavedSuccessDesc')}</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => revealItemInDir(savedAskFilePath).catch(() => {})}
+                                className="bg-white hover:bg-white text-xs font-bold gap-1.5 shadow-sm"
+                            >
+                                <FolderOpen size={14} />
+                                {t('common.showInFolder')}
+                            </Button>
+                            <button
+                                onClick={() => setSavedAskFilePath(null)}
+                                className="p-1.5 text-emerald-700 hover:text-emerald-900 rounded-lg hover:bg-emerald-100/50"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 <Card variant={isQuarantined ? "danger" : (details.isTestVoucher ? "warning" : "glass")} className="border-none shadow-premium overflow-hidden">
                     <div className="p-8 flex flex-col md:flex-row items-center justify-between gap-8">
                         <div className="flex items-center gap-6">
@@ -351,6 +500,8 @@ export function VoucherDetailsView() {
                 {statusInfo?.id === 'incomplete' && (
                     <SignatureRequestBanner 
                         onAction={() => setShowExportModal(true)}
+                        onImportSignature={handleImportSignatureFile}
+                        progressText={guarantorProgress}
                     />
                 )}
 
@@ -452,13 +603,61 @@ export function VoucherDetailsView() {
                 )}
             </div>
 
-            <ExportDialog 
+            <ExportSigningRequestModal 
                 isOpen={showExportModal}
+                voucherId={voucherId}
                 onClose={() => setShowExportModal(false)}
-                onExport={handleExport}
-                isProcessing={isExporting}
-                error={exportError}
+                settings={settings}
+                protectAction={protectAction}
+                onSettingsRefresh={(newSettings) => setSettings(newSettings)}
+                contacts={contacts}
+                onSuccess={(savedPath) => setSavedAskFilePath(savedPath)}
             />
+
+            {pendingSigImport && (
+                <ConfirmationModal
+                    isOpen={true}
+                    title={t('voucher.enterSignaturePasswordTitle')}
+                    description={
+                        <div className="space-y-4 pt-2">
+                            <p className="text-xs text-theme-secondary font-medium">
+                                {t('voucher.enterSignaturePasswordDesc')}
+                            </p>
+                            <input
+                                type="password"
+                                value={sigContainerPassword}
+                                onChange={(e) => {
+                                    setSigContainerPassword(e.target.value);
+                                    setSigPasswordError("");
+                                }}
+                                placeholder={t('auth.passwordPlaceholder')}
+                                className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 text-sm font-bold"
+                                autoFocus
+                            />
+                            {sigPasswordError && (
+                                <p className="text-rose-500 text-xs font-bold">{sigPasswordError}</p>
+                            )}
+                        </div>
+                    }
+                    confirmText={t('common.confirm')}
+                    onConfirm={() => {
+                        if (!sigContainerPassword) {
+                            setSigPasswordError(t('voucher.errorEnterPassword'));
+                            return;
+                        }
+                        executeSignatureAttachment(
+                            pendingSigImport.fileBytes,
+                            pendingSigImport.standardToml,
+                            sigContainerPassword
+                        );
+                    }}
+                    onCancel={() => {
+                        setPendingSigImport(null);
+                        setSigContainerPassword("");
+                        setSigPasswordError("");
+                    }}
+                />
+            )}
             
             <ContactDialog
                 isOpen={showContactDialog}

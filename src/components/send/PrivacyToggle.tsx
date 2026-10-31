@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Shield, Lock, Eye, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Card } from '../ui/Card';
@@ -17,6 +18,10 @@ export function PrivacyToggle({
   privacyError
 }: PrivacyToggleProps) {
   const { t } = useTranslation();
+  const [isEditing, setIsEditing] = useState(false);
+
+  const showSelector = isEditing || privacyMode === null || privacyError;
+
   return (
     <Card header={
       <div id="privacyMode" className="flex items-center gap-2">
@@ -41,23 +46,65 @@ export function PrivacyToggle({
             </div>
             <CheckCircle2 className="text-theme-primary" size={24} />
           </div>
+        ) : showSelector ? (
+          <div className="space-y-3">
+            <div className={`grid grid-cols-2 gap-4 p-2 bg-slate-50 border-2 rounded-[40px] transition-all ${privacyError ? 'border-rose-500 ring-2 ring-rose-100' : 'border-slate-100'}`}>
+              <button 
+                type="button" 
+                onClick={() => {
+                  onPrivacyChange('public');
+                  setIsEditing(false);
+                }} 
+                className={`flex flex-col items-center gap-2 p-6 rounded-[32px] transition-all ${privacyMode === 'public' ? 'bg-white shadow-premium-lg border border-theme-subtle' : 'opacity-50 hover:opacity-80'}`}
+              >
+                <div className="p-3 bg-blue-50 text-blue-500 rounded-2xl"><Eye size={24}/></div>
+                <span className="text-xs font-black uppercase tracking-widest text-slate-900">{t('transfer.public')}</span>
+              </button>
+              <button 
+                type="button" 
+                onClick={() => {
+                  onPrivacyChange('stealth');
+                  setIsEditing(false);
+                }} 
+                className={`flex flex-col items-center gap-2 p-6 rounded-[32px] transition-all ${privacyMode === 'stealth' ? 'bg-white shadow-premium-lg border border-theme-subtle' : 'opacity-50 hover:opacity-80'}`}
+              >
+                <div className="p-3 bg-purple-50 text-purple-500 rounded-2xl"><Lock size={24}/></div>
+                <span className="text-xs font-black uppercase tracking-widest text-slate-900">{t('transfer.stealth')}</span>
+              </button>
+            </div>
+            {privacyMode !== null && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsEditing(false)}
+                  className="text-xs font-bold text-theme-light hover:text-theme-secondary transition-colors px-2 py-1"
+                >
+                  {t('common.done')}
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
-          <div className={`grid grid-cols-2 gap-4 p-2 bg-slate-50 border-2 rounded-[40px] transition-all ${privacyError ? 'border-rose-500 ring-2 ring-rose-100' : 'border-slate-100'}`}>
-            <button 
-              type="button" 
-              onClick={() => onPrivacyChange('public')} 
-              className={`flex flex-col items-center gap-2 p-6 rounded-[32px] transition-all ${privacyMode === 'public' ? 'bg-white shadow-premium-lg border border-theme-subtle' : 'opacity-50 hover:opacity-80'}`}
+          <div className="p-4 bg-slate-50/80 border border-theme-subtle/50 rounded-2xl flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-xl ${privacyMode === 'stealth' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                {privacyMode === 'stealth' ? <Lock size={18} /> : <Eye size={18} />}
+              </div>
+              <div>
+                <p className="text-xs font-black text-theme-secondary">
+                  {privacyMode === 'stealth' ? t('transfer.stealth') : t('transfer.public')}
+                </p>
+                <p className="text-[11px] text-theme-light font-medium">
+                  {privacyMode === 'stealth' ? t('transfer.privacyStealthSummary') : t('transfer.privacyPublicSummary')}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsEditing(true)}
+              className="px-3 py-1.5 rounded-xl border border-theme-subtle bg-white text-xs font-bold text-theme-secondary hover:bg-bg-app transition-colors shadow-sm"
             >
-              <div className="p-3 bg-blue-50 text-blue-500 rounded-2xl"><Eye size={24}/></div>
-              <span className="text-xs font-black uppercase tracking-widest text-slate-900">{t('transfer.public')}</span>
-            </button>
-            <button 
-              type="button" 
-              onClick={() => onPrivacyChange('stealth')} 
-              className={`flex flex-col items-center gap-2 p-6 rounded-[32px] transition-all ${privacyMode === 'stealth' ? 'bg-white shadow-premium-lg border border-theme-subtle' : 'opacity-50 hover:opacity-80'}`}
-            >
-              <div className="p-3 bg-purple-50 text-purple-500 rounded-2xl"><Lock size={24}/></div>
-              <span className="text-xs font-black uppercase tracking-widest text-slate-900">{t('transfer.stealth')}</span>
+              {t('common.change')}
             </button>
           </div>
         )}

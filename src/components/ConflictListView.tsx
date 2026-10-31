@@ -1,11 +1,14 @@
-// src/components/ConflictListView.tsx
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { integrityService } from "../services/integrityService";
+import { useSession } from "../context/SessionContext";
 import { logger } from "../utils/log";
 import { translateError, stringifyError } from "../utils/errorHelper";
 import { ProofOfDoubleSpendSummary } from "../types";
 import { Button } from "./ui/Button";
+import { open } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
+import { Upload } from "lucide-react";
 
 interface ConflictListViewProps {
     onBack: () => void;
@@ -14,9 +17,40 @@ interface ConflictListViewProps {
 
 export function ConflictListView({ onBack, onViewConflict }: ConflictListViewProps) {
     const { t } = useTranslation();
+    const { protectAction } = useSession();
     const [conflicts, setConflicts] = useState<ProofOfDoubleSpendSummary[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [isImporting, setIsImporting] = useState(false);
     const [errorMsg, setErrorMsg] = useState("");
+
+    const handleImportProof = async () => {
+        setIsImporting(true);
+        setErrorMsg("");
+        try {
+            const selected = await open({
+                multiple: false,
+                filters: [
+                    { name: 'Double Spend Proof (.hmcproof)', extensions: ['hmcproof'] },
+                    { name: t('voucher.export.allFiles'), extensions: ['*'] }
+                ]
+            });
+            if (!selected || typeof selected !== 'string') return;
+
+            const fileBytes = await readFile(selected);
+            const proofId = await protectAction(async (password) => {
+                return await integrityService.importDoubleSpendProof(Array.from(fileBytes), password || undefined);
+            });
+
+            if (proofId) {
+                onViewConflict(proofId);
+            }
+        } catch (e) {
+            logger.error(`Failed to import double spend proof: ${stringifyError(e)}`);
+            setErrorMsg(t('conflict.importProofFailed', { error: translateError(e, t) }));
+        } finally {
+            setIsImporting(false);
+        }
+    };
 
     useEffect(() => {
         logger.info("ConflictListView: Loading conflicts");
@@ -162,8 +196,20 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                 </button>
                 <h1 className="text-2xl font-bold text-theme-primary">{t('conflict.title')}</h1>
                 <div className="flex-grow"></div>
-                <div className="text-sm text-theme-light">
-                    {conflicts.length === 1 ? t('conflict.reportTotalCount', { count: conflicts.length }) : t('conflict.reportsTotalCount', { count: conflicts.length })}
+                <div className="flex items-center gap-4">
+                    <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={handleImportProof}
+                        disabled={isImporting}
+                        className="flex items-center gap-1.5 text-xs font-bold"
+                    >
+                        <Upload size={14} />
+                        {isImporting ? t('common.loading') : t('conflict.importProofBtn')}
+                    </Button>
+                    <div className="text-sm text-theme-light">
+                        {conflicts.length === 1 ? t('conflict.reportTotalCount', { count: conflicts.length }) : t('conflict.reportsTotalCount', { count: conflicts.length })}
+                    </div>
                 </div>
             </header>
 

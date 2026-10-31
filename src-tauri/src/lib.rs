@@ -166,9 +166,10 @@ pub fn run() {
             benchmark_l2_servers,
             refresh_l2_gateway_cache, refresh_regional_mesh_views,
             // Integrity
-            check_wallet_integrity, repair_wallet_integrity,
+            check_wallet_integrity, repair_wallet_integrity, export_double_spend_proof, import_double_spend_proof,
             // Wallet Backups
             probe_wallet_backup, export_wallet_backup_file, sync_wallet_backup_folder, inspect_wallet_backup, restore_wallet_backup,
+            get_backup_status, run_auto_backup_sync,
             // Web of Trust (WoT)
             get_wot_summary, export_wot_package, import_wot_package, evaluate_voucher_trust_preview
         ])

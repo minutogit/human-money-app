@@ -64,6 +64,10 @@ vi.mock('../ProfileSettings', () => ({
   ProfileSettings: () => <div data-testid="profile-settings-mock">Profile Settings Mock</div>,
 }));
 
+vi.mock('../StandardsManager', () => ({
+  StandardsManager: () => <div data-testid="standards-manager-mock">Standards Manager Mock</div>,
+}));
+
 vi.mock('../../utils/log', () => ({
   logger: {
     info: vi.fn(),
@@ -288,5 +292,32 @@ describe('SettingsView Component', () => {
     // After expanding, custom servers and network selection become visible
     expect(screen.getByText('Active Network')).toBeInTheDocument();
     expect(screen.getByText('Custom Servers & Trusted Peers')).toBeInTheDocument();
+  });
+
+  it('toggles StandardsManager accordion and PoS mode checkbox', async () => {
+    const user = userEvent.setup();
+    render(<SettingsView onBack={mockOnBack} />);
+
+    await screen.findByText('Identity Profile');
+    const securityTab = screen.getByText('Security & Ops');
+    await user.click(securityTab);
+
+    // Expand standards section
+    expect(screen.queryByTestId('standards-manager-mock')).not.toBeInTheDocument();
+    const standardsToggle = screen.getByRole('button', { name: /Manage and review installed voucher standards/i });
+    expect(standardsToggle).toBeInTheDocument();
+    await user.click(standardsToggle);
+
+    // Verify standards manager is displayed
+    expect(screen.getByTestId('standards-manager-mock')).toBeInTheDocument();
+
+    // Check PoS mode in advanced server & PoS section
+    const advancedToggle = screen.getByRole('button', { name: /Advanced Server & PoS Configuration/i });
+    await user.click(advancedToggle);
+
+    const posCheckbox = screen.getByRole('checkbox', { name: /Enable Point-of-Sale \(PoS\) Cashier Mode/i });
+    expect(posCheckbox).not.toBeChecked();
+    await user.click(posCheckbox);
+    expect(posCheckbox).toBeChecked();
   });
 });

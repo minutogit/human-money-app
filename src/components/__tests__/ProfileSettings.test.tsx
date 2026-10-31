@@ -10,6 +10,7 @@ vi.mock('../../services/profileService', () => ({
   profileService: {
     getProfile: vi.fn(),
     saveProfile: vi.fn(),
+    getUserId: vi.fn(),
   },
 }));
 
@@ -62,6 +63,7 @@ describe('ProfileSettings Component', () => {
     vi.clearAllMocks();
     (profileService.getProfile as Mock).mockResolvedValue({ ...mockProfile });
     (profileService.saveProfile as Mock).mockResolvedValue(undefined);
+    (profileService.getUserId as Mock).mockResolvedValue('did:key:z6Mku...');
   });
 
   it('renders loading state initially', () => {

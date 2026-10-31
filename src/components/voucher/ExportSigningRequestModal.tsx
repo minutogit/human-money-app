@@ -1,13 +1,13 @@
-// src/components/voucher/ExportSigningRequestModal.tsx
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { voucherService, SigningRequestConfig } from "../../services/voucherService";
 import { settingsService } from "../../services/settingsService";
+import { contactService } from "../../services/contactService";
 import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../../utils/log";
 import { translateError } from "../../utils/errorHelper";
 import { ConfirmationModal } from "../ui/ConfirmationModal";
-import { AppSettings } from "../../types";
+import { AppSettings, Contact } from "../../types";
 import { updateLastUsedDirectory } from "../../utils/settingsUtils";
 
 interface ExportSigningRequestModalProps {
@@ -17,6 +17,8 @@ interface ExportSigningRequestModalProps {
     settings: AppSettings | null;
     protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>;
     onSettingsRefresh: (settings: AppSettings) => void;
+    contacts?: Contact[];
+    onSuccess?: (savedFilePath: string) => void;
 }
 
 export function ExportSigningRequestModal({
@@ -25,7 +27,9 @@ export function ExportSigningRequestModal({
     onClose,
     settings,
     protectAction,
-    onSettingsRefresh
+    onSettingsRefresh,
+    contacts,
+    onSuccess
 }: ExportSigningRequestModalProps) {
     const { t } = useTranslation();
     const [recipientId, setRecipientId] = useState("");
@@ -36,6 +40,17 @@ export function ExportSigningRequestModal({
     const [showExportPassword, setShowExportPassword] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     const [exportError, setExportError] = useState("");
+    const [availableContacts, setAvailableContacts] = useState<Contact[]>(contacts || []);
+
+    useEffect(() => {
+        if (contacts && contacts.length > 0) {
+            setAvailableContacts(contacts);
+        } else if (isOpen) {
+            contactService.getContacts()
+                .then(setAvailableContacts)
+                .catch(() => {});
+        }
+    }, [contacts, isOpen]);
 
     const handleExportSigningRequest = async () => {
         if (!voucherId) return;
@@ -94,6 +109,10 @@ export function ExportSigningRequestModal({
                     onSettingsRefresh(newSettings);
                 }
 
+                if (onSuccess) {
+                    onSuccess(filePath);
+                }
+
                 resetAndClose();
             }
         } catch (e) {
@@ -133,18 +152,45 @@ export function ExportSigningRequestModal({
                     </div>
 
                     {encryptToDid ? (
-                        <div className="space-y-2 animate-in slide-in-from-top-2 duration-300">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">{t('voucher.export.signerDid')}</label>
-                            <input
-                                type="text"
-                                value={recipientId}
-                                onChange={(e) => setRecipientId(e.target.value)}
-                                placeholder={t('contacts.didPlaceholder')}
-                                className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 focus:border-theme-primary shadow-inner-soft transition-all"
-                                autoFocus
-                            />
+                        <div className="space-y-3 animate-in slide-in-from-top-2 duration-300">
+                            {availableContacts.length > 0 && (
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">
+                                        {t('voucher.export.selectFromContacts')}
+                                    </label>
+                                    <select
+                                        className="w-full px-4 py-2.5 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 text-xs font-semibold"
+                                        value={availableContacts.some(c => c.did === recipientId) ? recipientId : ""}
+                                        onChange={(e) => {
+                                            if (e.target.value) setRecipientId(e.target.value);
+                                        }}
+                                    >
+                                        <option value="">{t('voucher.export.chooseContactPlaceholder')}</option>
+                                        {availableContacts.map(c => {
+                                            const name = [c.profile?.firstName, c.profile?.lastName].filter(Boolean).join(" ") || c.profile?.organization;
+                                            return (
+                                                <option key={c.did} value={c.did}>
+                                                    {name ? `${name} (${c.did.slice(0, 15)}...)` : c.did}
+                                                </option>
+                                            );
+                                        })}
+                                    </select>
+                                </div>
+                            )}
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest px-1">{t('voucher.export.signerDid')}</label>
+                                <input
+                                    type="text"
+                                    value={recipientId}
+                                    onChange={(e) => setRecipientId(e.target.value)}
+                                    placeholder={t('contacts.didPlaceholder')}
+                                    className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 focus:border-theme-primary shadow-inner-soft transition-all"
+                                    autoFocus
+                                />
+                            </div>
                         </div>
                     ) : (
+
                         <div className="space-y-4 animate-in slide-in-from-top-2 duration-300">
                             <div className="flex items-center gap-3 p-4 bg-theme-accent/5 rounded-2xl border border-theme-accent/20">
                                 <input

@@ -252,6 +252,11 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
                 </div>
             </div>
 
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-theme-light flex items-start gap-2.5">
+                <Info size={16} className="text-theme-primary shrink-0 mt-0.5" />
+                <span>{t('auth.resetPasswordWithSeedDesc')}</span>
+            </div>
+
             <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); handleRecovery(); }}>
                     <Card header={<div className="flex items-center gap-2"><User size={14}/><label htmlFor="profile-select" className="font-black text-[10px] uppercase tracking-widest cursor-pointer">{t('profile.selectProfile')}</label></div>}>
                         <div className="space-y-4">

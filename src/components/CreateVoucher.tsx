@@ -170,6 +170,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         errors={errors}
                         standardRef={standardRef}
                         amountRef={amountRef}
+                        parsedStandard={parsedStandard}
                     />
 
                     <CreatorIdentityForm 

@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
 import { AppSettings, IntentDispatchObservation } from '../types';
@@ -14,7 +15,8 @@ import {
     Share2, 
     ShieldCheck, 
     User,
-    ArrowUpRight
+    ArrowUpRight,
+    FolderOpen
 } from 'lucide-react';
 import { suggestFilename } from '../utils/userIdHelper';
 import { stringifyError } from '../utils/errorHelper';
@@ -32,6 +34,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, l2Dispat
     const { protectAction } = useSession();
     const [feedback, setFeedback] = useState('');
     const [isSaving, setIsSaving] = useState(false);
+    const [savedFilePath, setSavedFilePath] = useState<string | null>(null);
     const [settings, setSettings] = useState<AppSettings | null>(null);
 
     useEffect(() => {
@@ -70,6 +73,7 @@ export function TransferSuccessView({ bundleData, recipientId, summary, l2Dispat
             if (filePath) {
                 const content = new Uint8Array(bundleData);
                 await writeFile(filePath, content);
+                setSavedFilePath(filePath);
                 logger.info(`Successfully saved transfer bundle to ${filePath}`);
                 
                 if (settings) {
@@ -219,6 +223,22 @@ export function TransferSuccessView({ bundleData, recipientId, summary, l2Dispat
                         {isSaving ? <Download className="animate-bounce" size={20} /> : <Download size={20} />}
                         {isSaving ? t('transfer.success.savingFile') : t('transfer.success.saveFile')}
                     </Button>
+
+                    {savedFilePath && (
+                        <Button
+                            variant="secondary"
+                            onClick={() => {
+                                revealItemInDir(savedFilePath).catch((err) => {
+                                    logger.error(`Failed to reveal item in dir: ${stringifyError(err)}`);
+                                });
+                            }}
+                            className="w-full max-w-sm py-3 rounded-2xl text-sm font-bold gap-2 animate-in fade-in duration-200"
+                        >
+                            <FolderOpen size={18} />
+                            {t('transfer.success.revealInFolder')}
+                        </Button>
+                    )}
+
                     <Button 
                         variant="secondary" 
                         onClick={onDone} 

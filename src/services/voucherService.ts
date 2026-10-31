@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { triggerAutoBackup } from "../utils/autoBackup";
 import { VoucherSummary, VoucherDetails, NewVoucherData, Voucher, TrustStatus, AggregatedBalance } from "../types";
 
 export type SigningRequestConfig = 
@@ -24,11 +25,15 @@ export const voucherService = {
     },
 
     create: async (standardTomlContent: string, data: NewVoucherData, password?: string) => {
-        return await invoke<Voucher>("create_new_voucher", { standardTomlContent, data, password });
+        const result = await invoke<Voucher>("create_new_voucher", { standardTomlContent, data, password });
+        triggerAutoBackup();
+        return result;
     },
 
     removeSignature: async (localInstanceId: string, signatureId: string, password?: string) => {
-        return await invoke<void>("remove_voucher_signature", { localInstanceId, signatureId, password });
+        const result = await invoke<void>("remove_voucher_signature", { localInstanceId, signatureId, password });
+        triggerAutoBackup();
+        return result;
     },
 
     createSigningRequest: async (localInstanceId: string, config: SigningRequestConfig) => {
@@ -52,9 +57,10 @@ export const voucherService = {
         });
     },
 
-
     processAndAttachSignature: async (containerBytes: number[], standardTomlContent: string, containerPassword?: string, walletPassword?: string) => {
-        return await invoke<string>("process_and_attach_signature", { containerBytes, standardTomlContent, containerPassword, walletPassword });
+        const result = await invoke<string>("process_and_attach_signature", { containerBytes, standardTomlContent, containerPassword, walletPassword });
+        triggerAutoBackup();
+        return result;
     },
 
     checkReputation: async (offenderId: string) => {
@@ -71,5 +77,9 @@ export const voucherService = {
 
     getTotalBalanceByCurrency: async () => {
         return await invoke<AggregatedBalance[]>("get_total_balance_by_currency");
+    },
+
+    getUserId: async () => {
+        return await invoke<string>("get_user_id");
     }
 };

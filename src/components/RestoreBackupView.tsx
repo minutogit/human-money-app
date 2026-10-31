@@ -291,7 +291,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                         className="shrink-0"
                     >
                         <RefreshCw size={12} className="mr-1" />
-                        {t('auth.useSingleFields') ? 'Recreate Identity' : 'Recreate'}
+                        {t('profile.backupRestoreRecreateEmptyBtn')}
                     </Button>
                 </div>
             )}

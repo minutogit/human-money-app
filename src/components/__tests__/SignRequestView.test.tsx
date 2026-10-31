@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { SignRequestView } from '../SignRequestView';
 import { invoke } from '@tauri-apps/api/core';
+import { save } from '@tauri-apps/plugin-dialog';
 import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact } from '../../types';
 
 // Mock the Tauri API
@@ -14,7 +15,11 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 }));
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
-  writeFile: vi.fn(),
+  writeFile: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  revealItemInDir: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../utils/log', () => ({
@@ -25,7 +30,7 @@ vi.mock('../../utils/log', () => ({
 }));
 
 vi.mock('../../utils/settingsUtils', () => ({
-  updateLastUsedDirectory: vi.fn(),
+  updateLastUsedDirectory: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../context/SessionContext', () => ({
@@ -104,6 +109,9 @@ uuid = "minuto-uuid-123"`,
       if (cmd === 'get_app_settings') {
         return Promise.resolve(mockSettings);
       }
+      if (cmd === 'get_profile') {
+        return Promise.resolve({ id: 'did:key:signer', firstName: 'Alice' });
+      }
       if (cmd === 'parse_standard_toml') {
         return Promise.resolve({
           immutable: {
@@ -123,6 +131,9 @@ uuid = "minuto-uuid-123"`,
       if (cmd === 'evaluate_signature_suitability') {
         return Promise.resolve(mockSignatureImpact);
       }
+      if (cmd === 'create_detached_signature_response_bundle') {
+        return Promise.resolve([1, 2, 3, 4]);
+      }
       return Promise.resolve(undefined);
     });
   });
@@ -137,5 +148,92 @@ uuid = "minuto-uuid-123"`,
       expect(screen.getByText(/Voucher Details/i)).toBeInTheDocument();
       expect(screen.getByText(/guarantor/i)).toBeInTheDocument();
     });
+  });
+
+  it('shows inline gender selection when gender is required and profile lacks valid gender', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_profile') return Promise.resolve({ id: 'did:key:signer', firstName: 'Alice' });
+      if (cmd === 'parse_standard_toml') {
+        return Promise.resolve({
+          immutable: {
+            identity: { uuid: 'minuto-uuid-123', name: 'Minuto Standard', abbreviation: 'MIN' },
+            issuance: { allowedSignatureRoles: ['guarantor'] },
+            customRules: {
+              genderRule: { expression: 'details.gender in ["1", "2"]' },
+            },
+          },
+        });
+      }
+      if (cmd === 'evaluate_signature_suitability') return Promise.resolve(mockSignatureImpact);
+      return Promise.resolve(undefined);
+    });
+
+    render(<SignRequestView voucherData={mockVoucherDetails} onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Gender Specification Required in Profile/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Save to Profile & Verify/i })).toBeInTheDocument();
+    });
+  });
+
+  it('shows gender warning when gender is required and includeDetails is unchecked', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_profile') return Promise.resolve({ id: 'did:key:signer', firstName: 'Alice', gender: '1' });
+      if (cmd === 'parse_standard_toml') {
+        return Promise.resolve({
+          immutable: {
+            identity: { uuid: 'minuto-uuid-123', name: 'Minuto Standard', abbreviation: 'MIN' },
+            issuance: { allowedSignatureRoles: ['guarantor'] },
+            customRules: {
+              genderRule: { expression: 'details.gender in ["1", "2"]' },
+            },
+          },
+        });
+      }
+      if (cmd === 'evaluate_signature_suitability') return Promise.resolve(mockSignatureImpact);
+      return Promise.resolve(undefined);
+    });
+
+    render(<SignRequestView voucherData={mockVoucherDetails} onBack={mockOnBack} />);
+
+    // Initially gender is set, so inline selection is not needed
+    await waitFor(() => {
+      expect(screen.queryByText(/Gender Specification Required in Profile/i)).not.toBeInTheDocument();
+    });
+
+    // Uncheck includeDetails
+    const checkbox = screen.getByRole('checkbox');
+    fireEvent.click(checkbox);
+
+    await waitFor(() => {
+      expect(screen.getByText(/requires disclosing your identity to verify gender parity/i)).toBeInTheDocument();
+    });
+  });
+
+  it('shows success screen after signing and saving signature file', async () => {
+    (save as Mock).mockResolvedValue('/tmp/signature-voucher-.sig');
+
+    render(<SignRequestView voucherData={mockVoucherDetails} onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Sign Now/i })).toBeInTheDocument();
+    });
+
+    const signButton = screen.getByRole('button', { name: /Sign Now/i });
+    fireEvent.click(signButton);
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/Signature \(\.sig\) Saved!/i).length).toBeGreaterThan(0);
+      expect(screen.getByText('/tmp/signature-voucher-.sig')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Done/i })).toBeInTheDocument();
+    });
+
+    // Clicking Done calls onBack
+    fireEvent.click(screen.getByRole('button', { name: /Done/i }));
+    expect(mockOnBack).toHaveBeenCalledTimes(1);
   });
 });

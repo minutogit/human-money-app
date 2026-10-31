@@ -16,7 +16,6 @@ import {
   Download, 
   PlusCircle, 
   History, 
-  ClipboardList, 
   Contact, 
   ShieldAlert, 
   Settings, 
@@ -24,7 +23,8 @@ import {
   ChevronRight,
   Heart,
   Bug,
-  BookOpen
+  BookOpen,
+  Lock
 } from 'lucide-react';
 
 export const INTERNAL_VIEWS = [
@@ -50,7 +50,7 @@ export const INTERNAL_VIEWS = [
 
 export const Sidebar: React.FC = () => {
   const { t } = useTranslation();
-  const { isSessionActive, isAuthenticated, profileName, notifyLogout, protectAction } = useSession();
+  const { isSessionActive, isAuthenticated, profileName, notifyLogout, protectAction, lockSession } = useSession();
   const { appState, navigate, appVersion, isSidebarOpen, setSidebarOpen } = useNavigation();
   const currentView = appState.view;
   const isLoggedIn = isAuthenticated ?? isSessionActive;
@@ -86,7 +86,6 @@ export const Sidebar: React.FC = () => {
     {
       label: t('common.sidebarRecords'),
       items: [
-        { id: 'activities', label: t('history.activityLog'), icon: ClipboardList, view: { view: 'activities' } },
         { id: 'transaction_history', label: t('history.transactionHistory'), icon: History, view: { view: 'transaction_history' } },
         { id: 'address_book', label: t('contacts.addressBook'), icon: Contact, view: { view: 'address_book' } },
       ]
@@ -129,23 +128,23 @@ export const Sidebar: React.FC = () => {
         </div>
 
         {/* Profile Header */}
-        <div 
-          onClick={!isSessionActive ? () => { protectAction(async () => {}).catch(() => {}); } : undefined}
-          onKeyDown={!isSessionActive ? (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              protectAction(async () => {}).catch(() => {});
-            }
-          } : undefined}
-          role={!isSessionActive ? "button" : undefined}
-          tabIndex={!isSessionActive ? 0 : undefined}
-          title={!isSessionActive ? t('auth.sessionLocked') : undefined}
-          className={`p-3 border-b border-theme-subtle bg-bg-app/30 transition-colors ${
-            !isSessionActive ? "cursor-pointer hover:bg-theme-warning/10" : ""
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            <div className="ring-2 ring-theme-primary/20 rounded-full p-0.5 shadow-sm">
+        <div className="p-3 border-b border-theme-subtle bg-bg-app/30 flex items-center justify-between gap-2">
+          <div 
+            onClick={!isSessionActive ? () => { protectAction(async () => {}).catch(() => {}); } : undefined}
+            onKeyDown={!isSessionActive ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                protectAction(async () => {}).catch(() => {});
+              }
+            } : undefined}
+            role={!isSessionActive ? "button" : undefined}
+            tabIndex={!isSessionActive ? 0 : undefined}
+            title={!isSessionActive ? t('auth.sessionLocked') : undefined}
+            className={`flex items-center gap-3 min-w-0 flex-1 transition-colors ${
+              !isSessionActive ? "cursor-pointer hover:bg-theme-warning/10 rounded-xl p-1 -m-1" : ""
+            }`}
+          >
+            <div className="ring-2 ring-theme-primary/20 rounded-full p-0.5 shadow-sm shrink-0">
               <Avatar
                 size={32}
                 name={profileName || t('common.guest')}
@@ -157,17 +156,30 @@ export const Sidebar: React.FC = () => {
               <h2 className="text-sm font-bold text-theme-secondary truncate flex items-center gap-1.5">
                 {profileName || (isSessionActive ? t('auth.loggedIn') : t('auth.sessionLocked'))}
                 {!isSessionActive && profileName && (
-                  <svg className="w-3.5 h-3.5 text-theme-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-3.5 h-3.5 text-theme-warning shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                   </svg>
                 )}
               </h2>
               <span className="text-[10px] font-medium text-theme-light uppercase tracking-widest flex items-center gap-1">
-                <span className={`w-1.5 h-1.5 rounded-full ${isSessionActive ? "bg-theme-success animate-pulse" : "bg-theme-warning"}`}></span>
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isSessionActive ? "bg-theme-success animate-pulse" : "bg-theme-warning"}`}></span>
                 {isSessionActive ? t('common.activeWallet') : t('auth.sessionLocked')}
               </span>
             </div>
           </div>
+          {isSessionActive && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                lockSession();
+              }}
+              title={t('auth.lockSession')}
+              className="p-2 text-theme-light hover:text-theme-primary hover:bg-theme-primary/10 rounded-xl transition-colors cursor-pointer shrink-0"
+            >
+              <Lock size={16} />
+            </button>
+          )}
         </div>
 
         {/* Navigation Content */}

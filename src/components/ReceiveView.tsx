@@ -6,16 +6,22 @@ import { settingsService } from '../services/settingsService';
 import { voucherService } from '../services/voucherService';
 import { standardsService } from '../services/standardsService';
 import { wotService } from '../services/wotService';
+import { integrityService } from '../services/integrityService';
 import { contactService } from '../services/contactService';
 import ContactDialog from './ContactDialog';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { profileService } from '../services/profileService';
+import { buildPaymentRequestText } from '../utils/humocoUri';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
+import { useOptionalNavigation } from '../context/NavigationContext';
+
 import { translateError, isBackendError, stringifyError } from '../utils/errorHelper';
 import { 
     VoucherStandardInfo,
@@ -25,7 +31,8 @@ import {
     VoucherDetails,
     VoucherSummary,
     Contact,
-    WotImportResultDto
+    WotImportResultDto,
+    PublicProfile
 } from '../types';
 import { PageLayout } from './ui/PageLayout';
 import { ImportStandardModal } from './ImportStandardModal';
@@ -38,17 +45,30 @@ import {
     Lock, 
     X,
     CheckCircle2,
-    AlertCircle
+    AlertCircle,
+    Copy,
+    Check
 } from 'lucide-react';
 
 interface ReceiveViewProps {
     onBack: () => void;
     onReceiveSuccess: (payload: ReceiveSuccessPayload | VoucherDetails) => void;
+    droppedFile?: { name: string; bytes: number[] };
 }
 
-export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
+export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveViewProps) {
     const { t } = useTranslation();
     const { protectAction } = useSession();
+    const nav = useOptionalNavigation();
+    const navigate = nav?.navigate;
+    const [activeTab, setActiveTab] = useState<'import' | 'request'>('import');
+    const [ownUserId, setOwnUserId] = useState('');
+    const [ownProfile, setOwnProfile] = useState<PublicProfile | null>(null);
+    const [reqStandardId, setReqStandardId] = useState<string>('');
+    const [reqAmount, setReqAmount] = useState<string>('');
+    const [reqNote, setReqNote] = useState<string>('');
+    const [reqIsTest, setReqIsTest] = useState<boolean>(false);
+    const [copiedRequest, setCopiedRequest] = useState<boolean>(false);
     const [bundlePath, setBundlePath] = useState<string | null>(null);
     const [bundleName, setBundleName] = useState<string | null>(null);
     const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
@@ -65,6 +85,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         content: React.ReactNode;
         confirmText: string;
         voucherId?: string;
+        proofId?: string;
     } | null>(null);
     const [toleranceModal, setToleranceModal] = useState<{
         type: 'Soft' | 'Critical';
@@ -73,9 +94,10 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
     const [confirmText, setConfirmText] = useState("");
     const [pendingPasswordImport, setPendingPasswordImport] = useState<{
         fileData: number[];
-        type: 'transfer' | 'ask' | 'sig' | 'wot';
+        type: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof';
         name: string;
     } | null>(null);
+
     const [wotImportModalData, setWotImportModalData] = useState<WotImportResultDto | null>(null);
     const [wotContactDialogOpen, setWotContactDialogOpen] = useState(false);
     const [wotExistingContact, setWotExistingContact] = useState<Contact | null>(null);
@@ -94,15 +116,22 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         async function fetchData() {
             try {
                 logger.info("ReceiveView opened, fetching initial data.");
-                const [standards, currentSettings] = await Promise.all([
+                const [standards, currentSettings, userId, profile] = await Promise.all([
                      standardsService.getStandards(),
                      settingsService.getSettings().catch(e => {
                          logger.warn(`Failed to fetch app settings: ${translateError(e, t)}`);
                          return null;
-                     })
+                     }),
+                     voucherService.getUserId().catch(() => ''),
+                     profileService.getProfile().catch(() => null)
                 ]);
                 setVoucherStandards(standards);
+                if (standards.length > 0) {
+                    setReqStandardId(standards[0].id);
+                }
                 setSettings(currentSettings);
+                setOwnUserId(userId);
+                setOwnProfile(profile);
             } catch (e) {
                 const msg = `Failed to fetch initial data: ${translateError(e, t)}`;
                 logger.error(msg);
@@ -111,6 +140,30 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         }
         fetchData();
     }, [t]);
+
+    useEffect(() => {
+        if (droppedFile) {
+            setBundlePath(droppedFile.name);
+            setBundleName(droppedFile.name);
+            setDroppedFileContent(droppedFile.bytes);
+
+            if (droppedFile.name.endsWith('.standard') || droppedFile.name.endsWith('.toml')) {
+                processStandardFile(droppedFile.bytes);
+            } else {
+                let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | null = null;
+                if (droppedFile.name.endsWith('.transfer')) detectedType = 'transfer';
+                else if (droppedFile.name.endsWith('.ask') || droppedFile.name.endsWith('.humocoreq')) detectedType = 'ask';
+                else if (droppedFile.name.endsWith('.sig') || droppedFile.name.endsWith('.humocosig')) detectedType = 'sig';
+                else if (droppedFile.name.endsWith('.wot')) detectedType = 'wot';
+                else if (droppedFile.name.endsWith('.hmcproof')) detectedType = 'proof';
+
+                if (detectedType) {
+                    executeReceiveDirectly(droppedFile.bytes, detectedType, droppedFile.name);
+                }
+            }
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [droppedFile]);
 
     const processStandardFile = async (fileData: number[]) => {
         setIsProcessing(true);
@@ -131,10 +184,11 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 multiple: false,
                 defaultPath: settings?.lastUsedDirectory,
                 filters: [
-                    { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'standard', 'toml', 'humocoreq', 'humocosig', 'wot'] },
+                    { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'standard', 'toml', 'humocoreq', 'humocosig', 'wot', 'hmcproof'] },
                     { name: 'Transfer File (.transfer)', extensions: ['transfer'] },
                     { name: 'Signature Request (.ask)', extensions: ['ask', 'humocoreq'] },
                     { name: 'Signature Response (.sig)', extensions: ['sig', 'humocosig'] },
+                    { name: 'Double Spend Proof (.hmcproof)', extensions: ['hmcproof'] },
                     { name: 'Voucher Standard (.standard, .toml)', extensions: ['standard', 'toml'] },
                     { name: t('transfer.importFile.wotFilter'), extensions: ['wot'] },
                     { name: 'All Files', extensions: ['*'] }
@@ -146,9 +200,9 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 setBundlePath(selectedPath);
                 
                 if (settings) {
-                    updateLastUsedDirectory(selectedPath, settings, protectAction).then(() => {
-                        settingsService.getSettings().then(setSettings).catch(() => {});
-                    });
+                    Promise.resolve(updateLastUsedDirectory(selectedPath, settings, protectAction))
+                        .then(() => settingsService.getSettings().then(setSettings).catch(() => {}))
+                        .catch(() => {});
                 }
 
                 const fileName = selectedPath.split(/[/\\]/).pop() || '';
@@ -160,7 +214,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 if (fileName.endsWith('.standard') || fileName.endsWith('.toml')) {
                     await processStandardFile(fileData);
                 } else {
-                    let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | null = null;
+                    let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | null = null;
                     if (fileName.endsWith('.transfer')) {
                         detectedType = 'transfer';
                     } else if (fileName.endsWith('.ask') || fileName.endsWith('.humocoreq')) {
@@ -169,6 +223,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                         detectedType = 'sig';
                     } else if (fileName.endsWith('.wot')) {
                         detectedType = 'wot';
+                    } else if (fileName.endsWith('.hmcproof')) {
+                        detectedType = 'proof';
                     }
 
                     if (detectedType) {
@@ -232,7 +288,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             const file = files[0];
-            const validExtensions = ['.transfer', '.ask', '.sig', '.standard', '.toml', '.humocoreq', '.humocosig', '.wot'];
+            const validExtensions = ['.transfer', '.ask', '.sig', '.standard', '.toml', '.humocoreq', '.humocosig', '.wot', '.hmcproof'];
             if (validExtensions.some(ext => file.name.endsWith(ext))) {
                 try {
                     const fileBuffer = await file.arrayBuffer();
@@ -246,11 +302,12 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     if (file.name.endsWith('.standard') || file.name.endsWith('.toml')) {
                         await processStandardFile(bundleData);
                     } else {
-                        let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | null = null;
+                        let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | null = null;
                         if (file.name.endsWith('.transfer')) detectedType = 'transfer';
                         else if (file.name.endsWith('.ask') || file.name.endsWith('.humocoreq')) detectedType = 'ask';
                         else if (file.name.endsWith('.sig') || file.name.endsWith('.humocosig')) detectedType = 'sig';
                         else if (file.name.endsWith('.wot')) detectedType = 'wot';
+                        else if (file.name.endsWith('.hmcproof')) detectedType = 'proof';
 
                         if (detectedType) {
                             executeReceiveDirectly(bundleData, detectedType, file.name);
@@ -267,7 +324,7 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
     async function executeReceiveDirectly(
         fileData: number[],
-        type: 'transfer' | 'ask' | 'sig' | 'wot',
+        type: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof',
         name: string,
         password?: string
     ) {
@@ -420,8 +477,8 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                 if (updatedInstanceId) {
                     setResultModal({
                         isOpen: true,
-                        title: t('transfer.importFile.transferComplete'),
-                        content: <p className="text-sm font-medium text-theme-secondary">{t('transfer.importFile.transferCompleteDesc')}</p>,
+                        title: t('voucher.signatureAttachedTitle'),
+                        content: <p className="text-sm font-medium text-theme-secondary">{t('voucher.signatureAttachedDesc')}</p>,
                         confirmText: t('transfer.importFile.viewDetails'),
                         voucherId: updatedInstanceId
                     });
@@ -437,6 +494,20 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
 
                 if (wotResult) {
                     setWotImportModalData(wotResult);
+                }
+            } else if (type === 'proof') {
+                const proofId = await protectAction(async (walletPassword) => {
+                    return await integrityService.importDoubleSpendProof(fileData, walletPassword || undefined);
+                });
+
+                if (proofId) {
+                    setResultModal({
+                        isOpen: true,
+                        title: t('conflict.proofImportedTitle'),
+                        content: <p className="text-sm font-medium text-theme-secondary">{t('conflict.proofImportedDesc')}</p>,
+                        confirmText: t('conflict.viewProofBtn'),
+                        proofId
+                    });
                 }
             }
         } catch (e) {
@@ -624,14 +695,70 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
         clearSelection();
     };
 
+    const selectedReqStandard = voucherStandards.find(s => s.id === reqStandardId) || voucherStandards[0];
+    const reqUuidMatch = selectedReqStandard?.content.match(/uuid\s*=\s*["']([^"']+)["']/);
+    const reqUnitMatch = selectedReqStandard?.content.match(/unit\s*=\s*["']([^"']+)["']/);
+    const reqStdUuid = reqUuidMatch ? reqUuidMatch[1] : selectedReqStandard?.id;
+    const reqUnit = reqUnitMatch ? reqUnitMatch[1] : selectedReqStandard?.displayName;
+    const reqNameParts = [ownProfile?.firstName, ownProfile?.lastName].filter(Boolean);
+    const reqName = reqNameParts.length > 0 ? reqNameParts.join(' ') : (ownProfile?.organization || '');
+
+    const generatedPaymentRequest = buildPaymentRequestText({
+        to: ownUserId,
+        name: reqName || undefined,
+        standardUuid: reqStdUuid,
+        standardName: selectedReqStandard?.displayName,
+        unit: reqUnit,
+        amount: reqAmount.trim() || undefined,
+        note: reqNote.trim() || undefined,
+        isTest: reqIsTest,
+    });
+
+    const handleCopyPaymentRequest = async () => {
+        try {
+            await writeText(generatedPaymentRequest);
+            setCopiedRequest(true);
+            setTimeout(() => setCopiedRequest(false), 2500);
+        } catch (err) {
+            logger.error(`Failed to copy payment request: ${stringifyError(err)}`);
+        }
+    };
+
     return (
         <PageLayout 
-
-            title={t('transfer.importFile.title')} 
-            description={t('transfer.importFile.description')} 
+            title={activeTab === 'import' ? t('transfer.importFile.title') : t('transfer.requestPayment.title')} 
+            description={activeTab === 'import' ? t('transfer.importFile.description') : t('transfer.requestPayment.description')} 
             onBack={onBack}
         >
             <div className="max-w-3xl mx-auto space-y-8">
+                {/* Mode Tabs */}
+                <div className="flex items-center justify-center">
+                    <div className="p-1.5 bg-slate-100 rounded-2xl flex items-center gap-1 border border-theme-subtle/50">
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab('import')}
+                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${
+                                activeTab === 'import'
+                                    ? 'bg-white text-theme-primary shadow-sm'
+                                    : 'text-theme-light hover:text-theme-secondary'
+                            }`}
+                        >
+                            {t('transfer.receiveTabs.importFile')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab('request')}
+                            className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${
+                                activeTab === 'request'
+                                    ? 'bg-white text-theme-primary shadow-sm'
+                                    : 'text-theme-light hover:text-theme-secondary'
+                            }`}
+                        >
+                            {t('transfer.receiveTabs.requestPayment')}
+                        </button>
+                    </div>
+                </div>
+
                 {feedbackMsg && (
                     <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-start gap-3 animate-in shake duration-500">
                         <AlertCircle className="text-rose-500 shrink-0" size={18} />
@@ -639,31 +766,143 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     </div>
                 )}
 
+                {activeTab === 'request' ? (
+                    <div className="space-y-6 animate-in fade-in duration-200">
+                        <div className="bg-white border border-theme-subtle rounded-3xl p-6 shadow-sm space-y-5">
+                            <div>
+                                <h3 className="text-base font-black text-theme-secondary">
+                                    {t('transfer.requestPayment.title')}
+                                </h3>
+                                <p className="text-xs text-theme-light mt-1">
+                                    {t('transfer.requestPayment.description')}
+                                </p>
+                            </div>
+
+                            <div className="space-y-4 pt-2">
+                                {/* Standard Selection */}
+                                <div>
+                                    <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">
+                                        {t('transfer.requestPayment.selectStandard')}
+                                    </label>
+                                    <select
+                                        value={reqStandardId}
+                                        onChange={(e) => setReqStandardId(e.target.value)}
+                                        className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary text-sm font-medium focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm"
+                                    >
+                                        {voucherStandards.map((std) => (
+                                            <option key={std.id} value={std.id}>
+                                                {std.displayName}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {/* Amount and Unit */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">
+                                            {t('transfer.requestPayment.amount')} ({t('common.optional')})
+                                        </label>
+                                        <Input
+                                            type="number"
+                                            min="0"
+                                            step="any"
+                                            value={reqAmount}
+                                            onChange={(e) => setReqAmount(e.target.value)}
+                                            placeholder="z. B. 15"
+                                            className="text-sm font-medium"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">
+                                            {t('transfer.requestPayment.unit')}
+                                        </label>
+                                        <div className="px-4 py-2.5 bg-slate-50 border border-theme-subtle rounded-xl text-sm font-bold text-theme-secondary">
+                                            {reqUnit || '–'}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Note / Purpose */}
+                                <div>
+                                    <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">
+                                        {t('transfer.requestPayment.purpose')} ({t('common.optional')})
+                                    </label>
+                                    <Input
+                                        type="text"
+                                        value={reqNote}
+                                        onChange={(e) => setReqNote(e.target.value)}
+                                        placeholder={t('transfer.requestPayment.purposePlaceholder')}
+                                        className="text-sm font-medium"
+                                    />
+                                </div>
+
+                                {/* Is Test Voucher Checkbox */}
+                                <label className="flex items-center gap-3 cursor-pointer select-none pt-1">
+                                    <input
+                                        type="checkbox"
+                                        checked={reqIsTest}
+                                        onChange={(e) => setReqIsTest(e.target.checked)}
+                                        className="rounded accent-theme-primary h-4 w-4"
+                                    />
+                                    <span className="text-xs font-bold text-theme-secondary">
+                                        {t('transfer.requestPayment.isTest')}
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+
+                        {/* Live Preview Box */}
+                        <div className="bg-slate-50 border border-theme-subtle rounded-3xl p-6 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <h4 className="text-xs font-black uppercase tracking-widest text-theme-light">
+                                    {t('transfer.requestPayment.previewTitle')}
+                                </h4>
+                                <span className="text-[10px] font-bold text-theme-light bg-white border border-theme-subtle/50 px-2 py-0.5 rounded-full">
+                                    {t('transfer.requestPayment.readyToShare')}
+                                </span>
+                            </div>
+                            <pre className="p-4 bg-white border border-theme-subtle rounded-2xl text-xs font-mono text-theme-secondary whitespace-pre-wrap break-all shadow-inner">
+                                {generatedPaymentRequest}
+                            </pre>
+                            <Button
+                                type="button"
+                                onClick={handleCopyPaymentRequest}
+                                className="w-full py-3.5 rounded-2xl gap-2 font-bold text-sm shadow-md"
+                            >
+                                {copiedRequest ? <Check size={18} className="text-emerald-300" /> : <Copy size={18} />}
+                                {copiedRequest ? t('transfer.requestPayment.copied') : t('transfer.requestPayment.copyButton')}
+                            </Button>
+                        </div>
+                    </div>
+                ) : (
                 <div className="space-y-8">
                 {/* PoS Mode Toggle */}
-                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
-                    <label className="flex items-center gap-3 cursor-pointer select-none">
-                        <input
-                            type="checkbox"
-                            checked={isPosMode}
-                            onChange={(e) => setIsPosMode(e.target.checked)}
-                            className="rounded accent-theme-primary h-4 w-4"
-                        />
-                        <span className="text-xs font-bold text-theme-secondary">
-                            {t('transfer.posModeToggle', 'PoS Cashier Mode (Point-of-Sale Checkout)')}
-                        </span>
-                    </label>
-                    {isPosMode && (
-                        <div className="w-full sm:w-64">
-                            <Input
-                                placeholder={t('transfer.purchaseIdPlaceholder', 'Receipt / Purchase ID (optional)')}
-                                value={purchaseId}
-                                onChange={(e) => setPurchaseId(e.target.value)}
-                                className="text-xs font-mono py-1.5"
+                {settings?.enablePosMode && (
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
+                        <label className="flex items-center gap-3 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={isPosMode}
+                                onChange={(e) => setIsPosMode(e.target.checked)}
+                                className="rounded accent-theme-primary h-4 w-4"
                             />
-                        </div>
-                    )}
-                </div>
+                            <span className="text-xs font-bold text-theme-secondary">
+                                {t('transfer.posModeToggle', 'PoS Cashier Mode (Point-of-Sale Checkout)')}
+                            </span>
+                        </label>
+                        {isPosMode && (
+                            <div className="w-full sm:w-64">
+                                <Input
+                                    placeholder={t('transfer.purchaseIdPlaceholder', 'Receipt / Purchase ID (optional)')}
+                                    value={purchaseId}
+                                    onChange={(e) => setPurchaseId(e.target.value)}
+                                    className="text-xs font-mono py-1.5"
+                                />
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* PoS Trust Fallback Card */}
                 {pendingPosFallback && (
@@ -780,24 +1019,25 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                             {t('transfer.importFile.localProcessing')}
                         </p>
                     </div>
-                </div>
 
-                {/* File Format Guide */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-10">
-                    {[
-                        { icon: FileCheck, titleKey: 'transfer.importFile.formatTransfer', descKey: 'transfer.importFile.formatTransferDesc', ext: '.transfer' },
-                        { icon: FileSignature, titleKey: 'transfer.importFile.formatSignatureRequest', descKey: 'transfer.importFile.formatSigReqDesc', ext: '.ask' },
-                        { icon: CheckCircle2, titleKey: 'transfer.importFile.formatSignatureResponse', descKey: 'transfer.importFile.formatSigRespDesc', ext: '.sig' }
-                    ].map((item, i) => (
-                        <div key={i} className="p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl flex flex-col items-center text-center">
-                            <item.icon size={18} className="text-theme-light/60 mb-2" />
-                            <h4 className="text-[10px] font-black uppercase tracking-widest text-theme-secondary mb-1">{t(item.titleKey)}</h4>
-                            <p className="text-[10px] text-theme-light font-medium leading-tight">{t(item.descKey)}</p>
-                            <span className="mt-2 text-[9px] font-mono font-bold bg-theme-subtle/20 px-2 py-0.5 rounded text-theme-light">{item.ext}</span>
-                        </div>
-                    ))}
+                    {/* File Format Guide */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-10">
+                        {[
+                            { icon: FileCheck, titleKey: 'transfer.importFile.formatTransfer', descKey: 'transfer.importFile.formatTransferDesc', ext: '.transfer' },
+                            { icon: FileSignature, titleKey: 'transfer.importFile.formatSignatureRequest', descKey: 'transfer.importFile.formatSigReqDesc', ext: '.ask' },
+                            { icon: CheckCircle2, titleKey: 'transfer.importFile.formatSignatureResponse', descKey: 'transfer.importFile.formatSigRespDesc', ext: '.sig' }
+                        ].map((item, i) => (
+                            <div key={i} className="p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl flex flex-col items-center text-center">
+                                <item.icon size={18} className="text-theme-light/60 mb-2" />
+                                <h4 className="text-[10px] font-black uppercase tracking-widest text-theme-secondary mb-1">{t(item.titleKey)}</h4>
+                                <p className="text-[10px] text-theme-light font-medium leading-tight">{t(item.descKey)}</p>
+                                <span className="mt-2 text-[9px] font-mono font-bold bg-theme-subtle/20 px-2 py-0.5 rounded text-theme-light">{item.ext}</span>
+                            </div>
+                        ))}
+                    </div>
                 </div>
-            </div>
+            )}
+        </div>
 
             {/* Modals */}
             <ConfirmationModal
@@ -899,7 +1139,9 @@ export function ReceiveView({ onBack, onReceiveSuccess }: ReceiveViewProps) {
                     confirmText={resultModal.confirmText}
                     cancelText={t('transfer.importFile.dismiss')}
                     onConfirm={() => {
-                        if (resultModal.voucherId) {
+                        if (resultModal.proofId && navigate) {
+                            navigate({ view: 'conflict_details', proofId: resultModal.proofId, previousView: { view: 'receive_bundle' } });
+                        } else if (resultModal.voucherId) {
                             onReceiveSuccess({
                                 senderId: "",
                                 transferSummary: { summableAmounts: {}, countableItems: {} },

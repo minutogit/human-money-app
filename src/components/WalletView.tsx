@@ -34,6 +34,7 @@ export function WalletView() {
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
     const [parsedStandards, setParsedStandards] = useState<Record<string, VoucherStandardDefinition>>({});
+    const [ownUserId, setOwnUserId] = useState<string>("");
 
     // Export state
     const [showExportModal, setShowExportModal] = useState(false);
@@ -42,10 +43,21 @@ export function WalletView() {
     // Extract initial filters from appState if available
     const initialStatusFilter = appState.view === 'wallet' ? appState.initialStatusFilter : undefined;
     const initialStandardFilter = appState.view === 'wallet' ? appState.initialStandardFilter : undefined;
+    const initialFilter = appState.view === 'wallet' ? appState.initialFilter : undefined;
 
     const {
         statusFilters,
         standardFilters,
+        searchQuery,
+        setSearchQuery,
+        originFilter,
+        setOriginFilter,
+        modeFilter,
+        setModeFilter,
+        expiringSoonOnly,
+        setExpiringSoonOnly,
+        sortOption,
+        setSortOption,
         statusCounts,
         standardCounts,
         filteredVouchers,
@@ -55,8 +67,10 @@ export function WalletView() {
         resetFilters
     } = useVoucherFilters({ 
         vouchers, 
+        ownUserId,
         initialStatusFilter, 
-        initialStandardFilter 
+        initialStandardFilter,
+        initialFilter
     });
 
     // Expand/collapse state for vouchers
@@ -66,15 +80,17 @@ export function WalletView() {
         logger.info("WalletView component displayed");
         async function fetchData() {
             try {
-                const [voucherList, currentSettings, profile, standards] = await Promise.all([
+                const [voucherList, currentSettings, profile, standards, id] = await Promise.all([
                     voucherService.getSummaries(),
                     settingsService.getSettings().catch(() => null),
                     profileService.getProfile().catch(() => null),
-                    standardsService.getStandards().catch(() => [])
+                    standardsService.getStandards().catch(() => []),
+                    voucherService.getUserId().catch(() => "")
                 ]);
                 setVouchers(voucherList || []);
                 setSettings(currentSettings);
                 setUserProfile(profile);
+                setOwnUserId(id || "");
 
                 // Parse standards for hints
                 const parsed: Record<string, VoucherStandardDefinition> = {};
@@ -138,6 +154,16 @@ export function WalletView() {
                 <VoucherFilterBar 
                     statusFilters={statusFilters}
                     standardFilters={standardFilters}
+                    searchQuery={searchQuery}
+                    setSearchQuery={setSearchQuery}
+                    originFilter={originFilter}
+                    setOriginFilter={setOriginFilter}
+                    modeFilter={modeFilter}
+                    setModeFilter={setModeFilter}
+                    expiringSoonOnly={expiringSoonOnly}
+                    setExpiringSoonOnly={setExpiringSoonOnly}
+                    sortOption={sortOption}
+                    setSortOption={setSortOption}
                     statusCounts={statusCounts}
                     standardCounts={standardCounts}
                     activeFilterCount={activeFilterCount}

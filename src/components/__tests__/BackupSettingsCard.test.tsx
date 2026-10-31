@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BackupSettingsCard } from '../BackupSettingsCard';
 import { backupService } from '../../services/backupService';
+import { settingsService } from '../../services/settingsService';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { AppSettings } from '../../types';
 
@@ -48,6 +49,12 @@ vi.mock('../../services/backupService', () => ({
     },
 }));
 
+vi.mock('../../services/settingsService', () => ({
+    settingsService: {
+        saveSettings: vi.fn().mockResolvedValue(undefined),
+    },
+}));
+
 const mockProtectAction = vi.fn(async (cb: (pw: string) => Promise<any>) => cb('mock-wallet-pw'));
 
 vi.mock('../../context/SessionContext', () => ({
@@ -73,15 +80,21 @@ describe('BackupSettingsCard', () => {
         backupProtectionMode: 'mnemonic_only',
         lastBackupAt: null,
         backupSyncFolder: null,
+        autoBackupEnabled: true,
+        backupDirty: false,
     };
 
     beforeEach(() => {
         vi.clearAllMocks();
     });
 
-    it('renders card title, subtitle, and never-backed-up status', () => {
+    it('renders card title, subtitle, and guided 3 ways', () => {
         render(<BackupSettingsCard settings={defaultSettings} />);
         expect(screen.getByText('Encrypted Wallet Backups')).toBeInTheDocument();
+        expect(screen.getByText('3 Simple Ways for Data Safety')).toBeInTheDocument();
+        expect(screen.getByText('Cloud Sync Folder')).toBeInTheDocument();
+        expect(screen.getByText('USB Drive / External Disk')).toBeInTheDocument();
+        expect(screen.getByText('Single File (.hmcbackup)')).toBeInTheDocument();
         expect(screen.getByText(/No backup created yet/i)).toBeInTheDocument();
     });
 
@@ -100,6 +113,26 @@ describe('BackupSettingsCard', () => {
         fireEvent.click(customModeRadio);
 
         expect(screen.getAllByPlaceholderText('Min. 8 characters')).toHaveLength(2);
+    });
+
+    it('toggles auto-backup checkbox and saves updated settings', async () => {
+        const onSettingsUpdated = vi.fn();
+        render(<BackupSettingsCard settings={defaultSettings} onSettingsUpdated={onSettingsUpdated} />);
+
+        const checkbox = screen.getByRole('checkbox');
+        expect(checkbox).toBeChecked();
+
+        fireEvent.click(checkbox);
+        expect(checkbox).not.toBeChecked();
+
+        await waitFor(() => {
+            expect(settingsService.saveSettings).toHaveBeenCalledWith(
+                expect.objectContaining({ autoBackupEnabled: false })
+            );
+            expect(onSettingsUpdated).toHaveBeenCalledWith(
+                expect.objectContaining({ autoBackupEnabled: false })
+            );
+        });
     });
 
     it('validates password mismatch in custom_password mode on export', async () => {
@@ -169,9 +202,9 @@ describe('BackupSettingsCard', () => {
 
         render(<BackupSettingsCard settings={defaultSettings} onSettingsUpdated={onSettingsUpdated} />);
         
-        // Click Choose Folder
-        const chooseFolderBtn = screen.getByRole('button', { name: /Choose Folder/i });
-        fireEvent.click(chooseFolderBtn);
+        // Click Choose Folder in the action panel
+        const chooseFolderButtons = screen.getAllByRole('button', { name: /Choose Folder/i });
+        fireEvent.click(chooseFolderButtons[0]);
 
         await waitFor(() => {
             expect(open).toHaveBeenCalledWith({ directory: true, multiple: false, defaultPath: undefined });

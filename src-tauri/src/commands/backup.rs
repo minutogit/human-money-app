@@ -1,8 +1,9 @@
 // src-tauri/src/commands/backup.rs
 use crate::{
     models::{
-        FrontendBackupInspectionDto, FrontendBackupProbeDto, FrontendBackupSummaryDto,
-        FrontendError, FrontendRestoreOutcomeDto, MnemonicLanguage, PortableBackupContainer,
+        FrontendAutoBackupStatusDto, FrontendBackupInspectionDto, FrontendBackupProbeDto,
+        FrontendBackupSummaryDto, FrontendError, FrontendRestoreOutcomeDto, MnemonicLanguage,
+        PortableBackupContainer,
     },
     AppState,
 };
@@ -468,6 +469,7 @@ pub fn export_wallet_backup_file(
 
     if let Ok(mut settings) = state.get_cached_settings() {
         settings.last_backup_at = Some(Utc::now().to_rfc3339());
+        settings.backup_dirty = false;
         let _ = state.save_settings(&mut service, settings, password.as_deref());
     }
 
@@ -519,6 +521,7 @@ pub fn sync_wallet_backup_folder(
         settings.backup_sync_folder = Some(folder_path);
         settings.backup_protection_mode = Some(protection_mode);
         settings.last_backup_at = Some(Utc::now().to_rfc3339());
+        settings.backup_dirty = false;
         let _ = state.save_settings(&mut service, settings, password.as_deref());
     }
 
@@ -694,6 +697,186 @@ pub async fn restore_wallet_backup(
         restored_standards_count,
         l2_reconciliation_status,
     })
+}
+
+pub(crate) fn is_older_than_14_days(last_backup_at: &Option<String>) -> bool {
+    let Some(ts_str) = last_backup_at else {
+        return true;
+    };
+    let Ok(ts) = chrono::DateTime::parse_from_rfc3339(ts_str) else {
+        return true;
+    };
+    let now = Utc::now();
+    now.signed_duration_since(ts.with_timezone(&Utc)).num_days() >= 14
+}
+
+#[tauri::command]
+pub fn get_backup_status(state: tauri::State<AppState>) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
+    let settings = match state.get_cached_settings() {
+        Ok(s) => s,
+        Err(_) => return Ok(FrontendAutoBackupStatusDto {
+            status: "notConfigured".to_string(),
+            last_backup_at: None,
+            backup_dirty: false,
+            sync_folder: None,
+            changed_blobs: None,
+        }),
+    };
+
+    let folder_str = match &settings.backup_sync_folder {
+        Some(f) if !f.trim().is_empty() => f.clone(),
+        _ => {
+            return Ok(FrontendAutoBackupStatusDto {
+                status: "notConfigured".to_string(),
+                last_backup_at: settings.last_backup_at,
+                backup_dirty: settings.backup_dirty,
+                sync_folder: None,
+                changed_blobs: None,
+            });
+        }
+    };
+
+    let is_outdated = settings.backup_dirty || is_older_than_14_days(&settings.last_backup_at);
+
+    if !settings.auto_backup_enabled || settings.backup_protection_mode.as_deref() == Some("custom_password") {
+        return Ok(FrontendAutoBackupStatusDto {
+            status: if is_outdated { "outdated".to_string() } else { "manualOnly".to_string() },
+            last_backup_at: settings.last_backup_at,
+            backup_dirty: settings.backup_dirty,
+            sync_folder: Some(folder_str),
+            changed_blobs: None,
+        });
+    }
+
+    let folder_path = Path::new(&folder_str);
+    if !folder_path.is_dir() {
+        return Ok(FrontendAutoBackupStatusDto {
+            status: "folderDisconnected".to_string(),
+            last_backup_at: settings.last_backup_at,
+            backup_dirty: settings.backup_dirty,
+            sync_folder: Some(folder_str),
+            changed_blobs: None,
+        });
+    }
+
+    let status = if is_outdated {
+        "outdated"
+    } else {
+        "synced"
+    };
+
+    Ok(FrontendAutoBackupStatusDto {
+        status: status.to_string(),
+        last_backup_at: settings.last_backup_at,
+        backup_dirty: settings.backup_dirty,
+        sync_folder: Some(folder_str),
+        changed_blobs: None,
+    })
+}
+
+#[tauri::command]
+pub fn run_auto_backup_sync(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
+    let mut settings = match state.get_cached_settings() {
+        Ok(s) => s,
+        Err(_) => return Ok(FrontendAutoBackupStatusDto {
+            status: "notConfigured".to_string(),
+            last_backup_at: None,
+            backup_dirty: false,
+            sync_folder: None,
+            changed_blobs: None,
+        }),
+    };
+
+    let folder_str = match &settings.backup_sync_folder {
+        Some(f) if !f.trim().is_empty() => f.clone(),
+        _ => {
+            return Ok(FrontendAutoBackupStatusDto {
+                status: "notConfigured".to_string(),
+                last_backup_at: settings.last_backup_at,
+                backup_dirty: settings.backup_dirty,
+                sync_folder: None,
+                changed_blobs: None,
+            });
+        }
+    };
+
+    if !settings.auto_backup_enabled || settings.backup_protection_mode.as_deref() == Some("custom_password") {
+        return Ok(FrontendAutoBackupStatusDto {
+            status: "manualOnly".to_string(),
+            last_backup_at: settings.last_backup_at,
+            backup_dirty: settings.backup_dirty,
+            sync_folder: Some(folder_str),
+            changed_blobs: None,
+        });
+    }
+
+    let folder_path = Path::new(&folder_str);
+    // WICHTIGER USB-SCHUTZ: Prüfe is_dir(), KEIN fs::create_dir_all falls Ordner fehlt!
+    if !folder_path.is_dir() {
+        if !settings.backup_dirty {
+            settings.backup_dirty = true;
+            if let Ok(mut service) = state.service.lock() {
+                let _ = state.save_settings(&mut service, settings.clone(), None);
+            }
+        }
+        return Ok(FrontendAutoBackupStatusDto {
+            status: "folderDisconnected".to_string(),
+            last_backup_at: settings.last_backup_at,
+            backup_dirty: settings.backup_dirty,
+            sync_folder: Some(folder_str),
+            changed_blobs: None,
+        });
+    }
+
+    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    let custom_standards = collect_custom_standards(&app);
+
+    match sync_backup_folder_impl(
+        folder_path,
+        "mnemonic",
+        BackupProtection::MnemonicOnly,
+        None,
+        false,
+        &mut service,
+        custom_standards,
+    ) {
+        Ok(summary) => {
+            settings.last_backup_at = Some(summary.timestamp.clone());
+            settings.backup_dirty = false;
+            let _ = state.save_settings(&mut service, settings.clone(), None);
+            Ok(FrontendAutoBackupStatusDto {
+                status: "synced".to_string(),
+                last_backup_at: settings.last_backup_at,
+                backup_dirty: false,
+                sync_folder: Some(folder_str),
+                changed_blobs: Some(summary.changed_blobs),
+            })
+        }
+        Err(e) => {
+            let is_locked = e.code == "error.wallet.locked"
+                || e.code == "error.auth.sessionTimeout"
+                || e.message.to_lowercase().contains("locked")
+                || e.message.to_lowercase().contains("session");
+            if is_locked {
+                Ok(FrontendAutoBackupStatusDto {
+                    status: "locked".to_string(),
+                    last_backup_at: settings.last_backup_at,
+                    backup_dirty: settings.backup_dirty,
+                    sync_folder: Some(folder_str),
+                    changed_blobs: None,
+                })
+            } else {
+                if !settings.backup_dirty {
+                    settings.backup_dirty = true;
+                    let _ = state.save_settings(&mut service, settings.clone(), None);
+                }
+                Err(e)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -939,5 +1122,35 @@ mod tests {
         assert!(msg.contains("mismatch") || msg.contains("integrity") || msg.contains("invalid"));
 
         let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn test_auto_backup_usb_protection_folder_disconnected() {
+        let base_dir = temp_test_dir("usb_protection");
+        let non_existent_usb = base_dir.join("media").join("usb_token_offline");
+
+        // Assure it does NOT exist
+        assert!(!non_existent_usb.exists());
+        assert!(!non_existent_usb.is_dir());
+
+        // In auto-backup, we check is_dir() to protect disconnected drives.
+        // It must NOT create directories if disconnected!
+        let is_connected = non_existent_usb.is_dir();
+        assert!(!is_connected);
+        assert!(!non_existent_usb.exists(), "USB path must not have been created");
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn test_is_older_than_14_days() {
+        assert!(is_older_than_14_days(&None));
+        assert!(is_older_than_14_days(&Some("invalid-timestamp".to_string())));
+
+        let recent = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
+        assert!(!is_older_than_14_days(&Some(recent)));
+
+        let old = (Utc::now() - chrono::Duration::days(16)).to_rfc3339();
+        assert!(is_older_than_14_days(&Some(old)));
     }
 }

@@ -61,5 +61,10 @@ export function useContactResolver() {
         return "Unknown Sender";
     }, [contacts]);
 
-    return { resolveIdentity, isLoading, refresh: loadContacts };
+    const isKnownContact = useCallback((did?: string | null): boolean => {
+        if (!did) return false;
+        return contacts.some(c => c.did === did);
+    }, [contacts]);
+
+    return { resolveIdentity, isKnownContact, contacts, isLoading, refresh: loadContacts };
 }

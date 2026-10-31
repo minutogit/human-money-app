@@ -7,7 +7,9 @@ import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { FullProofDetails, Contact } from "../types";
 import { translateError, stringifyError } from "../utils/errorHelper";
-import { ShieldAlert, CheckCircle2 } from "lucide-react";
+import { ShieldAlert, CheckCircle2, Download, FolderOpen } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 interface ConflictDetailsViewProps {
     proofId: string;
@@ -108,6 +110,34 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
         }
     };
 
+    const [isExporting, setIsExporting] = useState(false);
+    const [exportedProofPath, setExportedProofPath] = useState<string | null>(null);
+
+    const handleExportProof = async () => {
+        setIsExporting(true);
+        setErrorMsg("");
+        try {
+            const bytes = await integrityService.exportDoubleSpendProof(proofId);
+            const filePath = await save({
+                defaultPath: `double-spend-${proofId.slice(0, 8)}.hmcproof`,
+                filters: [
+                    { name: 'Double Spend Proof (.hmcproof)', extensions: ['hmcproof'] },
+                    { name: t('voucher.export.allFiles'), extensions: ['*'] }
+                ]
+            });
+            if (filePath) {
+                const { writeFile } = await import("@tauri-apps/plugin-fs");
+                await writeFile(filePath, new Uint8Array(bytes));
+                setExportedProofPath(filePath);
+            }
+        } catch (e) {
+            logger.error(`Failed to export double-spend proof: ${stringifyError(e)}`);
+            setErrorMsg(t('conflict.exportProofFailed', { error: translateError(e, t) }));
+        } finally {
+            setIsExporting(false);
+        }
+    };
+
     if (isLoading) return <div className="text-center p-8 text-theme-light">{t('conflict.loadingDetails')}</div>;
     if (errorMsg) return (
         <div className="p-8 text-center">
@@ -129,21 +159,57 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
 
     return (
         <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500 pb-12">
-            <header className="flex items-center gap-4">
-                <button
-                    onClick={onBack}
-                    className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
-                    title={t('common.back')}
+            <header className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                    <button
+                        onClick={onBack}
+                        className="p-2.5 rounded-full bg-white border border-theme-subtle hover:bg-bg-input-readonly transition-all text-theme-light hover:text-theme-primary shadow-sm active:scale-95"
+                        title={t('common.back')}
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                        </svg>
+                    </button>
+                    <h1 className="text-2xl font-bold text-theme-primary flex items-center gap-2">
+                        <span>{conflictRole === 'victim' ? '🛑' : '👁️'}</span> 
+                        {conflictRole === 'victim' ? t('conflict.criticalConflictTitle') : t('conflict.observationReportTitle')}
+                    </h1>
+                </div>
+                <Button
+                    variant="outline"
+                    onClick={handleExportProof}
+                    disabled={isExporting}
+                    className="flex items-center gap-2 text-xs font-bold shrink-0"
                 >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                    </svg>
-                </button>
-                <h1 className="text-2xl font-bold text-theme-primary flex items-center gap-2">
-                    <span>{conflictRole === 'victim' ? '🛑' : '👁️'}</span> 
-                    {conflictRole === 'victim' ? t('conflict.criticalConflictTitle') : t('conflict.observationReportTitle')}
-                </h1>
+                    <Download size={16} />
+                    {isExporting ? t('common.loading') : t('conflict.exportProofBtn')}
+                </Button>
             </header>
+
+            {exportedProofPath && (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3 animate-in fade-in duration-300">
+                    <div className="flex items-center gap-3">
+                        <CheckCircle2 size={20} className="text-emerald-600 shrink-0" />
+                        <div>
+                            <p className="text-xs font-black uppercase tracking-wider text-emerald-900">
+                                {t('conflict.proofExportedTitle')}
+                            </p>
+                            <p className="text-xs font-mono text-emerald-800 break-all">
+                                {exportedProofPath}
+                            </p>
+                        </div>
+                    </div>
+                    <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => revealItemInDir(exportedProofPath).catch(() => {})}
+                        className="flex items-center gap-1.5 text-xs font-bold shrink-0"
+                    >
+                        <FolderOpen size={14} />
+                        {t('transfer.success.revealInFolder')}
+                    </Button>
+                </div>
+            )}
 
             {conflictRole === 'victim' ? (
                 <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-lg">

@@ -64,6 +64,10 @@ export const authService = {
 
     unlockSession: async (password: string, timeout: number) => {
         return await invoke<void>("unlock_session", { password, durationSeconds: timeout });
+    },
+
+    lockSession: async () => {
+        return await invoke<void>("lock_session");
     }
 };
 

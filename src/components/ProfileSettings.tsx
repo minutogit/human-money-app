@@ -10,6 +10,7 @@ import { PublicProfile, Address } from '../types';
 import { useSession } from '../context/SessionContext';
 import { normalizeCoordinates, geocodeAddress, getCurrentLocation } from '../utils/geoUtils';
 import { translateError, stringifyError } from '../utils/errorHelper';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { 
     User, 
     MapPin, 
@@ -20,7 +21,9 @@ import {
     Heart, 
     Lock,
     Save,
-    CheckCircle2
+    CheckCircle2,
+    Copy,
+    Info
 } from 'lucide-react';
 
 export function ProfileSettings() {
@@ -36,6 +39,19 @@ export function ProfileSettings() {
     const [isGeocoding, setIsGeocoding] = useState(false);
     const [geoFeedback, setGeoFeedback] = useState('');
     const [geoFeedbackError, setGeoFeedbackError] = useState(false);
+    const [userId, setUserId] = useState('');
+    const [copiedId, setCopiedId] = useState(false);
+
+    const handleCopyUserId = async () => {
+        if (!userId) return;
+        try {
+            await writeText(userId);
+            setCopiedId(true);
+            setTimeout(() => setCopiedId(false), 2000);
+        } catch (e) {
+            logger.warn(`Failed to copy DID: ${stringifyError(e)}`);
+        }
+    };
 
     const handleUseGPS = async () => {
         setIsLocating(true);
@@ -83,9 +99,13 @@ export function ProfileSettings() {
     useEffect(() => {
         async function fetchProfile() {
             try {
-                logger.info("ProfileSettings: Fetching current profile.");
-                const currentProfile = await profileService.getProfile();
+                logger.info("ProfileSettings: Fetching current profile and userId.");
+                const [currentProfile, currentUserId] = await Promise.all([
+                    profileService.getProfile(),
+                    profileService.getUserId ? profileService.getUserId().catch(() => '') : Promise.resolve('')
+                ]);
                 setProfile(currentProfile);
+                setUserId(currentUserId);
             } catch (e) {
                 const msg = `${t('profile.errorLoading')}: ${translateError(e, t)}`;
                 logger.error(msg);
@@ -146,6 +166,28 @@ export function ProfileSettings() {
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20">
+            {/* User ID (DID) Card */}
+            {userId && (
+                <div className="bg-slate-50 border border-slate-200 p-5 rounded-[28px] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+                    <div className="min-w-0">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-theme-light mb-1">{t('profile.yourUserId')}</p>
+                        <p className="font-mono text-xs text-theme-secondary truncate select-all">{userId}</p>
+                    </div>
+                    <Button variant="secondary" size="xs" onClick={handleCopyUserId} className="shrink-0 gap-1.5 self-start sm:self-center">
+                        {copiedId ? <CheckCircle2 size={14} className="text-emerald-500" /> : <Copy size={14} />}
+                        {copiedId ? t('common.copied') : t('common.copy')}
+                    </Button>
+                </div>
+            )}
+
+            {/* Friendly voluntary notice */}
+            <div className="bg-blue-50/60 border border-blue-200/60 p-4 rounded-2xl flex items-start gap-3">
+                <Info size={18} className="text-blue-600 shrink-0 mt-0.5" />
+                <p className="text-xs text-blue-900 leading-relaxed font-medium">
+                    {t('profile.voluntaryNotice')}
+                </p>
+            </div>
+
             {/* Privacy Shield */}
             <div className="bg-emerald-500/10 border border-emerald-500/20 p-6 rounded-[32px] flex items-start gap-5 shadow-sm">
                 <div className="p-3 bg-white rounded-2xl shadow-sm text-emerald-600">
@@ -170,9 +212,8 @@ export function ProfileSettings() {
                     <div className="space-y-6 p-2">
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">
                                     {t('profile.firstName')}
-                                    <span className="text-theme-accent text-[8px]">({t('common.required')})</span>
                                 </label>
                                 <Input
                                     value={profile.firstName || ''}
@@ -181,9 +222,8 @@ export function ProfileSettings() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">
                                     {t('profile.lastName')}
-                                    <span className="text-theme-accent text-[8px]">({t('common.required')})</span>
                                 </label>
                                 <Input
                                     value={profile.lastName || ''}
@@ -263,9 +303,8 @@ export function ProfileSettings() {
                                 />
                             </div>
                             <div className="col-span-2 space-y-2">
-                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center justify-between">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">
                                     {t('profile.city')}
-                                    <span className="text-theme-accent text-[8px]">({t('common.required')})</span>
                                 </label>
                                 <Input
                                     value={profile.address?.city || ''}

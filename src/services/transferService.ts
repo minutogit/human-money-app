@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { triggerAutoBackup } from "../utils/autoBackup";
 import { TransactionRecord, AssetClassSummary, ReceiveSuccessPayload, WalletEvent, SourceTransfer, IntentDispatchObservation, PurchaseCompletion } from "../types";
 
 interface ReceiveBundleArgs {
@@ -74,7 +75,7 @@ export const transferService = {
     },
 
     createBundle: async (args: CreateBundleArgs) => {
-        return await invoke<CreateBundleResult>("create_transfer_bundle", {
+        const result = await invoke<CreateBundleResult>("create_transfer_bundle", {
             recipientId: args.recipientId,
             sources: args.sources.map(s => ({
                 localInstanceId: s.localInstanceId,
@@ -86,10 +87,14 @@ export const transferService = {
             usePrivacyMode: args.usePrivacyMode,
             password: args.password
         });
+        triggerAutoBackup();
+        return result;
     },
 
     saveTransactionRecord: async (record: TransactionRecord, password?: string) => {
-        return await invoke<void>("save_transaction_record", { record, password });
+        const result = await invoke<void>("save_transaction_record", { record, password });
+        triggerAutoBackup();
+        return result;
     },
 
     getActiveAssetClasses: async () => {
@@ -97,12 +102,14 @@ export const transferService = {
     },
 
     receiveBundle: async (args: ReceiveBundleArgs) => {
-        return await invoke<ReceiveSuccessPayload>("receive_bundle", {
+        const result = await invoke<ReceiveSuccessPayload>("receive_bundle", {
             bundleData: args.bundleData,
             standardDefinitionsToml: args.standardDefinitionsToml,
             password: args.password,
             forceAcceptToleranceBundle: args.forceAcceptToleranceBundle
         });
+        triggerAutoBackup();
+        return result;
     },
 
     getEventHistory: async (offset: number, limit: number) => {
@@ -162,12 +169,14 @@ export const transferService = {
         standardDefinitionsToml: Record<string, string>;
         password?: string | null;
     }) => {
-        return await invoke<PurchaseCompletion>("checkout_received_bundle", {
+        const result = await invoke<PurchaseCompletion>("checkout_received_bundle", {
             purchaseId: args.purchaseId,
             bundleData: args.bundleData,
             standardDefinitionsToml: args.standardDefinitionsToml,
             password: args.password ?? null,
         });
+        triggerAutoBackup();
+        return result;
     },
 
     submitL2SendIntent: async (args: {

@@ -81,6 +81,29 @@ export interface AppSettings {
     cachedPeersTestnet?: string[];
     devModeUnlocked?: boolean;
     regionalMeshSources?: RegionalSourceDto[];
+    enablePosMode?: boolean;
+    balanceViewMode?: 'spendable' | 'net';
+    autoBackupEnabled?: boolean;
+    backupDirty?: boolean;
+    backupSyncFolder?: string | null;
+    backupProtectionMode?: string | null;
+    lastBackupAt?: string | null;
+}
+
+export type AutoBackupStatus =
+    | 'notConfigured'
+    | 'synced'
+    | 'folderDisconnected'
+    | 'outdated'
+    | 'manualOnly'
+    | 'locked';
+
+export interface FrontendAutoBackupStatusDto {
+    status: AutoBackupStatus;
+    lastBackupAt?: string | null;
+    backupDirty: boolean;
+    syncFolder?: string | null;
+    changedBlobs?: number | null;
 }
 
 export type IntegrityReport =
@@ -105,15 +128,15 @@ export type AppState =
     | { view: "bug_report" }
     | { view: "create_voucher"; previousView?: AppState }
     | { view: "voucher_details"; voucherId: string; previousView?: AppState }
-    | { view: "send_vouchers" }
-    | { view: "receive_bundle" }
+    | { view: "send_vouchers"; initialRecipientId?: string; initialVoucherId?: string; initialNote?: string }
+    | { view: "receive_bundle"; droppedFile?: { name: string; bytes: number[] } }
     | { view: "transaction_history" }
-    | { view: "activities" }
+    | { view: "activities"; previousView?: AppState }
     | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string; l2Dispatch?: IntentDispatchObservation[] }
     | { view: "receive_success"; payload: ReceiveSuccessPayload }
     | { view: "address_book"; initialSearchQuery?: string; previousView?: AppState }
     | { view: "sign_request"; voucherData: VoucherDetails }
     | { view: "conflict_details"; proofId: string; previousView?: AppState }
     | { view: "conflict_list" }
-    | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string }
+    | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string; initialFilter?: 'all' | 'received' | 'own' | 'expiringSoon' }
     | { view: "concept"; previousView?: AppState };

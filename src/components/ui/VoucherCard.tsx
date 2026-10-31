@@ -5,7 +5,6 @@ import {
     Clock, 
     ShieldAlert, 
     History,
-    MoreVertical,
     ArrowUpRight,
 } from "lucide-react";
 import { VoucherSummary, VoucherStatus } from "../../types";
@@ -141,11 +140,6 @@ export const VoucherCard = React.memo(({
                                         {getStatusLabel(statusName)}
                                     </div>
                                 )}
-                                {mode === 'view' && (
-                                    <button className="p-1 hover:bg-theme-subtle/20 rounded-md text-theme-light transition-colors" onClick={(e) => e.stopPropagation()}>
-                                        <MoreVertical size={16} />
-                                    </button>
-                                )}
                                 {isSelected && (
                                     <div className="text-theme-primary">
                                         <CheckCircle2 size={16} />
@@ -166,7 +160,7 @@ export const VoucherCard = React.memo(({
                                     </span>
                                 </div>
                                 <div className="flex items-center gap-2 mt-1">
-                                    <Avatar size={16} name={voucher.localInstanceId} variant="pixel" />
+                                    <Avatar size={16} name={voucher.creatorId || voucher.localInstanceId} variant="pixel" />
                                     <p className="text-xs font-bold text-theme-secondary flex items-center gap-2">
                                         {t('voucher.issuedBy')}{' '}
                                         <span className="text-theme-primary">{voucher.creatorFirstName} {voucher.creatorLastName}</span>

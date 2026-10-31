@@ -52,6 +52,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToR
     const passwordInputRef = useRef<HTMLInputElement>(null);
 
     // --- State for Profile Details Step ---
+    const [profileName, setProfileName] = useState("");
     const [passphrase, setPassphrase] = useState<string>("");
     const [confirmPassphrase, setConfirmPassphrase] = useState<string>("");
     const [userPrefix, setUserPrefix] = useState("");
@@ -256,9 +257,9 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToR
     // (Adapted from CreateProfile.tsx)
     async function handleCreateProfileSubmit(e: FormEvent) {
         e.preventDefault();
-        const cleanedPrefix = userPrefix.trim();
-        if (!cleanedPrefix) {
-            setFeedback(t('profile.devicePrefixRequired'), "error");
+        const effectiveProfileName = profileName.trim() || userPrefix.trim();
+        if (!effectiveProfileName) {
+            setFeedback(t('profile.profileNameRequired'), "error");
             return;
         }
         if (password !== confirmPassword) {
@@ -277,6 +278,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToR
             return;
         }
 
+        const cleanedPrefix = userPrefix.trim();
         setIsLoading(true);
         setFeedback("", null); // Clear any previous errors
         
@@ -286,10 +288,10 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToR
             try {
                 const localInstanceId = await authService.getLocalInstanceId();
                 await profileService.createProfile({
-                    profileName: cleanedPrefix,
+                    profileName: effectiveProfileName,
                     mnemonic: mnemonicWords.join(' '), // Use the imported mnemonic
                     passphrase: passphrase || undefined,
-                    userPrefix: cleanedPrefix,
+                    userPrefix: cleanedPrefix || undefined,
                     password,
                     localInstanceId,
                     language: selectedLanguage,
@@ -464,6 +466,17 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToR
                         </div>
 
                         <div>
+                            <label htmlFor="profileName" className="block text-sm font-semibold text-theme-secondary mb-1">{t('profile.profileLabel')}</label>
+                            <Input 
+                                id="profileName"
+                                data-testid="profile-name-input"
+                                type="text"
+                                value={profileName} 
+                                onChange={(e) => setProfileName(e.target.value)} 
+                                placeholder={t('profile.profileNamePlaceholder')}
+                            />
+                        </div>
+                        <div>
                             <label htmlFor="password" className="block text-sm font-semibold text-theme-secondary mb-1">{t('profile.localPasswordLabel')}</label>
                             <Input 
                                 id="password"
@@ -504,7 +517,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToR
                                 <div className="flex items-center justify-between mb-1">
                                     <div className="flex items-center gap-1.5">
                                         <label htmlFor="userPrefix" className="block text-sm font-semibold text-theme-secondary">
-                                            {t('profile.devicePrefixLabel')}
+                                            {t('profile.devicePrefixLabel')} ({t('common.optional')})
                                         </label>
                                         <HelpIcon topic="subaccount" size={12} />
                                     </div>
@@ -524,22 +537,23 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToR
                                     value={userPrefix} 
                                     onChange={(e) => setUserPrefix(e.target.value)} 
                                     placeholder={t('profile.prefixPlaceholder')}
-                                    required
                                 />
                                 <p className="text-[10px] font-medium text-theme-light leading-normal mt-1">
                                     {t('profile.devicePrefixExplanation')}
                                 </p>
                             </div>
 
-                            <div className="space-y-1.5 p-3.5 bg-theme-subtle/20 border border-theme-subtle rounded-2xl">
-                                <p className="text-[10px] text-theme-secondary leading-relaxed">
-                                    {t('profile.prefixDescription')}
-                                </p>
-                                <p className="text-[9px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic">
-                                    <AlertTriangle size={10} className="shrink-0 mt-0.5" />
-                                    {t('profile.criticalPrefix')}
-                                </p>
-                            </div>
+                            {userPrefix.trim().length > 0 && (
+                                <div className="space-y-1.5 p-3.5 bg-theme-subtle/20 border border-theme-subtle rounded-2xl animate-in fade-in duration-300">
+                                    <p className="text-[10px] text-theme-secondary leading-relaxed">
+                                        {t('profile.prefixDescription')}
+                                    </p>
+                                    <p className="text-[9px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic">
+                                        <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                                        {t('profile.criticalPrefix')}
+                                    </p>
+                                </div>
+                            )}
                         </div>
 
                         <PrefixInfoModal 
@@ -557,7 +571,7 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToR
                                 <Button type="button" variant="secondary" onClick={() => setWizardStep("import_seed")} className="flex-1 py-4 rounded-2xl gap-2">
                                     <ArrowLeft size={18} /> {t('profile.back')}
                                 </Button>
-                                <Button type="submit" disabled={isLoading || !userPrefix.trim() || !password || !confirmPassword} className="flex-[2] py-4 rounded-2xl gap-2">
+                                <Button type="submit" disabled={isLoading || (!profileName.trim() && !userPrefix.trim()) || !password || !confirmPassword} className="flex-[2] py-4 rounded-2xl gap-2">
                                     {isLoading ? <RefreshCw className="animate-spin" size={18} /> : <CheckCircle2 size={18} />}
                                     {isLoading ? t('profile.creating') : t('profile.createAndEncrypt')}
                                 </Button>

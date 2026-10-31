@@ -13,6 +13,7 @@ import { NavigationProvider, useNavigation } from './context/NavigationContext';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { AppRouter } from "./components/AppRouter";
+import { GlobalFileDropZone } from "./components/GlobalFileDropZone";
 
 function AppContent() {
     const { t } = useTranslation();
@@ -38,13 +39,15 @@ function AppContent() {
         <div className="flex h-screen w-full bg-bg-app font-sans text-theme-secondary overflow-hidden">
                 <Sidebar />
 
-                <div className="flex flex-1 flex-col overflow-y-auto">
-                    <Header />
+                <GlobalFileDropZone>
+                    <div className="flex flex-1 flex-col overflow-y-auto">
+                        <Header />
 
-                    <main className="w-full flex-grow p-4 md:p-6 lg:p-8">
-                        <AppRouter />
-                    </main>
-                </div>
+                        <main className="w-full flex-grow p-4 md:p-6 lg:p-8">
+                            <AppRouter />
+                        </main>
+                    </div>
+                </GlobalFileDropZone>
 
                 {/* Fork detected overlay */}
                 {isForkLocked && (

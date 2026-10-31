@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { triggerAutoBackup } from "../utils/autoBackup";
 import { WotSummaryDto, WotImportResultDto, VoucherTrustDto } from "../types";
 
 export interface ExportWotPackageArgs {
@@ -27,11 +28,13 @@ export const wotService = {
     },
 
     importPackage: async (args: ImportWotPackageArgs): Promise<WotImportResultDto> => {
-        return await invoke<WotImportResultDto>("import_wot_package", {
+        const result = await invoke<WotImportResultDto>("import_wot_package", {
             containerBytes: args.containerBytes,
             containerPassword: args.containerPassword,
             password: args.password,
         });
+        triggerAutoBackup();
+        return result;
     },
 
     evaluateVoucherTrustPreview: async (

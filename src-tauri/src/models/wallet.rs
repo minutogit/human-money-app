@@ -54,6 +54,14 @@ pub struct FrontendAggregatedBalance {
     pub display_currency: String,
     pub display_standard_name: String,
     pub is_test_voucher: bool,
+    #[serde(default)]
+    pub received_amount: String,
+    #[serde(default)]
+    pub own_available_amount: String,
+    #[serde(default)]
+    pub own_circulating_amount: String,
+    #[serde(default)]
+    pub net_balance: String,
 }
 
 impl From<human_money_core::wallet::types::AggregatedBalance> for FrontendAggregatedBalance {
@@ -62,10 +70,14 @@ impl From<human_money_core::wallet::types::AggregatedBalance> for FrontendAggreg
             standard_name: b.standard_name,
             standard_uuid: b.standard_uuid,
             unit: b.unit,
-            total_amount: b.total_amount,
+            total_amount: b.total_amount.clone(),
             display_currency: b.display_currency,
             display_standard_name: b.display_standard_name,
             is_test_voucher: b.is_test_voucher,
+            received_amount: b.total_amount.clone(),
+            own_available_amount: "0".to_string(),
+            own_circulating_amount: "0".to_string(),
+            net_balance: b.total_amount,
         }
     }
 }

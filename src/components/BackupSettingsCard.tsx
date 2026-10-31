@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { AppSettings, BackupSummaryDto } from '../types';
 import { backupService } from '../services/backupService';
+import { settingsService } from '../services/settingsService';
 import { useSession } from '../context/SessionContext';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
@@ -20,7 +21,10 @@ import {
     Clock, 
     ShieldCheck, 
     Folder,
-    RefreshCw
+    RefreshCw,
+    Cloud,
+    HardDrive,
+    Sparkles
 } from 'lucide-react';
 
 interface BackupSettingsCardProps {
@@ -38,6 +42,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     const [backupPassword, setBackupPassword] = useState('');
     const [confirmBackupPassword, setConfirmBackupPassword] = useState('');
     const [syncFolder, setSyncFolder] = useState<string>(settings?.backupSyncFolder || '');
+    const [autoBackupEnabled, setAutoBackupEnabled] = useState<boolean>(settings?.autoBackupEnabled ?? true);
 
     const [isExporting, setIsExporting] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -54,6 +59,22 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
             return false;
         }
         return true;
+    };
+
+    const handleToggleAutoBackup = async (enabled: boolean) => {
+        setAutoBackupEnabled(enabled);
+        if (settings) {
+            const updated: AppSettings = {
+                ...settings,
+                autoBackupEnabled: enabled,
+            };
+            try {
+                await settingsService.saveSettings(updated);
+                if (onSettingsUpdated) onSettingsUpdated(updated);
+            } catch {
+                // best-effort
+            }
+        }
     };
 
     const handleExportFile = async () => {
@@ -84,6 +105,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                     ...(settings || { bundleRetentionDays: 30, sessionTimeoutSeconds: 300, privacyDefault: 'public' }),
                     lastBackupAt: summary.timestamp,
                     backupProtectionMode: protectionMode,
+                    backupDirty: false,
                 };
                 if (onSettingsUpdated) onSettingsUpdated(updatedSettings);
 
@@ -111,6 +133,20 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
 
             if (typeof selected === 'string') {
                 setSyncFolder(selected);
+                if (settings) {
+                    const updated: AppSettings = {
+                        ...settings,
+                        backupSyncFolder: selected,
+                        autoBackupEnabled,
+                        backupProtectionMode: protectionMode,
+                    };
+                    try {
+                        await settingsService.saveSettings(updated);
+                        if (onSettingsUpdated) onSettingsUpdated(updated);
+                    } catch {
+                        // ignore
+                    }
+                }
             }
         } catch (err) {
             logger.error(`Choose backup folder failed: ${stringifyError(err)}`);
@@ -143,7 +179,9 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                     ...(settings || { bundleRetentionDays: 30, sessionTimeoutSeconds: 300, privacyDefault: 'public' }),
                     backupSyncFolder: syncFolder,
                     backupProtectionMode: protectionMode,
+                    autoBackupEnabled,
                     lastBackupAt: summary.timestamp,
+                    backupDirty: false,
                 };
                 if (onSettingsUpdated) onSettingsUpdated(updatedSettings);
 
@@ -191,7 +229,103 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                     {t('settings.backupCardSubtitle')}
                 </p>
 
-                {/* Protection Mode Section */}
+                {/* 1. Einrichtungs-Helfer: 3 Alltags-Wege */}
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
+                            <Sparkles size={13} className="text-theme-primary" />
+                            {t('settings.backupGuideTitle', '3 einfache Wege für deine Datensicherheit')}
+                        </label>
+                        <span className="text-[11px] text-theme-light opacity-80 hidden sm:inline">
+                            {t('settings.backupGuideSubtitle', 'Wähle den Weg, der am besten zu deinem Alltag passt.')}
+                        </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {/* Weg 1: Cloud-Sync-Ordner */}
+                        <div 
+                            onClick={handleChooseFolder}
+                            className="p-3.5 rounded-2xl bg-white/70 dark:bg-slate-900/60 border border-theme-subtle hover:border-theme-primary/60 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-xs group"
+                        >
+                            <div className="space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                    <div className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200/60 group-hover:bg-blue-100 transition-colors">
+                                        <Cloud size={16} />
+                                    </div>
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200">
+                                        {t('settings.backupWayCloudBadge', 'Empfohlen für PC')}
+                                    </span>
+                                </div>
+                                <h4 className="font-bold text-xs text-theme-secondary">
+                                    {t('settings.backupWayCloudTitle', 'Cloud-Sync-Ordner')}
+                                </h4>
+                                <p className="text-[11px] text-theme-light leading-relaxed">
+                                    {t('settings.backupWayCloudDesc', 'Ordner von Nextcloud, Proton Drive, Syncthing oder Dropbox wählen. Ende-zu-Ende verschlüsselt.')}
+                                </p>
+                            </div>
+                            <span className="text-[10px] font-semibold text-theme-primary pt-1 inline-flex items-center gap-1">
+                                <span>{syncFolder ? t('settings.changeFolder', 'Ordner ändern') : t('settings.chooseFolderButton', 'Ordner wählen')}</span>
+                                →
+                            </span>
+                        </div>
+
+                        {/* Weg 2: USB-Stick / Externe Festplatte */}
+                        <div 
+                            onClick={handleChooseFolder}
+                            className="p-3.5 rounded-2xl bg-white/70 dark:bg-slate-900/60 border border-theme-subtle hover:border-theme-primary/60 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-xs group"
+                        >
+                            <div className="space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                    <div className="p-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border border-amber-200/60 group-hover:bg-amber-100 transition-colors">
+                                        <HardDrive size={16} />
+                                    </div>
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200">
+                                        {t('settings.backupWayUsbBadge', 'Ideal für Offline')}
+                                    </span>
+                                </div>
+                                <h4 className="font-bold text-xs text-theme-secondary">
+                                    {t('settings.backupWayUsbTitle', 'USB-Stick / Festplatte')}
+                                </h4>
+                                <p className="text-[11px] text-theme-light leading-relaxed">
+                                    {t('settings.backupWayUsbDesc', 'Ordner auf dem Stick wählen. Die App sichert automatisch, sobald der Stick angesteckt ist.')}
+                                </p>
+                            </div>
+                            <span className="text-[10px] font-semibold text-theme-primary pt-1 inline-flex items-center gap-1">
+                                <span>{syncFolder ? t('settings.changeFolder', 'Ordner ändern') : t('settings.chooseFolderButton', 'Ordner wählen')}</span>
+                                →
+                            </span>
+                        </div>
+
+                        {/* Weg 3: Einzeldatei */}
+                        <div 
+                            onClick={handleExportFile}
+                            className="p-3.5 rounded-2xl bg-white/70 dark:bg-slate-900/60 border border-theme-subtle hover:border-theme-primary/60 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-xs group"
+                        >
+                            <div className="space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                    <div className="p-2 rounded-xl bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 border border-purple-200/60 group-hover:bg-purple-100 transition-colors">
+                                        <FileArchive size={16} />
+                                    </div>
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200">
+                                        {t('settings.backupWayFileBadge', 'Manuell')}
+                                    </span>
+                                </div>
+                                <h4 className="font-bold text-xs text-theme-secondary">
+                                    {t('settings.backupWayFileTitle', 'Einzeldatei (.hmcbackup)')}
+                                </h4>
+                                <p className="text-[11px] text-theme-light leading-relaxed">
+                                    {t('settings.backupWayFileDesc', 'Für gelegentliche manuelle Kopien per Hand auf die Festplatte oder zum Weitergeben.')}
+                                </p>
+                            </div>
+                            <span className="text-[10px] font-semibold text-theme-primary pt-1 inline-flex items-center gap-1">
+                                <span>{t('settings.exportFileButton', 'Datei exportieren')}</span>
+                                →
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 2. Protection Mode Section */}
                 <div className="space-y-3 p-4 bg-slate-50/70 dark:bg-slate-800/40 rounded-2xl border border-theme-subtle/60">
                     <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
                         <ShieldCheck size={13} className="text-theme-primary" />
@@ -283,44 +417,11 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                     )}
                 </div>
 
-                {/* Two Action Panels */}
+                {/* 3. Action Panels (Sync Folder & Single File) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                    {/* Action 1: Export Single File */}
+                    {/* Action Panel 1: Differential Sync Folder */}
                     <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-theme-subtle flex flex-col justify-between space-y-4 shadow-sm">
-                        <div className="space-y-1.5">
-                            <div className="flex items-center gap-2">
-                                <FileArchive size={16} className="text-theme-primary" />
-                                <h4 className="font-bold text-xs text-theme-secondary uppercase tracking-wider">
-                                    {t('settings.exportFileTitle')}
-                                </h4>
-                            </div>
-                            <p className="text-[11px] text-theme-light leading-relaxed">
-                                {t('settings.exportFileDesc')}
-                            </p>
-                        </div>
-                        <Button
-                            type="button"
-                            onClick={handleExportFile}
-                            disabled={isExporting}
-                            className="w-full flex items-center justify-center gap-2 text-xs py-2.5"
-                        >
-                            {isExporting ? (
-                                <>
-                                    <RefreshCw size={14} className="animate-spin" />
-                                    {t('settings.exporting')}
-                                </>
-                            ) : (
-                                <>
-                                    <FileArchive size={14} />
-                                    {t('settings.exportFileButton')}
-                                </>
-                            )}
-                        </Button>
-                    </div>
-
-                    {/* Action 2: Differential Sync Folder */}
-                    <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-theme-subtle flex flex-col justify-between space-y-4 shadow-sm">
-                        <div className="space-y-1.5">
+                        <div className="space-y-3">
                             <div className="flex items-center gap-2">
                                 <FolderSync size={16} className="text-theme-primary" />
                                 <h4 className="font-bold text-xs text-theme-secondary uppercase tracking-wider">
@@ -345,6 +446,28 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                     {t('settings.chooseFolderButton')}
                                 </Button>
                             </div>
+
+                            {/* Schalter: Automatisch im Hintergrund sichern */}
+                            <div className="pt-2 border-t border-theme-subtle/60 space-y-1.5">
+                                <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={autoBackupEnabled}
+                                        onChange={(e) => handleToggleAutoBackup(e.target.checked)}
+                                        className="mt-0.5 rounded text-theme-primary focus:ring-theme-accent"
+                                    />
+                                    <div className="text-xs">
+                                        <span className="font-bold text-theme-secondary block">
+                                            {t('settings.autoBackupToggleLabel', 'Automatisch im Hintergrund sichern')}
+                                        </span>
+                                        <span className="text-[11px] text-theme-light block leading-relaxed">
+                                            {protectionMode === 'custom_password'
+                                                ? t('settings.autoBackupPasswordNotice', 'Hinweis: Bei eigenem Backup-Passwort ist Hintergrund-Sync pausiert (nur manuelle Sicherung).')
+                                                : t('settings.autoBackupToggleDesc', 'Sichert deine Gutscheine und Kontakte nach jeder Änderung lautlos im Hintergrund.')}
+                                        </span>
+                                    </div>
+                                </label>
+                            </div>
                         </div>
 
                         <Button
@@ -363,6 +486,40 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                 <>
                                     <FolderSync size={14} />
                                     {t('settings.syncFolderNowButton')}
+                                </>
+                            )}
+                        </Button>
+                    </div>
+
+                    {/* Action Panel 2: Export Single File */}
+                    <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-theme-subtle flex flex-col justify-between space-y-4 shadow-sm">
+                        <div className="space-y-1.5">
+                            <div className="flex items-center gap-2">
+                                <FileArchive size={16} className="text-theme-primary" />
+                                <h4 className="font-bold text-xs text-theme-secondary uppercase tracking-wider">
+                                    {t('settings.exportFileTitle')}
+                                </h4>
+                            </div>
+                            <p className="text-[11px] text-theme-light leading-relaxed">
+                                {t('settings.exportFileDesc')}
+                            </p>
+                        </div>
+
+                        <Button
+                            type="button"
+                            onClick={handleExportFile}
+                            disabled={isExporting}
+                            className="w-full flex items-center justify-center gap-2 text-xs py-2.5"
+                        >
+                            {isExporting ? (
+                                <>
+                                    <RefreshCw size={14} className="animate-spin" />
+                                    {t('settings.exporting')}
+                                </>
+                            ) : (
+                                <>
+                                    <FileArchive size={14} />
+                                    {t('settings.exportFileButton')}
                                 </>
                             )}
                         </Button>
@@ -390,3 +547,5 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         </Card>
     );
 };
+
+export default BackupSettingsCard;

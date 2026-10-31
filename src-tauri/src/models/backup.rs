@@ -63,3 +63,14 @@ pub struct FrontendRestoreOutcomeDto {
     pub restored_standards_count: usize,
     pub l2_reconciliation_status: String, // "no_servers" | "offline" | "reconciled"
 }
+
+/// Status and metadata for automated background backup and synchronization.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendAutoBackupStatusDto {
+    pub status: String, // "notConfigured" | "synced" | "folderDisconnected" | "outdated" | "manualOnly" | "locked"
+    pub last_backup_at: Option<String>,
+    pub backup_dirty: bool,
+    pub sync_folder: Option<String>,
+    pub changed_blobs: Option<usize>,
+}

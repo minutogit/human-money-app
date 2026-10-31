@@ -1,12 +1,48 @@
 ---
 project: human-money-app
-version: "0.3.0"
+version: "0.4.0"
 phase: "beta"
 health: "green"
 last_updated: "2026-10-31"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-050"
+    title: "Guided Guarantor Workflow, Issuer Redemption Shortcut & Double-Spend Proof Export/Import"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-048"]
+    description: "Added upfront guarantor requirement notices during voucher creation, concrete parity/signature progress pills and direct `.sig` import in `VoucherDetailsView`, address-book contact picker in signing request modals, inline gender setup & disclosure safeguards in `SignRequestView`, 1-click 'Redeem with Issuer' routing, and `.hmcproof` double-spend proof export/import (`export_double_spend_proof` / `import_double_spend_proof`)."
+  - id: "APP-049"
+    title: "Professional Account Statement, Unified Activity Navigation & UTF-8 BOM CSV Export"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-046"]
+    description: "Consolidated sidebar history under a bank-grade 'Account Statement' view (with secondary access to the technical lifecycle event log), added full-text search across resolved address-book names/currencies/receipt IDs, direction/currency/date-range filters, period totals, 1-click 'Save as Contact' for unknown DIDs, and RFC-4180 UTF-8 BOM CSV export."
+  - id: "APP-048"
+    title: "Desktop Sharing Helpers (Contact Cards, Payment Requests, Compact Privacy & Global Drag-and-Drop)"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-045"]
+    description: "Implemented `humoco://contact` and `humoco://pay` copy/paste builders and parsers, 'Copy My Contact Card' and direct `.wot` file import in `AddressBook`, a 'Request Payment' tab in `ReceiveView`, 1-click payment request paste & compact collapsible privacy summary in `SendView`, 'Show in File Manager' post-save helper, and app-wide `GlobalFileDropZone`."
+  - id: "APP-047"
+    title: "Silent Background Auto-Backup Sync, Mount-Safe USB Protection & Header Backup Status Badge"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-045"]
+    description: "Added automatic debounced differential background backup sync (`run_auto_backup_sync` / `get_backup_status`) for unlocked `mnemonic_only` wallets with strict mount-point safety (`folderDisconnected` when USB/NAS is unplugged without creating empty directories), a 3-state `BackupStatusBadge` in `Header`, smart 14-day/unconfigured Dashboard reminders, and a 3-path setup guide in `BackupSettingsCard`."
+  - id: "APP-046"
+    title: "Switchable Balance Modes (Spendable vs. Net Balance), Breakdown Popover, Expiry Alerts & Wallet Search/Sort"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-045"]
+    description: "Extended `FrontendAggregatedBalance` with exact fixed-point `i128` calculations (`receivedAmount`, `ownAvailableAmount`, `ownCirculatingAmount`, `netBalance`) without modifying Layer-1 Core. Added Dashboard 'Spendable' vs. 'Net Balance' switcher, hover/tap `(i)` breakdown popover, 30-day voucher expiry alert banner, full-text search/sorting/origin filters in `WalletView`, and interactive human-readable `<TrustBadge />` popovers."
+  - id: "APP-045"
+    title: "Onboarding Clarity, Just-in-Time Profile UX, Manual Session Lock & Send/Receive Polish"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Clarified Login/Restore/Password-Reset flows, made `userPrefix` optional with a dedicated `profileName` input in `RecreateProfile`, tucked expert passphrase/multi-device warnings into collapsible sections, shifted profile fields to non-blocking just-in-time guidance with auto-prefill on voucher creation, wired the `SendView` contact picker modal, added manual session lock in `Sidebar`, hid PoS cashier mode behind an advanced setting, and removed erroneous ledger terminology across all 5 locales."
   - id: "APP-044"
     title: "Full Offline-First Web of Trust Integration (Contacts, Voucher TrustBadges, .wot Exchange, Piggybacking & s_wot)"
     status: "completed"
@@ -283,7 +319,7 @@ priority_tasks:
 
 ## Current Focus
 
-Tauri v2 desktop/mobile wallet (`v0.3.0` Beta). Core voucher workflows, L2 PoS checkout & reconciliation, encrypted differential backups, and full Offline-First Web of Trust (`humoco-wot`) contact ratings, `<TrustBadge />` scoring, `.wot` file exchange, and transaction piggybacking are integrated across 5 locales.
+Tauri v2 desktop/mobile wallet (`v0.4.0` Beta). Core voucher workflows, switchable Spendable/Net balance views, silent mount-safe auto-backups, `humoco://` contact & payment request sharing, global drag-and-drop, bank-grade Account Statement with CSV export, guided guarantor/redemption/proof workflows, L2 PoS checkout, and full Offline-First Web of Trust (`humoco-wot`) are integrated across 5 locales.
 
 ## Architecture
 
@@ -473,3 +509,14 @@ Bumped `human-money-app` to v0.3.0. Integrated Core encrypted backups (`.hmcback
 ### 2026-10-31 — Full Offline-First Web of Trust Integration (`APP-002` / `APP-044`)
 
 Integrated `humoco-wot` across the Tauri host and React 19 UI in all 5 locales (EN, DE, ES, FR, IT). Added encrypted `wot_register` state synchronized atomically with `AddressBook` (canonical DID matching, no auto-migration of free-text tags), human-semantic contact trust ratings and recommendation reach controls, `<TrustBadge />` (color + percentage + primary bridge contact + connection path) across voucher cards/details/receive/sign-request views, Ed25519-authenticated `.wot` trust file export/import (`TargetDid` & `Password`), automatic 2-phase delta piggybacking inside Public & Stealth `TransactionBundle`s for rated (`level >= 1`) contacts, `s_wot` Gravitational Coin Selection bonus, and 1-click trust revocation on verified double-spend conflicts.
+
+### 2026-10-31 — v0.4.0: End-to-End Desktop UX Overhaul, Balance Modes, Auto-Backup & Account Statement (`APP-045`–`APP-050`)
+
+Bumped `human-money-app` to `v0.4.0`. Delivered comprehensive user-centric improvements across all 5 locales without modifying Layer-1 Core:
+- **Onboarding & Quick-Wins (`APP-045`)**: Disambiguated backup restore vs. password reset vs. empty seed derivation, fixed optional `userPrefix` + `profileName` in `RecreateProfile`, added non-blocking just-in-time profile guidance with auto-prefill on voucher creation, wired the `SendView` contact picker, added 1-click session locking in `Sidebar`, and tucked PoS cashier mode into advanced settings.
+- **Balance Psychology & Wallet Tools (`APP-046`)**: Added fixed-point `i128` breakdown (`received`, `ownAvailable`, `ownCirculating`, `netBalance`), Dashboard switcher between *Spendable* and *Net Balance* with hover/tap `(i)` popovers, 30-day expiry warnings, full-text search/sorting/origin filters in `WalletView`, and interactive `<TrustBadge />` explanations.
+- **Silent Auto-Backup (`APP-047`)**: Added debounced background differential sync for unlocked `mnemonic_only` wallets with USB/mount disconnection safety, a 3-state `BackupStatusBadge` in `Header`, and a 3-path setup guide.
+- **Desktop Exchange (`APP-048`)**: Added copy/paste `humoco://contact` cards and `humoco://pay` payment requests, direct `.wot` import in `AddressBook`, collapsible `PrivacyToggle`, file-manager reveal helpers, and app-wide `GlobalFileDropZone`.
+- **Account Statement (`APP-049`)**: Unified history navigation into a bank-style Account Statement with resolved contact search, direction/currency/period filters, quick contact saving, and UTF-8 BOM CSV export.
+- **Guarantor, Redemption & Proof Workflows (`APP-050`)**: Added upfront guarantor notices, parity progress pills, direct `.sig` attachment, inline gender setup & disclosure safeguards in `SignRequestView`, 1-click issuer redemption routing, and `.hmcproof` double-spend proof export/import. All 280 Vitest tests and 38 Rust unit tests pass.
+

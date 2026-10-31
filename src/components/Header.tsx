@@ -4,6 +4,7 @@ import logo from "../assets/logo.png";
 import { useNavigation } from "../context/NavigationContext";
 import { useSession } from "../context/SessionContext";
 import { WalletSyncBadge } from "./WalletSyncBadge";
+import { BackupStatusBadge } from "./BackupStatusBadge";
 import { INTERNAL_VIEWS } from "./Sidebar";
 
 export const Header: React.FC = () => {
@@ -35,7 +36,8 @@ export const Header: React.FC = () => {
                 </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
+                <BackupStatusBadge />
                 <WalletSyncBadge />
             </div>
         </header>

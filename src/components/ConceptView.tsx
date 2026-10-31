@@ -19,7 +19,8 @@ import {
     ChevronDown, 
     ChevronUp, 
     Sparkles, 
-    CheckCircle2 
+    CheckCircle2,
+    ShieldCheck
 } from 'lucide-react';
 
 export const ConceptView: React.FC = () => {
@@ -68,6 +69,12 @@ export const ConceptView: React.FC = () => {
             text: t('dashboard.conceptScreen5Text'),
             icon: <AlertTriangle className="w-12 h-12 text-theme-primary" />,
             bgColor: 'bg-amber-50/50 dark:bg-amber-950/20'
+        },
+        {
+            title: t('dashboard.conceptVaultTitle'),
+            text: t('dashboard.conceptVaultText'),
+            icon: <ShieldCheck className="w-12 h-12 text-theme-primary" />,
+            bgColor: 'bg-cyan-50/50 dark:bg-cyan-950/20'
         }
     ];
 
@@ -96,6 +103,11 @@ export const ConceptView: React.FC = () => {
             title: t('dashboard.conceptSecurityTitle'),
             text: t('dashboard.conceptSecurityText'),
             icon: <AlertTriangle className="w-5 h-5 text-theme-primary" />
+        },
+        {
+            title: t('dashboard.conceptVaultTitle'),
+            text: t('dashboard.conceptVaultText'),
+            icon: <ShieldCheck className="w-5 h-5 text-theme-primary" />
         },
         {
             title: t('dashboard.conceptFutureTitle'),

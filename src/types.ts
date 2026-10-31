@@ -6,14 +6,6 @@ export * from './types/transaction';
 export * from './types/api';
 export * from './types/wot';
 
-declare module './types/api' {
-  interface AppSettings {
-    backupSyncFolder?: string | null;
-    backupProtectionMode?: string | null;
-    lastBackupAt?: string | null;
-  }
-}
-
 /** Structured error DTO from the Tauri backend */
 export interface BackendError {
   code: string;

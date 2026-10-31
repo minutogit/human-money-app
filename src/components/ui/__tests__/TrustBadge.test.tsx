@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { TrustBadge } from '../TrustBadge';
 import { VoucherTrustDto } from '../../../types';
@@ -6,6 +6,9 @@ import { VoucherTrustDto } from '../../../types';
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => {
+      if (key === 'voucher.trustAdditionalPaths' && options?.count !== undefined) {
+        return `(+${String(options.count)} Wege)`;
+      }
       if (options?.percent !== undefined && options?.name !== undefined) {
         return `${key}:${String(options.percent)}%:${String(options.name)}`;
       }
@@ -55,7 +58,7 @@ describe('TrustBadge', () => {
     };
     render(<TrustBadge trust={trust} />);
     const badge = screen.getByTestId('trust-badge');
-    expect(badge).toHaveTextContent('voucher.trustViaGuarantor:85%:Alice Smith (+1)');
+    expect(badge).toHaveTextContent('voucher.trustViaGuarantor:85%:Alice Smith (+1 Wege)');
     expect(badge.className).toContain('emerald');
   });
 
@@ -143,6 +146,34 @@ describe('TrustBadge', () => {
     };
     render(<TrustBadge trust={trust} />);
     const badge = screen.getByTestId('trust-badge');
-    expect(badge).toHaveTextContent('voucher.trustViaNetwork:30% (+2)');
+    expect(badge).toHaveTextContent('voucher.trustViaNetwork:30% (+2 Wege)');
+  });
+
+  it('opens explanation popover on click and stops propagation', () => {
+    const trust: VoucherTrustDto = {
+      score: 0.85,
+      trustPercent: 85,
+      isOwnVoucher: false,
+      blockedByOffender: false,
+      shortestHops: 2,
+      primaryBridgeName: 'Alice',
+      additionalPathsCount: 1,
+      viaGuarantor: false,
+      bestPathNames: ['Alice'],
+    };
+    const parentClickHandler = vi.fn();
+    render(
+      <div onClick={parentClickHandler}>
+        <TrustBadge trust={trust} />
+      </div>
+    );
+
+    const badge = screen.getByTestId('trust-badge');
+    expect(screen.queryByTestId('trust-badge-popover')).toBeNull();
+
+    fireEvent.click(badge);
+    expect(screen.getByTestId('trust-badge-popover')).toBeInTheDocument();
+    expect(screen.getByText('voucher.trustBadgeExplanation')).toBeInTheDocument();
+    expect(parentClickHandler).not.toHaveBeenCalled();
   });
 });

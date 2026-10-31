@@ -8,6 +8,7 @@ import { Card } from './ui/Card';
 import { Input } from './ui/Input';
 import { AppSettings, PrivacyDefault, CustomServerDto, RegionalSourceDto } from '../types';
 import { useSession } from '../context/SessionContext';
+import { useOptionalNavigation } from '../context/NavigationContext';
 import { translateError, stringifyError } from '../utils/errorHelper';
 
 import { ProfileSettings } from './ProfileSettings';
@@ -53,7 +54,11 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
-    const [activeTab, setActiveTab] = useState<'app' | 'profile' | 'standards'>('profile');
+    const [activeTab, setActiveTab] = useState<'app' | 'profile'>('profile');
+    const [isStandardsOpen, setIsStandardsOpen] = useState(false);
+
+    const nav = useOptionalNavigation();
+    const appVersion = nav?.appVersion || '0.3.0';
 
     // Dev mode hidden trigger (7 clicks)
     const [devClickCount, setDevClickCount] = useState(0);
@@ -272,13 +277,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         {t('settings.tabIdentityProfile')}
                     </button>
                     <button 
-                        onClick={() => setActiveTab('standards')}
-                        className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'standards' ? 'bg-white text-theme-primary shadow-premium' : 'text-theme-light hover:text-theme-secondary hover:bg-white/40'}`}
-                    >
-                        <ShieldCheck size={14} />
-                        {t('standards.title')}
-                    </button>
-                    <button 
                         onClick={() => setActiveTab('app')}
                         className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'app' ? 'bg-white text-theme-primary shadow-premium' : 'text-theme-light hover:text-theme-secondary hover:bg-white/40'}`}
                     >
@@ -289,8 +287,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
                 {activeTab === 'profile' ? (
                     <ProfileSettings />
-                ) : activeTab === 'standards' ? (
-                    <StandardsManager />
                 ) : (
                     <form onSubmit={handleSave} className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -451,6 +447,22 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
                                     {isAdvancedNetworkOpen && (
                                         <div className="p-4 space-y-6 border-t border-theme-subtle">
+                                            {/* PoS Mode Toggle */}
+                                            <label className="flex items-start gap-3 p-3 bg-white border border-theme-subtle rounded-xl cursor-pointer hover:border-theme-primary/40 transition-colors">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!settings?.enablePosMode}
+                                                    onChange={(e) => setSettings(s => s ? { ...s, enablePosMode: e.target.checked } : null)}
+                                                    className="mt-0.5 accent-theme-primary"
+                                                />
+                                                <span className="text-xs font-medium text-theme-secondary leading-relaxed">
+                                                    {t('settings.enablePosMode')}
+                                                    <span className="block text-[10px] text-theme-light/60 font-normal">
+                                                        {t('settings.enablePosModeDesc')}
+                                                    </span>
+                                                </span>
+                                            </label>
+
                                             {/* Network Selection */}
                                             <div className="space-y-3">
                                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('settings.activeNetworkLabel', 'Active Network')}</label>
@@ -748,6 +760,33 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                             </div>
                         </Card>
 
+                        {/* Voucher Standards Manager */}
+                        <div className="border border-theme-subtle rounded-2xl overflow-hidden bg-white/50">
+                            <button
+                                type="button"
+                                onClick={() => setIsStandardsOpen(v => !v)}
+                                className="w-full flex items-center justify-between p-5 bg-slate-50/70 hover:bg-slate-100/70 transition-colors text-left"
+                            >
+                                <div className="flex items-center gap-3">
+                                    <ShieldCheck size={18} className="text-theme-primary" />
+                                    <div>
+                                        <span className="font-black text-xs uppercase tracking-widest text-theme-secondary block">
+                                            {t('standards.title')}
+                                        </span>
+                                        <p className="text-[10px] text-theme-light/70 font-medium">
+                                            {t('standards.manageStandardsDescription')}
+                                        </p>
+                                    </div>
+                                </div>
+                                {isStandardsOpen ? <ChevronUp size={18} className="text-theme-light" /> : <ChevronDown size={18} className="text-theme-light" />}
+                            </button>
+
+                            {isStandardsOpen && (
+                                <div className="p-6 border-t border-theme-subtle bg-white">
+                                    <StandardsManager />
+                                </div>
+                            )}
+                        </div>
 
                         <div className="pt-6 flex flex-col items-center gap-4">
                             <Button type="submit" disabled={isSaving} className="min-w-[240px] gap-2 rounded-2xl py-4 shadow-lg shadow-theme-primary/20">
@@ -765,7 +804,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                 tabIndex={0}
                                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleDevModeClick(); }}}
                             >
-                                v0.2.1 • {isDevUnlocked ? 'DEV freigeschaltet' : `${devClickCount}/7`}
+                                v{appVersion} • {isDevUnlocked ? 'DEV freigeschaltet' : `${devClickCount}/7`}
                             </span>
                         </div>
                     </form>

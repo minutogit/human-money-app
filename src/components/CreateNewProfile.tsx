@@ -59,6 +59,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNe
 
     const [passphrase, setPassphrase] = useState<string>("");
     const [confirmPassphrase, setConfirmPassphrase] = useState<string>("");
+    const [showPassphraseAccordion, setShowPassphraseAccordion] = useState(false);
     const [profileName, setProfileName] = useState("");
     const [userPrefix, setUserPrefix] = useState("");
     const [isSubAccount, setIsSubAccount] = useState(false);
@@ -229,27 +230,42 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNe
                             </div>
                         </div>
 
-                        <div className="space-y-4 pt-4 border-t border-theme-primary/10">
-                            <div className="space-y-2">
-                                <div className="flex items-center gap-1.5">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1">
-                                        <Lock size={10}/> 
-                                        <span>{t('profile.optionalPassphrase', { ordinal: wordCount === 12 ? '13th' : '25th' })}</span>
-                                    </label>
-                                    <HelpIcon topic="passphrase" size={12} />
+                        <div className="pt-3 border-t border-theme-primary/10">
+                            <button
+                                type="button"
+                                onClick={() => setShowPassphraseAccordion(!showPassphraseAccordion)}
+                                className="w-full flex items-center justify-between py-2 text-left text-xs font-bold text-theme-secondary hover:text-theme-primary transition-colors cursor-pointer"
+                            >
+                                <span className="flex items-center gap-1.5">
+                                    <Lock size={12} className="text-theme-primary" />
+                                    <span>{t('profile.optionalPassphraseAccordion', { ordinal: wordCount === 12 ? '13th' : '25th' })}</span>
+                                </span>
+                                <span className="text-[10px] text-theme-light">
+                                    {showPassphraseAccordion ? '▲' : '▼'}
+                                </span>
+                            </button>
+                            {showPassphraseAccordion && (
+                                <div className="space-y-3 pt-3 animate-in fade-in duration-200">
+                                    <div className="flex items-center gap-1.5">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1">
+                                            <Lock size={10}/> 
+                                            <span>{t('profile.optionalPassphrase', { ordinal: wordCount === 12 ? '13th' : '25th' })}</span>
+                                        </label>
+                                        <HelpIcon topic="passphrase" size={12} />
+                                    </div>
+                                    <Input 
+                                        type="text" 
+                                        value={passphrase} 
+                                        onChange={(e) => setPassphrase(e.target.value)} 
+                                        placeholder={t('profile.passphrasePlaceholder')} 
+                                        className="rounded-2xl"
+                                    />
+                                    <p className="text-[9px] font-bold text-amber-600 bg-amber-50 p-3 rounded-xl border border-amber-100 flex items-start gap-2">
+                                        <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                                        {t('profile.passphraseAdvanced', { wordCount })}
+                                    </p>
                                 </div>
-                                <Input 
-                                    type="text" 
-                                    value={passphrase} 
-                                    onChange={(e) => setPassphrase(e.target.value)} 
-                                    placeholder={t('profile.passphrasePlaceholder')} 
-                                    className="rounded-2xl"
-                                />
-                                <p className="text-[9px] font-bold text-amber-600 bg-amber-50 p-3 rounded-xl border border-amber-100 flex items-start gap-2">
-                                    <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                                    {t('profile.passphraseAdvanced', { wordCount })}
-                                </p>
-                            </div>
+                            )}
                         </div>
 
                         <div className="flex flex-col items-center gap-4 pt-4">
@@ -393,37 +409,39 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNe
                                     </div>
 
                                     {isSubAccount && (
-                                        <div className="space-y-2 pt-2 border-t border-theme-primary/5 animate-in fade-in duration-300">
-                                            <div className="flex items-center justify-between">
-                                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
-                                                    {t('profile.subAccountName')}
-                                                </label>
-                                                <button 
-                                                    type="button" 
-                                                    onClick={() => setShowPrefixInfo(true)}
-                                                    className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20"
-                                                >
-                                                    <HelpCircle size={12} />
-                                                    <span>{t('profile.readInstructions')}</span>
-                                                </button>
+                                        <>
+                                            <div className="space-y-2 pt-2 border-t border-theme-primary/5 animate-in fade-in duration-300">
+                                                <div className="flex items-center justify-between">
+                                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
+                                                        {t('profile.subAccountName')}
+                                                    </label>
+                                                    <button 
+                                                        type="button" 
+                                                        onClick={() => setShowPrefixInfo(true)}
+                                                        className="text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-1.5 bg-theme-primary/5 px-2.5 py-1 rounded-full border border-theme-primary/20"
+                                                    >
+                                                        <HelpCircle size={12} />
+                                                        <span>{t('profile.readInstructions')}</span>
+                                                    </button>
+                                                </div>
+                                                <Input 
+                                                    value={userPrefix} 
+                                                    onChange={(e) => setUserPrefix(e.target.value)} 
+                                                    placeholder={t('profile.prefixPlaceholder')} 
+                                                />
                                             </div>
-                                            <Input 
-                                                value={userPrefix} 
-                                                onChange={(e) => setUserPrefix(e.target.value)} 
-                                                placeholder={t('profile.prefixPlaceholder')} 
-                                            />
-                                        </div>
-                                    )}
 
-                                    <div className="space-y-1.5 p-3.5 bg-theme-subtle/20 border border-theme-subtle rounded-2xl">
-                                        <p className="text-[10px] text-theme-secondary leading-relaxed">
-                                            {t('profile.prefixDescription')}
-                                        </p>
-                                        <p className="text-[9px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic">
-                                            <AlertTriangle size={10} className="shrink-0 mt-0.5" />
-                                            {t('profile.criticalPrefix')}
-                                        </p>
-                                    </div>
+                                            <div className="space-y-1.5 p-3.5 bg-theme-subtle/20 border border-theme-subtle rounded-2xl animate-in fade-in duration-300">
+                                                <p className="text-[10px] text-theme-secondary leading-relaxed">
+                                                    {t('profile.prefixDescription')}
+                                                </p>
+                                                <p className="text-[9px] font-black text-rose-600 flex items-start gap-1.5 leading-tight italic">
+                                                    <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                                                    {t('profile.criticalPrefix')}
+                                                </p>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             </Card>
 

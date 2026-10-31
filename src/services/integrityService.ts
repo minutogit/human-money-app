@@ -32,7 +32,16 @@ export const integrityService = {
 
     repairWalletIntegrity: async (password: string | undefined) => {
         return await invoke<void>("repair_wallet_integrity", { password });
+    },
+
+    exportDoubleSpendProof: async (proofId: string) => {
+        return await invoke<number[]>("export_double_spend_proof", { proofId });
+    },
+
+    importDoubleSpendProof: async (proofBytes: number[], password?: string) => {
+        return await invoke<string>("import_double_spend_proof", { proofBytes, password: password || null });
     }
 };
+
 
 

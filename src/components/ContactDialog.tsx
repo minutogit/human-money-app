@@ -4,6 +4,9 @@ import { Contact, PublicProfile } from '../types';
 import Avatar from 'boring-avatars';
 import { translateError } from '../utils/errorHelper';
 import { HelpIcon } from './ui/HelpIcon';
+import { readText } from '@tauri-apps/plugin-clipboard-manager';
+import { parseContactCard } from '../utils/humocoUri';
+import { Clipboard } from 'lucide-react';
 
 interface ContactDialogProps {
     isOpen: boolean;
@@ -69,6 +72,33 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setDesiredHops(3);
         }
     }, [existingContact, initialProfile, initialDid, isOpen]);
+
+    const applyContactCard = (rawText: string) => {
+        const parsed = parseContactCard(rawText);
+        if (parsed) {
+            setDid(parsed.did);
+            if (parsed.name && !firstName && !lastName && !organization) {
+                const parts = parsed.name.trim().split(/\s+/);
+                if (parts.length === 1) {
+                    setFirstName(parts[0]);
+                } else {
+                    setFirstName(parts[0]);
+                    setLastName(parts.slice(1).join(' '));
+                }
+            }
+        }
+    };
+
+    const handlePasteFromClipboard = async () => {
+        try {
+            const text = await readText();
+            if (text) {
+                applyContactCard(text);
+            }
+        } catch (e) {
+            console.error("Failed to read from clipboard:", e);
+        }
+    };
 
     if (!isOpen) return null;
 
@@ -143,13 +173,29 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
 
                 <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
                     <div>
-                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.userId')}</label>
+                        <div className="flex items-center justify-between mb-1.5">
+                            <label className="block text-xs font-bold text-theme-light uppercase tracking-widest">{t('contacts.userId')}</label>
+                            {!existingContact && (
+                                <button
+                                    type="button"
+                                    onClick={handlePasteFromClipboard}
+                                    className="text-xs font-bold text-theme-primary hover:text-theme-accent transition-colors flex items-center gap-1"
+                                >
+                                    <Clipboard size={14} />
+                                    {t('contacts.pasteContactCard')}
+                                </button>
+                            )}
+                        </div>
                         <input
                             type="text"
                             value={did}
                             onChange={(e) => {
-                                const val = e.target.value.replace(/\s+/g, '');
-                                e.target.value = val;
+                                const rawVal = e.target.value;
+                                if (rawVal.includes('humoco://contact')) {
+                                    applyContactCard(rawVal);
+                                    return;
+                                }
+                                const val = rawVal.replace(/\s+/g, '');
                                 setDid(val);
                             }}
                             disabled={!!existingContact}

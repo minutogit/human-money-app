@@ -73,12 +73,13 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 vi.mock('../../utils/log', () => ({
   logger: {
     info: vi.fn(),
+    warn: vi.fn(),
     error: vi.fn(),
   },
 }));
 
 vi.mock('../../utils/settingsUtils', () => ({
-  updateLastUsedDirectory: vi.fn(),
+  updateLastUsedDirectory: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../context/SessionContext', () => ({
@@ -105,6 +106,7 @@ amount_decimal_places = 4`,
     bundleRetentionDays: 30,
     sessionTimeoutSeconds: 300,
     privacyDefault: 'public',
+    enablePosMode: true,
   };
 
   const mockOnBack = vi.fn();
@@ -375,8 +377,9 @@ amount_decimal_places = 4`,
     );
 
     // 1. Enable PoS Mode checkbox
-    const posCheckbox = screen.getByRole('checkbox');
+    const posCheckbox = await screen.findByRole('checkbox');
     fireEvent.click(posCheckbox);
+    expect(posCheckbox).toBeChecked();
 
     // 2. Select file
     const selectButton = screen.getByRole('button', { name: /Select File/i });

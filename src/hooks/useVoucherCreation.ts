@@ -112,6 +112,10 @@ export function useVoucherCreation() {
         }
     }, []);
 
+    useEffect(() => {
+        void handleLoadProfile();
+    }, [handleLoadProfile]);
+
     const handleCoordBlur = useCallback(() => {
         if (!identity.coordinates) {
             setCoordWarning("");

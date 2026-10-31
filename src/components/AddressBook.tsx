@@ -6,8 +6,9 @@ import { Button } from './ui/Button';
 import { contactService } from '../services/contactService';
 import { wotService } from '../services/wotService';
 import { settingsService } from '../services/settingsService';
-import { save } from '@tauri-apps/plugin-dialog';
-import { writeFile } from '@tauri-apps/plugin-fs';
+import { save, open } from '@tauri-apps/plugin-dialog';
+import { writeFile, readFile } from '@tauri-apps/plugin-fs';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { HelpIcon } from './ui/HelpIcon';
 import { Contact, WotSummaryDto } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
@@ -17,6 +18,9 @@ import { logger } from '../utils/log';
 import { stringifyError, translateError } from '../utils/errorHelper';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { useSession } from '../context/SessionContext';
+import { profileService } from '../services/profileService';
+import { voucherService } from '../services/voucherService';
+import { buildContactCardText } from '../utils/humocoUri';
 import { 
     UserPlus, 
     Search, 
@@ -28,7 +32,9 @@ import {
     Users,
     X,
     Share2,
-    Download
+    Copy,
+    Check,
+    Upload
 } from 'lucide-react';
 
 interface AddressBookProps {
@@ -50,6 +56,11 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const [isExportModalOpen, setIsExportModalOpen] = useState(false);
     const [exportPassword, setExportPassword] = useState('');
     const [isExporting, setIsExporting] = useState(false);
+    const [copiedContactCard, setCopiedContactCard] = useState(false);
+    const [pendingWotImportBytes, setPendingWotImportBytes] = useState<number[] | null>(null);
+    const [isWotPasswordModalOpen, setIsWotPasswordModalOpen] = useState(false);
+    const [wotContainerPassword, setWotContainerPassword] = useState('');
+    const [isImportingWot, setIsImportingWot] = useState(false);
     const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
     const loadContacts = useCallback(async () => {
@@ -178,6 +189,88 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         }
     };
 
+    const handleCopyContactCard = async () => {
+        try {
+            const [did, profile] = await Promise.all([
+                voucherService.getUserId().catch(() => ''),
+                profileService.getProfile().catch(() => null)
+            ]);
+            if (!did) {
+                logger.warn("No user ID found for contact card");
+                return;
+            }
+            const nameParts = [profile?.firstName, profile?.lastName].filter(Boolean);
+            const name = nameParts.length > 0 ? nameParts.join(' ') : profile?.organization;
+            const cardText = buildContactCardText({ did, name: name || undefined });
+            await writeText(cardText);
+            setCopiedContactCard(true);
+            setTimeout(() => setCopiedContactCard(false), 2500);
+        } catch (err) {
+            logger.error("Failed to copy contact card: " + stringifyError(err));
+            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
+        }
+    };
+
+    const executeImportWot = async (fileBytes: number[], password?: string) => {
+        setIsImportingWot(true);
+        try {
+            const result = await protectAction(async (walletPassword) => {
+                return await wotService.importPackage({
+                    containerBytes: fileBytes,
+                    containerPassword: password || null,
+                    password: walletPassword || null,
+                });
+            });
+            setIsWotPasswordModalOpen(false);
+            setPendingWotImportBytes(null);
+            setWotContainerPassword('');
+            if (result) {
+                setFeedbackMsg({
+                    type: 'success',
+                    message: t('transfer.wotImport.stats', {
+                        imported: result.imported,
+                        updated: result.updated,
+                    })
+                });
+                await loadContacts();
+            }
+        } catch (err) {
+            const errorStr = stringifyError(err);
+            const isPasswordRequired = errorStr.includes("Password required") || errorStr.toLowerCase().includes("decrypt") || errorStr.includes("SymmetricEncryption") || errorStr.includes("MacError");
+            if (isPasswordRequired) {
+                setPendingWotImportBytes(fileBytes);
+                setIsWotPasswordModalOpen(true);
+                return;
+            }
+            logger.error("Failed to import WoT package: " + errorStr);
+            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsImportingWot(false);
+        }
+    };
+
+    const handleImportWot = async () => {
+        try {
+            const settings = await settingsService.getSettings().catch(() => null);
+            const selectedPath = await open({
+                multiple: false,
+                defaultPath: settings?.lastUsedDirectory,
+                filters: [{ name: t('transfer.importFile.wotFilter'), extensions: ['wot'] }]
+            });
+            if (typeof selectedPath === 'string') {
+                if (settings) {
+                    await updateLastUsedDirectory(selectedPath, settings, protectAction).catch(() => {});
+                }
+                const fileUint8Array = await readFile(selectedPath);
+                const fileBytes = Array.from(fileUint8Array);
+                await executeImportWot(fileBytes);
+            }
+        } catch (err) {
+            logger.error("Failed to read WoT file: " + stringifyError(err));
+            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
+        }
+    };
+
     const allTags = Array.from(new Set(contacts.flatMap(c => c.tags)));
 
     const filteredContacts = contacts.filter(contact => {
@@ -203,16 +296,27 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             description={t('contacts.description')} 
             onBack={onBack}
             actions={
-                <Button
-                    onClick={() => {
-                        setEditingContact(null);
-                        setIsDialogOpen(true);
-                    }}
-                    className="gap-2"
-                >
-                    <UserPlus size={18} />
-                    {t('contacts.newContact')}
-                </Button>
+                <div className="flex items-center gap-3">
+                    <Button
+                        variant="secondary"
+                        onClick={handleCopyContactCard}
+                        className="gap-2"
+                        title={t('contacts.copyContactCard')}
+                    >
+                        {copiedContactCard ? <Check size={18} className="text-emerald-500" /> : <Copy size={18} />}
+                        {copiedContactCard ? t('contacts.copiedContactCard') : t('contacts.copyContactCard')}
+                    </Button>
+                    <Button
+                        onClick={() => {
+                            setEditingContact(null);
+                            setIsDialogOpen(true);
+                        }}
+                        className="gap-2"
+                    >
+                        <UserPlus size={18} />
+                        {t('contacts.newContact')}
+                    </Button>
+                </div>
             }
         >
             <div className="max-w-6xl mx-auto space-y-8">
@@ -251,15 +355,27 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                 : t('contacts.wotBannerEmpty')}
                         </p>
                     </div>
-                    <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => setIsExportModalOpen(true)}
-                        className="self-start sm:self-auto rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
-                    >
-                        <Download size={14} />
-                        {t('contacts.exportWotButton')}
-                    </Button>
+                    <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={handleImportWot}
+                            disabled={isImportingWot}
+                            className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
+                        >
+                            <Upload size={14} />
+                            {isImportingWot ? t('common.loading') : t('contacts.importWotButton')}
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={() => setIsExportModalOpen(true)}
+                            className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
+                        >
+                            <Share2 size={14} />
+                            {t('contacts.exportWotButton')}
+                        </Button>
+                    </div>
                 </div>
 
                 {/* Search and Filters */}
@@ -514,6 +630,57 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                 className="py-2 px-4 rounded-xl bg-theme-primary text-white font-bold text-xs hover:bg-theme-accent transition-all shadow-md disabled:opacity-50"
                             >
                                 {isExporting ? t('common.loading') : t('contacts.exportWotButton')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isWotPasswordModalOpen && (
+                <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
+                    <div className="bg-bg-app border border-theme-subtle rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+                        <div className="p-6 border-b border-theme-subtle bg-white">
+                            <h3 className="text-lg font-black text-theme-secondary">
+                                {t('transfer.wotImport.title')}
+                            </h3>
+                            <p className="text-xs text-theme-light mt-1">
+                                {t('transfer.importFile.passwordPlaceholder')}
+                            </p>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            <input
+                                type="password"
+                                value={wotContainerPassword}
+                                onChange={(e) => setWotContainerPassword(e.target.value)}
+                                placeholder={t('transfer.importFile.passwordPlaceholder')}
+                                className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 text-sm shadow-sm"
+                                autoFocus
+                            />
+                        </div>
+                        <div className="p-4 bg-white border-t border-theme-subtle flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setIsWotPasswordModalOpen(false);
+                                    setWotContainerPassword('');
+                                    setPendingWotImportBytes(null);
+                                }}
+                                disabled={isImportingWot}
+                                className="py-2 px-4 rounded-xl border border-theme-subtle text-theme-light font-bold text-xs hover:bg-bg-app transition-colors"
+                            >
+                                {t('common.cancel')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (pendingWotImportBytes) {
+                                        executeImportWot(pendingWotImportBytes, wotContainerPassword);
+                                    }
+                                }}
+                                disabled={isImportingWot}
+                                className="py-2 px-4 rounded-xl bg-theme-primary text-white font-bold text-xs hover:bg-theme-accent transition-all shadow-md disabled:opacity-50"
+                            >
+                                {isImportingWot ? t('common.loading') : t('transfer.importFile.confirmImport')}
                             </button>
                         </div>
                     </div>

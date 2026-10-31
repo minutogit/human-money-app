@@ -27,6 +27,10 @@ export function useNavigation() {
     return context;
 }
 
+export function useOptionalNavigation() {
+    return useContext(NavigationContext);
+}
+
 export function NavigationProvider({ children }: { children: ReactNode }) {
     const [appState, setAppState] = useState<AppState>({ view: "loading" });
     const [isSidebarOpen, setSidebarOpen] = useState(false);

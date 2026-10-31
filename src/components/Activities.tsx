@@ -6,6 +6,7 @@ import { logger } from '../utils/log';
 import { stringifyError } from '../utils/errorHelper';
 import { WalletEvent } from '../types';
 import { PageLayout } from './ui/PageLayout';
+import { Button } from './ui/Button';
 import { formatDateTime } from '../utils/format';
 import { 
     PlusCircle, 
@@ -17,7 +18,8 @@ import {
     Clock, 
     Info,
     ChevronRight,
-    Calendar
+    Calendar,
+    History
 } from 'lucide-react';
 
 import { useNavigation } from '../context/NavigationContext';
@@ -91,6 +93,17 @@ export function Activities() {
             title={t('history.activitiesTitle')} 
             description={t('history.activitiesDescription')} 
             onBack={goBack}
+            actions={
+                <Button
+                    variant="secondary"
+                    size="xs"
+                    onClick={() => navigate({ view: 'transaction_history' })}
+                    className="flex items-center gap-1.5 rounded-xl text-xs"
+                >
+                    <History size={14} />
+                    <span>{t('history.backToStatement')}</span>
+                </Button>
+            }
         >
             <div className="max-w-4xl mx-auto space-y-6">
                 {isLoading && (

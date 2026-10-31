@@ -64,7 +64,14 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 }));
 
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
-  writeText: vi.fn(),
+  writeText: vi.fn().mockResolvedValue(undefined),
+  readText: vi.fn().mockResolvedValue(''),
+}));
+
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  revealItemInDir: vi.fn().mockResolvedValue(undefined),
+  openPath: vi.fn().mockResolvedValue(undefined),
+  openUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock settingsUtils

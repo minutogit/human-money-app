@@ -113,7 +113,7 @@ describe('Login Component', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/\[\+\] CREATE NEW WALLET/i)).toBeInTheDocument();
-      expect(screen.getByText(/\[→\] CREATE FROM EXISTING WALLET/i)).toBeInTheDocument();
+      expect(screen.getByText(/\[→\] RESTORE FROM BACKUP/i)).toBeInTheDocument();
       expect(screen.getByText(/Forgot password\?/i)).toBeInTheDocument();
     });
   });

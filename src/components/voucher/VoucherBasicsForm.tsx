@@ -1,11 +1,11 @@
 // src/components/voucher/VoucherBasicsForm.tsx
 
 import { useTranslation } from "react-i18next";
-import { Coins, AlertCircle, FlaskConical } from "lucide-react";
+import { Coins, AlertCircle, FlaskConical, FileSignature } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
 import { HelpIcon } from "../ui/HelpIcon";
-import { VoucherStandardInfo } from "../../types";
+import { VoucherStandardInfo, VoucherStandardDefinition } from "../../types";
 
 interface VoucherBasicsFormProps {
     standards: VoucherStandardInfo[];
@@ -23,6 +23,7 @@ interface VoucherBasicsFormProps {
     errors: Record<string, boolean>;
     standardRef: React.RefObject<HTMLSelectElement | null>;
     amountRef: React.RefObject<HTMLInputElement | null>;
+    parsedStandard?: VoucherStandardDefinition | null;
 }
 
 export function VoucherBasicsForm({
@@ -40,9 +41,17 @@ export function VoucherBasicsForm({
     isLoading,
     errors,
     standardRef,
-    amountRef
+    amountRef,
+    parsedStandard
 }: VoucherBasicsFormProps) {
     const { t } = useTranslation();
+
+    const additionalSignaturesRange = parsedStandard?.immutable?.issuance?.additionalSignaturesRange;
+    const minGuarantors = additionalSignaturesRange && additionalSignaturesRange[0] !== undefined ? additionalSignaturesRange[0] : 0;
+    const customRules = parsedStandard?.immutable?.customRules || {};
+    const hasGenderMale = Object.values(customRules).some(r => r.expression?.includes("gender == '1'"));
+    const hasGenderFemale = Object.values(customRules).some(r => r.expression?.includes("gender == '2'"));
+
     return (
         <Card header={
             <div className="flex items-center gap-2">
@@ -52,22 +61,41 @@ export function VoucherBasicsForm({
         }>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
-                    <div className="space-y-2">
-                        <label htmlFor="voucher-type" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.create.voucherType')}</label>
-                        <select 
-                            id="voucher-type"
-                            ref={standardRef}
-                            value={selectedStandardId} 
-                            onChange={(e) => onStandardChange(e.target.value)} 
-                            disabled={isLoading || standards.length === 0} 
-                            className={`w-full bg-white border rounded-2xl px-4 py-3.5 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all ${errors.standard ? 'border-rose-500' : 'border-theme-subtle'}`}
-                        >
-                            <option value="">{t('voucher.basics.selectType')}</option>
-                            {standards.map(s => (
-                                <option key={s.id} value={s.id}>{s.displayName}</option>
-                            ))}
-                        </select>
+                    <div className="space-y-3">
+                        <div className="space-y-2">
+                            <label htmlFor="voucher-type" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.create.voucherType')}</label>
+                            <select 
+                                id="voucher-type"
+                                ref={standardRef}
+                                value={selectedStandardId} 
+                                onChange={(e) => onStandardChange(e.target.value)} 
+                                disabled={isLoading || standards.length === 0} 
+                                className={`w-full bg-white border rounded-2xl px-4 py-3.5 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all ${errors.standard ? 'border-rose-500' : 'border-theme-subtle'}`}
+                            >
+                                <option value="">{t('voucher.basics.selectType')}</option>
+                                {standards.map(s => (
+                                    <option key={s.id} value={s.id}>{s.displayName}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {minGuarantors > 0 && (
+                            <div className="p-3.5 bg-amber-500/[0.08] border border-amber-500/20 rounded-2xl flex items-start gap-3 text-amber-900 animate-in fade-in duration-300">
+                                <FileSignature size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                                <div className="text-xs leading-relaxed">
+                                    <p className="font-bold text-amber-950">
+                                        {t('voucher.basics.guarantorRequiredTitle')}
+                                    </p>
+                                    <p className="text-amber-800/90 text-[11px] mt-0.5">
+                                        {hasGenderMale && hasGenderFemale && minGuarantors === 2
+                                            ? t('voucher.basics.guarantorRequirementMinuto')
+                                            : t('voucher.basics.guarantorRequirementGeneric', { count: minGuarantors })}
+                                    </p>
+                                </div>
+                            </div>
+                        )}
                     </div>
+
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <label htmlFor="voucher-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.basics.amountLabel')}</label>

@@ -79,7 +79,7 @@ export const AppRouter: React.FC = () => {
         case "settings":
             return <SettingsView onBack={() => navigate({ view: "logged_in" })} />;
         case "support":
-            return <SupportView />;
+            return <SupportView onBack={goBack} />;
         case "bug_report":
             return <BugReportView onBack={goBack} />;
         case "concept":
@@ -105,9 +105,14 @@ export const AppRouter: React.FC = () => {
                 initialSearchQuery={appState.initialSearchQuery}
             />;
         case "send_vouchers":
-            return <SendView />;
+            return <SendView
+                initialRecipientId={appState.initialRecipientId}
+                initialVoucherId={appState.initialVoucherId}
+                initialNote={appState.initialNote}
+            />;
         case "receive_bundle":
             return <ReceiveView
+                droppedFile={appState.droppedFile}
                 onBack={() => navigate({ view: "logged_in" })}
                 onReceiveSuccess={(payload) => {
                     if ('localInstanceId' in payload) {

@@ -7,6 +7,7 @@ import { AuthModal } from '../components/ui/AuthModal';
 // AppSettings import removed as unused
 
 import { startSealSyncLoop, stopSealSyncLoop } from '../utils/sealSync';
+import { startAutoBackupLoop, stopAutoBackupLoop } from '../utils/autoBackup';
 import { useWindowTitleSync } from '../hooks/useWindowTitleSync';
 import { useIntegrityCheck } from '../hooks/useIntegrityCheck';
 import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
@@ -25,6 +26,7 @@ export interface SessionContextType {
     integrityReport: import('../types').IntegrityReport | null;
     checkIntegrity: () => Promise<void>;
     clearLocks: () => void;
+    lockSession: () => Promise<void>;
 }
 
 const SessionContext = createContext<SessionContextType | null>(null);
@@ -84,6 +86,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (name) setProfileName(name);
         activateSession();
         startSealSyncLoop();
+        startAutoBackupLoop();
         checkIntegrity();
 
         authService.isSessionActive()
@@ -107,6 +110,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         isSessionActiveRef.current = false;
         setProfileName("");
         stopSealSyncLoop();
+        stopAutoBackupLoop();
     }, []);
 
     const protectAction = useCallback(async <T,>(action: (password: string | null) => Promise<T>): Promise<T | void> => {
@@ -228,13 +232,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setPendingAction(null);
     };
 
+    const lockSession = useCallback(async () => {
+        try {
+            await authService.lockSession();
+        } catch (e) {
+            logger.warn(`Failed to lock session in backend: ${stringifyError(e)}`);
+        } finally {
+            setIsSessionActive(false);
+            isSessionActiveRef.current = false;
+        }
+    }, []);
+
     const clearLocks = useCallback(() => {
         setIsForkLocked(false);
         setIsRecoveryRequired(false);
     }, []);
 
     return (
-        <SessionContext.Provider value={{ protectAction, isSessionActive, isAuthenticated, profileName, setProfileName, notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks }}>
+        <SessionContext.Provider value={{ protectAction, isSessionActive, isAuthenticated, profileName, setProfileName, notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks, lockSession }}>
             {children}
             <AuthModal
                 isOpen={isModalOpen}
