@@ -21,6 +21,8 @@ export interface WotSummaryDto {
     closeConfidantsCount: number;
     importedPeerListsCount: number;
     ownListVersion?: number | null;
+    ownListMaxHops?: number;
+    providerFiltersCount?: number;
 }
 
 export interface WotImportResultDto {
@@ -33,4 +35,19 @@ export interface WotImportResultDto {
     rejectedSpam: number;
     isKnownContact: boolean;
     existingTrustLevel?: number | null;
+    isProviderFilter?: boolean;
+    providerName?: string | null;
+    providerMemberCount?: number | null;
+}
+
+export interface WotProviderDto {
+    issuerDid: string;
+    name: string;
+    version: number;
+    issuedAt: number;
+    sourceUrl?: string | null;
+    memberCount: number;
+    trustLevel: number;
+    importedAt: number;
+    isStale: boolean;
 }

@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { HelpCircle } from 'lucide-react';
 import { HelpModal } from './HelpModal';
 
-export type HelpTopic = 'mnemonic' | 'passphrase' | 'subaccount' | 'profile' | 'handover' | 'senderName' | 'privacy' | 'voucherMode' | 'voucherCreator' | 'voucherSignatures' | 'signatureRequest' | 'wotNetwork' | 'voucherTrust';
+export type HelpTopic = 'mnemonic' | 'passphrase' | 'subaccount' | 'profile' | 'handover' | 'senderName' | 'privacy' | 'voucherMode' | 'voucherCreator' | 'voucherSignatures' | 'signatureRequest' | 'wotNetwork' | 'voucherTrust' | 'wotReach';
 
 interface HelpIconProps {
     topic: HelpTopic;
@@ -99,6 +99,12 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
                     title: t('voucher.helpTrustTitle'),
                     short: t('voucher.helpTrustShort'),
                     long: t('voucher.helpTrustLong')
+                };
+            case 'wotReach':
+                return {
+                    title: t('contacts.helpWotReachTitle'),
+                    short: t('contacts.helpWotReachShort'),
+                    long: t('contacts.helpWotReachLong')
                 };
         }
     };

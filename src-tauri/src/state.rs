@@ -166,7 +166,7 @@ impl AppState {
                 if level > 3 {
                     return Err(AppFacadeError::Generic(format!("Invalid trust level: {}", level)));
                 }
-                let hops = if level == 0 { 0 } else { contact.desired_hops.unwrap_or(3).min(8) };
+                let hops = if level == 0 { 0 } else { reg.policy.own_list_max_hops };
                 reg.set_contact_trust(&can_did, level, hops, now_secs)
                     .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
                 reg.prune_unreachable_lists();
@@ -403,7 +403,7 @@ impl AppState {
         let own_user_id = service.with_wallet(|w| w.get_user_id().to_string())?;
         let own_can_did = canonicalize_did(&own_user_id)
             .map_err(|e| AppFacadeError::Generic(format!("Invalid own wallet DID: {}", e)))?;
-        let reg = match service.load_encrypted_data(WOT_DATA_NAME, password) {
+        let mut reg = match service.load_encrypted_data(WOT_DATA_NAME, password) {
             Ok(data) => {
                 serde_json::from_slice::<humoco_wot::TrustRegister>(&data)
                     .map_err(|e| AppFacadeError::Json(format!("Failed to deserialize TrustRegister: {}", e)))?
@@ -422,6 +422,16 @@ impl AppState {
                 }
             }
         };
+
+        reg.policy.own_list_max_hops = reg.policy.own_list_max_hops.clamp(1, 4);
+        reg.policy.max_eval_depth = reg.policy.max_eval_depth.max(5);
+        reg.policy.max_import_depth = reg.policy.max_import_depth.max(5);
+        for entry in reg.own_contacts.values_mut() {
+            if entry.level >= 1 && entry.desired_hops != reg.policy.own_list_max_hops {
+                entry.desired_hops = reg.policy.own_list_max_hops;
+                reg.own_list_dirty = true;
+            }
+        }
 
         *self.wot.lock().unwrap() = Some(reg.clone());
         Ok(reg)
@@ -526,12 +536,21 @@ impl AppState {
         let mut via_guarantor = false;
         let mut best_path_names = Vec::new();
 
+        let resolve_name = |did: &str| -> Option<String> {
+            lookup_contact_name(contacts_ref, did).or_else(|| {
+                canonicalize_did(did)
+                    .ok()
+                    .and_then(|can| reg.provider_filters.get(&can))
+                    .map(|p| p.payload.name.clone())
+            })
+        };
+
         if let Some(best_path) = eval.paths.first() {
             let hops = &best_path.hops;
             if hops.len() >= 2 {
                 let hop1 = &hops[1];
                 primary_bridge_did = Some(hop1.clone());
-                primary_bridge_name = lookup_contact_name(contacts_ref, hop1);
+                primary_bridge_name = resolve_name(hop1);
 
                 if hops.len() >= 3 {
                     let penultimate = &hops[hops.len() - 2];
@@ -545,8 +564,7 @@ impl AppState {
 
             if hops.len() > 2 {
                 for hop in &hops[1..hops.len() - 1] {
-                    let name = lookup_contact_name(contacts_ref, hop)
-                        .unwrap_or_else(|| truncate_did(hop));
+                    let name = resolve_name(hop).unwrap_or_else(|| truncate_did(hop));
                     best_path_names.push(name);
                 }
             }

@@ -7,6 +7,12 @@ last_updated: "2026-11-01"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-052"
+    title: "Global WoT Reach Selector (1–4 Hops), Passwordless Multi-Contact .wot Sharing & Progressive-Disclosure Provider Seals"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-044", "APP-051", "CORE-011", "WOT-010"]
+    description: "Replaced confusing per-contact hop buttons in `ContactDialog` with a global `1..4 Hops` network reach selector + `<HelpIcon topic=\"wotReach\" />` in `AddressBook` (`set_wot_max_hops`, automatic legacy contact normalization), added 1-click passwordless `.wot` sharing encrypted for up to 256 rated contacts (`ContainerConfig::TargetDids`), integrated `wot-provider-filter+v1` auto-detection (unencrypted & `SecureContainer`), inline provider rating in `ReceiveView`, progressive-disclosure `'Prüfsiegel & Verbände'` tab in `AddressBook` (`get_wot_providers`, `set_wot_provider_trust`, `remove_wot_provider`, opt-in HTTPS `refresh_wot_provider_url`), >1-year staleness indicators, and full EN/DE/ES/FR/IT translations (41 Rust WoT tests + 328 Vitest tests passing)."
   - id: "APP-051"
     title: "Unified Page Header, Navigation History & Shared UI Primitives Consolidation"
     status: "completed"
@@ -325,7 +331,7 @@ priority_tasks:
 
 ## Current Focus
 
-Tauri v2 desktop/mobile wallet (`v0.4.0` Beta). Core voucher workflows, switchable Spendable/Net balance views, silent mount-safe auto-backups, `humoco://` contact & payment request sharing, global drag-and-drop, bank-grade Account Statement with CSV export, guided guarantor/redemption/proof workflows, L2 PoS checkout, and full Offline-First Web of Trust (`humoco-wot`) are integrated across 5 locales.
+Tauri v2 desktop/mobile wallet (`v0.4.0` Beta). Core voucher workflows, switchable Spendable/Net balance views, silent mount-safe auto-backups, `humoco://` contact & payment request sharing, global drag-and-drop, bank-grade Account Statement with CSV export, guided guarantor/redemption/proof workflows, unified navigation history & shared UI primitives (`APP-051`), global 1–4 hops reach selector, passwordless multi-contact `.wot` sharing & progressive-disclosure `BinaryFuse64` provider seals (`APP-052`), L2 PoS checkout, and full Offline-First Web of Trust (`humoco-wot`) are integrated across 5 locales.
 
 ## Architecture
 
@@ -525,4 +531,9 @@ Bumped `human-money-app` to `v0.4.0`. Delivered comprehensive user-centric impro
 - **Desktop Exchange (`APP-048`)**: Added copy/paste `humoco://contact` cards and `humoco://pay` payment requests, direct `.wot` import in `AddressBook`, collapsible `PrivacyToggle`, file-manager reveal helpers, and app-wide `GlobalFileDropZone`.
 - **Account Statement (`APP-049`)**: Unified history navigation into a bank-style Account Statement with resolved contact search, direction/currency/period filters, quick contact saving, and UTF-8 BOM CSV export.
 - **Guarantor, Redemption & Proof Workflows (`APP-050`)**: Added upfront guarantor notices, parity progress pills, direct `.sig` attachment, inline gender setup & disclosure safeguards in `SignRequestView`, 1-click issuer redemption routing, and `.hmcproof` double-spend proof export/import. All 280 Vitest tests and 38 Rust unit tests pass.
+
+### 2026-11-01 — Navigation History, Shared UI Primitives & Global Reach / Provider Seals (`APP-051`, `APP-052`)
+
+- **Page Header & Navigation History (`APP-051`)**: Unified single scroll container in `App.tsx`, anti-squish header flex guarantees in `PageLayout`, 20-entry backstack history navigation (`NavigationContext`), and shared `AlertBanner`, `SegmentedTabs`, `ModalShell`, and `PageState` primitives across 16+ views.
+- **Global WoT Reach Selector & Provider Seals (`APP-052`)**: Replaced per-contact hop buttons with a global 1–4 hops reach selector (`set_wot_max_hops`), 1-click passwordless `.wot` export encrypted for up to 256 rated contacts (`CORE-011`), auto-detection and import of `BinaryFuse64` signed provider seals (`wot-provider-filter+v1`, `WOT-010`), progressive-disclosure 'Prüfsiegel & Verbände' tab in AddressBook (`get_wot_providers`, `set_wot_provider_trust`, `remove_wot_provider`, opt-in HTTPS refresh), inline provider rating in ReceiveView, staleness indicators (>1 year), and full 5-locale translations (41 Rust WoT tests + 328 Vitest tests passing).
 

@@ -34,7 +34,6 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [notes, setNotes] = useState('');
     const [newTag, setNewTag] = useState('');
     const [trustLevel, setTrustLevel] = useState<number | null>(existingContact?.trustLevel ?? null);
-    const [desiredHops, setDesiredHops] = useState<number>(existingContact?.desiredHops ?? 3);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -50,7 +49,6 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setTags(existingContact.tags);
             setNotes(existingContact.notes || '');
             setTrustLevel(existingContact.trustLevel ?? null);
-            setDesiredHops(existingContact.desiredHops ?? 3);
         } else if (initialProfile) {
             setFirstName(initialProfile.firstName || '');
             setLastName(initialProfile.lastName || '');
@@ -59,7 +57,6 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setTags([]);
             setNotes('');
             setTrustLevel(null);
-            setDesiredHops(3);
         } else {
             // Reset for new contact
             setDid(initialDid || '');
@@ -69,7 +66,6 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setTags([]);
             setNotes('');
             setTrustLevel(null);
-            setDesiredHops(3);
         }
     }, [existingContact, initialProfile, initialDid, isOpen]);
 
@@ -133,7 +129,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 notes: notes.trim() || undefined,
                 addedAt: existingContact?.addedAt || new Date().toISOString(),
                 trustLevel: trustLevel,
-                desiredHops: trustLevel === null ? null : (trustLevel === 0 ? 0 : desiredHops),
+                desiredHops: trustLevel === 0 ? 0 : null,
                 hasPeerList: existingContact?.hasPeerList,
                 peerListUpdatedAt: existingContact?.peerListUpdatedAt,
             };
@@ -321,40 +317,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                 );
                             })}
                         </div>
-
-                        {/* Recommendation Reach Selector */}
-                        {trustLevel !== null && trustLevel >= 1 && (
-                            <div className="space-y-1.5 pt-2 animate-in fade-in duration-200">
-                                <label className="block text-xs font-bold text-theme-light uppercase tracking-widest">
-                                    {t('contacts.reachabilityLabel')}
-                                </label>
-                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                                    {[
-                                        { hops: 0, labelKey: 'contacts.reachPrivate' },
-                                        { hops: 1, labelKey: 'contacts.reachDirect' },
-                                        { hops: 3, labelKey: 'contacts.reachStandard' },
-                                        { hops: 6, labelKey: 'contacts.reachWide' }
-                                    ].map(({ hops, labelKey }) => {
-                                        const isSelected = desiredHops === hops;
-                                        return (
-                                            <button
-                                                key={hops}
-                                                type="button"
-                                                onClick={() => setDesiredHops(hops)}
-                                                className={`py-2 px-2.5 rounded-xl text-xs font-bold border text-center transition-all ${
-                                                    isSelected
-                                                        ? 'bg-theme-secondary border-theme-secondary text-white shadow-sm'
-                                                        : 'bg-white border-theme-subtle text-theme-light hover:border-theme-primary/30'
-                                                }`}
-                                            >
-                                                {t(labelKey)}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        )}
                     </div>
+
 
                     <div>
                         <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">{t('contacts.tags')}</label>

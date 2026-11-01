@@ -6,7 +6,7 @@ import { ReceiveView } from '../ReceiveView';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
-import { Contact, WotSummaryDto, WotImportResultDto } from '../../types';
+import { Contact, WotSummaryDto, WotImportResultDto, WotProviderDto } from '../../types';
 
 vi.mock('../../context/SessionContext', () => ({
   useSession: () => ({
@@ -67,7 +67,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       expect(screen.getByRole('button', { name: /^Trusted$/i })).toBeInTheDocument();
     });
 
-    it('selecting Close Confidant sets trustLevel: 3 and default desiredHops: 3', async () => {
+    it('selecting Close Confidant sets trustLevel: 3 and default desiredHops: null', async () => {
       const onSaveMock = vi.fn().mockResolvedValue(undefined);
 
       render(
@@ -84,8 +84,8 @@ describe('WoT Contacts & Trust Ratings', () => {
       expect(level3Btn).toBeInTheDocument();
       fireEvent.click(level3Btn!);
 
-      // Reachability section should now be visible
-      expect(screen.getByText(/contacts\.reachabilityLabel|Recommendation Reach/i)).toBeInTheDocument();
+      // Reachability section was removed from per-contact dialog (managed globally)
+      expect(screen.queryByText(/contacts\.reachabilityLabel|Recommendation Reach/i)).not.toBeInTheDocument();
 
       // Click save
       const saveBtn = screen.getByText(/contacts\.saveContact|Save Contact/i);
@@ -95,9 +95,10 @@ describe('WoT Contacts & Trust Ratings', () => {
         expect(onSaveMock).toHaveBeenCalledTimes(1);
         const savedContact: Contact = onSaveMock.mock.calls[0][0];
         expect(savedContact.trustLevel).toBe(3);
-        expect(savedContact.desiredHops).toBe(3);
+        expect(savedContact.desiredHops).toBeNull();
       });
     });
+
 
     it('selecting Real Person sets trustLevel: 0 and desiredHops: 0', async () => {
       const onSaveMock = vi.fn().mockResolvedValue(undefined);
@@ -235,12 +236,152 @@ describe('WoT Contacts & Trust Ratings', () => {
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith('export_wot_package', {
           recipientDid: 'did:key:zAliceConfidant',
+          containerPassword: undefined,
+          shareWithAllContacts: null,
           password: null,
         });
         expect(writeFile).toHaveBeenCalled();
       });
     });
+
+    it('clicking a hop button in AddressBook invokes set_wot_max_hops', async () => {
+      (invoke as unknown as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+        if (cmd === 'get_wot_summary') return Promise.resolve({ ...mockSummary, ownListMaxHops: 3 });
+        if (cmd === 'get_wot_providers') return Promise.resolve([]);
+        if (cmd === 'set_wot_max_hops') return Promise.resolve({ ...mockSummary, ownListMaxHops: 2 });
+        return Promise.resolve();
+      });
+
+      render(<AddressBook onBack={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Alice')).toBeInTheDocument();
+      });
+
+      // Find the "2 Hops" button
+      const hop2Btn = screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops/i });
+      expect(hop2Btn).toBeInTheDocument();
+      fireEvent.click(hop2Btn);
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('set_wot_max_hops', {
+          maxHops: 2,
+          password: null,
+        });
+      });
+    });
+
+    it('multi-recipient .wot share modal defaults to sharing with all rated contacts and invokes export_wot_package', async () => {
+      (invoke as unknown as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+        if (cmd === 'get_wot_summary') return Promise.resolve({ ...mockSummary, ratedContactsCount: 5 });
+        if (cmd === 'get_wot_providers') return Promise.resolve([]);
+        if (cmd === 'get_app_settings') return Promise.resolve({ lastUsedDirectory: '/tmp' });
+        if (cmd === 'export_wot_package') return Promise.resolve([1, 2, 3]);
+        return Promise.resolve();
+      });
+
+      (save as unknown as Mock).mockResolvedValue('/tmp/trust-network.wot');
+
+      render(<AddressBook onBack={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Alice')).toBeInTheDocument();
+      });
+
+      // Open export modal
+      const exportBtn = screen.getByRole('button', { name: /contacts\.exportWotButton|Share Trust File/i });
+      fireEvent.click(exportBtn);
+
+      // Verify modal is open and shows "all contacts" option
+      await waitFor(() => {
+        expect(screen.getByText(/contacts\.exportModeAllContacts|Share with All Rated Contacts/i)).toBeInTheDocument();
+      });
+
+      // Confirm export button inside modal footer
+      const confirmExportBtn = screen.getAllByRole('button', { name: /contacts\.exportWotButton|Share Trust File/i })[1];
+      fireEvent.click(confirmExportBtn);
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('export_wot_package', {
+          recipientDid: undefined,
+          containerPassword: undefined,
+          shareWithAllContacts: true,
+          password: null,
+        });
+        expect(writeFile).toHaveBeenCalled();
+      });
+    });
+
+    it('progressive disclosure: providers tab is hidden when empty and appears when provider exists', async () => {
+      const mockProvider: WotProviderDto = {
+        issuerDid: 'did:key:zProvider123',
+        name: 'Regional Alliance',
+        version: 1,
+        issuedAt: Math.floor(Date.now() / 1000),
+        sourceUrl: 'https://alliance.example/filter.wot',
+        memberCount: 42,
+        trustLevel: 1,
+        importedAt: Math.floor(Date.now() / 1000),
+        isStale: false,
+      };
+
+      // Test 1: Empty providers -> Tab switcher is NOT rendered
+      (invoke as unknown as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+        if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);
+        if (cmd === 'get_wot_providers') return Promise.resolve([]);
+        return Promise.resolve();
+      });
+
+      const { unmount } = render(<AddressBook onBack={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Alice')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByText(/contacts\.tabProviders|Community Seals & Providers/i)).not.toBeInTheDocument();
+      unmount();
+
+      // Test 2: Provider present -> Tab switcher is rendered, switch tab, update trust
+      (invoke as unknown as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+        if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);
+        if (cmd === 'get_wot_providers') return Promise.resolve([mockProvider]);
+        if (cmd === 'set_wot_provider_trust') return Promise.resolve([{ ...mockProvider, trustLevel: 2 }]);
+        return Promise.resolve();
+      });
+
+      render(<AddressBook onBack={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/contacts\.tabProviders|Community Seals & Providers/i)).toBeInTheDocument();
+      });
+
+      // Switch to providers tab
+      const providersTabBtn = screen.getByRole('tab', { name: /contacts\.tabProviders|Community Seals & Providers/i });
+      fireEvent.click(providersTabBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText('Regional Alliance')).toBeInTheDocument();
+        expect(screen.getByText(/contacts\.providerMembers|42 Members/i)).toBeInTheDocument();
+      });
+
+      // Click trust level 2 button for provider
+      const trustLevel2Btn = screen.getByRole('button', { name: /contacts\.trustLevel2|Good Contact/i });
+      fireEvent.click(trustLevel2Btn);
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('set_wot_provider_trust', {
+          issuerDid: 'did:key:zProvider123',
+          level: 2,
+          password: null,
+        });
+      });
+    });
   });
+
 
   describe('ReceiveView with .wot files', () => {
     it('processes .wot file and displays import summary modal', async () => {

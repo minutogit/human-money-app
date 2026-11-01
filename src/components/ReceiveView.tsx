@@ -102,6 +102,8 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
     } | null>(null);
 
     const [wotImportModalData, setWotImportModalData] = useState<WotImportResultDto | null>(null);
+    const [selectedProviderLevel, setSelectedProviderLevel] = useState<number>(0);
+    const [isSavingProviderTrust, setIsSavingProviderTrust] = useState(false);
     const [wotContactDialogOpen, setWotContactDialogOpen] = useState(false);
     const [wotExistingContact, setWotExistingContact] = useState<Contact | null>(null);
     const [importStandardModalData, setImportStandardModalData] = useState<{
@@ -506,6 +508,7 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
 
                 if (wotResult) {
                     setWotImportModalData(wotResult);
+                    setSelectedProviderLevel(wotResult.existingTrustLevel ?? 0);
                 }
             } else if (type === 'proof') {
                 const proofId = await protectAction(async (walletPassword) => {
@@ -674,12 +677,40 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
         clearSelection();
     };
 
+    const isProvider = wotImportModalData?.isProviderFilter;
     const senderProfile = wotImportModalData?.senderProfile;
-    const senderDisplayName = senderProfile
-        ? (senderProfile.firstName || senderProfile.lastName
-            ? `${senderProfile.firstName || ''} ${senderProfile.lastName || ''}`.trim()
-            : senderProfile.organization || wotImportModalData?.senderDid || '')
-        : (wotImportModalData?.senderDid || '');
+    const senderDisplayName = isProvider
+        ? (wotImportModalData?.providerName || wotImportModalData?.senderDid || '')
+        : (senderProfile
+            ? (senderProfile.firstName || senderProfile.lastName
+                ? `${senderProfile.firstName || ''} ${senderProfile.lastName || ''}`.trim()
+                : senderProfile.organization || wotImportModalData?.senderDid || '')
+            : (wotImportModalData?.senderDid || ''));
+
+    const handleSaveProviderTrust = async () => {
+        if (!wotImportModalData?.senderDid) return;
+        setIsSavingProviderTrust(true);
+        try {
+            await protectAction(async (pwd) => {
+                await wotService.setProviderTrust(
+                    wotImportModalData.senderDid,
+                    selectedProviderLevel,
+                    pwd || null
+                );
+            });
+            handleCloseWotModal();
+        } catch (err) {
+            logger.error("Failed to save provider trust: " + stringifyError(err));
+            setResultModal({
+                isOpen: true,
+                title: t('common.error'),
+                content: <p className="text-sm font-medium text-rose-600">{translateError(err, t)}</p>,
+                confirmText: t('common.ok'),
+            });
+        } finally {
+            setIsSavingProviderTrust(false);
+        }
+    };
 
     const handleOpenContactFromWot = async () => {
         if (!wotImportModalData) return;
@@ -1190,11 +1221,17 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                             <CheckCircle2 size={20} />
                         </div>
                         <h3 className="text-lg font-black text-theme-secondary tracking-tight">
-                            {t('transfer.wotImport.title')}
+                            {wotImportModalData?.isProviderFilter
+                                ? t('transfer.wotImport.providerTitle')
+                                : t('transfer.wotImport.title')}
                         </h3>
                     </div>
                 }
-                description={t('transfer.wotImport.fromSender', { name: senderDisplayName })}
+                description={
+                    wotImportModalData?.isProviderFilter
+                        ? t('transfer.wotImport.providerDescription', { name: senderDisplayName })
+                        : t('transfer.wotImport.fromSender', { name: senderDisplayName })
+                }
                 footer={
                     <div className="flex gap-3">
                         <button
@@ -1204,34 +1241,79 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                         >
                             {t('common.close')}
                         </button>
-                        <Button
-                            type="button"
-                            onClick={handleOpenContactFromWot}
-                            className="flex-[2] py-2.5 px-4 rounded-xl text-xs font-bold"
-                        >
-                            {wotImportModalData?.isKnownContact
-                                ? t('transfer.wotImport.updateContactAction')
-                                : t('transfer.wotImport.rateContactAction')}
-                        </Button>
+                        {wotImportModalData?.isProviderFilter ? (
+                            <Button
+                                type="button"
+                                onClick={handleSaveProviderTrust}
+                                disabled={isSavingProviderTrust}
+                                className="flex-[2] py-2.5 px-4 rounded-xl text-xs font-bold"
+                            >
+                                {isSavingProviderTrust ? t('common.loading') : t('contacts.saveContact')}
+                            </Button>
+                        ) : (
+                            <Button
+                                type="button"
+                                onClick={handleOpenContactFromWot}
+                                className="flex-[2] py-2.5 px-4 rounded-xl text-xs font-bold"
+                            >
+                                {wotImportModalData?.isKnownContact
+                                    ? t('transfer.wotImport.updateContactAction')
+                                    : t('transfer.wotImport.rateContactAction')}
+                            </Button>
+                        )}
                     </div>
                 }
             >
                 {wotImportModalData && (
                     <div className="space-y-4">
-                        <div className="p-4 bg-white rounded-2xl border border-theme-subtle/60 shadow-sm">
+                        <div className="p-4 bg-white rounded-2xl border border-theme-subtle/60 shadow-sm space-y-2">
                             <p className="text-sm font-semibold text-theme-secondary">
-                                {t('transfer.wotImport.stats', {
-                                    imported: wotImportModalData.imported,
-                                    updated: wotImportModalData.updated,
-                                })}
+                                {wotImportModalData.isProviderFilter
+                                    ? t('transfer.wotImport.providerStats', {
+                                          count: wotImportModalData.providerMemberCount ?? 0,
+                                      })
+                                    : t('transfer.wotImport.stats', {
+                                          imported: wotImportModalData.imported,
+                                          updated: wotImportModalData.updated,
+                                      })}
                             </p>
-                            <p className="text-[10px] font-mono text-theme-light/60 mt-2 truncate" title={wotImportModalData.senderDid}>
+                            <p className="text-[10px] font-mono text-theme-light/60 truncate" title={wotImportModalData.senderDid}>
                                 {wotImportModalData.senderDid}
                             </p>
                         </div>
+
+                        {wotImportModalData.isProviderFilter && (
+                            <div className="space-y-2 pt-1">
+                                <label className="block text-xs font-bold text-theme-light uppercase tracking-widest">
+                                    {t('contacts.trustSectionLabel')}
+                                </label>
+                                <div className="grid grid-cols-4 gap-2">
+                                    {[
+                                        { level: 0, labelKey: 'contacts.providerTrustInactive' },
+                                        { level: 1, labelKey: 'contacts.trustLevel1' },
+                                        { level: 2, labelKey: 'contacts.trustLevel2' },
+                                        { level: 3, labelKey: 'contacts.trustLevel3' },
+                                    ].map((opt) => (
+                                        <button
+                                            key={opt.level}
+                                            type="button"
+                                            onClick={() => setSelectedProviderLevel(opt.level)}
+                                            className={`py-2 px-1.5 rounded-xl text-xs font-bold border text-center transition-all cursor-pointer ${
+                                                selectedProviderLevel === opt.level
+                                                    ? 'bg-theme-secondary border-theme-secondary text-white shadow-sm'
+                                                    : 'bg-white border-theme-subtle text-theme-light hover:border-theme-primary/30'
+                                            }`}
+                                        >
+                                            {t(opt.labelKey)}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
             </ModalShell>
+
 
             {wotContactDialogOpen && (
                 <ContactDialog
