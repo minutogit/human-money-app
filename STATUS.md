@@ -7,6 +7,12 @@ last_updated: "2026-11-01"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-053"
+    title: "Proof-Carrying L2 Client Hardening (Parent-Bound 401 PoW, 1-RTT Offline-Buyer Checkout, Unoccupied Retry & Verified Anchor Sync)"
+    status: "completed"
+    priority: "high"
+    depends_on: ["CORE-012", "CORE-013", "NODE-001", "NODE-003"]
+    description: "Fixed parent-bound stateless PoW directly from `401` challenge responses (`HUMOCO_V1_POW_STATELESS`, zero extra roundtrips), switched regional mesh view polling to public `/v1/regional-mesh-view`, upgraded PoS `checkout_bundle` to 1-RTT `POST /v1/checkout` supporting offline buyers and upstream conflict recording, enabled immediate exact-byte intent re-dispatch on verified 14/20 `Unoccupied` proofs, and wired signature-verified `WalletSeal` anchor sync (42 Rust tests + 328 Vitest tests passing)."
   - id: "APP-052"
     title: "Global WoT Reach Selector (1–4 Hops), Passwordless Multi-Contact .wot Sharing & Progressive-Disclosure Provider Seals"
     status: "completed"
@@ -536,4 +542,11 @@ Bumped `human-money-app` to `v0.4.0`. Delivered comprehensive user-centric impro
 
 - **Page Header & Navigation History (`APP-051`)**: Unified single scroll container in `App.tsx`, anti-squish header flex guarantees in `PageLayout`, 20-entry backstack history navigation (`NavigationContext`), and shared `AlertBanner`, `SegmentedTabs`, `ModalShell`, and `PageState` primitives across 16+ views.
 - **Global WoT Reach Selector & Provider Seals (`APP-052`)**: Replaced per-contact hop buttons with a global 1–4 hops reach selector (`set_wot_max_hops`), 1-click passwordless `.wot` export encrypted for up to 256 rated contacts (`CORE-011`), auto-detection and import of `BinaryFuse64` signed provider seals (`wot-provider-filter+v1`, `WOT-010`), progressive-disclosure 'Prüfsiegel & Verbände' tab in AddressBook (`get_wot_providers`, `set_wot_provider_trust`, `remove_wot_provider`, opt-in HTTPS refresh), inline provider rating in ReceiveView, staleness indicators (>1 year), and full 5-locale translations (41 Rust WoT tests + 328 Vitest tests passing).
+
+### 2026-11-01 — Proof-Carrying L2 Client Hardening (`APP-053`)
+
+- **Parent-Bound 401 PoW (`APP-053`)**: Fixed stateless PoW computation directly from `401 Unauthorized` challenge responses (`HUMOCO_V1_POW_STATELESS`, parent-bound, zero extra roundtrips).
+- **Public Mesh View & 1-RTT Checkout**: Switched regional mesh view polling to unauthenticated 5s-cached `/v1/regional-mesh-view`, upgraded PoS `checkout_bundle` to 1-RTT `POST /v1/checkout` supporting offline buyers and upstream conflict recording via `MissingLocks.anchor_lock`.
+- **Unoccupied Retries & Anchor Sync**: Enabled immediate exact-byte intent re-dispatch on verified 14/20 `Unoccupied` quorum proofs and wired signature-verified `WalletSeal` anchor sync (42 Rust unit/integration tests + 328 Vitest tests passing).
+
 

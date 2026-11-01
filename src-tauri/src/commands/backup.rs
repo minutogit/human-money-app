@@ -658,26 +658,30 @@ pub async fn restore_wallet_backup(
                 if !resp.status().is_success() { continue; }
                 let Ok(resp_bytes) = resp.bytes().await else { continue };
 
-                let lock_entry = if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
-                    match envelope.verdict {
-                        human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
-                        _ => None,
-                    }
-                } else if let Ok(verdict) = serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes) {
-                    match verdict {
-                        human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
-                        _ => None,
-                    }
+                let verdict_opt = if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
+                    Some(envelope.verdict)
                 } else {
-                    None
+                    serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes).ok()
                 };
 
-                if let Some(entry) = lock_entry {
+                if let Some(verdict) = verdict_opt {
                     let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-                    if service.reconcile_voucher_state(&local_id, Some(&entry), Some(&new_password)).is_ok() {
-                        reconciled_spent_count += 1;
+                    match service.reconcile_voucher_verdict(&local_id, &verdict, Some(&new_password)) {
+                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::AlreadySpent { .. }) => {
+                            reconciled_spent_count += 1;
+                            break;
+                        }
+                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::ConflictDetected { .. }) => {
+                            reconciled_spent_count += 1;
+                            break;
+                        }
+                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::UnspentSafe) => {
+                            break;
+                        }
+                        Err(e) => {
+                            log::debug!("Backup voucher reconciliation rejected: {}", e);
+                        }
                     }
-                    break;
                 }
             }
         }

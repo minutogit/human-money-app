@@ -760,6 +760,7 @@ mod z01_fail_closed_tests {
         let proof = LiveStateProof {
             context: context.clone(),
             votes,
+            occupancy: human_money_core::humoco_proto::live::LiveSlotOccupancy::Occupied,
         };
         (context, proof)
     }
@@ -824,6 +825,7 @@ mod z01_fail_closed_tests {
                 committee: Vec::new(),
             },
             votes: Vec::new(),
+            occupancy: human_money_core::humoco_proto::live::LiveSlotOccupancy::Occupied,
         };
         let proof_json = serde_json::to_string(&proof).unwrap();
         let err = parse_live_checkout_ipc(&proof_json, "{ broken context").unwrap_err();
@@ -909,6 +911,7 @@ mod z01_fail_closed_tests {
         let short = LiveStateProof {
             context: context.clone(),
             votes: proof.votes[..13].to_vec(),
+            occupancy: human_money_core::humoco_proto::live::LiveSlotOccupancy::Occupied,
         };
         assert!(verify(&short, &context).is_err(), "13/20 sub-quorum must fail");
 
@@ -918,6 +921,7 @@ mod z01_fail_closed_tests {
         let zero_proof = LiveStateProof {
             context: zero_nonce.clone(),
             votes: proof.votes.clone(),
+            occupancy: human_money_core::humoco_proto::live::LiveSlotOccupancy::Occupied,
         };
         assert!(verify(&zero_proof, &zero_nonce).is_err(), "Missing challenge must fail");
 
@@ -928,6 +932,7 @@ mod z01_fail_closed_tests {
         let deviated_proof = LiveStateProof {
             context: deviated.clone(),
             votes: proof.votes.clone(),
+            occupancy: human_money_core::humoco_proto::live::LiveSlotOccupancy::Occupied,
         };
         assert!(verify(&deviated_proof, &context).is_err(), "Context mismatch must fail");
 

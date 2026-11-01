@@ -1,6 +1,6 @@
 //! Recipient-owned cold authority and one-gateway productive checkout.
 use crate::{AppState,settings::{AppSettings,RegionalSourceDto},models::FrontendError};
-use human_money_core::humoco_proto::{mesh::{RegionalMeshPolicy,RegionalMeshView,regional_committee},live::LiveStateProof};
+use human_money_core::humoco_proto::mesh::{RegionalMeshPolicy,RegionalMeshView,regional_committee};
 use std::collections::HashMap;
 
 const REGIONAL_VIEW_RENEWAL_WINDOW_MS:u64=10_000;
@@ -24,7 +24,7 @@ pub(crate) fn configured_policy(settings:&AppSettings)->Result<Option<RegionalMe
     let network=match settings.active_network.to_lowercase().as_str() {"mainnet"=>0,"testnet"=>1,_=>return Err(fail("Invalid regional network"))};
     let mut keys=Vec::new();
     for source in &settings.regional_mesh_sources {
-        if source.url.len()>2048 || crate::gateway_resolver::endpoint(&source.url,"v1/operator/regional-mesh-view").is_none() {return Err(fail("Invalid regional source URL"));}
+        if source.url.len()>2048 || (crate::gateway_resolver::endpoint(&source.url,"v1/regional-mesh-view").is_none() && crate::gateway_resolver::endpoint(&source.url,"v1/operator/regional-mesh-view").is_none()) {return Err(fail("Invalid regional source URL"));}
         let key = if source.public_key.len()==64 {human_money_core::hex::decode(&source.public_key).map_err(|_|fail("Invalid source identity"))?.try_into().map_err(|_|fail("Invalid source identity"))?}
             else {human_money_core::services::crypto::decode_bs58_fixed::<32>(&source.public_key,"regional_source").map_err(FrontendError::from)?};
         keys.push(key);
@@ -39,10 +39,21 @@ pub(crate) async fn fetch_regional_views(sources:&[RegionalSourceDto],policy:&Re
     let deadline=tokio::time::Instant::now()+std::time::Duration::from_secs(2);
     let mut views=Vec::new(); let mut used=0usize;
     for source in sources {
-        let url=crate::gateway_resolver::endpoint(&source.url,"v1/operator/regional-mesh-view").ok_or_else(||fail("Invalid regional source"))?;
+        let url=crate::gateway_resolver::endpoint(&source.url,"v1/regional-mesh-view").ok_or_else(||fail("Invalid regional source"))?;
         let mut request=client.get(url);
         if let Some(token)=&source.bearer_token {request=request.bearer_auth(token);}
-        let response=tokio::time::timeout_at(deadline,request.send()).await.map_err(|_|fail("Regional source timeout"))?.map_err(|_|fail("Regional source unavailable"))?;
+        let mut response=tokio::time::timeout_at(deadline,request.send()).await.map_err(|_|fail("Regional source timeout"))?.map_err(|_|fail("Regional source unavailable"))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            if let Some(op_url) = crate::gateway_resolver::endpoint(&source.url, "v1/operator/regional-mesh-view") {
+                let mut op_req = client.get(op_url);
+                if let Some(token) = &source.bearer_token {
+                    op_req = op_req.bearer_auth(token);
+                }
+                if let Ok(Ok(op_resp)) = tokio::time::timeout_at(deadline, op_req.send()).await {
+                    response = op_resp;
+                }
+            }
+        }
         if !response.status().is_success() {return Err(fail("Regional source rejected request"));}
         let bytes=tokio::time::timeout_at(deadline,crate::gateway_resolver::bounded_body(response,2*1024*1024)).await
             .map_err(|_|fail("Regional source timeout"))?.ok_or_else(||fail("Regional view ceiling exceeded"))?;
@@ -271,18 +282,45 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
     }
 
     let (owner,views)=ensure_cached_views(state).await?;
-    let context={let mut service=state.service.lock().map_err(|_|fail("Wallet service unavailable"))?;
-        service.begin_checkout_purchase(purchase_id,bundle,&views,now()?,password).map_err(FrontendError::from)?};
+    let checkout_req = {
+        let mut service = state.service.lock().map_err(|_| fail("Wallet service unavailable"))?;
+        service.prepare_checkout_request(purchase_id, bundle, &views, now()?, password).map_err(FrontendError::from)?
+    };
 
-    let proof:LiveStateProof = match crate::gateway_resolver::fetch_live_proof(&candidates,&context).await {
-        Ok(Some(proof)) => proof,
+    let checkout_resp = match crate::gateway_resolver::fetch_checkout_proof(&settings, &candidates, &checkout_req).await {
+        Ok(Some(resp)) => resp,
         _ => return Err(FrontendError::from("pos.quorumUnavailable".to_string())),
     };
 
-    let mut service=state.service.lock().map_err(|_|fail("Wallet service unavailable"))?;
-    if service.with_wallet(|wallet|wallet.get_user_id().to_string()).map_err(FrontendError::from)?!=owner {return Err(fail("Wallet changed during checkout"));}
-    let completion=service.complete_checkout_purchase(purchase_id,bundle,&proof,&views,standards,now()?,password).map_err(FrontendError::from)?;
-    if let Err(error)=state.refresh_events_cache(&mut service,password) {log::warn!("Checkout committed; event cache refresh failed: {}",error);}
+    let mut service = state.service.lock().map_err(|_| fail("Wallet service unavailable"))?;
+    if service.with_wallet(|wallet| wallet.get_user_id().to_string()).map_err(FrontendError::from)? != owner {
+        return Err(fail("Wallet changed during checkout"));
+    }
+
+    if let Some(ref conflict_entry) = checkout_resp.conflicting_lock {
+        let conflict_recorded = service.record_checkout_upstream_conflict(bundle, conflict_entry, password).unwrap_or(false);
+        if checkout_resp.proof.occupancy == human_money_core::humoco_proto::live::LiveSlotOccupancy::Unoccupied && conflict_recorded {
+            return Ok(PurchaseCompletion {
+                purchase_id: purchase_id.to_string(),
+                newly_committed: false,
+                verdict: crate::models::FrontendCheckoutReleaseVerdict {
+                    outcome: "Conflict".to_string(),
+                    can_release_goods_automatically: false,
+                    requires_merchant_approval: false,
+                    is_goods_release_authorized: false,
+                    merchant_warning: Some("Upstream double-spend conflict proven on Layer 2".to_string()),
+                },
+                receive_payload: None,
+            });
+        }
+    }
+
+    if checkout_resp.proof.occupancy == human_money_core::humoco_proto::live::LiveSlotOccupancy::Unoccupied {
+        return Err(FrontendError::from("pos.quorumUnavailable".to_string()));
+    }
+
+    let completion = service.complete_checkout_purchase(purchase_id, bundle, &checkout_resp.proof, &views, standards, now()?, password).map_err(FrontendError::from)?;
+    if let Err(error) = state.refresh_events_cache(&mut service, password) { log::warn!("Checkout committed; event cache refresh failed: {}", error); }
 
     let (receive_payload, record_opt) = build_receive_payload_and_record(
         state,

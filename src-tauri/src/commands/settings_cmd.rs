@@ -438,13 +438,13 @@ pub async fn check_anchor_sync(
         return Ok("NoServers".to_string());
     }
 
-    let (query, local_t_id, current_tag) = {
+    let query = {
         let service = match state.service.lock() {
             Ok(s) => s,
             Err(_) => return Ok("Offline".to_string()),
         };
         match service.prepare_anchor_status_query() {
-            Ok(data) => (data.0, data.1, data.2),
+            Ok((data, _, _)) => data,
             Err(e) => {
                 log::debug!("prepare_anchor_status_query returned: {}", e);
                 return Ok("Offline".to_string());
@@ -463,7 +463,7 @@ pub async fn check_anchor_sync(
         }
     };
 
-    let mut responses = Vec::new();
+    let mut envelopes = Vec::new();
     for candidate in &candidates {
         let status_url = match crate::gateway_resolver::endpoint(candidate, "v1/status") {
             Some(u) => u,
@@ -473,9 +473,7 @@ pub async fn check_anchor_sync(
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(resp_bytes) = resp.bytes().await {
                     if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
-                        responses.push(envelope.verdict);
-                    } else if let Ok(verdict) = serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes) {
-                        responses.push(verdict);
+                        envelopes.push(envelope);
                     }
                 }
             }
@@ -488,16 +486,22 @@ pub async fn check_anchor_sync(
         }
     }
 
-    if responses.is_empty() {
+    if envelopes.is_empty() {
         return Ok("Offline".to_string());
     }
 
-    let verdict = human_money_core::services::l2_gateway::evaluate_multi_node_anchor_verdicts(
-        &responses,
-        &local_t_id,
-        &current_tag,
-        candidates.len(),
-    );
+    let service = match state.service.lock() {
+        Ok(s) => s,
+        Err(_) => return Ok("Offline".to_string()),
+    };
+
+    let verdict = match service.evaluate_verified_anchor_envelopes(&envelopes) {
+        Ok(v) => v,
+        Err(e) => {
+            log::debug!("evaluate_verified_anchor_envelopes returned: {}", e);
+            return Ok("Inconclusive".to_string());
+        }
+    };
 
     let status_str = match verdict {
         human_money_core::services::l2_gateway::AnchorSyncVerdict::Synchronized => "Synchronized",
@@ -582,23 +586,30 @@ pub async fn reconcile_rollback(
                 if !resp.status().is_success() { continue; }
                 let Ok(resp_bytes) = resp.bytes().await else { continue };
 
-                let lock_entry = if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
-                    match envelope.verdict {
-                        human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
-                        _ => None,
-                    }
-                } else if let Ok(verdict) = serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes) {
-                    match verdict {
-                        human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
-                        _ => None,
-                    }
-                } else { None };
+                let verdict_opt = if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
+                    Some(envelope.verdict)
+                } else {
+                    serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes).ok()
+                };
 
-                if let Some(entry) = lock_entry {
+                if let Some(verdict) = verdict_opt {
                     let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-                    let _ = service.reconcile_voucher_state(&local_id, Some(&entry), password.as_deref());
-                    spent_voucher_ids.push(local_id);
-                    break;
+                    match service.reconcile_voucher_verdict(&local_id, &verdict, password.as_deref()) {
+                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::AlreadySpent { .. }) => {
+                            spent_voucher_ids.push(local_id);
+                            break;
+                        }
+                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::ConflictDetected { .. }) => {
+                            spent_voucher_ids.push(local_id);
+                            break;
+                        }
+                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::UnspentSafe) => {
+                            break;
+                        }
+                        Err(e) => {
+                            log::debug!("Voucher reconciliation rejected: {}", e);
+                        }
+                    }
                 }
             }
         }
@@ -626,62 +637,22 @@ pub async fn flush_pending_anchor_sync(
         return Ok(false);
     }
 
-    let (identity, seal) = {
+    let plan = {
         let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        let sync_status = service.get_seal_sync_status().map_err(FrontendError::from)?;
-        if sync_status != human_money_core::models::seal::SyncStatus::PendingUpload {
-            return Ok(false);
-        }
-        let seal_bytes = match service.get_seal_for_upload().map_err(FrontendError::from)? {
-            Some(b) => b,
+        match service.prepare_anchor_sync_upload().map_err(FrontendError::from)? {
+            Some(plan) => plan,
             None => return Ok(false),
-        };
-        let seal: human_money_core::models::seal::WalletSeal = serde_json::from_slice(&seal_bytes).map_err(|e| FrontendError::from(e.to_string()))?;
-        let identity = service.with_wallet_and_identity(|_, id| id.clone()).map_err(FrontendError::from)?;
-        (identity, seal)
-    };
-
-    let mut state_hash_bytes = [0u8; 32];
-    if let Ok(bytes) = human_money_core::hex::decode(&seal.payload.state_hash) {
-        if bytes.len() == 32 {
-            state_hash_bytes.copy_from_slice(&bytes);
         }
-    } else if let Ok(bytes) = human_money_core::services::crypto::decode_bs58_fixed::<32>(&seal.payload.state_hash, "state_hash") {
-        state_hash_bytes = bytes;
-    } else {
-        let h = blake3::hash(seal.payload.state_hash.as_bytes());
-        state_hash_bytes = *h.as_bytes();
-    }
-
-    let lock_request = if seal.payload.tx_nonce == 0 {
-        human_money_core::services::l2_gateway::build_anchor_genesis_lock(
-            &identity,
-            seal.payload.epoch as u64,
-            &state_hash_bytes,
-            None,
-        ).map_err(FrontendError::from)?
-    } else {
-        let tag = human_money_core::models::seal::derive_anchor_step_tag(
-            &seal.payload.prev_seal_hash,
-            seal.payload.tx_nonce,
-        );
-        human_money_core::services::l2_gateway::build_anchor_leap_lock(
-            &identity,
-            seal.payload.epoch as u64,
-            seal.payload.tx_nonce,
-            &tag,
-            &state_hash_bytes,
-        ).map_err(FrontendError::from)?
     };
 
-    let req_bytes = serde_json::to_vec(&lock_request).map_err(|e| FrontendError::from(e.to_string()))?;
+    let req_bytes = serde_json::to_vec(&plan.chain_request).map_err(|e| FrontendError::from(e.to_string()))?;
     let http_status = crate::gateway_resolver::dispatch_exact(&settings, &candidates, &req_bytes)
         .await
         .map_err(FrontendError::from)?;
 
     if matches!(http_status, Some(200 | 201)) {
         let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        service.flush_pending_anchor_sync(password.as_deref()).map_err(FrontendError::from)
+        service.complete_anchor_sync_upload(plan.target_checkpoint, password.as_deref()).map_err(FrontendError::from)
     } else {
         log::debug!("L2 anchor flush returned non-success HTTP status: {:?}", http_status);
         Ok(false)
@@ -787,7 +758,6 @@ pub async fn check_voucher_l2_status(
         }),
     };
 
-    let mut response_entry = None;
     let mut at_least_one_responded = false;
 
     for base in &candidates {
@@ -817,36 +787,45 @@ pub async fn check_voucher_l2_status(
         if !resp.status().is_success() { continue; }
         let Ok(resp_bytes) = resp.bytes().await else { continue };
 
-        let entry = if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
-            match envelope.verdict {
-                human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
-                _ => None,
-            }
-        } else if let Ok(verdict) = serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes) {
-            match verdict {
-                human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
-                _ => None,
-            }
-        } else { None };
+        let verdict_opt = if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
+            Some(envelope.verdict)
+        } else {
+            serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes).ok()
+        };
 
-        if let Some(e) = entry {
-            response_entry = Some(e);
-            break;
+        if let Some(verdict) = verdict_opt {
+            let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+            match service.reconcile_voucher_verdict(&local_instance_id, &verdict, password.as_deref()) {
+                Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::AlreadySpent { successor_t_id }) => {
+                    return Ok(FrontendVoucherL2StatusDto {
+                        status: "spent".to_string(),
+                        archived: true,
+                        successor_t_id: Some(successor_t_id),
+                    });
+                }
+                Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::ConflictDetected { conflicting_lock }) => {
+                    let successor_t_id = bs58::encode(conflicting_lock.t_id).into_string();
+                    return Ok(FrontendVoucherL2StatusDto {
+                        status: "conflict".to_string(),
+                        archived: true,
+                        successor_t_id: Some(successor_t_id),
+                    });
+                }
+                Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::UnspentSafe) => {
+                    return Ok(FrontendVoucherL2StatusDto {
+                        status: "unspent".to_string(),
+                        archived: is_currently_archived,
+                        successor_t_id: None,
+                    });
+                }
+                Err(e) => {
+                    log::debug!("Voucher reconciliation rejected invalid verdict: {}", e);
+                }
+            }
         }
     }
 
-    if let Some(entry) = response_entry {
-        let successor_t_id = serde_json::to_value(&entry)
-            .ok()
-            .and_then(|v| v.get("t_id").and_then(|t| t.as_str().map(|s| s.to_string())));
-        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        let _ = service.reconcile_voucher_state(&local_instance_id, Some(&entry), password.as_deref());
-        Ok(FrontendVoucherL2StatusDto {
-            status: "spent".to_string(),
-            archived: true,
-            successor_t_id,
-        })
-    } else if at_least_one_responded {
+    if at_least_one_responded {
         Ok(FrontendVoucherL2StatusDto {
             status: "unspent".to_string(),
             archived: is_currently_archived,

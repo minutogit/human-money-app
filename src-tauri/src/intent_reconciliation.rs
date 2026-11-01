@@ -86,23 +86,48 @@ async fn reconcile_due_intent(
         return Ok(());
     };
 
-    let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
-    let current_owner = service
-        .with_wallet(|wallet| wallet.get_user_id().to_string())
-        .map_err(FrontendError::from)?;
-    if current_owner != owner {
-        return Ok(());
+    let (is_verified_unoccupied, intent_opt) = {
+        let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
+        let current_owner = service
+            .with_wallet(|wallet| wallet.get_user_id().to_string())
+            .map_err(FrontendError::from)?;
+        if current_owner != owner {
+            return Ok(());
+        }
+
+        if proof.occupancy == human_money_core::humoco_proto::live::LiveSlotOccupancy::Unoccupied {
+            let is_unoccupied = service
+                .verify_intent_unoccupied_for_retry(local_id, &proof, &views, now, None)
+                .map_err(FrontendError::from)?;
+            let intent = if is_unoccupied {
+                service
+                    .with_wallet(|wallet| wallet.profile.l2_send_intents.get(local_id).cloned())
+                    .map_err(FrontendError::from)?
+            } else {
+                None
+            };
+            (is_unoccupied, intent)
+        } else {
+            if let Err(error) = service.complete_intent_reconciliation(
+                local_id, &proof, &views, now, None,
+            ) {
+                log::debug!(
+                    "Live intent reconciliation failed for {}: {}",
+                    local_id,
+                    error
+                );
+            }
+            let _ = service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None);
+            (false, None)
+        }
+    };
+
+    if is_verified_unoccupied {
+        if let Some(intent) = intent_opt {
+            let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+            let _ = crate::gateway_resolver::dispatch_intents(&settings, candidates, &[intent]).await;
+        }
     }
-    if let Err(error) = service.complete_intent_reconciliation(
-        local_id, &proof, &views, now, None,
-    ) {
-        log::debug!(
-            "Live intent reconciliation failed for {}: {}",
-            local_id,
-            error
-        );
-    }
-    let _ = service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None);
     Ok(())
 }
 
