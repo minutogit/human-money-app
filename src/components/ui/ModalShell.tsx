@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 export interface ModalShellProps {
     isOpen: boolean;
@@ -11,6 +12,7 @@ export interface ModalShellProps {
     closeOnEscape?: boolean;
     closeOnBackdrop?: boolean;
     className?: string;
+    zIndexClass?: string;
 }
 
 const maxWidthMap: Record<NonNullable<ModalShellProps['maxWidth']>, string> = {
@@ -32,6 +34,7 @@ export function ModalShell({
     closeOnEscape = true,
     closeOnBackdrop = false,
     className = '',
+    zIndexClass = 'z-[100]',
 }: ModalShellProps) {
     useEffect(() => {
         if (!isOpen || closeOnEscape === false || !onClose) return;
@@ -56,9 +59,9 @@ export function ModalShell({
         }
     };
 
-    return (
+    const modalContent = (
         <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+            className={`fixed inset-0 ${zIndexClass} flex items-center justify-center bg-black/50 backdrop-blur-sm p-4`}
             onClick={handleBackdropClick}
         >
             <div
@@ -95,4 +98,8 @@ export function ModalShell({
             </div>
         </div>
     );
+
+    return typeof document !== 'undefined' && document.body
+        ? createPortal(modalContent, document.body)
+        : modalContent;
 }

@@ -103,7 +103,6 @@ amount_decimal_places = 4`,
   ];
 
   const mockSettings: AppSettings = {
-    bundleRetentionDays: 30,
     sessionTimeoutSeconds: 300,
     privacyDefault: 'public',
     enablePosMode: true,

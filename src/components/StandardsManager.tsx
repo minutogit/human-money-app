@@ -7,20 +7,23 @@ import { Card } from './ui/Card';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { ExportStandardModal } from './ExportStandardModal';
 import { ImportStandardModal } from './ImportStandardModal';
+import { StandardDetailsModal } from './StandardDetailsModal';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
-import { FileCode, Download, Trash2, Plus, ShieldCheck, CheckCircle2 } from 'lucide-react';
+import { FileCode, Download, Trash2, Plus, ShieldCheck, CheckCircle2, Eye } from 'lucide-react';
 import { logger } from '../utils/log';
 import { translateError } from '../utils/errorHelper';
 
 export function StandardsManager() {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const [standards, setStandards] = useState<VoucherStandardInfo[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
 
     // Modal States
+    const [detailsTarget, setDetailsTarget] = useState<VoucherStandardInfo | null>(null);
+    const [definitionsMap, setDefinitionsMap] = useState<Record<string, VoucherStandardDefinition>>({});
     const [exportTarget, setExportTarget] = useState<{ id: string; name: string } | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<VoucherStandardInfo | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
@@ -35,6 +38,19 @@ export function StandardsManager() {
         try {
             const list = await standardsService.getStandards();
             setStandards(list);
+
+            const defs: Record<string, VoucherStandardDefinition> = {};
+            await Promise.all(
+                list.map(async (std) => {
+                    try {
+                        const parsed = await standardsService.parseStandard(std.content);
+                        defs[std.id] = parsed;
+                    } catch {
+                        // silently ignore parse errors so loading never fails
+                    }
+                })
+            );
+            setDefinitionsMap(defs);
         } catch (e) {
             setError(translateError(e, t));
         } finally {
@@ -136,51 +152,97 @@ export function StandardsManager() {
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {standards.map((std) => (
-                        <Card key={std.id} className="relative overflow-hidden flex flex-col justify-between p-6">
-                            <div className="space-y-4">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="flex items-center gap-3">
-                                        <div className="p-3 bg-theme-primary/10 text-theme-primary rounded-2xl">
-                                            <ShieldCheck size={24} />
+                    {standards.map((std) => {
+                        const def = definitionsMap[std.id];
+                        const lang = (i18n.language || 'en').slice(0, 2);
+                        const descriptions = def?.mutable?.i18n?.descriptions || {};
+                        const previewDesc =
+                            descriptions[lang] ||
+                            descriptions['de'] ||
+                            descriptions['en'] ||
+                            Object.values(descriptions)[0];
+                        const unit = def?.immutable?.blueprint?.unit;
+
+                        return (
+                            <Card key={std.id} className="relative overflow-hidden flex flex-col justify-between p-6">
+                                <div
+                                    className="space-y-3 cursor-pointer group"
+                                    onClick={() => setDetailsTarget(std)}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="flex items-center gap-3 min-w-0">
+                                            <div className="p-3 bg-theme-primary/10 text-theme-primary rounded-2xl group-hover:scale-105 transition-transform shrink-0">
+                                                <ShieldCheck size={24} />
+                                            </div>
+                                            <div className="min-w-0">
+                                                <h4 className="text-base font-black text-theme-primary tracking-tight truncate group-hover:text-theme-primary-hover transition-colors">
+                                                    {std.displayName}
+                                                </h4>
+                                                <p className="text-[10px] font-mono text-theme-light truncate max-w-[180px]">
+                                                    {std.id}
+                                                </p>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <h4 className="text-base font-black text-theme-primary tracking-tight">
-                                                {std.displayName}
-                                            </h4>
-                                            <p className="text-[10px] font-mono text-theme-light truncate max-w-[180px]">
-                                                {std.id}
-                                            </p>
+                                        <div className="flex items-center gap-1.5 flex-wrap justify-end shrink-0">
+                                            {unit && (
+                                                <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-500/10 text-emerald-700 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                                                    {unit}
+                                                </span>
+                                            )}
+                                            <span className="text-[10px] font-black uppercase tracking-wider bg-theme-primary/10 text-theme-primary px-2.5 py-1 rounded-full border border-theme-primary/20">
+                                                TOML
+                                            </span>
                                         </div>
                                     </div>
-                                    <span className="text-[10px] font-black uppercase tracking-wider bg-theme-primary/10 text-theme-primary px-2.5 py-1 rounded-full border border-theme-primary/20">
-                                        TOML
-                                    </span>
+                                    {previewDesc && (
+                                        <p className="text-xs text-theme-light line-clamp-2 leading-relaxed">
+                                            {previewDesc}
+                                        </p>
+                                    )}
                                 </div>
-                            </div>
 
-                            {/* Actions */}
-                            <div className="flex items-center gap-2 pt-6 mt-4 border-t border-slate-100">
-                                <Button
-                                    variant="secondary"
-                                    onClick={() => setExportTarget({ id: std.id, name: std.displayName })}
-                                    className="flex-1 flex items-center justify-center gap-2 text-xs py-2.5"
-                                >
-                                    <Download size={14} />
-                                    <span>{t('standards.export')}</span>
-                                </Button>
+                                {/* Actions */}
+                                <div className="flex items-center gap-2 pt-6 mt-4 border-t border-slate-100">
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => setDetailsTarget(std)}
+                                        className="flex-1 flex items-center justify-center gap-2 text-xs py-2.5"
+                                    >
+                                        <Eye size={14} />
+                                        <span>{t('standards.detailsButton')}</span>
+                                    </Button>
 
-                                <button
-                                    onClick={() => setDeleteTarget(std)}
-                                    className="p-2.5 rounded-xl border border-rose-200 text-rose-500 hover:bg-rose-50 hover:border-rose-300 transition-all"
-                                    title={t('standards.delete')}
-                                >
-                                    <Trash2 size={16} />
-                                </button>
-                            </div>
-                        </Card>
-                    ))}
+                                    <Button
+                                        variant="secondary"
+                                        onClick={() => setExportTarget({ id: std.id, name: std.displayName })}
+                                        className="flex-1 flex items-center justify-center gap-2 text-xs py-2.5"
+                                    >
+                                        <Download size={14} />
+                                        <span>{t('standards.export')}</span>
+                                    </Button>
+
+                                    <button
+                                        onClick={() => setDeleteTarget(std)}
+                                        className="p-2.5 rounded-xl border border-rose-200 text-rose-500 hover:bg-rose-50 hover:border-rose-300 transition-all cursor-pointer"
+                                        title={t('standards.delete')}
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                            </Card>
+                        );
+                    })}
                 </div>
+            )}
+
+            {/* Standard Details Modal */}
+            {detailsTarget && (
+                <StandardDetailsModal
+                    isOpen={true}
+                    standard={detailsTarget}
+                    definition={definitionsMap[detailsTarget.id] || null}
+                    onClose={() => setDetailsTarget(null)}
+                />
             )}
 
             {/* Export Modal */}

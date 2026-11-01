@@ -9,6 +9,7 @@ use crate::settings::{AppSettings, SETTINGS_KEY};
 pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
 pub const CONTACTS_DATA_NAME: &str = "address_book";
 pub const WOT_DATA_NAME: &str = "wot_register";
+pub const BUNDLE_RETENTION_DAYS: i64 = 90;
 
 pub struct AppState {
     pub service: Mutex<AppService>,
@@ -348,7 +349,7 @@ impl AppState {
         // 3. Load transaction history and clean up expired bundle data
         let mut history = self.load_history_from_disk(service, Some(password))?;
         let mut changed = false;
-        let retention_duration = Duration::days(settings.bundle_retention_days as i64);
+        let retention_duration = Duration::days(BUNDLE_RETENTION_DAYS);
 
         for record in history.iter_mut() {
             if record.bundle_data.is_empty() {

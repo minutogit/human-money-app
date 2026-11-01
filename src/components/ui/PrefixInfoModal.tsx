@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
 import { HelpCircle, ShieldAlert } from 'lucide-react';
@@ -9,11 +11,33 @@ interface PrefixInfoModalProps {
 
 export function PrefixInfoModal({ isOpen, onClose }: PrefixInfoModalProps) {
     const { t } = useTranslation();
+
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                onClose();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isOpen, onClose]);
+
     if (!isOpen) return null;
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in duration-300">
-            <div className="w-full max-w-xl bg-white border border-theme-subtle rounded-[32px] overflow-hidden shadow-premium-2xl animate-in zoom-in-95 slide-in-from-bottom-10 duration-500">
+    const modalContent = (
+        <div 
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in duration-300"
+            onClick={onClose}
+        >
+            <div 
+                role="dialog"
+                aria-modal="true"
+                className="w-full max-w-xl bg-white border border-theme-subtle rounded-[32px] overflow-hidden shadow-premium-2xl animate-in zoom-in-95 slide-in-from-bottom-10 duration-500"
+                onClick={(e) => e.stopPropagation()}
+            >
                 {/* Header */}
                 <div className="bg-theme-primary/5 p-8 border-b border-theme-subtle">
                     <div className="flex items-center gap-4 mb-2">
@@ -66,4 +90,8 @@ export function PrefixInfoModal({ isOpen, onClose }: PrefixInfoModalProps) {
             </div>
         </div>
     );
+
+    return typeof document !== 'undefined' && document.body
+        ? createPortal(modalContent, document.body)
+        : modalContent;
 }

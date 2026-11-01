@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { AlertBanner } from '../AlertBanner';
 import { SegmentedTabs, SegmentedTabItem } from '../SegmentedTabs';
 import { ModalShell } from '../ModalShell';
+import { HelpIcon } from '../HelpIcon';
 import { PageLoadingState, PageEmptyState, PageErrorState } from '../PageState';
 
 describe('AlertBanner', () => {
@@ -202,7 +203,7 @@ describe('ModalShell', () => {
 
   it('respects closeOnBackdrop setting', () => {
     const handleClose = vi.fn();
-    const { rerender, container } = render(
+    const { rerender } = render(
       <ModalShell
         isOpen={true}
         onClose={handleClose}
@@ -213,7 +214,7 @@ describe('ModalShell', () => {
       </ModalShell>
     );
 
-    const backdrop = container.firstChild as HTMLDivElement;
+    const backdrop = screen.getByRole('dialog').parentElement as HTMLDivElement;
     expect(backdrop).not.toBeNull();
 
     // Clicking backdrop when closeOnBackdrop=false should NOT close
@@ -238,7 +239,8 @@ describe('ModalShell', () => {
     expect(handleClose).not.toHaveBeenCalled();
 
     // Clicking the outer backdrop itself SHOULD trigger close
-    fireEvent.click(backdrop);
+    const updatedBackdrop = screen.getByRole('dialog').parentElement as HTMLDivElement;
+    fireEvent.click(updatedBackdrop);
     expect(handleClose).toHaveBeenCalledTimes(1);
   });
 
@@ -251,6 +253,44 @@ describe('ModalShell', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(dialog.className).toContain('max-w-2xl');
+  });
+
+  it('portals its dialog into document.body outside an overflow-hidden wrapper', () => {
+    render(
+      <div className="overflow-hidden max-h-10 transform scale-50" data-testid="trapping-parent">
+        <ModalShell isOpen={true} title="Portaled Modal">
+          <p>Modal inside trapping ancestor</p>
+        </ModalShell>
+      </div>
+    );
+
+    const trappingParent = screen.getByTestId('trapping-parent');
+    expect(trappingParent.children.length).toBe(0);
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    expect(trappingParent.contains(dialog)).toBe(false);
+    expect(document.body.contains(dialog)).toBe(true);
+  });
+
+  it('supports custom zIndexClass with default z-[100]', () => {
+    const { rerender } = render(
+      <ModalShell isOpen={true} title="Default Z-Index">
+        <div>Content</div>
+      </ModalShell>
+    );
+
+    let backdrop = screen.getByRole('dialog').parentElement as HTMLDivElement;
+    expect(backdrop.className).toContain('z-[100]');
+
+    rerender(
+      <ModalShell isOpen={true} zIndexClass="z-[150]" title="Custom Z-Index">
+        <div>Content</div>
+      </ModalShell>
+    );
+
+    backdrop = screen.getByRole('dialog').parentElement as HTMLDivElement;
+    expect(backdrop.className).toContain('z-[150]');
   });
 });
 
@@ -340,3 +380,83 @@ describe('PageState', () => {
     });
   });
 });
+
+describe('HelpIcon and HelpModal', () => {
+  it('opens HelpModal in document.body on click and closes on Close button', () => {
+    render(
+      <div className="overflow-hidden" data-testid="trapping-wrapper">
+        <HelpIcon topic="posMode" />
+      </div>
+    );
+
+    // Initial state: HelpModal is not open
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    // Click the help button
+    const helpBtn = screen.getByRole('button');
+    fireEvent.click(helpBtn);
+
+    // HelpModal should now be open portaled into document.body
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    const trappingWrapper = screen.getByTestId('trapping-wrapper');
+    expect(trappingWrapper.contains(dialog)).toBe(false);
+    expect(document.body.contains(dialog)).toBe(true);
+
+    // Close on Close button
+    const closeBtn = screen.getByRole('button', { name: /close|schließen/i });
+    fireEvent.click(closeBtn);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('closes HelpModal on Escape key', () => {
+    render(<HelpIcon topic="settingsPrivacy" />);
+
+    // Click to open
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // Press Escape
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('closes HelpModal on backdrop click but not on dialog click', () => {
+    render(<HelpIcon topic="exclusiveGateways" />);
+
+    // Click to open
+    fireEvent.click(screen.getByRole('button'));
+    const dialog = screen.getByRole('dialog');
+    const backdrop = dialog.parentElement as HTMLDivElement;
+
+    // Click inside dialog content should not close
+    fireEvent.click(dialog);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // Click backdrop should close
+    fireEvent.click(backdrop);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('renders HelpModal at z-[110] so it stacks cleanly above ModalShell at z-[100]', () => {
+    render(
+      <ModalShell isOpen={true} title="Parent Modal">
+        <HelpIcon topic="deviceBinding" />
+      </ModalShell>
+    );
+
+    // Click help button inside ModalShell
+    const helpBtn = screen.getByRole('button');
+    fireEvent.click(helpBtn);
+
+    const dialogs = screen.getAllByRole('dialog');
+    expect(dialogs).toHaveLength(2);
+
+    const modalShellBackdrop = dialogs[0].parentElement as HTMLDivElement;
+    const helpModalBackdrop = dialogs[1].parentElement as HTMLDivElement;
+
+    expect(modalShellBackdrop.className).toContain('z-[100]');
+    expect(helpModalBackdrop.className).toContain('z-[110]');
+  });
+});
+

@@ -80,7 +80,6 @@ amount_decimal_places = 4`,
   ];
 
   const mockSettings: AppSettings = {
-    bundleRetentionDays: 30,
     sessionTimeoutSeconds: 300,
     privacyDefault: 'public',
   };
@@ -326,4 +325,128 @@ amount_decimal_places = 4`,
       expect(screen.getByText(/No valid payment request/i)).toBeInTheDocument();
     });
   });
+
+  it('shows sender name input and does not display Anonymous when get_user_profile returns empty profile', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_summaries') return Promise.resolve(mockVouchers);
+      if (cmd === 'get_user_id') return Promise.resolve('did:key:z789');
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_active_asset_classes') {
+        return Promise.resolve([
+          {
+            standardUuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
+            isTestVoucher: false,
+            displayStandardName: 'FreeTaler',
+            displayCurrency: 'Taler',
+          },
+        ]);
+      }
+      if (cmd === 'get_user_profile') {
+        return Promise.resolve({});
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<SendView />);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Your name for the recipient/i)).toBeInTheDocument();
+    });
+
+    const senderInput = screen.getByPlaceholderText(/Your name for the recipient/i);
+    expect(senderInput).toHaveValue('');
+
+    const anonymousCheckbox = screen.getByRole('checkbox', { name: /Send anonymously/i });
+    expect(anonymousCheckbox).not.toBeChecked();
+
+    expect(screen.queryByText('Anonymous')).not.toBeInTheDocument();
+    expect(screen.queryByText('transfer.anonymous')).not.toBeInTheDocument();
+  });
+
+  it('hides sender name input when sendAnonymously is checked and passes senderProfileName: null to create_transfer_bundle', async () => {
+    let createBundleArgs: Record<string, unknown> | undefined;
+
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_voucher_summaries') return Promise.resolve(mockVouchers);
+      if (cmd === 'get_user_id') return Promise.resolve('did:key:z789');
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_active_asset_classes') {
+        return Promise.resolve([
+          {
+            standardUuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
+            isTestVoucher: false,
+            displayStandardName: 'FreeTaler',
+            displayCurrency: 'Taler',
+          },
+        ]);
+      }
+      if (cmd === 'get_user_profile') {
+        return Promise.resolve({
+          organization: 'Test Org',
+          firstName: 'Test',
+          lastName: 'User',
+        });
+      }
+      if (cmd === 'create_transfer_bundle') {
+        createBundleArgs = args;
+        return Promise.resolve({
+          bundleData: [1, 2, 3],
+          bundleId: 'bundle-123',
+          involvedSourcesDetails: [],
+        });
+      }
+      if (cmd === 'save_transaction_record') {
+        return Promise.resolve(undefined);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<SendView />);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Your name for the recipient/i)).toBeInTheDocument();
+    });
+
+    // Checkbox is initially unchecked, input is visible with default profile name
+    const senderInput = screen.getByPlaceholderText(/Your name for the recipient/i);
+    expect(senderInput).toHaveValue('Test User');
+
+    const anonymousCheckbox = screen.getByRole('checkbox', { name: /Send anonymously/i });
+    expect(anonymousCheckbox).not.toBeChecked();
+
+    // Toggle anonymous checkbox to send anonymously
+    fireEvent.click(anonymousCheckbox);
+    expect(anonymousCheckbox).toBeChecked();
+
+    // Sender name input should now be hidden and anonymous hint shown
+    expect(screen.queryByPlaceholderText(/Your name for the recipient/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Your name is hidden/i)).toBeInTheDocument();
+
+    // Fill recipient ID
+    const recipientInput = await screen.findByRole('textbox', { name: /User ID \(DID\)/i });
+    fireEvent.change(recipientInput, { target: { value: 'did:key:z456' } });
+
+    // Select voucher
+    const freetalerVouchers = await screen.findAllByText('FreeTaler');
+    fireEvent.click(freetalerVouchers[freetalerVouchers.length - 1]);
+
+    // Click Send Vouchers
+    const sendButton = await screen.findByRole('button', { name: /Send Vouchers/i });
+    fireEvent.click(sendButton);
+
+    // Confirm transfer
+    const executeButton = await screen.findByRole('button', { name: /Execute/i });
+    fireEvent.click(executeButton);
+
+    // Assert create_transfer_bundle was invoked with senderProfileName: null
+    await waitFor(() => {
+      expect(createBundleArgs).toBeDefined();
+      expect(createBundleArgs?.senderProfileName).toBeNull();
+    });
+  });
 });
+

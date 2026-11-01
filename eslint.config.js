@@ -56,6 +56,9 @@ export default [
       "react-hooks/exhaustive-deps": "warn",
       "react-hooks/preserve-manual-memoization": "off",
       "react-hooks/set-state-in-effect": "off",
+      "react-hooks/purity": "off",
+      "react-hooks/refs": "off",
+      "react-hooks/globals": "off",
     },
     settings: {
       react: {

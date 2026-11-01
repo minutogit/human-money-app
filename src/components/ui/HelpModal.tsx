@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
 import { HelpCircle } from 'lucide-react';
@@ -12,14 +14,30 @@ interface HelpModalProps {
 
 export function HelpModal({ isOpen, onClose, title, short, long }: HelpModalProps) {
     const { t } = useTranslation();
+
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                onClose();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isOpen, onClose]);
+
     if (!isOpen) return null;
 
-    return (
+    const modalContent = (
         <div 
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in duration-300"
+            className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in duration-200"
             onClick={onClose}
         >
             <div 
+                role="dialog"
+                aria-modal="true"
                 className="w-full max-w-lg bg-white border border-theme-subtle rounded-[32px] overflow-hidden shadow-premium-2xl animate-in zoom-in-95 slide-in-from-bottom-10 duration-500"
                 onClick={(e) => e.stopPropagation()}
             >
@@ -56,4 +74,8 @@ export function HelpModal({ isOpen, onClose, title, short, long }: HelpModalProp
             </div>
         </div>
     );
+
+    return typeof document !== 'undefined' && document.body
+        ? createPortal(modalContent, document.body)
+        : modalContent;
 }

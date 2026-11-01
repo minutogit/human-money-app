@@ -19,7 +19,6 @@ vi.mock('@tauri-apps/api/core', () => ({
     if (cmd === 'get_user_id') return Promise.resolve('did:key:z123');
     if (cmd === 'get_app_settings') return Promise.resolve({
       sessionTimeoutSeconds: 300,
-      bundleRetentionDays: 30,
       privacyDefault: 'public',
     });
     return Promise.resolve(undefined);
@@ -39,7 +38,6 @@ vi.mock('../../services/settingsService', () => ({
   settingsService: {
     getSettings: vi.fn().mockResolvedValue({
       sessionTimeoutSeconds: 300,
-      bundleRetentionDays: 30,
       privacyDefault: 'public',
     }),
   },
@@ -161,7 +159,6 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     (authService.isSessionActive as Mock).mockResolvedValue(false);
     (settingsService.getSettings as Mock).mockResolvedValue({
       sessionTimeoutSeconds: 0,
-      bundleRetentionDays: 30,
       privacyDefault: 'public',
     });
 

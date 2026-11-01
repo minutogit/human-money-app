@@ -74,7 +74,6 @@ vi.mock('../../utils/log', () => ({
 
 describe('BackupSettingsCard', () => {
     const defaultSettings: AppSettings = {
-        bundleRetentionDays: 30,
         sessionTimeoutSeconds: 300,
         privacyDefault: 'public',
         backupProtectionMode: 'mnemonic_only',
@@ -88,13 +87,12 @@ describe('BackupSettingsCard', () => {
         vi.clearAllMocks();
     });
 
-    it('renders card title, subtitle, and guided 3 ways', () => {
+    it('renders card title, subtitle, and protection mode', () => {
         render(<BackupSettingsCard settings={defaultSettings} />);
         expect(screen.getByText('Encrypted Wallet Backups')).toBeInTheDocument();
-        expect(screen.getByText('3 Simple Ways for Data Safety')).toBeInTheDocument();
-        expect(screen.getByText('Cloud Sync Folder')).toBeInTheDocument();
-        expect(screen.getByText('USB Drive / External Disk')).toBeInTheDocument();
-        expect(screen.getByText('Single File (.hmcbackup)')).toBeInTheDocument();
+        expect(screen.getByText('Protection Mode')).toBeInTheDocument();
+        expect(screen.getByText(/Local Backup Folder/i)).toBeInTheDocument();
+        expect(screen.getByText(/Export Single File/i)).toBeInTheDocument();
         expect(screen.getByText(/No backup created yet/i)).toBeInTheDocument();
     });
 
@@ -187,7 +185,7 @@ describe('BackupSettingsCard', () => {
         });
     });
 
-    it('allows folder selection and syncs differential backup', async () => {
+    it('allows folder selection and syncs differential backup with exact 1 selection button', async () => {
         const onSettingsUpdated = vi.fn();
         vi.mocked(open).mockResolvedValue('/media/usb/backups');
         vi.mocked(backupService.syncBackupFolder).mockResolvedValue({
@@ -202,13 +200,18 @@ describe('BackupSettingsCard', () => {
 
         render(<BackupSettingsCard settings={defaultSettings} onSettingsUpdated={onSettingsUpdated} />);
         
-        // Click Choose Folder in the action panel
+        // Exact 1 folder selection button: "Choose Folder" when empty
         const chooseFolderButtons = screen.getAllByRole('button', { name: /Choose Folder/i });
+        expect(chooseFolderButtons).toHaveLength(1);
         fireEvent.click(chooseFolderButtons[0]);
 
         await waitFor(() => {
             expect(open).toHaveBeenCalledWith({ directory: true, multiple: false, defaultPath: undefined });
             expect(screen.getByText('/media/usb/backups')).toBeInTheDocument();
+            // Changes to Change Folder
+            expect(screen.getByRole('button', { name: /Change folder/i })).toBeInTheDocument();
+            // Unlink button appears
+            expect(screen.getByRole('button', { name: /Unlink folder/i })).toBeInTheDocument();
         });
 
         // Click Sync Folder Now
@@ -224,6 +227,30 @@ describe('BackupSettingsCard', () => {
                 forceFull: false,
             });
             expect(screen.getByText(/Sync completed: 2 updated, 8 unchanged/i)).toBeInTheDocument();
+        });
+    });
+
+    it('allows clearing/unlinking configured backup folder', async () => {
+        const onSettingsUpdated = vi.fn();
+        const settingsWithFolder: AppSettings = {
+            ...defaultSettings,
+            backupSyncFolder: '/media/usb/backups',
+        };
+        render(<BackupSettingsCard settings={settingsWithFolder} onSettingsUpdated={onSettingsUpdated} />);
+        
+        expect(screen.getByText('/media/usb/backups')).toBeInTheDocument();
+        const unlinkBtn = screen.getByRole('button', { name: /Unlink folder/i });
+        fireEvent.click(unlinkBtn);
+
+        await waitFor(() => {
+            expect(settingsService.saveSettings).toHaveBeenCalledWith(
+                expect.objectContaining({ backupSyncFolder: null })
+            );
+            expect(onSettingsUpdated).toHaveBeenCalledWith(
+                expect.objectContaining({ backupSyncFolder: null })
+            );
+            expect(screen.getByText('No sync folder configured.')).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /Choose Folder/i })).toBeInTheDocument();
         });
     });
 });

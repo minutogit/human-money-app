@@ -21,6 +21,7 @@ import { ConfirmationModal } from './ui/ConfirmationModal';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
 import { useOptionalNavigation } from '../context/NavigationContext';
+import { HelpIcon } from './ui/HelpIcon';
 
 import { translateError, isBackendError, stringifyError } from '../utils/errorHelper';
 import { 
@@ -912,17 +913,20 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                 {/* PoS Mode Toggle */}
                 {settings?.enablePosMode && (
                     <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
-                        <label className="flex items-center gap-3 cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={isPosMode}
-                                onChange={(e) => setIsPosMode(e.target.checked)}
-                                className="rounded accent-theme-primary h-4 w-4"
-                            />
-                            <span className="text-xs font-bold text-theme-secondary">
-                                {t('transfer.posModeToggle', 'PoS Cashier Mode (Point-of-Sale Checkout)')}
-                            </span>
-                        </label>
+                        <div className="flex items-center gap-2">
+                            <label className="flex items-center gap-3 cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={isPosMode}
+                                    onChange={(e) => setIsPosMode(e.target.checked)}
+                                    className="rounded accent-theme-primary h-4 w-4"
+                                />
+                                <span className="text-xs font-bold text-theme-secondary">
+                                    {t('transfer.posModeToggle', 'PoS Cashier Mode (Point-of-Sale Checkout)')}
+                                </span>
+                            </label>
+                            <HelpIcon topic="posMode" size={14} />
+                        </div>
                         {isPosMode && (
                             <div className="w-full sm:w-64">
                                 <Input

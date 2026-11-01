@@ -77,7 +77,6 @@ vi.mock('../../utils/log', () => ({
 
 describe('SettingsView Component', () => {
   const mockSettings = {
-    bundleRetentionDays: 30,
     sessionTimeoutSeconds: 600, // 10 minutes
     privacyDefault: 'ask',
   };
@@ -140,13 +139,13 @@ describe('SettingsView Component', () => {
 
     // Configuration elements should be visible - query by role
     const inputs = screen.getAllByRole('spinbutton');
-    expect(inputs[0]).toHaveValue(30); // History Storage
-    expect(inputs[1]).toHaveValue(10); // Session Timeout
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toHaveValue(10); // Session Timeout
 
     expect(screen.getByText('Interactive')).toBeInTheDocument();
     expect(screen.getByText('Stealth')).toBeInTheDocument();
     expect(screen.getByText('Public')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('test-device-id-1234')).toBeInTheDocument();
+    expect(screen.getByTitle('test-device-id-1234')).toBeInTheDocument();
   });
 
   it('allows copying device ID to clipboard', async () => {
@@ -171,10 +170,10 @@ describe('SettingsView Component', () => {
     const securityTab = screen.getByText('Security & Ops');
     await user.click(securityTab);
 
-    // Edit fields using spinbutton roles
+    // Edit session timeout field
     const inputs = screen.getAllByRole('spinbutton');
-    fireEvent.change(inputs[0], { target: { value: '45' } });
-    fireEvent.change(inputs[1], { target: { value: '15' } });
+    expect(inputs).toHaveLength(1);
+    fireEvent.change(inputs[0], { target: { value: '15' } });
 
     // Select "Stealth" option
     const stealthRadio = screen.getByLabelText(/Stealth/i);
@@ -187,7 +186,6 @@ describe('SettingsView Component', () => {
     await waitFor(() => {
       expect(settingsService.saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
-          bundleRetentionDays: 45,
           sessionTimeoutSeconds: 900, // 15 minutes * 60 seconds
           privacyDefault: 'stealth',
         }),
@@ -285,13 +283,13 @@ describe('SettingsView Component', () => {
     expect(screen.getByText(/No public Human Money Node servers are active yet/i)).toBeInTheDocument();
 
     // Collapsible advanced section is toggled
-    const advancedToggle = screen.getByRole('button', { name: /Advanced Server & PoS Configuration/i });
+    const advancedToggle = screen.getByRole('button', { name: /Advanced (Server & PoS|Gateway & Merchant) Configuration/i });
     expect(advancedToggle).toBeInTheDocument();
     await user.click(advancedToggle);
 
     // After expanding, custom servers and network selection become visible
     expect(screen.getByText('Active Network')).toBeInTheDocument();
-    expect(screen.getByText('Custom Servers & Trusted Peers')).toBeInTheDocument();
+    expect(screen.getByText('Known Gateways & Server Credentials')).toBeInTheDocument();
   });
 
   it('toggles StandardsManager accordion and PoS mode checkbox', async () => {
@@ -312,10 +310,10 @@ describe('SettingsView Component', () => {
     expect(screen.getByTestId('standards-manager-mock')).toBeInTheDocument();
 
     // Check PoS mode in advanced server & PoS section
-    const advancedToggle = screen.getByRole('button', { name: /Advanced Server & PoS Configuration/i });
+    const advancedToggle = screen.getByRole('button', { name: /Advanced (Server & PoS|Gateway & Merchant) Configuration/i });
     await user.click(advancedToggle);
 
-    const posCheckbox = screen.getByRole('checkbox', { name: /Enable Point-of-Sale \(PoS\) Cashier Mode/i });
+    const posCheckbox = screen.getByRole('checkbox', { name: /PoS|Point-of-Sale/i });
     expect(posCheckbox).not.toBeChecked();
     await user.click(posCheckbox);
     expect(posCheckbox).toBeChecked();

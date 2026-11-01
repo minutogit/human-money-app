@@ -13,7 +13,7 @@ export interface CreateBundleArgs {
     recipientId: string;
     sources: SourceTransfer[];
     notes?: string | null;
-    senderProfileName: string;
+    senderProfileName: string | null;
     standardDefinitionsToml: Record<string, string>;
     usePrivacyMode: boolean;
     password?: string | null;

@@ -1,5 +1,6 @@
 // src/components/BackupStatusBadge.tsx
 import React, { useState, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { 
     HardDrive, 
@@ -165,6 +166,17 @@ export const BackupStatusBadge: React.FC<BackupStatusBadgeProps> = ({
         ? new Date(backupStatus.lastBackupAt).toLocaleString()
         : t("settings.backupNever", "Noch kein Backup erstellt");
 
+    useEffect(() => {
+        if (!isModalOpen) return;
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+                setIsModalOpen(false);
+            }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [isModalOpen]);
+
     const handleClick = () => {
         if (backupStatus.status === "notConfigured") {
             navigate({ view: "settings" });
@@ -204,12 +216,17 @@ export const BackupStatusBadge: React.FC<BackupStatusBadgeProps> = ({
             </div>
 
             {/* Backup Details Modal */}
-            {isModalOpen && (
+            {isModalOpen && typeof document !== 'undefined' && document.body && createPortal(
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150"
+                    className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150"
                     role="dialog"
                     aria-modal="true"
                     aria-labelledby="backup-status-title"
+                    onClick={(e) => {
+                        if (e.target === e.currentTarget) {
+                            setIsModalOpen(false);
+                        }
+                    }}
                 >
                     <div className="max-w-md w-full bg-card rounded-2xl p-6 shadow-2xl border border-theme-subtle text-theme-secondary space-y-4">
                         <div className="flex items-start justify-between gap-3">
@@ -287,7 +304,8 @@ export const BackupStatusBadge: React.FC<BackupStatusBadgeProps> = ({
                             </div>
                         </div>
                     </div>
-                </div>
+                </div>,
+                document.body
             )}
         </>
     );

@@ -87,7 +87,6 @@ const mockVouchers: VoucherSummary[] = [
 ];
 
 const mockSettings: AppSettings = {
-    bundleRetentionDays: 30,
     sessionTimeoutSeconds: 600,
     privacyDefault: 'ask',
     balanceViewMode: 'spendable',

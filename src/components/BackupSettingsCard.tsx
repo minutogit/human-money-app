@@ -22,9 +22,7 @@ import {
     ShieldCheck, 
     Folder,
     RefreshCw,
-    Cloud,
-    HardDrive,
-    Sparkles
+    X
 } from 'lucide-react';
 
 interface BackupSettingsCardProps {
@@ -77,6 +75,23 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         }
     };
 
+    const handleClearFolder = async () => {
+        setFeedback(null);
+        setSyncFolder('');
+        if (settings) {
+            const updated: AppSettings = {
+                ...settings,
+                backupSyncFolder: null,
+            };
+            try {
+                await settingsService.saveSettings(updated);
+                if (onSettingsUpdated) onSettingsUpdated(updated);
+            } catch (err) {
+                logger.error(`Clear backup folder failed: ${stringifyError(err)}`);
+            }
+        }
+    };
+
     const handleExportFile = async () => {
         setFeedback(null);
         if (!validateCustomPassword()) return;
@@ -102,7 +117,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
 
             if (summary) {
                 const updatedSettings: AppSettings = {
-                    ...(settings || { bundleRetentionDays: 30, sessionTimeoutSeconds: 300, privacyDefault: 'public' }),
+                    ...(settings || { sessionTimeoutSeconds: 300, privacyDefault: 'public' }),
                     lastBackupAt: summary.timestamp,
                     backupProtectionMode: protectionMode,
                     backupDirty: false,
@@ -176,7 +191,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
 
             if (summary) {
                 const updatedSettings: AppSettings = {
-                    ...(settings || { bundleRetentionDays: 30, sessionTimeoutSeconds: 300, privacyDefault: 'public' }),
+                    ...(settings || { sessionTimeoutSeconds: 300, privacyDefault: 'public' }),
                     backupSyncFolder: syncFolder,
                     backupProtectionMode: protectionMode,
                     autoBackupEnabled,
@@ -229,103 +244,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                     {t('settings.backupCardSubtitle')}
                 </p>
 
-                {/* 1. Einrichtungs-Helfer: 3 Alltags-Wege */}
-                <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
-                            <Sparkles size={13} className="text-theme-primary" />
-                            {t('settings.backupGuideTitle', '3 einfache Wege für deine Datensicherheit')}
-                        </label>
-                        <span className="text-[11px] text-theme-light opacity-80 hidden sm:inline">
-                            {t('settings.backupGuideSubtitle', 'Wähle den Weg, der am besten zu deinem Alltag passt.')}
-                        </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        {/* Weg 1: Cloud-Sync-Ordner */}
-                        <div 
-                            onClick={handleChooseFolder}
-                            className="p-3.5 rounded-2xl bg-white/70 dark:bg-slate-900/60 border border-theme-subtle hover:border-theme-primary/60 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-xs group"
-                        >
-                            <div className="space-y-1.5">
-                                <div className="flex items-center justify-between">
-                                    <div className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200/60 group-hover:bg-blue-100 transition-colors">
-                                        <Cloud size={16} />
-                                    </div>
-                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200">
-                                        {t('settings.backupWayCloudBadge', 'Empfohlen für PC')}
-                                    </span>
-                                </div>
-                                <h4 className="font-bold text-xs text-theme-secondary">
-                                    {t('settings.backupWayCloudTitle', 'Cloud-Sync-Ordner')}
-                                </h4>
-                                <p className="text-[11px] text-theme-light leading-relaxed">
-                                    {t('settings.backupWayCloudDesc', 'Ordner von Nextcloud, Proton Drive, Syncthing oder Dropbox wählen. Ende-zu-Ende verschlüsselt.')}
-                                </p>
-                            </div>
-                            <span className="text-[10px] font-semibold text-theme-primary pt-1 inline-flex items-center gap-1">
-                                <span>{syncFolder ? t('settings.changeFolder', 'Ordner ändern') : t('settings.chooseFolderButton', 'Ordner wählen')}</span>
-                                →
-                            </span>
-                        </div>
-
-                        {/* Weg 2: USB-Stick / Externe Festplatte */}
-                        <div 
-                            onClick={handleChooseFolder}
-                            className="p-3.5 rounded-2xl bg-white/70 dark:bg-slate-900/60 border border-theme-subtle hover:border-theme-primary/60 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-xs group"
-                        >
-                            <div className="space-y-1.5">
-                                <div className="flex items-center justify-between">
-                                    <div className="p-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border border-amber-200/60 group-hover:bg-amber-100 transition-colors">
-                                        <HardDrive size={16} />
-                                    </div>
-                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200">
-                                        {t('settings.backupWayUsbBadge', 'Ideal für Offline')}
-                                    </span>
-                                </div>
-                                <h4 className="font-bold text-xs text-theme-secondary">
-                                    {t('settings.backupWayUsbTitle', 'USB-Stick / Festplatte')}
-                                </h4>
-                                <p className="text-[11px] text-theme-light leading-relaxed">
-                                    {t('settings.backupWayUsbDesc', 'Ordner auf dem Stick wählen. Die App sichert automatisch, sobald der Stick angesteckt ist.')}
-                                </p>
-                            </div>
-                            <span className="text-[10px] font-semibold text-theme-primary pt-1 inline-flex items-center gap-1">
-                                <span>{syncFolder ? t('settings.changeFolder', 'Ordner ändern') : t('settings.chooseFolderButton', 'Ordner wählen')}</span>
-                                →
-                            </span>
-                        </div>
-
-                        {/* Weg 3: Einzeldatei */}
-                        <div 
-                            onClick={handleExportFile}
-                            className="p-3.5 rounded-2xl bg-white/70 dark:bg-slate-900/60 border border-theme-subtle hover:border-theme-primary/60 transition-all cursor-pointer flex flex-col justify-between space-y-2 shadow-xs group"
-                        >
-                            <div className="space-y-1.5">
-                                <div className="flex items-center justify-between">
-                                    <div className="p-2 rounded-xl bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 border border-purple-200/60 group-hover:bg-purple-100 transition-colors">
-                                        <FileArchive size={16} />
-                                    </div>
-                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200">
-                                        {t('settings.backupWayFileBadge', 'Manuell')}
-                                    </span>
-                                </div>
-                                <h4 className="font-bold text-xs text-theme-secondary">
-                                    {t('settings.backupWayFileTitle', 'Einzeldatei (.hmcbackup)')}
-                                </h4>
-                                <p className="text-[11px] text-theme-light leading-relaxed">
-                                    {t('settings.backupWayFileDesc', 'Für gelegentliche manuelle Kopien per Hand auf die Festplatte oder zum Weitergeben.')}
-                                </p>
-                            </div>
-                            <span className="text-[10px] font-semibold text-theme-primary pt-1 inline-flex items-center gap-1">
-                                <span>{t('settings.exportFileButton', 'Datei exportieren')}</span>
-                                →
-                            </span>
-                        </div>
-                    </div>
-                </div>
-
-                {/* 2. Protection Mode Section */}
+                {/* Protection Mode Section */}
                 <div className="space-y-3 p-4 bg-slate-50/70 dark:bg-slate-800/40 rounded-2xl border border-theme-subtle/60">
                     <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
                         <ShieldCheck size={13} className="text-theme-primary" />
@@ -419,7 +338,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
 
                 {/* 3. Action Panels (Sync Folder & Single File) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                    {/* Action Panel 1: Differential Sync Folder */}
+                    {/* Action Panel 1: Local Backup Folder */}
                     <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-theme-subtle flex flex-col justify-between space-y-4 shadow-sm">
                         <div className="space-y-3">
                             <div className="flex items-center gap-2">
@@ -432,6 +351,10 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                 {t('settings.syncFolderDesc')}
                             </p>
 
+                            <div className="p-2.5 rounded-xl bg-blue-50/60 border border-blue-200/50 text-[11px] text-blue-900 leading-relaxed">
+                                {t('settings.syncFolderCloudTip')}
+                            </div>
+
                             <div className="flex items-center gap-2 pt-1">
                                 <div className="flex-1 min-w-0 px-3 py-2 bg-slate-50 dark:bg-slate-800 rounded-xl border border-theme-subtle/50 text-[10px] font-mono text-theme-secondary truncate">
                                     {syncFolder || t('settings.noFolderSelected')}
@@ -443,8 +366,20 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                     className="px-3 py-2 text-xs shrink-0"
                                 >
                                     <Folder size={14} className="mr-1 inline" />
-                                    {t('settings.chooseFolderButton')}
+                                    {syncFolder ? t('settings.changeFolder') : t('settings.chooseFolderButton')}
                                 </Button>
+                                {syncFolder && (
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={handleClearFolder}
+                                        className="p-2 text-xs shrink-0 text-slate-500 hover:text-rose-600"
+                                        title={t('settings.clearFolderButton')}
+                                        aria-label={t('settings.clearFolderButton')}
+                                    >
+                                        <X size={14} />
+                                    </Button>
+                                )}
                             </div>
 
                             {/* Schalter: Automatisch im Hintergrund sichern */}

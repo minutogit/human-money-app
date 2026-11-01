@@ -68,7 +68,6 @@ export interface RegionalSourceDto {
 }
 
 export interface AppSettings {
-    bundleRetentionDays: number;
     sessionTimeoutSeconds: number;
     lastUsedDirectory?: string;
     privacyDefault: PrivacyDefault;

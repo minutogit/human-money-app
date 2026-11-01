@@ -448,7 +448,8 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
     const executeTransfer = async () => {
         dispatch({ type: 'SET_PROCESSING', value: true });
         try {
-            const senderName = state.sendProfileName ? state.customSenderName : null;
+            const trimmedName = state.customSenderName.trim();
+            const senderName = state.sendProfileName && trimmedName.length > 0 ? trimmedName : null;
             const sources: SourceTransfer[] = Array.from(selectedMap.entries()).map(([id, amount]) => ({
                 localInstanceId: id,
                 amountToSend: amount,
@@ -465,7 +466,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     recipientId: state.recipientId,
                     sources,
                     notes: state.notes || null,
-                    senderProfileName: senderName || t('transfer.anonymous'),
+                    senderProfileName: senderName,
                     standardDefinitionsToml,
                     usePrivacyMode: state.privacyMode === 'stealth',
                     password
@@ -551,53 +552,50 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     <div className="lg:col-span-7 space-y-6">
                         {/* Absender (From) */}
                         <Card header={
-                            <div className="flex items-center gap-2">
-                                <UserCheck size={18} className="text-theme-primary"/>
-                                <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.from')}</span>
+                            <div className="flex items-center justify-between gap-2 w-full">
+                                <div className="flex items-center gap-2">
+                                    <UserCheck size={16} className="text-theme-primary" />
+                                    <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.senderNameLabel')}</span>
+                                    <HelpIcon topic="senderName" size={14} />
+                                </div>
+                                <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-theme-light hover:text-theme-secondary cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={!state.sendProfileName}
+                                        onChange={(e) => dispatch({ type: 'TOGGLE_PROFILE_NAME', value: !e.target.checked })}
+                                        className="rounded border-slate-300 accent-theme-primary h-3.5 w-3.5 cursor-pointer"
+                                    />
+                                    <span>{t('transfer.sendAnonymously')}</span>
+                                </label>
                             </div>
                         }>
-                            <div className="space-y-6">
-                                <div className="flex items-center justify-between p-4 bg-slate-50 border border-slate-200/60 rounded-3xl gap-4">
-                                    <div className="flex items-center gap-4 min-w-0">
-                                        <div className="relative shrink-0">
-                                            {state.sendProfileName ? (
-                                                <Avatar size={40} name={ownUserId || "anonymous"} variant="beam" />
-                                            ) : (
-                                                <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-400">
-                                                    <Shield size={20} />
-                                                </div>
-                                            )}
+                            {state.sendProfileName ? (
+                                <div className="space-y-1.5">
+                                    <div className="flex items-center gap-3">
+                                        <div className="shrink-0">
+                                            <Avatar size={32} name={ownUserId || "sender"} variant="beam" />
                                         </div>
-                                        <div className="min-w-0">
-                                            <h4 className="text-sm font-black text-slate-800 truncate">
-                                                {state.sendProfileName ? (state.customSenderName || t('transfer.anonymous')) : t('transfer.anonymous')}
-                                            </h4>
-                                            <p className="text-[9px] font-mono text-slate-400 truncate tracking-tight">{ownUserId || t('common.loading')}</p>
+                                        <div className="flex-1 min-w-0">
+                                            <Input 
+                                                value={state.customSenderName} 
+                                                onChange={(e) => dispatch({ type: 'SET_SENDER_NAME', name: e.target.value })} 
+                                                placeholder={t('transfer.senderNamePlaceholder')} 
+                                                className="bg-white border-slate-200 text-sm font-bold rounded-xl py-2 px-3" 
+                                            />
                                         </div>
                                     </div>
-                                    <div className="shrink-0 flex items-center gap-2">
-                                        <label className="flex items-center gap-3 cursor-pointer group">
-                                            <div className={`w-10 h-6 rounded-full transition-all relative ${state.sendProfileName ? 'bg-theme-primary shadow-inner' : 'bg-slate-300'}`}>
-                                                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md ${state.sendProfileName ? 'left-5' : 'left-1'}`}></div>
-                                                <input type="checkbox" className="hidden" checked={state.sendProfileName} onChange={(e) => dispatch({ type: 'TOGGLE_PROFILE_NAME', value: e.target.checked })} />
-                                            </div>
-                                        </label>
-                                        <HelpIcon topic="senderName" />
-                                    </div>
+                                    {ownUserId && (
+                                        <p className="text-[10px] font-mono text-slate-400 truncate pl-11">
+                                            {ownUserId}
+                                        </p>
+                                    )}
                                 </div>
-
-                                {state.sendProfileName && (
-                                    <div className="space-y-2 animate-in slide-in-from-top-2 duration-200">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.displayName')}</label>
-                                        <Input 
-                                            value={state.customSenderName} 
-                                            onChange={(e) => dispatch({ type: 'SET_SENDER_NAME', name: e.target.value })} 
-                                            placeholder={t('transfer.displayNamePlaceholder')} 
-                                            className="bg-white border-slate-200 text-sm font-bold rounded-2xl py-3 px-4" 
-                                        />
-                                    </div>
-                                )}
-                            </div>
+                            ) : (
+                                <div className="flex items-center gap-2.5 py-1.5 px-3 bg-slate-50 border border-slate-200/60 rounded-xl text-xs text-slate-500">
+                                    <Shield size={15} className="text-slate-400 shrink-0" />
+                                    <span>{t('transfer.anonymousHint')}</span>
+                                </div>
+                            )}
                         </Card>
 
                         {/* Visual Flow Connector */}
@@ -733,8 +731,8 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                                 <h4 className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.confirmTitle')} - {t('common.preview')}</h4>
                                 <div className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
                                     <div className="flex justify-between py-2.5">
-                                        <span className="text-slate-400">{t('transfer.from')}</span>
-                                        <span className="text-slate-900">{state.sendProfileName ? (state.customSenderName || t('transfer.anonymous')) : t('transfer.anonymous')}</span>
+                                        <span className="text-slate-400">{t('transfer.senderNameLabel')}</span>
+                                        <span className="text-slate-900">{state.sendProfileName ? (state.customSenderName.trim() || t('transfer.noSenderNameProvided')) : t('transfer.anonymous')}</span>
                                     </div>
                                     <div className="flex justify-between py-2.5">
                                         <span className="text-slate-400">{t('transfer.recipient')}</span>

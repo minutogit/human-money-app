@@ -4,7 +4,26 @@ import { useTranslation } from 'react-i18next';
 import { HelpCircle } from 'lucide-react';
 import { HelpModal } from './HelpModal';
 
-export type HelpTopic = 'mnemonic' | 'passphrase' | 'subaccount' | 'profile' | 'handover' | 'senderName' | 'privacy' | 'voucherMode' | 'voucherCreator' | 'voucherSignatures' | 'signatureRequest' | 'wotNetwork' | 'voucherTrust' | 'wotReach';
+export type HelpTopic =
+    | 'mnemonic'
+    | 'passphrase'
+    | 'subaccount'
+    | 'profile'
+    | 'handover'
+    | 'senderName'
+    | 'privacy'
+    | 'voucherMode'
+    | 'voucherCreator'
+    | 'voucherSignatures'
+    | 'signatureRequest'
+    | 'wotNetwork'
+    | 'voucherTrust'
+    | 'wotReach'
+    | 'settingsPrivacy'
+    | 'posMode'
+    | 'exclusiveGateways'
+    | 'gatewayTokens'
+    | 'deviceBinding';
 
 interface HelpIconProps {
     topic: HelpTopic;
@@ -16,7 +35,12 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
     const { t } = useTranslation();
     const [isHovered, setIsHovered] = useState(false);
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [coords, setCoords] = useState<{ top: number; left: number; placement: 'top' | 'bottom' } | null>(null);
+    const [coords, setCoords] = useState<{
+        top: number;
+        left: number;
+        arrowOffset: number;
+        placement: 'top' | 'bottom';
+    } | null>(null);
     const buttonRef = useRef<HTMLButtonElement>(null);
 
     // Map topics to their respective i18n keys based on the domains
@@ -106,6 +130,36 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
                     short: t('contacts.helpWotReachShort'),
                     long: t('contacts.helpWotReachLong')
                 };
+            case 'settingsPrivacy':
+                return {
+                    title: t('settings.helpPrivacyTitle'),
+                    short: t('settings.helpPrivacyShort'),
+                    long: t('settings.helpPrivacyLong')
+                };
+            case 'posMode':
+                return {
+                    title: t('settings.helpPosModeTitle'),
+                    short: t('settings.helpPosModeShort'),
+                    long: t('settings.helpPosModeLong')
+                };
+            case 'exclusiveGateways':
+                return {
+                    title: t('settings.helpExclusiveGatewaysTitle'),
+                    short: t('settings.helpExclusiveGatewaysShort'),
+                    long: t('settings.helpExclusiveGatewaysLong')
+                };
+            case 'gatewayTokens':
+                return {
+                    title: t('settings.helpGatewayTokensTitle'),
+                    short: t('settings.helpGatewayTokensShort'),
+                    long: t('settings.helpGatewayTokensLong')
+                };
+            case 'deviceBinding':
+                return {
+                    title: t('settings.helpDeviceBindingTitle'),
+                    short: t('settings.helpDeviceBindingShort'),
+                    long: t('settings.helpDeviceBindingLong')
+                };
         }
     };
 
@@ -116,10 +170,15 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
             const rect = buttonRef.current.getBoundingClientRect();
             const placement: 'top' | 'bottom' = rect.top < 190 ? 'bottom' : 'top';
             const innerWidth = typeof window !== 'undefined' ? window.innerWidth : 1024;
-            const clampedLeft = Math.max(150, Math.min(rect.left + rect.width / 2, innerWidth - 150));
+            const margin = Math.min(144, innerWidth / 2 - 12);
+            const buttonCenter = rect.left + rect.width / 2;
+            const clampedLeft = Math.max(margin + 12, Math.min(buttonCenter, innerWidth - margin - 12));
+            const arrowOffset = Math.max(-margin + 16, Math.min(buttonCenter - clampedLeft, margin - 16));
+
             setCoords({
                 top: placement === 'bottom' ? rect.bottom + 8 : rect.top - 8,
                 left: clampedLeft,
+                arrowOffset,
                 placement,
             });
         }
@@ -161,7 +220,7 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
                 </button>
             </div>
 
-            {isHovered && coords && createPortal(
+            {isHovered && coords && typeof document !== 'undefined' && document.body && createPortal(
                 <div 
                     style={{
                         position: 'fixed',
@@ -169,14 +228,20 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
                         left: `${coords.left}px`,
                         transform: coords.placement === 'bottom' ? 'translate(-50%, 0)' : 'translate(-50%, -100%)',
                     }}
-                    className="w-64 bg-slate-900 text-white text-xs rounded-xl p-3 shadow-lg z-[9999] pointer-events-none animate-in fade-in zoom-in-95 duration-200 text-center"
+                    className="w-72 max-w-[calc(100vw-24px)] bg-slate-900 text-white text-xs rounded-xl p-3 shadow-lg z-[9999] pointer-events-none animate-in fade-in zoom-in-95 duration-200 text-left leading-relaxed"
                 >
-                    <p className="font-semibold mb-1">{keys.title}</p>
+                    <p className="font-semibold mb-1 text-slate-100">{keys.title}</p>
                     <p className="opacity-90">{keys.short}</p>
                     {coords.placement === 'bottom' ? (
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-slate-900" />
+                        <div
+                            style={{ left: `calc(50% + ${coords.arrowOffset}px)` }}
+                            className="absolute bottom-full -translate-x-1/2 border-4 border-transparent border-b-slate-900"
+                        />
                     ) : (
-                        <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
+                        <div
+                            style={{ left: `calc(50% + ${coords.arrowOffset}px)` }}
+                            className="absolute top-full -translate-x-1/2 border-4 border-transparent border-t-slate-900"
+                        />
                     )}
                 </div>,
                 document.body

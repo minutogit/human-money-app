@@ -86,7 +86,6 @@ uuid = "minuto-uuid-123"`,
   ];
 
   const mockSettings: AppSettings = {
-    bundleRetentionDays: 30,
     sessionTimeoutSeconds: 300,
     privacyDefault: 'public',
   };

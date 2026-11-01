@@ -20,6 +20,7 @@ import { SegmentedTabs } from './ui/SegmentedTabs';
 import { AlertBanner } from './ui/AlertBanner';
 import { authService } from '../services/authService';
 import { LanguageSelector } from './ui/LanguageSelector';
+import { HelpIcon } from './ui/HelpIcon';
 import { 
     User, 
     Settings as SettingsIcon, 
@@ -28,7 +29,7 @@ import {
     Eye, 
     EyeOff, 
     Clock, 
-    Database,
+    Copy,
     Save,
     CheckCircle2,
     Fingerprint,
@@ -287,64 +288,43 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     <ProfileSettings />
                 ) : (
                     <form onSubmit={handleSave} className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                            {/* Storage & Data Retention */}
-                            <Card header={
-                                <div className="flex items-center gap-2">
-                                    <Database size={18} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">{t('settings.dataStewardshipTitle')}</span>
+                        {/* Session Control */}
+                        <Card header={
+                            <div className="flex items-center gap-2">
+                                <Clock size={18} className="text-theme-primary" />
+                                <span className="font-black text-xs uppercase tracking-widest">{t('settings.activeSessionTitle')}</span>
+                            </div>
+                        }>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-xs font-bold text-theme-secondary">
+                                        {t('settings.timeoutIntervalLabel')}
+                                    </label>
+                                    <p className="text-[11px] text-theme-light/80 font-medium leading-relaxed">
+                                        {t('settings.timeoutIntervalDescription')}
+                                    </p>
                                 </div>
-                            }>
-                                <div className="space-y-6">
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('settings.historyStorageLabel')}</label>
-                                        <Input
-                                            type="number"
-                                            value={settings?.bundleRetentionDays ?? 30}
-                                            onChange={(e) => setSettings(s => s ? { ...s, bundleRetentionDays: parseInt(e.target.value, 10) } : null)}
-                                            min="1"
-                                            className="font-bold"
-                                        />
-                                        <p className="text-[10px] text-theme-light/60 font-medium leading-relaxed">
-                                            {t('settings.historyStorageDescription')}
-                                        </p>
-                                    </div>
+                                <div className="w-full sm:w-36 shrink-0">
+                                    <Input
+                                        type="number"
+                                        value={settings ? Math.floor((settings.sessionTimeoutSeconds || 0) / 60) : 10}
+                                        onChange={(e) => {
+                                            const minutes = parseInt(e.target.value, 10);
+                                            setSettings(s => s ? { ...s, sessionTimeoutSeconds: isNaN(minutes) ? 0 : minutes * 60 } : null);
+                                        }}
+                                        min="0"
+                                        className="font-bold"
+                                    />
                                 </div>
-                            </Card>
-
-                            {/* Session Control */}
-                            <Card header={
-                                <div className="flex items-center gap-2">
-                                    <Clock size={18} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">{t('settings.activeSessionTitle')}</span>
-                                </div>
-                            }>
-                                <div className="space-y-6">
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('settings.timeoutIntervalLabel')}</label>
-                                        <Input
-                                            type="number"
-                                            value={settings ? Math.floor((settings.sessionTimeoutSeconds || 0) / 60) : 10}
-                                            onChange={(e) => {
-                                                const minutes = parseInt(e.target.value, 10);
-                                                setSettings(s => s ? { ...s, sessionTimeoutSeconds: isNaN(minutes) ? 0 : minutes * 60 } : null);
-                                            }}
-                                            min="0"
-                                            className="font-bold"
-                                        />
-                                        <p className="text-[10px] text-theme-light/60 font-medium leading-relaxed">
-                                            {t('settings.timeoutIntervalDescription')}
-                                        </p>
-                                    </div>
-                                </div>
-                            </Card>
-                        </div>
+                            </div>
+                        </Card>
 
                         {/* Privacy Protocols */}
                         <Card header={
                             <div className="flex items-center gap-2">
                                 <Shield size={18} className="text-theme-primary" />
                                 <span className="font-black text-xs uppercase tracking-widest">{t('settings.privacyProtocolsTitle')}</span>
+                                <HelpIcon topic="settingsPrivacy" size={15} />
                             </div>
                         }>
                             <div className="space-y-4">
@@ -437,7 +417,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                         <div className="flex items-center gap-2">
                                             <Server size={14} className="text-theme-primary" />
                                             <span className="text-xs font-bold text-theme-secondary">
-                                                {t('settings.advancedNetworkToggle', 'Advanced Server & PoS Configuration')}
+                                                {t('settings.advancedNetworkToggle')}
                                             </span>
                                         </div>
                                         {isAdvancedNetworkOpen ? <ChevronUp size={16} className="text-theme-light" /> : <ChevronDown size={16} className="text-theme-light" />}
@@ -446,20 +426,26 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                     {isAdvancedNetworkOpen && (
                                         <div className="p-4 space-y-6 border-t border-theme-subtle">
                                             {/* PoS Mode Toggle */}
-                                            <label className="flex items-start gap-3 p-3 bg-white border border-theme-subtle rounded-xl cursor-pointer hover:border-theme-primary/40 transition-colors">
+                                            <div className="flex items-start gap-3 p-3 bg-white border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
                                                 <input
                                                     type="checkbox"
+                                                    id="enablePosMode"
                                                     checked={!!settings?.enablePosMode}
                                                     onChange={(e) => setSettings(s => s ? { ...s, enablePosMode: e.target.checked } : null)}
                                                     className="mt-0.5 accent-theme-primary"
                                                 />
-                                                <span className="text-xs font-medium text-theme-secondary leading-relaxed">
-                                                    {t('settings.enablePosMode')}
-                                                    <span className="block text-[10px] text-theme-light/60 font-normal">
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <label htmlFor="enablePosMode" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
+                                                            {t('settings.enablePosMode')}
+                                                        </label>
+                                                        <HelpIcon topic="posMode" size={14} />
+                                                    </div>
+                                                    <label htmlFor="enablePosMode" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
                                                         {t('settings.enablePosModeDesc')}
-                                                    </span>
-                                                </span>
-                                            </label>
+                                                    </label>
+                                                </div>
+                                            </div>
 
                                             {/* Network Selection */}
                                             <div className="space-y-3">
@@ -494,7 +480,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                             {/* Custom Servers */}
                                             <div className="space-y-3">
                                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-2">
-                                                    <Server size={12} /> {t('settings.customServersTitle', 'Custom Servers & Trusted Peers')}
+                                                    <Server size={12} /> {t('settings.customServersTitle')}
+                                                    <HelpIcon topic="gatewayTokens" size={14} />
                                                 </label>
                                                 {(settings?.customServers || []).length > 0 ? (
                                                     <div className="space-y-2">
@@ -538,13 +525,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                                         className="text-xs font-mono"
                                                     />
                                                     <Input
-                                                        placeholder={t('settings.authTokenPlaceholder', 'Auth Token (optional)')}
+                                                        placeholder={t('settings.authTokenPlaceholder')}
                                                         value={newServerAuthToken}
                                                         onChange={(e) => setNewServerAuthToken(e.target.value)}
                                                         className="text-xs font-mono"
                                                     />
                                                     <Input
-                                                        placeholder={t('settings.peerTokenPlaceholder', 'Peer Token (optional)')}
+                                                        placeholder={t('settings.peerTokenPlaceholder')}
                                                         value={newServerPeerToken}
                                                         onChange={(e) => setNewServerPeerToken(e.target.value)}
                                                         className="text-xs font-mono"
@@ -564,18 +551,26 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                             </div>
 
                                             {/* Exclusive Checkbox */}
-                                            <label className="flex items-start gap-3 p-3 bg-amber-50/50 border border-amber-200 rounded-xl cursor-pointer hover:bg-amber-50 transition-colors">
+                                            <div className="flex items-start gap-3 p-3 bg-amber-50/50 border border-amber-200 rounded-xl hover:bg-amber-50 transition-colors">
                                                 <input
                                                     type="checkbox"
+                                                    id="exclusiveCustomServers"
                                                     checked={!!settings?.exclusiveCustomServers}
                                                     onChange={(e) => setSettings(s => s ? { ...s, exclusiveCustomServers: e.target.checked } : null)}
                                                     className="mt-0.5 accent-theme-primary"
                                                 />
-                                                <span className="text-xs font-medium text-theme-secondary leading-relaxed">
-                                                    {t('settings.exclusiveServersLabel', 'Exclusively use custom servers (Strictly private)')}
-                                                    <span className="block text-[10px] text-theme-light/60 font-normal">{t('settings.exclusiveServersDesc', 'When active, only the custom servers above are used — no public seed peers.')}</span>
-                                                </span>
-                                            </label>
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <label htmlFor="exclusiveCustomServers" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
+                                                            {t('settings.exclusiveServersLabel')}
+                                                        </label>
+                                                        <HelpIcon topic="exclusiveGateways" size={14} />
+                                                    </div>
+                                                    <label htmlFor="exclusiveCustomServers" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
+                                                        {t('settings.exclusiveServersDesc')}
+                                                    </label>
+                                                </div>
+                                            </div>
 
                                             {/* Regional Observation Sources (Regional Mesh) */}
                                             <div className="space-y-3 pt-4 border-t border-theme-subtle">
@@ -723,53 +718,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                             </div>
                         </Card>
 
-                        {/* Device Cryptographic Binding */}
-                        <Card header={
-                            <div className="flex items-center gap-2">
-                                <Fingerprint size={18} className="text-theme-primary" />
-                                <span className="font-black text-xs uppercase tracking-widest">{t('settings.deviceBindingTitle')}</span>
-                            </div>
-                        }>
-                            <div className="space-y-4">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('settings.deviceBindingLabel')}</label>
-                                    <div className="flex gap-2">
-                                        <input
-                                            type="text"
-                                            readOnly
-                                            value={localInstanceId || t('settings.retrievingId')}
-                                            className="w-full bg-slate-50 border border-theme-subtle rounded-2xl px-5 py-4 text-xs font-mono text-theme-secondary select-all"
-                                        />
-                                        <Button 
-                                            type="button" 
-                                            onClick={async () => {
-                                                if (localInstanceId) {
-                                                    const ok = await copyToClipboard(localInstanceId);
-                                                    try {
-                                                        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-                                                            await navigator.clipboard.writeText(localInstanceId);
-                                                        }
-                                                    } catch {}
-                                                    if (ok) {
-                                                        setCopiedDeviceId(true);
-                                                        setTimeout(() => setCopiedDeviceId(false), 2000);
-                                                    }
-                                                }
-                                            }}
-                                            variant="outline"
-                                            className="px-4 text-xs font-black uppercase tracking-widest shrink-0"
-                                            title={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
-                                        >
-                                            {copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
-                                        </Button>
-                                    </div>
-                                    <p className="text-[10px] text-theme-light/60 font-medium leading-relaxed">
-                                        {t('settings.deviceBindingDescription')}
-                                    </p>
-                                </div>
-                            </div>
-                        </Card>
-
                         {/* Voucher Standards Manager */}
                         <div className="border border-theme-subtle rounded-2xl overflow-hidden bg-white/50">
                             <button
@@ -805,17 +753,52 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                             </Button>
                             {error && <AlertBanner variant="error" className="w-full max-w-md">{error}</AlertBanner>}
                             {success && <AlertBanner variant="success" className="w-full max-w-md">{success}</AlertBanner>}
-                            {/* Hidden version trigger */}
-                            <span
-                                onClick={handleDevModeClick}
-                                className="text-[10px] font-mono text-theme-light/40 select-none cursor-pointer hover:text-theme-light/70 transition-colors"
-                                title={isDevUnlocked ? "Entwicklermodus aktiv" : `Klick ${Math.max(0, 7 - devClickCount)} bis Entwicklermodus`}
-                                role="button"
-                                tabIndex={0}
-                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleDevModeClick(); }}}
-                            >
-                                v{appVersion} • {isDevUnlocked ? 'DEV freigeschaltet' : `${devClickCount}/7`}
-                            </span>
+
+                            {/* Subtle Diagnostics Footer */}
+                            <div className="pt-4 border-t border-theme-subtle/40 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-[11px] text-theme-light/70">
+                                <span
+                                    onClick={handleDevModeClick}
+                                    className="font-mono text-[10px] text-theme-light/60 select-none cursor-pointer hover:text-theme-light/90 transition-colors"
+                                    title={isDevUnlocked ? "Entwicklermodus aktiv" : `Klick ${Math.max(0, 7 - devClickCount)} bis Entwicklermodus`}
+                                    role="button"
+                                    tabIndex={0}
+                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleDevModeClick(); }}}
+                                >
+                                    v{appVersion} • {isDevUnlocked ? 'DEV freigeschaltet' : `${devClickCount}/7`}
+                                </span>
+                                <span>•</span>
+                                <div className="inline-flex items-center gap-1.5">
+                                    <span>{t('settings.deviceIdFooterLabel')}:</span>
+                                    <code className="font-mono text-[10px] text-theme-light/80 select-all" title={localInstanceId}>
+                                        {localInstanceId ? (localInstanceId.length > 16 ? `${localInstanceId.slice(0, 8)}…${localInstanceId.slice(-4)}` : localInstanceId) : t('settings.retrievingId')}
+                                    </code>
+                                    <button
+                                        type="button"
+                                        onClick={async () => {
+                                            if (localInstanceId) {
+                                                const ok = await copyToClipboard(localInstanceId);
+                                                try {
+                                                    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                                                        await navigator.clipboard.writeText(localInstanceId);
+                                                    }
+                                                } catch {
+                                                    // Ignore clipboard write failure
+                                                }
+                                                if (ok) {
+                                                    setCopiedDeviceId(true);
+                                                    setTimeout(() => setCopiedDeviceId(false), 2000);
+                                                }
+                                            }
+                                        }}
+                                        className="p-1 text-theme-light/70 hover:text-theme-primary transition-colors rounded inline-flex items-center justify-center"
+                                        aria-label={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
+                                        title={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
+                                    >
+                                        {copiedDeviceId ? <CheckCircle2 size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                                    </button>
+                                    <HelpIcon topic="deviceBinding" size={12} />
+                                </div>
+                            </div>
                         </div>
                     </form>
                 )}
