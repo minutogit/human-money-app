@@ -71,7 +71,6 @@ export interface AppSettings {
     sessionTimeoutSeconds: number;
     lastUsedDirectory?: string;
     privacyDefault: PrivacyDefault;
-    l2NodeUrls?: string[];
     activeNetwork?: string;
     bootstrapSeedUrl?: string | null;
     customServers?: CustomServerDto[];

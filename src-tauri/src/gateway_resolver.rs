@@ -590,7 +590,7 @@ pub(crate) fn cached_candidates(settings: &AppSettings) -> Vec<String> {
     }
     if !settings.exclusive_custom_servers {
         let cached = if settings.active_network.eq_ignore_ascii_case("testnet") { &settings.cached_peers_testnet } else { &settings.cached_peers_mainnet };
-        for base in cached.iter().chain(settings.l2_node_urls.iter().flatten()) {
+        for base in cached.iter() {
             if endpoint(base, "").is_some() && !candidates.contains(base) { candidates.push(base.clone()); }
             if candidates.len() == 32 { break; }
         }

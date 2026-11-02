@@ -266,15 +266,6 @@ pub async fn resolve_active_l2_nodes_internal(settings: &AppSettings) -> Vec<Str
         }
     };
 
-    // Also consider legacy l2_node_urls as additional fallback if no candidates yet
-    if candidates.is_empty() {
-        if let Some(ref legacy) = settings.l2_node_urls {
-            if !legacy.is_empty() {
-                candidates = legacy.clone();
-            }
-        }
-    }
-
     // Clean and dedup
     candidates = candidates
         .into_iter()
@@ -342,9 +333,6 @@ pub async fn benchmark_l2_servers(
                 if let Some(peers) = fetch_seed_peers(&seed_url).await {
                     all.extend(peers);
                 }
-            }
-            if let Some(ref legacy) = settings.l2_node_urls {
-                all.extend(legacy.clone());
             }
         }
         all.into_iter().map(|u| u.trim().to_string()).filter(|u| !u.is_empty()).collect()

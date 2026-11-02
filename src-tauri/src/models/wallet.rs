@@ -202,10 +202,7 @@ pub struct TransactionRecord {
     pub sender_id: String,
     pub timestamp: String, // ISO 8601
 
-    #[serde(alias = "total_amount_by_unit", alias = "summable_amounts", alias = "summableAmounts", default)]
     pub summable_amounts: std::collections::HashMap<String, String>,
-
-    #[serde(alias = "countable_items", alias = "countableItems", default)]
     pub countable_items: std::collections::HashMap<String, u32>,
     
     pub involved_vouchers: Vec<String>, // local_instance_ids

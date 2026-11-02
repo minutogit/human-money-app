@@ -54,30 +54,17 @@ export function formatDateTime(isoString: string): string {
  * Formats a transaction summary showing both summable amounts and countable items.
  * @param summable Record of currency/unit to amount strings
  * @param countable Record of currency/unit to counts
- * @param details Optional details array to fix missing TEST prefixes for legacy records
  * @returns Combined summary string (e.g., "10.00 EUR, 5 Vouchers")
  */
 export function formatSummary(
     summable: Record<string, string> | undefined,
-    countable: Record<string, number> | undefined,
-    details?: { unit: string; isTestVoucher: boolean }[]
+    countable: Record<string, number> | undefined
 ): string {
     const s = Object.entries(summable || {}).map(([unit, amount]) => {
-        let displayUnit = unit;
-        if (details && !displayUnit.startsWith('TEST-')) {
-            // Check if any involved voucher in the details array is a test voucher for this unit
-            const isTest = details.some(d => d.unit === unit && d.isTestVoucher);
-            if (isTest) displayUnit = `TEST-${unit}`;
-        }
-        return `${formatAmount(amount)} ${displayUnit}`;
+        return `${formatAmount(amount)} ${unit}`;
     });
     const c = Object.entries(countable || {}).map(([unit, total]) => {
-        let displayUnit = unit;
-        if (details && !displayUnit.startsWith('TEST-')) {
-            const isTest = details.some(d => d.unit === unit && d.isTestVoucher);
-            if (isTest) displayUnit = `TEST-${unit}`;
-        }
-        return `${total} ${displayUnit}${total > 1 ? 's' : ''}`;
+        return `${total} ${unit}${total > 1 ? 's' : ''}`;
     });
     const all = [...s, ...c];
     return all.length > 0 ? all.join(', ') : '0.00';

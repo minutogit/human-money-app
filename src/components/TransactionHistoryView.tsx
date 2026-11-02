@@ -147,7 +147,7 @@ export function TransactionHistoryView() {
                 const recipientId = (record.recipientId || '').toLowerCase();
                 const senderId = (record.senderId || '').toLowerCase();
                 const senderProfile = (record.senderProfileName || '').toLowerCase();
-                const summaryText = formatSummary(record.summableAmounts, record.countableItems, record.involvedSourcesDetails).toLowerCase();
+                const summaryText = formatSummary(record.summableAmounts, record.countableItems).toLowerCase();
 
                 const matchesQuery = 
                     resolvedName.includes(query) ||
@@ -537,7 +537,7 @@ export function TransactionHistoryView() {
                                                 <p className={`text-base sm:text-lg font-bold font-mono tracking-tight ${
                                                     isSent ? 'text-slate-700' : 'text-emerald-600'
                                                 }`}>
-                                                    {isSent ? '-' : '+'}{formatSummary(record.summableAmounts, record.countableItems, record.involvedSourcesDetails)}
+                                                    {isSent ? '-' : '+'}{formatSummary(record.summableAmounts, record.countableItems)}
                                                 </p>
                                                 <span className={`text-[10px] font-bold uppercase tracking-wider block ${
                                                     isSent ? 'text-theme-light' : 'text-emerald-600/80'

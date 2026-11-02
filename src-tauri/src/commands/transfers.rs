@@ -1055,54 +1055,6 @@ pub async fn submit_l2_send_intent(
     Ok(crate::gateway_resolver::IntentDispatchObservation { local_instance_id, status: "pending".into(), http_status })
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all="camelCase")]
-pub struct FrontendPurchaseCompletion {
-    pub purchase_id:String,
-    pub newly_committed:bool,
-    pub verdict:FrontendCheckoutReleaseVerdict,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub receive_payload: Option<ReceiveSuccessPayload>,
-}
-fn parse_regional_views(json:&str)->Result<Vec<human_money_core::humoco_proto::mesh::RegionalMeshView>,FrontendError> {
-    if json.len()>4*1024*1024 {return Err(FrontendError::from("Regional view budget exceeded".to_string()));}
-    serde_json::from_str(json).map_err(|_|FrontendError::from("Invalid regional views".to_string()))
-}
-fn checkout_now_ms()->Result<u64,FrontendError> {
-    u64::try_from(Utc::now().timestamp_millis()).map_err(|_|FrontendError::from("Invalid checkout verification time".to_string()))
-}
-/// The returned protocol context contains the backend-generated, persisted nonce.
-#[tauri::command]
-pub fn begin_pos_checkout(purchase_id:String,bundle_data:Vec<u8>,regional_views_json:String,password:Option<String>,state:tauri::State<AppState>)->Result<String,FrontendError> {
-    let views=parse_regional_views(&regional_views_json)?;let now=checkout_now_ms()?;
-    let mut service=state.service.lock().map_err(|_|FrontendError::from("Wallet service unavailable".to_string()))?;
-    let context=service.begin_checkout_purchase(&purchase_id,&bundle_data,&views,now,password.as_deref()).map_err(FrontendError::from)?;
-    serde_json::to_string(&context).map_err(|e| FrontendError::from(e.to_string()))
-}
-/// Emits release only after Core has committed L1 and the purchase together.
-/// An idempotent retry retains the purchase ID and reports newlyCommitted=false.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub fn complete_pos_checkout(purchase_id:String,bundle_data:Vec<u8>,proof_json:String,regional_views_json:String,standard_definitions_toml:HashMap<String,String>,password:Option<String>,state:tauri::State<AppState>)->Result<FrontendPurchaseCompletion,FrontendError> {
-    {
-        let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        if let Some(completion) = service.replay_checkout_purchase(&purchase_id, &bundle_data).map_err(FrontendError::from)? {
-            return Ok(FrontendPurchaseCompletion {
-                purchase_id: completion.purchase_id,
-                newly_committed: completion.newly_committed,
-                verdict: completion.verdict.into(),
-                receive_payload: None,
-            });
-        }
-    }
-    if proof_json.len()>32*1024 {return Err(FrontendError::from("Checkout proof budget exceeded".to_string()));}
-    let proof:LiveStateProof=serde_json::from_str(&proof_json).map_err(|_|FrontendError::from("Invalid checkout proof".to_string()))?;
-    let views=parse_regional_views(&regional_views_json)?;let now=checkout_now_ms()?;
-    let mut service=state.service.lock().map_err(|_|FrontendError::from("Wallet service unavailable".to_string()))?;
-    let completion=service.complete_checkout_purchase(&purchase_id,&bundle_data,&proof,&views,&standard_definitions_toml,now,password.as_deref()).map_err(FrontendError::from)?;
-    Ok(FrontendPurchaseCompletion {purchase_id:completion.purchase_id,newly_committed:completion.newly_committed,verdict:completion.verdict.into(),receive_payload:None})
-}
-
 /// Productive purchase path: stored challenge, one payment gateway, atomic import.
 #[tauri::command]
 pub async fn checkout_received_bundle(purchase_id:String,bundle_data:Vec<u8>,standard_definitions_toml:HashMap<String,String>,password:Option<String>,state:tauri::State<'_,AppState>)->Result<crate::checkout::PurchaseCompletion,FrontendError> {
