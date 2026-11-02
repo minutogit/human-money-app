@@ -2,6 +2,12 @@
 
 You are the developer of the **Human Money App**, a cross-platform desktop wallet built with Tauri v2, React 19, TypeScript, and Tailwind CSS v4.
 
+## Pre-Launch Policy: No Backwards Compatibility (Non-Negotiable)
+
+- **App & Network Not Yet Live:** The Human Money ecosystem is in pre-launch state — there are no deployed production wallets, legacy user databases, or backward-compatibility requirements for local state or backups.
+- **Zero Backwards Compatibility (*Subtraction before Construction*):** Breaking changes to Tauri IPC commands, frontend/backend DTOs, local storage schemas, and backup formats are explicitly allowed and desired. Never build fallback parsers or compatibility layers for old formats.
+- **Mandatory Audit & Cleanup Duty:** During audits, refactoring, or feature development, agents MUST actively detect and **completely delete** obsolete DTO fields, legacy migration shims, unused commands, and dead state-handling code instead of introducing or preserving compatibility wrappers.
+
 ## Your Role
 
 - Build and maintain the Tauri desktop wallet UI
@@ -37,10 +43,10 @@ When working with the `human_money_core` API, the **authoritative source** is al
 
 Read the code directly when you need current API signatures.
 
-> **Wichtiger Hinweis zu `human_money_core` (ab v0.3 Breaking Changes):**
-> Bei Fehlern oder Core-Updates muss zwingend `human_money_core` geprüft werden, da es ab Version 0.3 diverse Breaking Changes gibt.
-> - **Host-App (Tauri) Breaking Change:** Archive müssen künftig mit `FileVoucherArchive::new_secure(path, wallet_passwort)` gebaut werden.
-> - **Offene Punkte (report-only, ohne deterministischen Test):** Fehlendes `fsync` in `save_wallet` und TOCTOU-Race im PID-Lock.
+> **Core Integration Notice:**
+> When updating or troubleshooting `human_money_core`, ensure host-app compatibility:
+> - **Host-App (Tauri):** Archives must be constructed with `FileVoucherArchive::new_secure(path, wallet_passwort)`.
+> - **Report-only items (no deterministic test):** Missing `fsync` in `save_wallet` and TOCTOU race in PID lock.
 
 ## Status Maintenance
 
@@ -66,6 +72,7 @@ To keep the architecture clean and avoid polluting `human_money_core` with front
 - **camelCase Serialization:** Use `#[serde(rename_all = "camelCase")]` ONLY on these Tauri DTOs to satisfy Tauri v2/TypeScript conventions.
 - **Mapping in Commands:** Tauri commands (in `src-tauri/src/commands/...`) act as translators. Convert Core structs into Frontend DTOs before returning them (ideally by implementing the `From` trait, e.g., `impl From<VoucherSummary> for FrontendVoucherSummary`). Apply the same logic in reverse for data sent from the frontend.
 - **TypeScript Interfaces:** Frontend interfaces (`src/types.ts`) must exactly match the `camelCase` structure of the backend DTOs.
+- **No Compatibility Shims:** When updating IPC payloads or models, update both sides (`src-tauri` models and `src/types.ts`) directly. Never add or retain `#[serde(alias = ...)]`, fallback parsers, or deprecated compatibility fields.
 
 ## Project Structure
 
