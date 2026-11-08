@@ -1,0 +1,20 @@
+{
+  "drop_secret_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+  "drop_pub_b58": "C6cUahgsea11j7dTmSFiNydnaPG9kg7yPFagXqerHGnC",
+  "admin_token_hex": "960d509b7b6ba2a38e81c2e40d345e2711c206ddfcbee1b42d12d6373004f368",
+  "admin_token_hash": "3e3a0547f01f0c849fcf37f1ead8793f95b93c946dd2a459d443a7520a1dd65e",
+  "members": [
+    {
+      "ed25519_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "did": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+      "write_token_hex": "f6ebe4ce70b5665af0ef3f96dc4b662af5cb4d62f6ac1f58ebc60f0030078ccc",
+      "access_id": "5e24aa36c629dc577ae1ac12647d1c2a"
+    },
+    {
+      "ed25519_seed_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "did": "did:key:z6MkqGC3nWZhYieEVTVDKW5v588CiGfsDSmRVG9ZwwWTvLSK",
+      "write_token_hex": "4d43204242cbe5c764ffced65e5128c2c84b289696e86b1f82c461c97ba9bd84",
+      "access_id": "247735c0acdef52674425732585019cb"
+    }
+  ]
+}
