@@ -68,6 +68,24 @@
     },
     "source_text": "Back to Login"
   },
+  "auth.concurrentCloneDesc": {
+    "source_text": "Multiple devices are actively signing transactions for this wallet with the same credentials. To protect your funds against double-spend penalties, all operations have been halted. Please recover your wallet with your recovery seed to establish a clean state.",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "auth.concurrentCloneTitle": {
+    "source_text": "Security Alert: Concurrent Clone Detected",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
   "auth.confirmPassword": {
     "ai_hint": "Label for the confirm password input field in wallet recovery.",
     "status": {
@@ -205,6 +223,69 @@
       "it": "ai-translated"
     },
     "source_text": "All normal wallet functions are suspended until recovery is complete."
+  },
+  "auth.handoverDeleteBtn": {
+    "source_text": "Remove Local Profile from This Device",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "auth.handoverDesc": {
+    "source_text": "This wallet was transferred to another device (Epoch {{targetEpoch}}). On this device, transactions are deactivated to prevent conflicting spends.",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "auth.handoverLogoutBtn": {
+    "source_text": "Switch Profile / Log Out",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "auth.handoverReclaimBtn": {
+    "source_text": "Reclaim Wallet on This Device",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "auth.handoverReclaimDesc": {
+    "source_text": "To reactivate this device, enter your password. This transfers the active lock back to this device and deactivates the other device.",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "auth.handoverReclaimTitle": {
+    "source_text": "Reactivate Wallet on This Device",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "auth.handoverTitle": {
+    "source_text": "Wallet Active on Another Device",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
   },
   "auth.helpHandoverLong": {
     "source_text": "To guarantee the highest security for your balance, your wallet can only execute transactions actively on one device at a time. When switching to another device, you must perform a 'handover'. The previous device is then paused for new payments until you return the rights there as needed.",
@@ -3226,6 +3307,15 @@
       "it": "ai-translated"
     }
   },
+  "error.security.concurrentCloneDetected": {
+    "source_text": "Security Alert: Concurrent clone detected. Multiple devices are active simultaneously.",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
   "error.security.rollbackDetected": {
     "source_text": "Critical: Wallet state manipulation or outdated backup detected.",
     "status": {
@@ -3242,6 +3332,15 @@
       "fr": "ai-translated",
       "es": "ai-translated",
       "it": "ai-translated"
+    }
+  },
+  "error.security.supersededByHandover": {
+    "source_text": "Wallet Deactivated: This wallet was transferred to another device or recovered with seed.",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
     }
   },
   "error.security.walletLockedDueToFork": {
@@ -10732,6 +10831,24 @@
       "it": "ai-translated"
     }
   },
+  "wallet.anchor.cloneHint": {
+    "source_text": "Multiple devices active simultaneously. Full recovery required.",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "wallet.anchor.cloneLabel": {
+    "source_text": "Clone Conflict",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
   "wallet.anchor.conflictLabel": {
     "source_text": "Backup Conflict",
     "status": {
@@ -10901,6 +11018,60 @@
       "es": "ai-translated",
       "fr": "ai-translated",
       "it": "ai-translated"
+    }
+  },
+  "wallet.anchor.sameDeviceRollbackHint": {
+    "source_text": "An older backup is loaded on this device. Click to synchronize seamlessly.",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "wallet.anchor.sameDeviceRollbackLabel": {
+    "source_text": "Local Backup Behind",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "wallet.anchor.sameDeviceRollbackModalDesc": {
+    "source_text": "This device loaded an older backup. Newer transactions are already registered and secured online. Reconciling will safely update your local state without loss.",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "wallet.anchor.sameDeviceRollbackModalTitle": {
+    "source_text": "Update Local Backup",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "wallet.anchor.supersededHint": {
+    "source_text": "This wallet was activated on another device.",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
+    }
+  },
+  "wallet.anchor.supersededLabel": {
+    "source_text": "Transferred to Other Device",
+    "status": {
+      "de": "human-verified",
+      "fr": "human-verified",
+      "es": "human-verified",
+      "it": "human-verified"
     }
   },
   "wallet.anchor.syncLabel": {

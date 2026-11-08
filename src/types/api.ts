@@ -35,9 +35,13 @@ export type AnchorSyncStatus =
     | 'Synchronized'
     | 'Offline'
     | 'NoServers'
+    | 'PendingLeapLock'
+    | 'Inconclusive'
+    | 'SameDeviceRollback'
+    | 'SupersededByHandover'
+    | 'ConcurrentCloneDetected'
     | 'RollbackDetected'
-    | 'ForkConflict'
-    | 'PendingLeapLock';
+    | 'ForkConflict';
 
 export interface RollbackReport {
     quarantinedVoucherIds?: string[];

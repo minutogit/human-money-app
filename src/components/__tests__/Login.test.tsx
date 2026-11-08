@@ -189,4 +189,84 @@ describe('Login Component', () => {
       expect(screen.getByText(/Authentication Error: Invalid password/i)).toBeInTheDocument();
     });
   });
+
+  it('shows calm handover UI when login fails with supersededByHandover', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'list_profiles') {
+        return Promise.resolve(mockProfiles);
+      }
+      if (cmd === 'get_local_instance_id') {
+        return Promise.resolve('test-instance-id');
+      }
+      if (cmd === 'login') {
+        return Promise.reject({
+          code: 'error.security.supersededByHandover',
+          message: 'Wallet superseded by handover',
+          details: { targetEpoch: '3' },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <Login
+        onLoginSuccess={mockOnLoginSuccess}
+        onSwitchToCreate={mockOnSwitchToCreate}
+        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToReset={mockOnSwitchToReset}
+      />
+    );
+
+    const passwordInput = await screen.findByLabelText(/Password/i);
+    const loginButton = screen.getByRole('button', { name: /Login/i });
+
+    fireEvent.change(passwordInput, { target: { value: 'password123' } });
+    await waitFor(() => expect(loginButton).not.toBeDisabled());
+    fireEvent.click(loginButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Wallet Active on Another Device/i)).toBeInTheDocument();
+      expect(screen.getByText(/Epoch 3/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Switch Profile/i })).toBeInTheDocument();
+    });
+  });
+
+  it('shows clone security alert UI when login fails with concurrentCloneDetected', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'list_profiles') {
+        return Promise.resolve(mockProfiles);
+      }
+      if (cmd === 'get_local_instance_id') {
+        return Promise.resolve('test-instance-id');
+      }
+      if (cmd === 'login') {
+        return Promise.reject({
+          code: 'error.security.concurrentCloneDetected',
+          message: 'Concurrent clone detected',
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <Login
+        onLoginSuccess={mockOnLoginSuccess}
+        onSwitchToCreate={mockOnSwitchToCreate}
+        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToReset={mockOnSwitchToReset}
+      />
+    );
+
+    const passwordInput = await screen.findByLabelText(/Password/i);
+    const loginButton = screen.getByRole('button', { name: /Login/i });
+
+    fireEvent.change(passwordInput, { target: { value: 'password123' } });
+    await waitFor(() => expect(loginButton).not.toBeDisabled());
+    fireEvent.click(loginButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Security Alert: Concurrent Clone Detected/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Recover Wallet with Seed Phrase/i })).toBeInTheDocument();
+    });
+  });
 });

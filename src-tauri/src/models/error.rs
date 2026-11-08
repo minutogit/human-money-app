@@ -41,6 +41,12 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
             human_money_core::app_service::AppFacadeError::RequiresSealRecovery => "error.security.sealRecoveryRequired".to_string(),
             human_money_core::app_service::AppFacadeError::StateRollbackDetected => "error.security.rollbackDetected".to_string(),
             human_money_core::app_service::AppFacadeError::WalletLockedDueToFork => "error.security.walletLockedDueToFork".to_string(),
+            human_money_core::app_service::AppFacadeError::WalletSupersededByHandover { target_epoch, is_seed_recovery } => {
+                details.insert("targetEpoch".to_string(), target_epoch.to_string());
+                details.insert("isSeedRecovery".to_string(), is_seed_recovery.to_string());
+                "error.security.supersededByHandover".to_string()
+            }
+            human_money_core::app_service::AppFacadeError::WalletConcurrentCloneDetected => "error.security.concurrentCloneDetected".to_string(),
             human_money_core::app_service::AppFacadeError::VoucherNotActive(status) => {
                 if matches!(status, human_money_core::wallet::instance::VoucherStatus::Quarantined { .. }) {
                     "error.conflict.voucherQuarantined".to_string()
@@ -91,6 +97,23 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
 fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
     let mut details = HashMap::new();
 
+    // --- Security Errors (must precede generic wallet lock substring checks) ---
+    if msg.starts_with("Security Notice: This wallet profile was transferred to another device") {
+        return ("error.security.supersededByHandover".into(), details);
+    }
+    if msg.starts_with("Security Lockdown: Concurrent clone detected!") {
+        return ("error.security.concurrentCloneDetected".into(), details);
+    }
+    if msg.starts_with("Security Lockdown:") {
+        return ("error.security.walletLockedDueToFork".into(), details);
+    }
+    if msg.starts_with("Security Alert:") {
+        return ("error.security.sealRecoveryRequired".into(), details);
+    }
+    if msg.starts_with("Critical Error: Wallet state manipulation") {
+        return ("error.security.rollbackDetected".into(), details);
+    }
+
     // --- Wallet State Errors ---
     if msg.contains("Wallet is locked") || msg.contains("AppService is locked") {
         return ("error.wallet.locked".into(), details);
@@ -103,17 +126,6 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
     }
     if msg.contains("device mismatch") || msg.contains("belongs to a different device") || msg.contains("Device Mismatch") {
         return ("error.auth.deviceMismatch".into(), details);
-    }
-
-    // --- Security Errors ---
-    if msg.starts_with("Security Alert:") {
-        return ("error.security.sealRecoveryRequired".into(), details);
-    }
-    if msg.starts_with("Critical Error: Wallet state manipulation") {
-        return ("error.security.rollbackDetected".into(), details);
-    }
-    if msg.starts_with("Security Lockdown:") {
-        return ("error.security.walletLockedDueToFork".into(), details);
     }
 
     // --- Quarantine / Double Spend ---
@@ -181,4 +193,41 @@ fn extract_two_labeled_values(msg: &str, label1: &str, label2: &str) -> Option<(
     let val2 = val2_part.trim_matches(|c: char| c == '.' || c == ' ').to_string();
 
     Some((val1, val2))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use human_money_core::app_service::AppFacadeError;
+
+    #[test]
+    fn test_error_mapping_superseded_by_handover() {
+        let err = AppFacadeError::WalletSupersededByHandover {
+            target_epoch: 4,
+            is_seed_recovery: true,
+        };
+        let frontend_err = FrontendError::from(err);
+        assert_eq!(frontend_err.code, "error.security.supersededByHandover");
+        assert_eq!(frontend_err.details.get("targetEpoch"), Some(&"4".to_string()));
+        assert_eq!(frontend_err.details.get("isSeedRecovery"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_error_mapping_concurrent_clone_detected() {
+        let err = AppFacadeError::WalletConcurrentCloneDetected;
+        let frontend_err = FrontendError::from(err);
+        assert_eq!(frontend_err.code, "error.security.concurrentCloneDetected");
+    }
+
+    #[test]
+    fn test_classify_error_fallback() {
+        let (code1, _) = classify_error("Security Notice: This wallet profile was transferred to another device (target epoch #2, is_seed_recovery: false). Deactivated on this device.");
+        assert_eq!(code1, "error.security.supersededByHandover");
+
+        let (code2, _) = classify_error("Security Lockdown: Concurrent clone detected! Another device has performed transactions with the exact same prefix without a handover.");
+        assert_eq!(code2, "error.security.concurrentCloneDetected");
+
+        let (code3, _) = classify_error("Security Lockdown: Wallet is locked due to a detected fork in the transaction history. Recovery required.");
+        assert_eq!(code3, "error.security.walletLockedDueToFork");
+    }
 }

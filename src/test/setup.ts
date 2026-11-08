@@ -80,10 +80,12 @@ vi.mock('../utils/settingsUtils', () => ({
 }));
 
 // Mock react-i18next to return English translations
-const stableT = (key: string, options?: any) => {
-  let val = (enTranslations as Record<string, string>)[key] || key;
-  if (options && typeof options === 'object') {
-    for (const [k, v] of Object.entries(options)) {
+const stableT = (key: string, defaultOrOptions?: any, options?: any) => {
+  const actualOptions = typeof defaultOrOptions === 'object' ? defaultOrOptions : options;
+  const defaultVal = typeof defaultOrOptions === 'string' ? defaultOrOptions : key;
+  let val = (enTranslations as Record<string, string>)[key] || defaultVal;
+  if (actualOptions && typeof actualOptions === 'object') {
+    for (const [k, v] of Object.entries(actualOptions)) {
       val = val.replace(new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`, 'g'), String(v));
     }
   }

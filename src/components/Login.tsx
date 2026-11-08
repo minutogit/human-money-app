@@ -30,7 +30,10 @@ import {
     PlusCircle,
     UserX,
     ShieldCheck,
-    BookOpen
+    BookOpen,
+    Smartphone,
+    ChevronDown,
+    ChevronUp
 } from "lucide-react";
 
 interface LoginProps {
@@ -59,6 +62,9 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     const [showHandoverUI, setShowHandoverUI] = useState(false);
     const [showPostHandoverWarning, setShowPostHandoverWarning] = useState(false);
     const [handoverUserId, setHandoverUserId] = useState("");
+    const [showSupersededUI, setShowSupersededUI] = useState(false);
+    const [supersededTargetEpoch, setSupersededTargetEpoch] = useState<number | undefined>(undefined);
+    const [showCloneUI, setShowCloneUI] = useState(false);
     
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [showDeletePasswordPrompt, setShowDeletePasswordPrompt] = useState(false);
@@ -116,7 +122,14 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName);
             } catch (e) {
                 const msg = stringifyError(e);
-                if ((isBackendError(e) && e.code === 'error.auth.deviceMismatch') || msg.includes("Device Mismatch") || msg.includes("different device")) {
+                const code = isBackendError(e) ? e.code : '';
+                if (code === 'error.security.supersededByHandover' || msg.includes("transferred to another device") || msg.includes("SupersededByHandover")) {
+                    const epoch = isBackendError(e) && e.details?.targetEpoch ? parseInt(e.details.targetEpoch, 10) : undefined;
+                    setSupersededTargetEpoch(epoch);
+                    setShowSupersededUI(true);
+                } else if (code === 'error.security.concurrentCloneDetected' || msg.includes("Concurrent clone detected") || msg.includes("WalletConcurrentCloneDetected")) {
+                    setShowCloneUI(true);
+                } else if (code === 'error.auth.deviceMismatch' || msg.includes("Device Mismatch") || msg.includes("different device")) {
                     setFeedback(translateError(e, t), "error");
                     setShowHandoverUI(true);
                 } else {
@@ -200,6 +213,151 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     return (
         <AuthLayout maxWidth="max-w-2xl">
             {/* Overlays */}
+            {showSupersededUI && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/40 backdrop-blur-md p-4 animate-in fade-in duration-300">
+                    <Card className="w-full max-w-xl border-amber-200 shadow-2xl p-8 sm:p-10 space-y-6 animate-in zoom-in duration-300">
+                        <div className="text-center space-y-3">
+                            <div className="mx-auto w-16 h-16 bg-amber-500 text-white rounded-3xl flex items-center justify-center shadow-lg">
+                                <Smartphone size={32} />
+                            </div>
+                            <div className="space-y-1">
+                                <h2 className="text-2xl font-bold text-gray-900 tracking-tight">
+                                    {t('auth.handoverTitle', 'Wallet Active on Another Device')}
+                                </h2>
+                                <p className="text-xs font-semibold uppercase tracking-wider text-amber-600">
+                                    {activeProfileName}
+                                </p>
+                            </div>
+                            <p className="text-sm text-gray-600 leading-relaxed">
+                                {t('auth.handoverDesc', 'This wallet was transferred to another device (Epoch {{targetEpoch}}). On this device, transactions are deactivated to prevent conflicting spends.', {
+                                    targetEpoch: supersededTargetEpoch !== undefined ? supersededTargetEpoch : '?'
+                                })}
+                            </p>
+                        </div>
+
+                        <div className="space-y-3 pt-2">
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                onClick={() => {
+                                    setShowSupersededUI(false);
+                                    setFeedback("", null);
+                                }}
+                                className="w-full py-3.5 rounded-2xl font-semibold"
+                            >
+                                {t('auth.handoverLogoutBtn', 'Switch Profile')}
+                            </Button>
+
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                onClick={() => {
+                                    setShowSupersededUI(false);
+                                    setShowDeletePasswordPrompt(true);
+                                    setDeletePassword("");
+                                    setDeleteError("");
+                                }}
+                                className="w-full py-3 text-rose-600 border border-rose-200 hover:bg-rose-50 rounded-2xl text-xs font-semibold"
+                            >
+                                {t('auth.handoverDeleteBtn', 'Remove Local Profile from This Device')}
+                            </Button>
+                        </div>
+
+                        {/* Collapsible reclaim */}
+                        <div className="pt-3 border-t border-slate-100">
+                            <button
+                                type="button"
+                                onClick={() => setShowHandoverUI(!showHandoverUI)}
+                                className="w-full flex items-center justify-between text-xs font-semibold text-slate-500 hover:text-amber-600 transition-colors py-2"
+                            >
+                                <span className="flex items-center gap-1.5">
+                                    <Key size={14} />
+                                    {t('auth.handoverReclaimTitle', 'Reactivate Wallet on This Device')}
+                                </span>
+                                {showHandoverUI ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                            </button>
+
+                            {showHandoverUI && (
+                                <div className="mt-3 space-y-3 animate-in slide-in-from-top-2 duration-150">
+                                    <p className="text-xs text-slate-500">
+                                        {t('auth.handoverReclaimDesc', 'To reactivate this device, enter your password. This transfers the active lock back to this device and deactivates the other device.')}
+                                    </p>
+                                    <div className="space-y-2">
+                                        <Input
+                                            type="password"
+                                            placeholder={t('auth.enterAccessPassword', 'Password')}
+                                            value={password}
+                                            onChange={(e) => setPassword(e.target.value)}
+                                            className="text-sm py-2"
+                                            autoFocus
+                                        />
+                                        <Button
+                                            type="button"
+                                            disabled={isLoggingIn || !password}
+                                            onClick={async () => {
+                                                setShowSupersededUI(false);
+                                                await handleHandover();
+                                            }}
+                                            className="w-full bg-amber-600 hover:bg-amber-700 text-white text-xs py-2.5 flex items-center justify-center gap-2 rounded-2xl"
+                                        >
+                                            {isLoggingIn ? <RefreshCw size={14} className="animate-spin" /> : <Lock size={14} />}
+                                            {t('auth.handoverReclaimBtn', 'Reclaim Wallet on This Device')}
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </Card>
+                </div>
+            )}
+
+            {showCloneUI && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/40 backdrop-blur-md p-4 animate-in fade-in duration-300">
+                    <Card className="w-full max-w-xl border-rose-200 shadow-2xl p-8 sm:p-10 space-y-6 animate-in zoom-in duration-300">
+                        <div className="text-center space-y-3">
+                            <div className="mx-auto w-16 h-16 bg-rose-600 text-white rounded-3xl flex items-center justify-center shadow-lg">
+                                <ShieldAlert size={32} className="animate-pulse" />
+                            </div>
+                            <div className="space-y-1">
+                                <h2 className="text-2xl font-bold text-gray-900 tracking-tight">
+                                    {t('auth.concurrentCloneTitle', 'Security Alert: Concurrent Clone Detected')}
+                                </h2>
+                                <p className="text-xs font-semibold uppercase tracking-wider text-rose-600">
+                                    {activeProfileName}
+                                </p>
+                            </div>
+                            <p className="text-sm text-gray-600 leading-relaxed">
+                                {t('auth.concurrentCloneDesc', 'Multiple devices are actively signing transactions for this wallet with the same credentials. To protect your funds against double-spend penalties, all operations have been halted. Please recover your wallet with your recovery seed to establish a clean state.')}
+                            </p>
+                        </div>
+
+                        <div className="space-y-3 pt-2">
+                            <Button
+                                type="button"
+                                onClick={() => {
+                                    setShowCloneUI(false);
+                                    onSwitchToRecreate();
+                                }}
+                                className="w-full py-3.5 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-semibold shadow-md"
+                            >
+                                {t('auth.recoverWalletSeed', 'Recover Wallet with Seed Phrase')}
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                onClick={() => {
+                                    setShowCloneUI(false);
+                                    setFeedback("", null);
+                                }}
+                                className="w-full py-3 rounded-2xl font-semibold"
+                            >
+                                {t('common.cancel', 'Cancel')}
+                            </Button>
+                        </div>
+                    </Card>
+                </div>
+            )}
+
             {showDeleteConfirm && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/40 backdrop-blur-md p-4 animate-in fade-in duration-300">
                     <Card className="w-full max-w-xl border-rose-200 shadow-2xl p-10 space-y-8 animate-in zoom-in duration-300">
@@ -362,7 +520,13 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                                         <select
                                             id="profile-select"
                                             value={selectedProfile}
-                                            onChange={(e) => { setSelectedProfile(e.target.value); setShowHandoverUI(false); setFeedback("", null); }}
+                                            onChange={(e) => { 
+                                                setSelectedProfile(e.target.value); 
+                                                setShowHandoverUI(false); 
+                                                setShowSupersededUI(false); 
+                                                setShowCloneUI(false); 
+                                                setFeedback("", null); 
+                                            }}
                                             className="w-full bg-white border border-theme-subtle rounded-2xl px-5 py-4 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all group-hover:border-theme-primary/30"
                                         >
                                             {profiles.map((profile) => (

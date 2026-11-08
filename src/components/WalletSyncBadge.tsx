@@ -26,7 +26,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
     compact = false,
 }) => {
     const { t } = useTranslation();
-    const { isSessionActive, protectAction } = useSession();
+    const { isSessionActive, protectAction, triggerSecurityLockdown } = useSession();
 
     const [status, setStatus] = useState<AnchorSyncStatus>("Offline");
     const [isChecking, setIsChecking] = useState(false);
@@ -46,7 +46,16 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
         try {
             const nextStatus = await settingsService.checkAnchorSync();
             setStatus(nextStatus);
-            if (nextStatus === "RollbackDetected" || nextStatus === "ForkConflict") {
+            if (nextStatus === "SupersededByHandover") {
+                logger.warn("Live L2 anchor check returned SupersededByHandover");
+                triggerSecurityLockdown("handover");
+            } else if (nextStatus === "ConcurrentCloneDetected") {
+                logger.warn("Live L2 anchor check returned ConcurrentCloneDetected");
+                triggerSecurityLockdown("clone");
+            } else if (nextStatus === "ForkConflict") {
+                logger.warn("Live L2 anchor check returned ForkConflict");
+                triggerSecurityLockdown("fork");
+            } else if (nextStatus === "RollbackDetected" || nextStatus === "SameDeviceRollback") {
                 logger.warn(`L2 Anchor Sync alert detected: ${nextStatus}`);
             }
         } catch (e) {
@@ -55,7 +64,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
         } finally {
             setIsChecking(false);
         }
-    }, [isSessionActive]);
+    }, [isSessionActive, triggerSecurityLockdown]);
 
     const refreshNetwork = useCallback(async () => {
         try {
@@ -101,10 +110,18 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
         }
     };
 
-    const isConflict = status === "RollbackDetected" || status === "ForkConflict";
+    const isConflict = status === "RollbackDetected" || status === "ForkConflict" || status === "SameDeviceRollback";
+    const isSameDevice = status === "SameDeviceRollback";
     const isTestnet = activeNetwork?.toLowerCase() === "testnet";
 
-    const badgeConfig = {
+    const statusConfigs: Record<AnchorSyncStatus, {
+        label: string;
+        tooltip: string;
+        containerStyle: string;
+        dotStyle: string;
+        Icon: React.ComponentType<{ size?: number; className?: string }>;
+        iconColor: string;
+    }> = {
         NoServers: {
             label: t("wallet.syncNoServers", "Offline Mode"),
             tooltip: t("wallet.syncNoServersHint", "No online sync configured. You can still send and receive vouchers safely offline at any time."),
@@ -137,6 +154,38 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
             Icon: Shield,
             iconColor: "text-amber-600 dark:text-amber-400",
         },
+        Inconclusive: {
+            label: t("wallet.syncServersUnreachable", "Online Sync Unreachable"),
+            tooltip: t("wallet.anchor.offlineTooltip", "Online sync servers are currently unreachable. Offline payments still work normally."),
+            containerStyle: "bg-amber-50/90 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60 hover:bg-amber-100/90",
+            dotStyle: "bg-amber-500",
+            Icon: Shield,
+            iconColor: "text-amber-600 dark:text-amber-400",
+        },
+        SameDeviceRollback: {
+            label: t("wallet.anchor.sameDeviceRollbackLabel", "Local Backup Behind"),
+            tooltip: t("wallet.anchor.sameDeviceRollbackHint", "An older backup is loaded on this device. Click to synchronize seamlessly."),
+            containerStyle: "bg-amber-50/90 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60 hover:bg-amber-100/90",
+            dotStyle: "bg-amber-500",
+            Icon: RefreshCw,
+            iconColor: "text-amber-600 dark:text-amber-400",
+        },
+        SupersededByHandover: {
+            label: t("wallet.anchor.supersededLabel", "Transferred to Other Device"),
+            tooltip: t("wallet.anchor.supersededHint", "This wallet was activated on another device."),
+            containerStyle: "bg-amber-50/90 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60 hover:bg-amber-100/90",
+            dotStyle: "bg-amber-500",
+            Icon: Shield,
+            iconColor: "text-amber-600 dark:text-amber-400",
+        },
+        ConcurrentCloneDetected: {
+            label: t("wallet.anchor.cloneLabel", "Clone Conflict"),
+            tooltip: t("wallet.anchor.cloneHint", "Multiple devices active simultaneously. Full recovery required."),
+            containerStyle: "bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/50 dark:text-rose-200 dark:border-rose-700 hover:bg-rose-100 animate-pulse",
+            dotStyle: "bg-rose-600",
+            Icon: ShieldAlert,
+            iconColor: "text-rose-600 dark:text-rose-400",
+        },
         RollbackDetected: {
             label: t("wallet.anchor.conflictLabel", "Backup Conflict"),
             tooltip: t("wallet.anchor.conflictTooltip", "Security Warning: Backup conflict detected. Click to reconcile."),
@@ -153,16 +202,10 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
             Icon: ShieldAlert,
             iconColor: "text-rose-600 dark:text-rose-400",
         },
-    }[status] || {
-        label: t("wallet.syncNoServers", "Offline Mode"),
-        tooltip: t("wallet.syncNoServersHint", "No online sync configured. You can still send and receive vouchers safely offline at any time."),
-        containerStyle: "bg-slate-100 text-slate-700 border-slate-300",
-        dotStyle: "bg-slate-400",
-        Icon: Shield,
-        iconColor: "text-slate-500",
     };
 
-    const IconComp = badgeConfig.Icon;
+    const currentConfig = statusConfigs[status] || statusConfigs.Offline;
+    const IconComp = currentConfig.Icon;
 
     const testnetTooltip = isTestnet
         ? t("wallet.anchor.testnetTooltip", "Testnet-Modus: Transaktionen laufen im Testnetzwerk – kein echtes Mainnet-Geld. Netzwerk: testnet")
@@ -172,11 +215,11 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
         <>
             <div className={`inline-flex items-center gap-2 ${className}`}>
                 <div 
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border shadow-xs transition-all cursor-pointer select-none ${badgeConfig.containerStyle}`}
-                    title={badgeConfig.tooltip}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border shadow-xs transition-all cursor-pointer select-none ${currentConfig.containerStyle}`}
+                    title={currentConfig.tooltip}
                     role="button"
                     tabIndex={0}
-                    aria-label={`L2 Status: ${badgeConfig.label} - ${badgeConfig.tooltip}`}
+                    aria-label={`L2 Status: ${currentConfig.label} - ${currentConfig.tooltip}`}
                     onClick={() => {
                         if (isConflict) {
                             setIsModalOpen(true);
@@ -195,11 +238,11 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                         }
                     }}
                 >
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${badgeConfig.dotStyle} ${isConflict ? "animate-ping" : ""}`} />
-                    <IconComp size={14} className={`shrink-0 ${badgeConfig.iconColor}`} />
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${currentConfig.dotStyle} ${isConflict ? "animate-ping" : ""}`} />
+                    <IconComp size={14} className={`shrink-0 ${currentConfig.iconColor}`} />
                     {!compact && (
                         <span className="font-semibold truncate hidden sm:inline">
-                            {badgeConfig.label}
+                            {currentConfig.label}
                         </span>
                     )}
                     {isChecking && (
@@ -232,12 +275,14 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                 >
                     <div className="max-w-md w-full bg-card rounded-2xl p-6 shadow-2xl border border-theme-subtle text-theme-secondary space-y-4">
                         <div className="flex items-start justify-between gap-3">
-                            <div className="flex items-center gap-2.5 text-theme-error">
-                                <div className="p-2 rounded-xl bg-rose-100 dark:bg-rose-950/60 border border-rose-300">
-                                    <ShieldAlert size={22} className="text-rose-600 dark:text-rose-400" />
+                            <div className="flex items-center gap-2.5">
+                                <div className={`p-2 rounded-xl border ${isSameDevice ? "bg-amber-100 dark:bg-amber-950/60 border-amber-300 text-amber-600 dark:text-amber-400" : "bg-rose-100 dark:bg-rose-950/60 border-rose-300 text-rose-600 dark:text-rose-400"}`}>
+                                    {isSameDevice ? <RefreshCw size={22} /> : <ShieldAlert size={22} />}
                                 </div>
                                 <h3 id="anchor-reconcile-title" className="text-base font-bold text-theme-primary">
-                                    {t("wallet.anchor.modalTitle", "Sicherheitswarnung: Backup-Konflikt")}
+                                    {isSameDevice 
+                                        ? t("wallet.anchor.sameDeviceRollbackModalTitle", "Update Local Backup") 
+                                        : t("wallet.anchor.modalTitle", "Security Warning: Backup Conflict")}
                                 </h3>
                             </div>
                             <button
@@ -252,10 +297,9 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                         {!reconcileReport ? (
                             <>
                                 <p className="text-xs leading-relaxed text-theme-secondary">
-                                    {t(
-                                        "wallet.anchor.modalDescription",
-                                        "An outdated backup was detected or a device conflict exists. Newer transactions already exist in online protection for this wallet."
-                                    )}
+                                    {isSameDevice
+                                        ? t("wallet.anchor.sameDeviceRollbackModalDesc", "This device loaded an older backup. Newer transactions are already registered and secured online. Reconciling will safely update your local state without loss.")
+                                        : t("wallet.anchor.modalDescription", "An outdated backup was detected or a device conflict exists. Newer transactions already exist in online protection for this wallet.")}
                                 </p>
                                 <div className="p-3 bg-bg-app rounded-xl text-xs space-y-1.5 border border-theme-subtle">
                                     <div className="flex items-center gap-2 font-semibold text-theme-primary">
@@ -290,7 +334,7 @@ export const WalletSyncBadge: React.FC<WalletSyncBadgeProps> = ({
                                         size="sm"
                                         onClick={handleReconcile}
                                         disabled={isReconciling}
-                                        className="bg-rose-600 hover:bg-rose-700 text-white"
+                                        className={isSameDevice ? "bg-amber-600 hover:bg-amber-700 text-white" : "bg-rose-600 hover:bg-rose-700 text-white"}
                                     >
                                         {isReconciling ? (
                                             <span className="flex items-center gap-1.5">

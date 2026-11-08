@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-require-imports, no-undef, @typescript-eslint/no-explicit-any */
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { WalletSyncBadge } from '../WalletSyncBadge';
 import { settingsService } from '../../services/settingsService';
@@ -45,11 +45,13 @@ vi.mock('../../services/settingsService', () => ({
 }));
 
 const mockProtectAction = vi.fn(async (cb: (pw: string) => Promise<any>) => cb('mock-password'));
+const mockTriggerSecurityLockdown = vi.fn();
 
 vi.mock('../../context/SessionContext', () => ({
     useSession: () => ({
         isSessionActive: true,
         protectAction: mockProtectAction,
+        triggerSecurityLockdown: mockTriggerSecurityLockdown,
     }),
 }));
 
@@ -121,6 +123,46 @@ describe('WalletSyncBadge Component', () => {
 
         await waitFor(() => {
             expect(screen.getByText(/Testnet/i)).toBeInTheDocument();
+        });
+    });
+
+    it('renders "Local Backup Behind" amber badge for SameDeviceRollback and opens modal on click', async () => {
+        (settingsService.checkAnchorSync as any).mockResolvedValue('SameDeviceRollback');
+
+        render(<WalletSyncBadge />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Local Backup Behind')).toBeInTheDocument();
+        });
+
+        const badgeButton = screen.getByRole('button', { name: /L2 Status: Local Backup Behind/i });
+        fireEvent.click(badgeButton);
+
+        await waitFor(() => {
+            expect(screen.getByText('Update Local Backup')).toBeInTheDocument();
+            expect(screen.getByText(/This device loaded an older backup/i)).toBeInTheDocument();
+        });
+    });
+
+    it('triggers security lockdown on SupersededByHandover', async () => {
+        (settingsService.checkAnchorSync as any).mockResolvedValue('SupersededByHandover');
+
+        render(<WalletSyncBadge />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Transferred to Other Device')).toBeInTheDocument();
+            expect(mockTriggerSecurityLockdown).toHaveBeenCalledWith('handover');
+        });
+    });
+
+    it('triggers security lockdown on ConcurrentCloneDetected', async () => {
+        (settingsService.checkAnchorSync as any).mockResolvedValue('ConcurrentCloneDetected');
+
+        render(<WalletSyncBadge />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Clone Conflict')).toBeInTheDocument();
+            expect(mockTriggerSecurityLockdown).toHaveBeenCalledWith('clone');
         });
     });
 });

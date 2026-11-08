@@ -202,7 +202,16 @@ pub fn login(
             }
 
             // Initialisiere die Session und den Cache
-            state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)
+            state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)?;
+
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                use tauri::Manager;
+                let app_state = app_handle.state::<AppState>();
+                let _ = crate::commands::settings_cmd::check_anchor_sync(app_state).await;
+            });
+
+            Ok(())
         }
         Err(e) => {
             error!("Login failed: {}", e);
@@ -212,6 +221,7 @@ pub fn login(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn recover_wallet_and_set_new_password(
     folder_name: String,
     mnemonic: String,
@@ -220,6 +230,7 @@ pub fn recover_wallet_and_set_new_password(
     local_instance_id: String,
     language: MnemonicLanguage,
     state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<(), FrontendError> {
     info!("Attempting to recover wallet and set new password with language {:?}...", language);
     let mut service = state.service.lock().unwrap();
@@ -230,7 +241,17 @@ pub fn recover_wallet_and_set_new_password(
             
             // NEU: Nach der Recovery müssen wir die Session und den Cache ebenfalls initialisieren,
             // da der User im Frontend direkt ins Dashboard (logged_in) wechselt.
-            state.initialize_profile_session(&mut service, &new_password).map_err(FrontendError::from)
+            state.initialize_profile_session(&mut service, &new_password).map_err(FrontendError::from)?;
+
+            let app_handle = app.clone();
+            let pwd = new_password.clone();
+            tauri::async_runtime::spawn(async move {
+                use tauri::Manager;
+                let app_state = app_handle.state::<AppState>();
+                crate::commands::settings_cmd::probe_and_flush_cold_recovery_inner(&app_state, Some(&pwd)).await;
+            });
+
+            Ok(())
         }
         Err(e) => {
             error!("Wallet recovery failed: {}", e);
@@ -259,7 +280,17 @@ pub fn handover_to_this_device(
             }
 
             // Initialisiere die Session und den Cache
-            state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)
+            state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)?;
+
+            let app_handle = app.clone();
+            let pwd = password.clone();
+            tauri::async_runtime::spawn(async move {
+                use tauri::Manager;
+                let app_state = app_handle.state::<AppState>();
+                let _ = crate::commands::settings_cmd::flush_pending_anchor_sync_inner(&app_state, Some(&pwd)).await;
+            });
+
+            Ok(())
         }
         Err(e) => {
             error!("Handover failed: {}", e);

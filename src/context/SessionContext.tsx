@@ -13,6 +13,13 @@ import { useIntegrityCheck } from '../hooks/useIntegrityCheck';
 import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
 import { isBackendError, stringifyError } from '../utils/errorHelper';
 
+export type SecurityLockdownKind = 'handover' | 'clone' | 'fork' | null;
+
+export interface SecurityLockdownDetails {
+    targetEpoch?: number;
+    isSeedRecovery?: boolean;
+}
+
 export interface SessionContextType {
     protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>;
     isSessionActive: boolean;
@@ -22,6 +29,9 @@ export interface SessionContextType {
     notifyLogin: (name?: string) => void;
     notifyLogout: () => void;
     isForkLocked: boolean;
+    lockdownKind: SecurityLockdownKind;
+    lockdownDetails: SecurityLockdownDetails | null;
+    triggerSecurityLockdown: (kind: SecurityLockdownKind, details?: SecurityLockdownDetails) => void;
     isRecoveryRequired: boolean;
     integrityReport: import('../types').IntegrityReport | null;
     checkIntegrity: () => Promise<void>;
@@ -43,7 +53,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [profileName, setProfileName] = useState<string>("");
     const [isForkLocked, setIsForkLocked] = useState(false);
+    const [lockdownKind, setLockdownKind] = useState<SecurityLockdownKind>(null);
+    const [lockdownDetails, setLockdownDetails] = useState<SecurityLockdownDetails | null>(null);
     const [isRecoveryRequired, setIsRecoveryRequired] = useState(false);
+
+    const triggerSecurityLockdown = useCallback((kind: SecurityLockdownKind, details?: SecurityLockdownDetails) => {
+        setLockdownKind(kind);
+        setLockdownDetails(details || null);
+        if (kind !== null) {
+            setIsForkLocked(true);
+        } else {
+            setIsForkLocked(false);
+        }
+    }, []);
 
     // Refs für Throttling und Status
     const lastHeartbeatRef = useRef(0);
@@ -128,10 +150,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     isSessionActiveRef.current = false;
                     throw new Error("SESSION_EXPIRED_RETRY");
                 }
-                if (errCode === 'error.security.walletLockedDueToFork'
+                if (errCode === 'error.security.supersededByHandover'
+                    || errMsg.includes("SupersededByHandover") || errMsg.includes("transferred to another device")) {
+                    logger.warn("Wallet superseded by handover on another device.");
+                    const targetEpoch = isBackendError(error) && error.details?.targetEpoch ? parseInt(error.details.targetEpoch, 10) : undefined;
+                    const isSeedRecovery = isBackendError(error) && error.details?.isSeedRecovery === 'true';
+                    triggerSecurityLockdown('handover', { targetEpoch, isSeedRecovery });
+                } else if (errCode === 'error.security.concurrentCloneDetected'
+                    || errMsg.includes("Concurrent clone detected") || errMsg.includes("WalletConcurrentCloneDetected")) {
+                    logger.error("CRITICAL: Concurrent clone detected.");
+                    triggerSecurityLockdown('clone');
+                } else if (errCode === 'error.security.walletLockedDueToFork'
                     || errMsg.includes("WalletLockedDueToFork") || errMsg.includes("SealForkDetected") || errMsg.includes("Security Lockdown")) {
                     logger.error("CRITICAL: Wallet is locked due to a fork.");
-                    setIsForkLocked(true);
+                    triggerSecurityLockdown('fork');
                 }
                 if (errCode === 'error.security.sealRecoveryRequired'
                     || errMsg.includes("RequiresSealRecovery") || errMsg.includes("No local security seal found")) {
@@ -246,10 +278,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const clearLocks = useCallback(() => {
         setIsForkLocked(false);
         setIsRecoveryRequired(false);
+        setLockdownKind(null);
+        setLockdownDetails(null);
     }, []);
 
     return (
-        <SessionContext.Provider value={{ protectAction, isSessionActive, isAuthenticated, profileName, setProfileName, notifyLogin, notifyLogout, isForkLocked, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks, lockSession }}>
+        <SessionContext.Provider value={{ protectAction, isSessionActive, isAuthenticated, profileName, setProfileName, notifyLogin, notifyLogout, isForkLocked, lockdownKind, lockdownDetails, triggerSecurityLockdown, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks, lockSession }}>
             {children}
             <AuthModal
                 isOpen={isModalOpen}

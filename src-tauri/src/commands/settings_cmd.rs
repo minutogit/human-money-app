@@ -478,29 +478,39 @@ pub async fn check_anchor_sync(
         return Ok("Offline".to_string());
     }
 
-    let service = match state.service.lock() {
-        Ok(s) => s,
-        Err(_) => return Ok("Offline".to_string()),
-    };
+    let verdict = {
+        let mut service = match state.service.lock() {
+            Ok(s) => s,
+            Err(_) => return Ok("Offline".to_string()),
+        };
 
-    let verdict = match service.evaluate_verified_anchor_envelopes(&envelopes) {
-        Ok(v) => v,
-        Err(e) => {
-            log::debug!("evaluate_verified_anchor_envelopes returned: {}", e);
-            return Ok("Inconclusive".to_string());
+        match service.apply_verified_anchor_envelopes(&envelopes, None) {
+            Ok(v) => v,
+            Err(e) => {
+                log::debug!("apply_verified_anchor_envelopes returned: {}", e);
+                return Ok("Inconclusive".to_string());
+            }
         }
     };
 
     let status_str = match verdict {
         human_money_core::services::l2_gateway::AnchorSyncVerdict::Synchronized => "Synchronized",
-        human_money_core::services::l2_gateway::AnchorSyncVerdict::RollbackDetected { .. } => "RollbackDetected",
+        human_money_core::services::l2_gateway::AnchorSyncVerdict::SupersededByHandover { .. } => "SupersededByHandover",
+        human_money_core::services::l2_gateway::AnchorSyncVerdict::SameDeviceRollback { .. } => "SameDeviceRollback",
+        human_money_core::services::l2_gateway::AnchorSyncVerdict::ConcurrentCloneDetected { .. } => "ConcurrentCloneDetected",
+        human_money_core::services::l2_gateway::AnchorSyncVerdict::RollbackDetected { .. } => "SameDeviceRollback",
         human_money_core::services::l2_gateway::AnchorSyncVerdict::ForkConflict { .. } => "ForkConflict",
-        human_money_core::services::l2_gateway::AnchorSyncVerdict::PendingLeapLock { .. } => "PendingLeapLock",
-        human_money_core::services::l2_gateway::AnchorSyncVerdict::GenesisRequired => "PendingLeapLock",
+        human_money_core::services::l2_gateway::AnchorSyncVerdict::PendingLeapLock { .. }
+        | human_money_core::services::l2_gateway::AnchorSyncVerdict::GenesisRequired => "PendingLeapLock",
         human_money_core::services::l2_gateway::AnchorSyncVerdict::Inconclusive => "Inconclusive",
     };
 
     log::debug!("Anchor sync check evaluated to: {}", status_str);
+
+    if status_str == "PendingLeapLock" {
+        let _ = flush_pending_anchor_sync_inner(&state, None).await;
+    }
+
     Ok(status_str.to_string())
 }
 
@@ -613,10 +623,9 @@ pub async fn reconcile_rollback(
     Ok(report.into())
 }
 
-#[tauri::command]
-pub async fn flush_pending_anchor_sync(
-    password: Option<String>,
-    state: tauri::State<'_, AppState>,
+pub(crate) async fn flush_pending_anchor_sync_inner(
+    state: &AppState,
+    password: Option<&str>,
 ) -> Result<bool, FrontendError> {
     info!("Flushing pending anchor sync to L2...");
     let settings = state.get_cached_settings().map_err(FrontendError::from)?;
@@ -625,26 +634,169 @@ pub async fn flush_pending_anchor_sync(
         return Ok(false);
     }
 
-    let plan = {
-        let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        match service.prepare_anchor_sync_upload().map_err(FrontendError::from)? {
-            Some(plan) => plan,
-            None => return Ok(false),
+    for _iteration in 0..8 {
+        let plan = {
+            let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+            match service.prepare_anchor_sync_upload().map_err(FrontendError::from)? {
+                Some(p) => p,
+                None => return Ok(false),
+            }
+        };
+
+        let mut advanced_conflict = false;
+
+        for step in &plan.tombstone_plans {
+            let outcome = crate::gateway_resolver::dispatch_anchor_chain(&settings, &candidates, &step.chain_request)
+                .await
+                .map_err(FrontendError::from)?;
+
+            match outcome {
+                crate::gateway_resolver::AnchorDispatchOutcome::Accepted(200 | 201) => {
+                    continue;
+                }
+                crate::gateway_resolver::AnchorDispatchOutcome::Conflict(boxed_lock) => {
+                    if let Some(existing_lock) = *boxed_lock {
+                        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+                        let advanced = service
+                            .advance_pending_tombstone_from_conflict(step.old_epoch, &existing_lock, password)
+                            .map_err(FrontendError::from)?;
+                        if advanced {
+                            advanced_conflict = true;
+                            break;
+                        } else {
+                            return Ok(false);
+                        }
+                    } else {
+                        return Ok(false);
+                    }
+                }
+                _ => {
+                    return Ok(false);
+                }
+            }
+        }
+
+        if advanced_conflict {
+            continue;
+        }
+
+        if let Some(active_req) = &plan.active_chain_request {
+            let outcome = crate::gateway_resolver::dispatch_anchor_chain(&settings, &candidates, active_req)
+                .await
+                .map_err(FrontendError::from)?;
+
+            match outcome {
+                crate::gateway_resolver::AnchorDispatchOutcome::Accepted(200 | 201) => {
+                    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+                    service
+                        .complete_anchor_sync_upload(plan.target_checkpoint, password)
+                        .map_err(FrontendError::from)?;
+                    return Ok(true);
+                }
+                _ => {
+                    log::debug!("Active anchor chain dispatch was not accepted: {:?}", outcome);
+                    return Ok(false);
+                }
+            }
+        } else {
+            let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+            service
+                .complete_anchor_sync_upload(plan.target_checkpoint, password)
+                .map_err(FrontendError::from)?;
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+pub(crate) async fn probe_and_flush_cold_recovery_inner(
+    state: &AppState,
+    password: Option<&str>,
+) {
+    let settings = match state.get_cached_settings() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let candidates = crate::gateway_resolver::cached_candidates(&settings);
+    if candidates.is_empty() {
+        return;
+    }
+
+    let (target_epoch, probes) = {
+        let service = match state.service.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        match service.prepare_cold_recovery_probes(8) {
+            Ok(res) => res,
+            Err(_) => return,
         }
     };
 
-    let req_bytes = serde_json::to_vec(&plan.chain_request).map_err(|e| FrontendError::from(e.to_string()))?;
-    let http_status = crate::gateway_resolver::dispatch_exact(&settings, &candidates, &req_bytes)
-        .await
-        .map_err(FrontendError::from)?;
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(2500))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return,
+    };
 
-    if matches!(http_status, Some(200 | 201)) {
-        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        service.complete_anchor_sync_upload(plan.target_checkpoint, password.as_deref()).map_err(FrontendError::from)
-    } else {
-        log::debug!("L2 anchor flush returned non-success HTTP status: {:?}", http_status);
-        Ok(false)
+    for (epoch, epoch_valid_until, query) in probes {
+        for candidate in candidates.iter().take(4) {
+            let status_url = match crate::gateway_resolver::endpoint(candidate, "v1/status") {
+                Some(u) => u,
+                None => continue,
+            };
+            let resp = match client.post(status_url).json(&query).send().await {
+                Ok(r) if r.status().is_success() => r,
+                _ => continue,
+            };
+            let resp_bytes = match resp.bytes().await {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
+                let lock_entry_opt = match envelope.verdict {
+                    human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
+                    human_money_core::models::layer2_api::L2Verdict::Conflict { existing_lock } => Some(existing_lock),
+                    _ => None,
+                };
+
+                if let Some(entry) = lock_entry_opt {
+                    let checkpoint = entry.causal_output.map(|co| human_money_core::models::seal::SyncedAnchorCheckpoint {
+                        epoch,
+                        tx_nonce: 0,
+                        l2_slot: 1,
+                        seal_hash: "".to_string(),
+                        state_hash: "".to_string(),
+                        causal_state_hash: co.state_hash,
+                        epoch_valid_until: epoch_valid_until.clone(),
+                    });
+                    if let Ok(mut service) = state.service.lock() {
+                        let _ = service.queue_cold_recovery_tombstone(
+                            epoch,
+                            &epoch_valid_until,
+                            target_epoch,
+                            checkpoint,
+                            password,
+                        );
+                    }
+                    break;
+                }
+            }
+        }
     }
+
+    let _ = flush_pending_anchor_sync_inner(state, password).await;
+}
+
+#[tauri::command]
+pub async fn flush_pending_anchor_sync(
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, FrontendError> {
+    flush_pending_anchor_sync_inner(&state, password.as_deref()).await
 }
 
 /// Explicit cold-path refresh. Public gateway directories select messengers;
@@ -871,5 +1023,83 @@ mod tests {
         };
         let unspent_json = serde_json::to_string(&unspent_dto).unwrap();
         assert!(!unspent_json.contains("successorTId"));
+    }
+
+    #[test]
+    fn test_anchor_sync_verdict_mapping_parity() {
+        use human_money_core::services::l2_gateway::AnchorSyncVerdict;
+
+        let fake_entry = human_money_core::models::layer2_api::L2LockEntry {
+            causal_output: None,
+            layer2_voucher_id: "vid".into(),
+            t_id: [1u8; 32],
+            sender_ephemeral_pub: [0u8; 32],
+            layer2_signature: [0u8; 64],
+            trap_r: Some("r".into()),
+            trap_s: Some("s".into()),
+            encrypted_timestamp: 0,
+            created_at_ms: 0,
+            deletable_at: None,
+            privacy_guard: None,
+        };
+
+        let map_verdict = |v: AnchorSyncVerdict| -> &'static str {
+            match v {
+                AnchorSyncVerdict::Synchronized => "Synchronized",
+                AnchorSyncVerdict::SupersededByHandover { .. } => "SupersededByHandover",
+                AnchorSyncVerdict::SameDeviceRollback { .. } => "SameDeviceRollback",
+                AnchorSyncVerdict::ConcurrentCloneDetected { .. } => "ConcurrentCloneDetected",
+                AnchorSyncVerdict::RollbackDetected { .. } => "SameDeviceRollback",
+                AnchorSyncVerdict::ForkConflict { .. } => "ForkConflict",
+                AnchorSyncVerdict::PendingLeapLock { .. }
+                | AnchorSyncVerdict::GenesisRequired => "PendingLeapLock",
+                AnchorSyncVerdict::Inconclusive => "Inconclusive",
+            }
+        };
+
+        assert_eq!(map_verdict(AnchorSyncVerdict::Synchronized), "Synchronized");
+        assert_eq!(
+            map_verdict(AnchorSyncVerdict::SupersededByHandover {
+                target_epoch: 2,
+                is_seed_recovery: false,
+                lock_entry: fake_entry.clone(),
+            }),
+            "SupersededByHandover"
+        );
+        assert_eq!(
+            map_verdict(AnchorSyncVerdict::SameDeviceRollback {
+                remote_t_id: [1u8; 32],
+                lock_entry: fake_entry.clone(),
+            }),
+            "SameDeviceRollback"
+        );
+        assert_eq!(
+            map_verdict(AnchorSyncVerdict::ConcurrentCloneDetected {
+                remote_t_id: [1u8; 32],
+                lock_entry: fake_entry.clone(),
+            }),
+            "ConcurrentCloneDetected"
+        );
+        assert_eq!(
+            map_verdict(AnchorSyncVerdict::RollbackDetected {
+                remote_t_id: [1u8; 32],
+                lock_entry: fake_entry.clone(),
+            }),
+            "SameDeviceRollback"
+        );
+        assert_eq!(
+            map_verdict(AnchorSyncVerdict::ForkConflict {
+                foreign_entry: fake_entry.clone(),
+            }),
+            "ForkConflict"
+        );
+        assert_eq!(
+            map_verdict(AnchorSyncVerdict::PendingLeapLock {
+                sync_point: "pt".into(),
+            }),
+            "PendingLeapLock"
+        );
+        assert_eq!(map_verdict(AnchorSyncVerdict::GenesisRequired), "PendingLeapLock");
+        assert_eq!(map_verdict(AnchorSyncVerdict::Inconclusive), "Inconclusive");
     }
 }

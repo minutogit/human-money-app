@@ -33,6 +33,107 @@ pub(crate) fn endpoint(raw: &str, path: &str) -> Option<reqwest::Url> {
 pub(crate) async fn dispatch_exact(settings:&AppSettings,candidates:&[String],bytes:&[u8])->Result<Option<u16>,String> {
     dispatch_path(settings,candidates,bytes,"v1/lock",tokio::time::Instant::now()+std::time::Duration::from_millis(800)).await
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnchorDispatchOutcome {
+    Accepted(u16),
+    Conflict(Box<Option<human_money_core::models::layer2_api::L2LockEntry>>),
+    Unreachable,
+}
+
+pub(crate) async fn dispatch_anchor_chain(
+    settings: &AppSettings,
+    candidates: &[String],
+    chain_req: &human_money_core::models::layer2_api::L2ChainLockRequest,
+) -> Result<AnchorDispatchOutcome, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("HTTP client unavailable: {e}"))?;
+
+    let hops = chain_req.chain.len().max(1) as u64;
+    let budget_ms = hops.saturating_mul(800).max(3000);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(budget_ms);
+    let bytes = serde_json::to_vec(chain_req).map_err(|e| e.to_string())?;
+    let parent_lock = extract_pow_parent_lock(&bytes);
+    let path = "v1/lock";
+
+    for base in candidates.iter().take(4) {
+        let Some(url) = endpoint(base, path) else { continue };
+        let mut pow: Option<(String, u64)> = None;
+        for attempt in 0..2 {
+            let mut request = client
+                .post(url.clone())
+                .header("Content-Type", "application/json")
+                .body(bytes.clone());
+
+            if let Some(provider) = settings.custom_servers.iter().find(|provider| {
+                provider.is_active && endpoint(&provider.url, path).is_some_and(|known| known.origin() == url.origin())
+            }) {
+                if let Some(token) = &provider.auth_token {
+                    request = request.bearer_auth(token);
+                }
+                if let Some(token) = &provider.peer_token {
+                    if token.len() == 36 && token.starts_with("f2f_") && token[4..].bytes().all(|b| b.is_ascii_hexdigit()) {
+                        request = request.header("X-Peer-Token", token);
+                    }
+                }
+            }
+
+            if let Some((challenge, nonce)) = &pow {
+                request = request.header("X-PoW-Challenge", challenge).header("X-PoW-Nonce", nonce.to_string());
+            }
+
+            match tokio::time::timeout_at(deadline, request.send()).await {
+                Ok(Ok(response)) if response.status().as_u16() == 401 && attempt == 0 => {
+                    let body = tokio::time::timeout_at(deadline, bounded_body(response, 4096)).await.ok().flatten();
+                    pow = solve_public_pow(&client, base, &parent_lock, body, deadline).await;
+                    if pow.is_some() {
+                        continue;
+                    } else {
+                        break;
+                    }
+                }
+                Ok(Ok(response)) => {
+                    let status = response.status().as_u16();
+                    if status == 409 {
+                        let body_bytes = tokio::time::timeout_at(deadline, bounded_body(response, 131_072))
+                            .await
+                            .ok()
+                            .flatten();
+                        let conflicting_lock = body_bytes.and_then(|bytes| {
+                            serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&bytes)
+                                .ok()
+                                .and_then(|env| match env.verdict {
+                                    human_money_core::models::layer2_api::L2Verdict::Conflict { existing_lock } => Some(existing_lock),
+                                    _ => None,
+                                })
+                        });
+                        return Ok(AnchorDispatchOutcome::Conflict(Box::new(conflicting_lock)));
+                    } else if matches!(status, 200 | 201) {
+                        let body_bytes = tokio::time::timeout_at(deadline, bounded_body(response, 131_072))
+                            .await
+                            .ok()
+                            .flatten();
+                        if let Some(bytes) = body_bytes {
+                            if let Ok(env) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&bytes) {
+                                if let human_money_core::models::layer2_api::L2Verdict::Conflict { existing_lock } = env.verdict {
+                                    return Ok(AnchorDispatchOutcome::Conflict(Box::new(Some(existing_lock))));
+                                }
+                            }
+                        }
+                        return Ok(AnchorDispatchOutcome::Accepted(status));
+                    } else {
+                        break;
+                    }
+                }
+                Ok(Err(_)) => break,
+                Err(_) => return Ok(AnchorDispatchOutcome::Unreachable),
+            }
+        }
+    }
+    Ok(AnchorDispatchOutcome::Unreachable)
+}
 /// Each transfer input gets its own transport budget. Causal chains must
 /// persist and quorum-verify every hop, so they receive 800 ms per hop with a
 /// 3000 ms floor; single locks keep the 800 ms checkout budget. None of these
@@ -679,5 +780,59 @@ mod discovery_tests {
         assert!(cached_candidates(&settings).is_empty());
         settings.custom_servers.push(crate::settings::CustomServerDto { url: "https://custom.example".into(), ..Default::default() });
         assert_eq!(cached_candidates(&settings), vec!["https://custom.example"]);
+    }
+    #[tokio::test]
+    async fn dispatch_anchor_chain_parses_conflict_envelope_body() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_url = format!("http://{}", listener.local_addr().unwrap());
+
+        let fake_entry = human_money_core::models::layer2_api::L2LockEntry {
+            causal_output: None,
+            layer2_voucher_id: "test_anchor".to_string(),
+            t_id: [42u8; 32],
+            sender_ephemeral_pub: [1u8; 32],
+            layer2_signature: [0u8; 64],
+            trap_r: Some("r".to_string()),
+            trap_s: Some("s".to_string()),
+            encrypted_timestamp: 123456789,
+            created_at_ms: 0,
+            deletable_at: None,
+            privacy_guard: None,
+        };
+
+        let env = human_money_core::models::layer2_api::L2ResponseEnvelope {
+            verdict: human_money_core::models::layer2_api::L2Verdict::Conflict {
+                existing_lock: fake_entry.clone(),
+            },
+            server_signature: [0u8; 64],
+            quorum_certificate: None,
+        };
+        let body_json = serde_json::to_string(&env).unwrap();
+
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf).await.unwrap();
+            let resp = format!(
+                "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body_json.len(),
+                body_json
+            );
+            stream.write_all(resp.as_bytes()).await.unwrap();
+        });
+
+        let settings = AppSettings::default();
+        let chain_req = human_money_core::models::layer2_api::L2ChainLockRequest {
+            auth: human_money_core::models::layer2_api::L2AuthPayload {
+                ephemeral_pubkey: [0u8; 32],
+                auth_signature: None,
+            },
+            layer2_voucher_id: "test_anchor".to_string(),
+            chain: vec![],
+        };
+
+        let outcome = dispatch_anchor_chain(&settings, &[server_url], &chain_req).await.unwrap();
+        assert_eq!(outcome, AnchorDispatchOutcome::Conflict(Box::new(Some(fake_entry))));
+        task.await.unwrap();
     }
 }

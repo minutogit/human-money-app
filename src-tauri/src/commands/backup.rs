@@ -693,6 +693,14 @@ pub async fn restore_wallet_backup(
         }
     };
 
+    let app_handle = app.clone();
+    let pwd = new_password.clone();
+    tauri::async_runtime::spawn(async move {
+        use tauri::Manager;
+        let app_state = app_handle.state::<AppState>();
+        let _ = crate::commands::settings_cmd::flush_pending_anchor_sync_inner(&app_state, Some(&pwd)).await;
+    });
+
     Ok(FrontendRestoreOutcomeDto {
         folder_name: outcome.folder_name,
         profile_name,
