@@ -224,6 +224,9 @@ fn build_receive_payload_and_record(
         if let Some(ref wot_json) = opened_bundle.wot_sync_json {
             wot_imported_lists = state.try_import_piggybacked_wot(service, wot_json, &opened_bundle.sender_id, password);
         }
+        if let Some(ref card_json) = opened_bundle.contact_card_json {
+            state.try_import_piggybacked_contact_card(service, Some(card_json), password);
+        }
     }
 
     let payload = crate::models::ReceiveSuccessPayload {

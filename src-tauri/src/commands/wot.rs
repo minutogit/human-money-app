@@ -684,6 +684,7 @@ mod tests {
             desired_hops: Some(3),
             has_peer_list: false,
             peer_list_updated_at: None,
+            drops: vec![],
         };
 
         {
@@ -775,6 +776,7 @@ mod tests {
             desired_hops: Some(3),
             has_peer_list: false,
             peer_list_updated_at: None,
+            drops: vec![],
         };
         {
             let mut s = alice_state.service.lock().unwrap();
@@ -852,6 +854,7 @@ mod tests {
             desired_hops: Some(0),
             has_peer_list: false,
             peer_list_updated_at: None,
+            drops: vec![],
         };
         {
             let mut s = state.service.lock().unwrap();
@@ -878,6 +881,7 @@ mod tests {
             desired_hops: Some(2),
             has_peer_list: false,
             peer_list_updated_at: None,
+            drops: vec![],
         };
         {
             let mut s = state.service.lock().unwrap();
@@ -920,6 +924,7 @@ mod tests {
             desired_hops: Some(3),
             has_peer_list: false,
             peer_list_updated_at: None,
+            drops: vec![],
         };
         {
             let mut s = alice_state.service.lock().unwrap();
@@ -940,6 +945,7 @@ mod tests {
             desired_hops: Some(0),
             has_peer_list: false,
             peer_list_updated_at: None,
+            drops: vec![],
         };
         {
             let mut s = alice_state.service.lock().unwrap();
@@ -1040,6 +1046,7 @@ mod tests {
             desired_hops: Some(3),
             has_peer_list: false,
             peer_list_updated_at: None,
+            drops: vec![],
         };
         let charlie_contact = FrontendContact {
             did: charlie_did.clone(),
@@ -1054,6 +1061,7 @@ mod tests {
             desired_hops: Some(3),
             has_peer_list: false,
             peer_list_updated_at: None,
+            drops: vec![],
         };
         {
             let mut s = alice_state.service.lock().unwrap();

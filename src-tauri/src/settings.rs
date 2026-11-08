@@ -2,6 +2,9 @@
 use serde::{Deserialize, Serialize};
 
 pub const SETTINGS_KEY: &str = "app_settings";
+pub const MAX_POLLED_DROPS: usize = 10;
+pub const DROP_HEARTBEAT_SECS: u64 = 7 * 86_400;
+pub const DROP_CARD_MAX_BYTES: usize = 65_536;
 
 fn default_active_network() -> String {
     "mainnet".to_string()
@@ -84,6 +87,30 @@ pub struct AppSettings {
     pub auto_backup_enabled: bool,
     #[serde(default)]
     pub backup_dirty: bool,
+    #[serde(default = "default_market_show_unknown")]
+    pub market_show_unknown: bool,
+    #[serde(default = "default_max_store_hops")]
+    pub max_store_hops: u8,
+    #[serde(default)]
+    pub market_send_card_on_payment: bool,
+    #[serde(default = "default_share_min_level")]
+    pub share_min_level: u8,
+    #[serde(default)]
+    pub market_poll_wifi_only: bool,
+    #[serde(default)]
+    pub market_selected_drops: Vec<crate::models::FrontendDropDescriptor>,
+}
+
+fn default_share_min_level() -> u8 {
+    1
+}
+
+fn default_max_store_hops() -> u8 {
+    2
+}
+
+fn default_market_show_unknown() -> bool {
+    true
 }
 
 fn default_auto_backup_enabled() -> bool {
@@ -119,6 +146,12 @@ impl Default for AppSettings {
             balance_view_mode: default_balance_view_mode(),
             auto_backup_enabled: true,
             backup_dirty: false,
+            market_show_unknown: true,
+            max_store_hops: 2,
+            market_send_card_on_payment: false,
+            share_min_level: default_share_min_level(),
+            market_poll_wifi_only: false,
+            market_selected_drops: Vec::new(),
         }
     }
 }

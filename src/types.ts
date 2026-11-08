@@ -5,6 +5,7 @@ export * from './types/voucher';
 export * from './types/transaction';
 export * from './types/api';
 export * from './types/wot';
+export * from './types/market';
 
 /** Structured error DTO from the Tauri backend */
 export interface BackendError {

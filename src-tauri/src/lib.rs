@@ -5,6 +5,8 @@
 pub mod commands;
 pub mod models;
 pub mod settings;
+pub mod drop_client;
+pub mod drop_zip;
 mod gateway_resolver;
 pub(crate) mod intent_reconciliation;
 pub mod state;
@@ -24,7 +26,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*};
+use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*, market::*, drops::*};
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
 
@@ -172,7 +174,28 @@ pub fn run() {
             get_backup_status, run_auto_backup_sync,
             // Web of Trust (WoT)
             get_wot_summary, set_wot_max_hops, export_wot_package, import_wot_package, evaluate_voucher_trust_preview,
-            get_wot_providers, set_wot_provider_trust, remove_wot_provider, refresh_wot_provider_url
+            get_wot_providers, set_wot_provider_trust, remove_wot_provider, refresh_wot_provider_url,
+            // Marketplace
+            get_market_view,
+            get_own_contact_card,
+            save_own_contact_card,
+            delete_own_contact_card,
+            export_forward_card,
+            import_contact_card,
+            // Drops (Ablagen)
+            prepare_drop_setup,
+            save_drop_setup_zip,
+            finalize_drop_setup,
+            test_drop_connection,
+            get_drop_admin_status,
+            update_drop_admin_config,
+            block_drop_slot,
+            delete_drop_admin,
+            discover_available_drops,
+            set_selected_upload_drops,
+            sync_market_drops,
+            delete_own_drop_slots,
+            preview_contact_trust_change,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { UserCircle, Mail, Phone, Globe, Briefcase, Heart } from "lucide-react";
+import { UserCircle, Mail, Phone, Globe, Briefcase, Heart, Store } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
 import { Button } from "../ui/Button";
@@ -219,6 +219,12 @@ export function CreatorIdentityForm({
                         </div>
                     </div>
                     <div className="space-y-6">
+                        <div className="p-3 bg-theme-primary/5 border border-theme-primary/10 rounded-2xl flex items-start gap-2.5">
+                            <Store size={16} className="text-theme-primary shrink-0 mt-0.5" />
+                            <p className="text-[11px] text-theme-secondary leading-relaxed">
+                                {t('marketplace.creatorNotice')}
+                            </p>
+                        </div>
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> {t('profile.serviceOffer')}</label>
                             <textarea value={identity.serviceOffer || ""} onChange={(e) => handleChange('serviceOffer', e.target.value)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[140px]" placeholder={t('voucher.creator.serviceOfferPlaceholder')} />

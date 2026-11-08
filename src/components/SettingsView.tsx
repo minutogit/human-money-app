@@ -15,6 +15,7 @@ import { copyToClipboard } from '../utils/clipboard';
 import { ProfileSettings } from './ProfileSettings';
 import { BackupSettingsCard } from './BackupSettingsCard';
 import { StandardsManager } from './StandardsManager';
+import { DropManagementModal } from './marketplace/DropManagementModal';
 import { PageLayout } from './ui/PageLayout';
 import { SegmentedTabs } from './ui/SegmentedTabs';
 import { AlertBanner } from './ui/AlertBanner';
@@ -61,6 +62,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     const [success, setSuccess] = useState('');
     const [activeTab, setActiveTab] = useState<'app' | 'profile'>('profile');
     const [isStandardsOpen, setIsStandardsOpen] = useState(false);
+    const [isDropModalOpen, setIsDropModalOpen] = useState(false);
 
     const nav = useOptionalNavigation();
     const appVersion = nav?.appVersion || '0.3.0';
@@ -447,6 +449,137 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                                 </div>
                                             </div>
 
+                                            {/* Marketplace Show Unknown Creators Toggle */}
+                                            <div className="flex items-start gap-3 p-3 bg-white border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
+                                                <input
+                                                    type="checkbox"
+                                                    id="marketShowUnknown"
+                                                    checked={settings?.marketShowUnknown ?? true}
+                                                    onChange={(e) => setSettings(s => s ? { ...s, marketShowUnknown: e.target.checked } : null)}
+                                                    className="mt-0.5 accent-theme-primary"
+                                                />
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <label htmlFor="marketShowUnknown" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
+                                                            {t('settings.marketShowUnknown')}
+                                                        </label>
+                                                    </div>
+                                                    <label htmlFor="marketShowUnknown" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
+                                                        {t('settings.marketShowUnknownDesc')}
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            {/* Marketplace Max Store Hops */}
+                                            <div className="flex flex-col gap-1.5 p-3 bg-white border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <label htmlFor="maxStoreHops" className="text-xs font-medium text-theme-secondary cursor-pointer">
+                                                        {t('settings.maxStoreHops')}
+                                                    </label>
+                                                    <select
+                                                        id="maxStoreHops"
+                                                        value={settings?.maxStoreHops ?? 2}
+                                                        onChange={(e) => setSettings(s => s ? { ...s, maxStoreHops: Number(e.target.value) } : null)}
+                                                        className="h-8 px-2.5 bg-bg-app border border-theme-subtle rounded-lg text-xs font-semibold text-theme-secondary outline-none focus:ring-2 focus:ring-theme-primary/20 cursor-pointer"
+                                                    >
+                                                        <option value={1}>{t('settings.maxStoreHops1')}</option>
+                                                        <option value={2}>{t('settings.maxStoreHops2')}</option>
+                                                        <option value={3}>{t('settings.maxStoreHops3')}</option>
+                                                    </select>
+                                                </div>
+                                                <label htmlFor="maxStoreHops" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
+                                                    {t('settings.maxStoreHopsDesc')}
+                                                </label>
+                                            </div>
+
+                                            {/* Marketplace Send Card On Payment Toggle */}
+                                            <div className="flex items-start gap-3 p-3 bg-white border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
+                                                <input
+                                                    type="checkbox"
+                                                    id="marketSendCardOnPayment"
+                                                    checked={settings?.marketSendCardOnPayment ?? false}
+                                                    onChange={(e) => setSettings(s => s ? { ...s, marketSendCardOnPayment: e.target.checked } : null)}
+                                                    className="mt-0.5 accent-theme-primary"
+                                                />
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <label htmlFor="marketSendCardOnPayment" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
+                                                            {t('settings.marketSendCardOnPayment')}
+                                                        </label>
+                                                    </div>
+                                                    <label htmlFor="marketSendCardOnPayment" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
+                                                        {t('settings.marketSendCardOnPaymentDesc')}
+                                                    </label>
+                                                    <p className="mt-1 text-[10px] text-amber-700 bg-amber-50/70 p-2 rounded-lg border border-amber-200/60 leading-relaxed">
+                                                        {t('settings.marketSendCardOnPaymentPrivacyNote')}
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            {/* Marketplace Share Min Level */}
+                                            <div className="flex flex-col gap-1.5 p-3 bg-white border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <label htmlFor="shareMinLevel" className="text-xs font-medium text-theme-secondary cursor-pointer">
+                                                        {t('settings.shareMinLevel')}
+                                                    </label>
+                                                    <select
+                                                        id="shareMinLevel"
+                                                        value={settings?.shareMinLevel ?? 1}
+                                                        onChange={(e) => setSettings(s => s ? { ...s, shareMinLevel: Number(e.target.value) } : null)}
+                                                        className="h-8 px-2.5 bg-bg-app border border-theme-subtle rounded-lg text-xs font-semibold text-theme-secondary outline-none focus:ring-2 focus:ring-theme-primary/20 cursor-pointer"
+                                                    >
+                                                        <option value={0}>{t('contacts.trustLevel0')}</option>
+                                                        <option value={1}>{t('contacts.trustLevel1')}</option>
+                                                        <option value={2}>{t('contacts.trustLevel2')}</option>
+                                                        <option value={3}>{t('contacts.trustLevel3')}</option>
+                                                    </select>
+                                                </div>
+                                                <label htmlFor="shareMinLevel" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
+                                                    {t('settings.shareMinLevelDesc')}
+                                                </label>
+                                            </div>
+
+                                            {/* Marketplace Poll Wifi Only Toggle */}
+                                            <div className="flex items-start gap-3 p-3 bg-white border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
+                                                <input
+                                                    type="checkbox"
+                                                    id="marketPollWifiOnly"
+                                                    checked={settings?.marketPollWifiOnly ?? false}
+                                                    onChange={(e) => setSettings(s => s ? { ...s, marketPollWifiOnly: e.target.checked } : null)}
+                                                    className="mt-0.5 accent-theme-primary"
+                                                />
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <label htmlFor="marketPollWifiOnly" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
+                                                            {t('settings.marketPollWifiOnly')}
+                                                        </label>
+                                                    </div>
+                                                    <label htmlFor="marketPollWifiOnly" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
+                                                        {t('settings.marketPollWifiOnlyDesc')}
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            {/* Manage Drops Quick Action */}
+                                            <div className="flex items-center justify-between p-3 bg-bg-app border border-theme-subtle rounded-xl">
+                                                <div className="flex items-center gap-2">
+                                                    <Server size={16} className="text-theme-primary" />
+                                                    <span className="text-xs font-bold text-theme-secondary">
+                                                        {t('marketplace.dropsModalTitle')}
+                                                    </span>
+                                                </div>
+                                                <Button
+                                                    type="button"
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    onClick={() => setIsDropModalOpen(true)}
+                                                    className="text-xs gap-1.5"
+                                                >
+                                                    <Server size={13} />
+                                                    <span>{t('settings.manageDropsBtn')}</span>
+                                                </Button>
+                                            </div>
+
                                             {/* Network Selection */}
                                             <div className="space-y-3">
                                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('settings.activeNetworkLabel', 'Active Network')}</label>
@@ -803,6 +936,11 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     </form>
                 )}
             </div>
+
+            <DropManagementModal
+                isOpen={isDropModalOpen}
+                onClose={() => setIsDropModalOpen(false)}
+            />
         </PageLayout>
     );
 }

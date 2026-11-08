@@ -85,6 +85,28 @@ impl From<human_money_core::models::profile::PublicProfile> for FrontendUserProf
     }
 }
 
+impl From<FrontendUserProfile> for human_money_core::models::profile::PublicProfile {
+    fn from(p: FrontendUserProfile) -> Self {
+        Self {
+            protocol_version: p.protocol_version,
+            id: p.id,
+            first_name: p.first_name,
+            last_name: p.last_name,
+            organization: p.organization,
+            community: p.community,
+            address: p.address.map(|a| a.into()),
+            gender: p.gender,
+            email: p.email,
+            phone: p.phone,
+            coordinates: p.coordinates,
+            url: p.url,
+            service_offer: p.service_offer,
+            needs: p.needs,
+            picture_url: p.picture_url,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendContact {
@@ -101,6 +123,8 @@ pub struct FrontendContact {
     pub has_peer_list: bool,
     #[serde(default)]
     pub peer_list_updated_at: Option<u64>,
+    #[serde(default)]
+    pub drops: Vec<crate::models::FrontendDropDescriptor>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

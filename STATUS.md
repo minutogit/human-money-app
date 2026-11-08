@@ -3,10 +3,34 @@ project: human-money-app
 version: "0.4.0"
 phase: "beta"
 health: "green"
-last_updated: "2026-11-01"
+last_updated: "2026-11-08"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-057"
+    title: "Ablagen Frontend, Address Book Trust Impact, Settings, i18n & E2E Market Integration"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-056"]
+    description: "Implemented full Drop Management modal (DropManagementModal.tsx) with two tabs for drop sync/upload targets and own drop administration/setup wizard with ZIP export & HTTP connection verification; integrated non-blocking background drop syncing in MarketplaceView and MyOfferModal; added shareMinLevel and marketPollWifiOnly in SettingsView; added 'Hat eine Ablage' badge and inline trust change permission preview in AddressBook and ContactDialog; completed i18n in all 5 locales; 44 Vitest test suites (379 tests) passing."
+  - id: "APP-056"
+    title: "humoco-market Drop & Slot Crypto with Blind Multi-Recipient CSPRNG Padding & Deterministic Test Vectors"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-055"]
+    description: "Implemented cryptographically blind Drop access derivation (derive_write_token, derive_access_id, derive_admin_token), member access policy calculation with WoT Level 1-3 direct + Hop-2 clamping and allow/deny overrides, CardBundle packaging, and sealed slot blobs with CSPRNG bucket padding (16/32/64/128/256), XChaCha20Poly1305 payload encryption, and per-recipient ChaCha20Poly1305 ephemeral keys without plaintext DIDs. Generated fixed deterministic test vectors (31/31 crate unit/proptests passing)."
+  - id: "APP-055"
+    title: "humoco-market Signed Contact Cards, Pure-Rust QR Generator & src-tauri Piggybacking Backend Integration"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-054", "CORE-014"]
+    description: "Implemented pure-Rust ISO/IEC 18004 Byte-Mode ECC-L QR code SVG generator, ContactCard JWS EdDSA signing and verification with limits and prefix normalization, LRU CardStore with hop-bounded forwarding and offender checks, unified MarketView combining voucher and card listings with profile selection precedence, Tauri IPC commands (get_market_view, get_own_contact_card, save_own_contact_card, delete_own_contact_card, export_forward_card, import_contact_card), and non-blocking piggyback exchange in transfer and checkout flows (49/49 Rust backend tests + 360/360 Vitest tests passing)."
+  - id: "APP-054"
+    title: "humoco-drop Standalone Drop PHP Server, ZIP Packaging Tool & Blind Storage Backend"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Implemented standalone zero-dependency drop.php server with SHA-256 constant-time admin authorization, atomic slot writes and reads, quota enforcement, and automated zip builder tool."
   - id: "APP-053"
     title: "Proof-Carrying L2 Client Hardening (Parent-Bound 401 PoW, 1-RTT Offline-Buyer Checkout, Unoccupied Retry & Verified Anchor Sync)"
     status: "completed"
@@ -548,5 +572,44 @@ Bumped `human-money-app` to `v0.4.0`. Delivered comprehensive user-centric impro
 - **Parent-Bound 401 PoW (`APP-053`)**: Fixed stateless PoW computation directly from `401 Unauthorized` challenge responses (`HUMOCO_V1_POW_STATELESS`, parent-bound, zero extra roundtrips).
 - **Public Mesh View & 1-RTT Checkout**: Switched regional mesh view polling to unauthenticated 5s-cached `/v1/regional-mesh-view`, upgraded PoS `checkout_bundle` to 1-RTT `POST /v1/checkout` supporting offline buyers and upstream conflict recording via `MissingLocks.anchor_lock`.
 - **Unoccupied Retries & Anchor Sync**: Enabled immediate exact-byte intent re-dispatch on verified 14/20 `Unoccupied` quorum proofs and wired signature-verified `WalletSeal` anchor sync (42 Rust unit/integration tests + 328 Vitest tests passing).
+
+### 2026-11-08 — Market Waves 3A: Signed Contact Cards, Drop/Slot Crypto & Backend IPC (`APP-055`, `APP-056`)
+
+- **`humoco-market` Crate (`APP-055`, `APP-056`)**:
+  - Implemented standalone `#![forbid(unsafe_code)]` crate in `human-money-app/crates/humoco-market`.
+  - Added pure-Rust ISO/IEC 18004 Byte-Mode QR Code SVG generator (`qr.rs`, ECC-L, Versions 1..=40, up to 2900 bytes).
+  - Implemented canonical Ed25519 JWS card signing & verification (`card.rs`, `hmc-card+jwt`, base64url unpadded).
+  - Implemented in-memory & encrypted LRU `CardStore` (`card_store.rs`, hop bounding, known offender check, eviction).
+  - Implemented unified `MarketView` (`market_view.rs`) combining voucher listings and card listings, profile precedence, and trust tiers.
+  - Implemented cryptographically blind Drop access derivation and access control (`drop_access.rs`, `MemberPolicy`, direct + Hop-2 clamping, allow/deny lists).
+  - Implemented multi-recipient sealed slot blobs (`slot.rs`, `CardBundle`, CSPRNG bucket padding 16/32/64/128/256, XChaCha20Poly1305 + ChaCha20Poly1305 trial decryption, zero plaintext DIDs).
+  - Generated deterministic test vectors (`tests/vectors/drop_access.json`).
+  - All 31 unit tests and proptests passing with 0 clippy warnings.
+- **Tauri Host IPC & Piggyback Integration (`APP-055`)**:
+  - Registered Tauri commands: `get_market_view`, `get_own_contact_card`, `save_own_contact_card`, `delete_own_contact_card`, `export_forward_card`, `import_contact_card`.
+  - Added settings: `max_store_hops` (default 2), `market_send_card_on_payment` (default false).
+  - Wired transparent, non-blocking piggyback exchange in transfer creation and checkout receipt.
+  - All 49 backend unit tests and 360 Vitest tests passing with 0 warnings.
+
+### 2026-11-08 — Market Wave 5A: Ablagen Frontend, Drop Sync, Address Book Integration & Full Verification (`APP-057`)
+
+- **Drop Management Modal (`APP-057`)**:
+  - Built `DropManagementModal.tsx` with two clean tabs: "Ablagen nutzen" (sync actions, feedback display, discovered drops list with authorization badges, and selection of up to 3 upload targets) and "Eigene Ablage (Admin)" (guided setup wizard with policy configuration, ZIP package export via native save dialog + base64 fallback, HTTPS base URL validation, live connection testing, and full admin dashboard).
+  - Added admin controls for channel `card`: member counters (direct, hop 2, total / max), editable card policy, allow/deny list management, active slot viewer, manual 32-char hex Access-ID slot blocking, blocked slot unblocking, and local admin credentials reset.
+- **Marketplace & Offer Sync Integration**:
+  - Added non-blocking drop sync on mount and manual pull-to-refresh in `MarketplaceView.tsx`, triggering reload when new cards are imported.
+  - Added "Ablagen" header button in `MarketplaceView.tsx` opening `DropManagementModal`.
+  - Integrated automatic non-blocking drop upload on card save and drop slot cleanup on card deletion in `MyOfferModal.tsx`.
+- **Address Book & Settings Integration**:
+  - Added `shareMinLevel` selector and `marketPollWifiOnly` toggle to Marketplace settings in `SettingsView.tsx` alongside quick link to Drop Management.
+  - Added "Hat eine Ablage" (`hasDrop`) badge on contact cards in `AddressBook.tsx`.
+  - Added real-time permission change preview in `ContactDialog.tsx` on trust level changes (`previewContactTrustChange`), clearly indicating gained/lost reading and writing permissions.
+  - Wired automatic non-blocking drop members recalculation and push on contact save/delete in `contactService.ts`.
+- **i18n & Full Verification**:
+  - Added all Phase 3 keys across German, English, Spanish, French, and Italian and updated `i18n-lock.json`.
+  - Added unit test suites for `DropManagementModal.test.tsx` (5 tests), `AddressBook.test.tsx` (6 tests), and `WotContacts.test.tsx` (13 tests).
+  - All 44 Vitest test suites (379 tests), `tsc`, `eslint`, `i18n:check`, and full `./run-tests.sh -q` passing with 0 errors and 0 warnings.
+
+
 
 

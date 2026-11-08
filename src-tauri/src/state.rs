@@ -9,7 +9,44 @@ use crate::settings::{AppSettings, SETTINGS_KEY};
 pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
 pub const CONTACTS_DATA_NAME: &str = "address_book";
 pub const WOT_DATA_NAME: &str = "wot_register";
+pub const MARKET_CARD_STORE_KEY: &str = "market_card_store";
+pub const MARKET_OWN_CARD_KEY: &str = "market_own_card";
+pub const MARKET_DROP_ADMIN_KEY: &str = "market_drop_admin";
+pub const MARKET_DROP_SYNC_KEY: &str = "market_drop_sync";
 pub const BUNDLE_RETENTION_DAYS: i64 = 90;
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+pub struct StoredOwnCard {
+    pub card: humoco_market::ContactCard,
+    pub card_jws: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct StoredDropAdmin {
+    pub descriptor: humoco_market::DropDescriptor,
+    pub drop_secret_hex: String,
+    pub data_dir: String,
+    pub max_members: usize,
+    pub policies: std::collections::BTreeMap<String, humoco_market::MemberPolicy>,
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+    pub blocked_access_ids: Vec<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct StoredDropSync {
+    pub last_upload_at: Option<u64>,
+    pub last_readers_hash: Option<String>,
+    pub last_uploaded_card_v: Option<u64>,
+    #[serde(default)]
+    pub etags_by_read_url: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub last_modified_by_read_url: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub slot_mtimes: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    pub drop_sources_by_did: std::collections::BTreeMap<String, String>,
+}
 
 pub struct AppState {
     pub service: Mutex<AppService>,
@@ -94,9 +131,28 @@ impl AppState {
                 *self.contacts.lock().unwrap() = Some(address_book.clone());
 
                 let wot_guard = self.wot.lock().unwrap();
+                let card_store: Option<humoco_market::CardStore> = service
+                    .load_encrypted_data(MARKET_CARD_STORE_KEY, password)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+
                 let mut contacts: Vec<FrontendContact> = address_book.contacts.into_values().collect();
                 for c in contacts.iter_mut() {
                     enrich_contact_with_wot(c, wot_guard.as_ref());
+                    if let Some(ref store) = card_store {
+                        if let Ok(can_did) = canonicalize_did(&c.did) {
+                            if let Some(stored) = store
+                                .cards
+                                .values()
+                                .find(|sc| canonicalize_did(&sc.card.did).ok().as_deref() == Some(&can_did))
+                            {
+                                let card_drops: Vec<crate::models::FrontendDropDescriptor> =
+                                    stored.card.drops.iter().cloned().map(Into::into).collect();
+                                c.drops = merge_contact_drops(&c.drops, &card_drops);
+                            }
+                        }
+                    }
+                    c.drops.truncate(3);
                 }
                 contacts.sort_by(|a, b| {
                     let name_a = a.profile.first_name.as_deref().unwrap_or("");
@@ -652,6 +708,108 @@ impl AppState {
 
         Some(stats.imported + stats.updated + stats.merged)
     }
+
+    pub fn try_import_piggybacked_contact_card(
+        &self,
+        service: &mut AppService,
+        contact_card_json: Option<&str>,
+        password: Option<&str>,
+    ) {
+        let json = match contact_card_json {
+            Some(j) if !j.trim().is_empty() => j.trim(),
+            _ => return,
+        };
+
+        let env: humoco_market::CardEnvelope = match serde_json::from_str(json) {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("Malformed piggybacked CardEnvelope: {}", e);
+                return;
+            }
+        };
+
+        let settings = self
+            .get_cached_settings()
+            .or_else(|_| self.load_settings(service, password))
+            .unwrap_or_default();
+        let max_store_hops = settings.max_store_hops.clamp(1, 3);
+        let now = Utc::now().timestamp().max(0) as u64;
+
+        let mut store = match service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
+            Ok(data) => serde_json::from_slice::<humoco_market::CardStore>(&data).unwrap_or_default(),
+            Err(_) => humoco_market::CardStore::default(),
+        };
+
+        let outcome = service.with_wallet(|wallet| {
+            let is_offender = |did: &str| -> bool {
+                use human_money_core::models::conflict::TrustStatus;
+                matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_))
+            };
+            humoco_market::accept_envelope(&mut store, &env, now, max_store_hops, &is_offender)
+        });
+
+        match outcome {
+            Ok(humoco_market::AcceptOutcome::Accepted { did, replaced }) => {
+                log::info!("Accepted piggybacked contact card for did: {}, replaced: {}", did, replaced);
+                if let Ok(bytes) = serde_json::to_vec(&store) {
+                    if let Err(e) = service.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password) {
+                        log::warn!("Failed to save CardStore after accepting piggybacked card: {}", e);
+                    }
+                }
+                if let Some(stored) = store.cards.values().find(|sc| sc.card.did == did) {
+                    let card_drops: Vec<crate::models::FrontendDropDescriptor> =
+                        stored.card.drops.iter().cloned().map(Into::into).collect();
+                    self.update_contact_drops_from_card(service, &did, &card_drops, password);
+                }
+            }
+            Ok(other) => {
+                log::debug!("Piggybacked contact card outcome: {:?}", other);
+            }
+            Err(e) => {
+                log::warn!("Error verifying reputation for piggybacked contact card: {}", e);
+            }
+        }
+    }
+
+    pub fn update_contact_drops_from_card(
+        &self,
+        service: &mut AppService,
+        card_did: &str,
+        card_drops: &[crate::models::FrontendDropDescriptor],
+        password: Option<&str>,
+    ) {
+        if card_drops.is_empty() {
+            return;
+        }
+        let can_card_did = match canonicalize_did(card_did) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
+            Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data).unwrap_or_default(),
+            Err(_) => return,
+        };
+
+        let mut updated = false;
+        for (k, contact) in address_book.contacts.iter_mut() {
+            let is_match = k == card_did || canonicalize_did(k).ok().as_deref() == Some(&can_card_did);
+            if is_match {
+                let merged = merge_contact_drops(&contact.drops, card_drops);
+                if contact.drops != merged {
+                    contact.drops = merged;
+                    updated = true;
+                }
+            }
+        }
+
+        if updated {
+            if let Ok(bytes) = serde_json::to_vec(&address_book) {
+                let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password);
+            }
+            *self.contacts.lock().unwrap() = Some(address_book);
+        }
+    }
 }
 
 pub fn canonicalize_did(input: &str) -> Result<String, humoco_wot::WotError> {
@@ -733,4 +891,31 @@ fn truncate_did(did: &str) -> String {
     } else {
         did.to_string()
     }
+}
+
+pub fn merge_contact_drops(
+    existing: &[crate::models::FrontendDropDescriptor],
+    card_drops: &[crate::models::FrontendDropDescriptor],
+) -> Vec<crate::models::FrontendDropDescriptor> {
+    let mut result = Vec::with_capacity(3);
+    let mut seen = std::collections::HashSet::new();
+
+    // Newest card drops take precedence, preserving priority order
+    for d in card_drops {
+        if seen.insert(d.read_url.clone()) {
+            result.push(d.clone());
+            if result.len() == 3 {
+                return result;
+            }
+        }
+    }
+    for d in existing {
+        if seen.insert(d.read_url.clone()) {
+            result.push(d.clone());
+            if result.len() == 3 {
+                return result;
+            }
+        }
+    }
+    result
 }

@@ -24,7 +24,8 @@ const VALID_DOMAINS = [
   'settings',
   'standards',
   'error',
-  'gender'
+  'gender',
+  'marketplace'
 ];
 
 let enContent;

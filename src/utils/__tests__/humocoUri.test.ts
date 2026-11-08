@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { Buffer } from 'node:buffer';
 import {
   buildContactCardText,
   parseContactCard,
   buildPaymentRequestText,
   parsePaymentRequest,
+  buildCardUri,
+  parseCardUri,
 } from '../humocoUri';
 
 describe('humocoUri Utilities', () => {
@@ -152,6 +155,47 @@ describe('humocoUri Utilities', () => {
       expect(parsePaymentRequest('humoco://pay?amount=50')).toBeNull();
       expect(parsePaymentRequest('humoco://pay?to=invalid-recipient&amount=50')).toBeNull();
       expect(parsePaymentRequest('Just text without uri')).toBeNull();
+    });
+  });
+
+  describe('buildCardUri and parseCardUri', () => {
+    const sampleEnvelopeJson = JSON.stringify({
+      card_jws: 'eyJhbGciOiJFZERTQSIsInR5cCI6ImhtYy1jYXJkK2p3dCJ9.payload.sig',
+      hops: 1,
+    });
+    // encode in base64
+    const sampleB64 = Buffer.from(sampleEnvelopeJson, 'utf8').toString('base64');
+
+    it('builds a humoco://card URI with base64 envelope', () => {
+      const uri = buildCardUri(sampleB64);
+      expect(uri).toBe(`humoco://card?env=${sampleB64}`);
+    });
+
+    it('parses a humoco://card URI and decodes envelope JSON', () => {
+      const uri = `humoco://card?env=${sampleB64}`;
+      const result = parseCardUri(uri);
+      expect(result).not.toBeNull();
+      expect(result?.envBase64).toBe(sampleB64);
+      expect(result?.envelopeJson).toBe(sampleEnvelopeJson);
+    });
+
+    it('parses humoco://card embedded in chat or email text', () => {
+      const message = `
+        Hey check out my contact card:
+        humoco://card?env=${sampleB64}
+        See you on the marketplace!
+      `;
+      const result = parseCardUri(message);
+      expect(result).not.toBeNull();
+      expect(result?.envBase64).toBe(sampleB64);
+      expect(result?.envelopeJson).toBe(sampleEnvelopeJson);
+    });
+
+    it('returns null for empty or invalid card URI', () => {
+      expect(parseCardUri('')).toBeNull();
+      expect(parseCardUri('humoco://card')).toBeNull();
+      expect(parseCardUri('humoco://card?other=param')).toBeNull();
+      expect(parseCardUri('https://example.com/card?env=123')).toBeNull();
     });
   });
 });

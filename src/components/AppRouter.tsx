@@ -25,6 +25,7 @@ import { useNavigation } from '../context/NavigationContext';
 import { SupportView } from './SupportView';
 import { BugReportView } from './BugReportView';
 import { ConceptView } from './ConceptView';
+import { MarketplaceView } from './marketplace/MarketplaceView';
 
 export const AppRouter: React.FC = () => {
     const { notifyLogin } = useSession();
@@ -155,6 +156,8 @@ export const AppRouter: React.FC = () => {
             />;
         case "wallet":
             return <WalletView />;
+        case "marketplace":
+            return <MarketplaceView initialSelectedDid={appState.selectedDid} />;
         default:
             return (
                 <div className="flex h-full w-full items-center justify-center">

@@ -342,7 +342,7 @@
     }
   },
   "auth.loadExistingWalletSub": {
-    "source_text": "(Creates a wallet from an existing seed)",
+    "source_text": "(Load vouchers & contacts from .hmcbackup or sync folder)",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -351,7 +351,7 @@
     }
   },
   "auth.loadExistingWalletTitle": {
-    "source_text": "[→] CREATE FROM EXISTING WALLET",
+    "source_text": "[→] RESTORE FROM BACKUP",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -368,6 +368,15 @@
       "it": "ai-translated"
     },
     "source_text": "Loading Wallet..."
+  },
+  "auth.lockSession": {
+    "source_text": "Lock session",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "auth.loggedIn": {
     "ai_hint": "Status label shown in the sidebar when a session is active and the user is logged in.",
@@ -479,6 +488,15 @@
     },
     "source_text": "Password must be at least 8 characters"
   },
+  "auth.passwordPlaceholder": {
+    "source_text": "Enter password",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "auth.passwordsDontMatch": {
     "ai_hint": "Validation error when password and confirm password fields do not match.",
     "status": {
@@ -548,6 +566,24 @@
       "it": "ai-translated"
     },
     "source_text": "Repeat your new password"
+  },
+  "auth.resetPasswordWithSeedDesc": {
+    "source_text": "Reset the local password for an existing wallet on this device using your recovery words.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "auth.resetPasswordWithSeedTitle": {
+    "source_text": "Reset Password with Recovery Words",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "auth.securityLockdown": {
     "ai_hint": "Title heading in ForkLockOverlay when a fork is detected.",
@@ -789,6 +825,24 @@
     },
     "source_text": "Cancel"
   },
+  "common.change": {
+    "source_text": "Change",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.clear": {
+    "source_text": "Clear",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "common.close": {
     "source_text": "Close",
     "status": {
@@ -819,6 +873,24 @@
     },
     "ai_hint": "UI text in the common domain."
   },
+  "common.copy": {
+    "source_text": "Copy",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.copyError": {
+    "source_text": "Failed to copy to clipboard.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "common.create": {
     "source_text": "Create",
     "status": {
@@ -839,6 +911,15 @@
     },
     "ai_hint": "UI text in the common domain."
   },
+  "common.details": {
+    "source_text": "Toggle details",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "common.dictionary": {
     "ai_hint": "Label for the language/wordlist selector in profile creation and recovery.",
     "status": {
@@ -851,6 +932,15 @@
   },
   "common.done": {
     "source_text": "Done",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "common.error": {
+    "source_text": "Error",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -1114,6 +1204,15 @@
     },
     "source_text": "Required"
   },
+  "common.retry": {
+    "source_text": "Retry",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "common.select": {
     "source_text": "Select...",
     "status": {
@@ -1123,6 +1222,15 @@
       "it": "ai-translated"
     },
     "ai_hint": "UI text in the common domain."
+  },
+  "common.showInFolder": {
+    "source_text": "Show in Folder",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "common.sidebarActions": {
     "ai_hint": "Heading label for the 'Actions' navigation group in the sidebar.",
@@ -1452,6 +1560,24 @@
     },
     "ai_hint": "Label or status text in double-spend conflict resolver. Contains variables: {{index}}."
   },
+  "conflict.exportProofBtn": {
+    "source_text": "Save Fraud Proof (.hmcproof)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "conflict.exportProofFailed": {
+    "source_text": "Failed to export fraud proof: {{error}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "conflict.fetchDetailsFailed": {
     "source_text": "Failed to fetch double-spend proof details: {{error}}",
     "status": {
@@ -1473,7 +1599,7 @@
     "ai_hint": "Error message in conflict resolver. Contains variables: {{error}}."
   },
   "conflict.forkPointLabel": {
-    "source_text": "Fork Point Previous Hash:",
+    "source_text": "Common Transaction Split Point:",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -1511,6 +1637,24 @@
       "it": "ai-translated"
     },
     "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.importProofBtn": {
+    "source_text": "Import Fraud Proof (.hmcproof)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "conflict.importProofFailed": {
+    "source_text": "Failed to import fraud proof: {{error}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "conflict.informationOnlyTitle": {
     "source_text": "Information Only (Witness Report)",
@@ -1682,6 +1826,15 @@
     },
     "ai_hint": "Label or status text in double-spend conflict resolver."
   },
+  "conflict.proofExportedTitle": {
+    "source_text": "Fraud Proof (.hmcproof) Successfully Saved",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "conflict.proofIdLabel": {
     "source_text": "Conflict Proof ID:",
     "status": {
@@ -1691,6 +1844,24 @@
       "it": "ai-translated"
     },
     "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.proofImportedDesc": {
+    "source_text": "A fraud proof (double-spend) was detected and saved to the conflict registry.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "conflict.proofImportedTitle": {
+    "source_text": "Fraud Proof Successfully Imported",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "conflict.proofNotFound": {
     "source_text": "Double-spend proof not found.",
@@ -2026,6 +2197,15 @@
     },
     "ai_hint": "Label or status text in double-spend conflict resolver."
   },
+  "conflict.viewProofBtn": {
+    "source_text": "View Proof",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "conflict.witnessConflictsHeader": {
     "source_text": "Network Witness Reports ({{count}})",
     "status": {
@@ -2114,6 +2294,42 @@
     },
     "ai_hint": "Tooltip/accessibility label for clearing the search input."
   },
+  "contacts.clipboardReadFailed": {
+    "source_text": "Could not read from clipboard.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.copiedContactCard": {
+    "source_text": "Copied!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.copyContactCard": {
+    "source_text": "Copy Contact Card",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.copyContactCardFailed": {
+    "source_text": "Could not copy contact card.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "contacts.deleteConfirmButton": {
     "source_text": "Delete Contact",
     "status": {
@@ -2133,6 +2349,24 @@
       "it": "ai-translated"
     },
     "ai_hint": "Body message in confirmation modal asking if user is sure about deleting a contact."
+  },
+  "contacts.deleteProviderDesc": {
+    "source_text": "Are you sure you want to remove the provider filter \"{{name}}\"?",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.deleteProviderTitle": {
+    "source_text": "Remove Community Provider",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "contacts.deleteTitle": {
     "source_text": "Delete Contact",
@@ -2184,6 +2418,24 @@
     },
     "ai_hint": "Tooltip/accessibility label on the edit contact profile button."
   },
+  "contacts.emptyClipboard": {
+    "source_text": "Clipboard is empty.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.emptyContacts": {
+    "source_text": "No contacts available in address book.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "contacts.emptyDescription": {
     "source_text": "No contacts match your current filter. Add your first contact to get started.",
     "status": {
@@ -2213,6 +2465,42 @@
       "it": "ai-translated"
     },
     "ai_hint": "Placeholder subtitle in contact dialog before DID is typed."
+  },
+  "contacts.exportModeAllContacts": {
+    "source_text": "Share with All Rated Contacts ({{count}})",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.exportModeAllContactsDesc": {
+    "source_text": "Creates a single trust file automatically encrypted for each of your rated contacts. No password required.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.exportModePassword": {
+    "source_text": "Protect with Password",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.exportModePasswordDesc": {
+    "source_text": "Use a shared password to send your trust file to someone not yet in your address book.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "contacts.exportWotButton": {
     "source_text": "Share Trust File",
@@ -2289,8 +2577,55 @@
     },
     "ai_hint": "Input placeholder for first name."
   },
+  "contacts.hasDrop": {
+    "source_text": "Has a Drop",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "contacts.hasDropTooltip": {
+    "source_text": "Contact provides their own drop",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
   "contacts.helpWotLong": {
     "source_text": "In Human Money there is no central bank or global credit score. Instead, you decide locally whom you trust.\n\nWhen you send payments to trusted contacts or share a trust file (.wot), recommendations are passed on end-to-end encrypted. Your contact names stay private—your wallet simply checks in the background which shared contacts connect an unfamiliar voucher to you.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.helpWotReachLong": {
+    "source_text": "In Human Money, your personal recommendations determine trust throughout the network without any central authority:\n\n• 1 Hop: Only your direct contacts see your ratings.\n• 2 Hops: Friends of your friends can evaluate vouchers based on your recommendations.\n• 3 Hops (Recommended): Optimal regional community reach.\n• 4 Hops: Extended trans-regional network coverage.\n\nAutomatic reciprocity (Tit-for-Tat): New or one-sided contacts automatically start at 1 Hop. A contact only receives your wider recommendation circle once they share their trust recommendations with you as well. Ratings of Level 0 ('Real Person') are never forwarded (0 Hops).\n\nPrivacy & Zero-Knowledge: Your address book names and personal notes never leave your device. Only cryptographically salted pseudonymous hashes travel across the network, stripped cleanly at your chosen hop limit.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.helpWotReachShort": {
+    "source_text": "You decide how far your recommendations travel (1 to 4 hops). Contacts only receive wide forwarding once they also share recommendations back.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.helpWotReachTitle": {
+    "source_text": "Recommendation Reach & Privacy",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -2309,6 +2644,24 @@
   },
   "contacts.helpWotTitle": {
     "source_text": "How Your Trust Network Helps",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.importWotButton": {
+    "source_text": "Import Trust File (.wot)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.invalidClipboardContent": {
+    "source_text": "Clipboard does not contain a valid contact card or user ID.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -2355,6 +2708,24 @@
       "it": "ai-translated"
     },
     "ai_hint": "Button label to open contact creation dialog."
+  },
+  "contacts.noContactsFound": {
+    "source_text": "No matching contacts found.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.noOwnDidError": {
+    "source_text": "Could not load your own user ID.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "contacts.noTagsAssigned": {
     "source_text": "No tags assigned",
@@ -2406,8 +2777,98 @@
     },
     "ai_hint": "Input placeholder for organization name."
   },
+  "contacts.pasteContactCard": {
+    "source_text": "Paste from Clipboard",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.peerListStale": {
+    "source_text": "Recommendations outdated",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.peerListStaleHint": {
+    "source_text": "This contact has not updated their recommendations for over a year.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "contacts.peerListSynced": {
     "source_text": "Recommendations synced",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.providerImportSuccess": {
+    "source_text": "Community seal \"{{name}}\" imported with {{count}} verified members.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.providerMembers": {
+    "source_text": "{{count}} Members",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.providerRefreshButton": {
+    "source_text": "Update seal via URL",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.providerRefreshSuccess": {
+    "source_text": "Provider \"{{name}}\" updated successfully.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.providerRemovedSuccess": {
+    "source_text": "Provider removed successfully.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.providerStaleBadge": {
+    "source_text": "Needs Update",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.providerTrustInactive": {
+    "source_text": "Inactive (0)",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -2500,8 +2961,35 @@
     },
     "ai_hint": "Placeholder in the search input on the Address Book page."
   },
+  "contacts.selectContactTitle": {
+    "source_text": "Select Contact",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "contacts.shareWotForContact": {
     "source_text": "Create encrypted trust file for this contact",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.tabPersonalContacts": {
+    "source_text": "Personal Contacts",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.tabProviders": {
+    "source_text": "Community Seals & Providers",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -2601,6 +3089,15 @@
       "it": "ai-translated"
     }
   },
+  "contacts.trustLevelHint": {
+    "source_text": "Your personal trust rating for this contact.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "contacts.trustLevelUnrated": {
     "source_text": "Not rated yet",
     "status": {
@@ -2626,6 +3123,46 @@
       "es": "ai-translated",
       "fr": "ai-translated",
       "it": "ai-translated"
+    }
+  },
+  "contacts.trustPreviewGainRead": {
+    "source_text": "Can read your marketplace",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "contacts.trustPreviewGainWrite": {
+    "source_text": "Can write to your drop",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "contacts.trustPreviewLoseRead": {
+    "source_text": "Can no longer read your marketplace",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "contacts.trustPreviewLoseWrite": {
+    "source_text": "Can no longer write to your drop",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
     }
   },
   "contacts.trustSectionLabel": {
@@ -2694,6 +3231,60 @@
       "it": "ai-translated"
     }
   },
+  "contacts.wotHops1": {
+    "source_text": "1 Hop",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.wotHops2": {
+    "source_text": "2 Hops",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.wotHops3": {
+    "source_text": "3 Hops",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.wotHops4": {
+    "source_text": "4 Hops",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.wotReachLabel": {
+    "source_text": "Network Reach",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "contacts.wotReachSubtitle": {
+    "source_text": "Forwarding limit for your recommendations across the trust network.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "dashboard.backupReminderButton": {
     "source_text": "Backup Settings",
     "status": {
@@ -2714,6 +3305,60 @@
   },
   "dashboard.backupReminderTitle": {
     "source_text": "Create a Wallet Backup",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.balanceBreakdownTitle": {
+    "source_text": "Balance Breakdown",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.balanceDetailsTooltip": {
+    "source_text": "Show balance breakdown",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.breakdownNet": {
+    "source_text": "Net Balance",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.breakdownOwnAvailable": {
+    "source_text": "Own available",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.breakdownOwnCirculating": {
+    "source_text": "Own circulating (commitments)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.breakdownReceived": {
+    "source_text": "Received (from others)",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -3009,6 +3654,33 @@
       "it": "ai-translated"
     }
   },
+  "dashboard.conceptVaultText": {
+    "source_text": "There is no cloud and no central server account. Your vouchers and cryptographic keys exist solely encrypted on your local device. Regular backups protect against loss!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.conceptVaultTitle": {
+    "source_text": "Your Device is Your Vault",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.copyUserIdHint": {
+    "source_text": "Copy your user ID: {{id}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "dashboard.eventReceived": {
     "source_text": "Received from {{name}}",
     "status": {
@@ -3081,6 +3753,24 @@
       "it": "ai-translated"
     }
   },
+  "dashboard.expiringSoonDesc": {
+    "source_text": "These active vouchers will expire within the next 30 days. Click here to view them in your wallet.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.expiringSoonTitle": {
+    "source_text": "{{count}} voucher(s) expiring soon",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "dashboard.fixNow": {
     "source_text": "Fix Now",
     "status": {
@@ -3099,6 +3789,24 @@
       "it": "ai-translated"
     }
   },
+  "dashboard.modeNet": {
+    "source_text": "Net Balance",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.modeSpendable": {
+    "source_text": "Spendable",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "dashboard.needSignatures": {
     "source_text": "{{count}} Vouchers need signatures",
     "status": {
@@ -3114,6 +3822,15 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "dashboard.ownFrameAvailable": {
+    "source_text": "Own frame available: +{{amount}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -3520,6 +4237,51 @@
     },
     "ai_hint": "Descriptive paragraph text in transaction history / activity log."
   },
+  "history.backToStatement": {
+    "source_text": "To Account Statement",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.copyDid": {
+    "source_text": "Copy DID",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.copyTxId": {
+    "source_text": "Copy receipt ID",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.counterparty": {
+    "source_text": "Counterparty",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.currency": {
+    "source_text": "Currency",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "history.date": {
     "source_text": "Date",
     "status": {
@@ -3570,6 +4332,15 @@
     },
     "ai_hint": "Activity log status event message."
   },
+  "history.eventLogButton": {
+    "source_text": "Event Log",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "history.eventQuarantine": {
     "source_text": "Voucher quarantined",
     "status": {
@@ -3619,6 +4390,69 @@
       "it": "ai-translated"
     },
     "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.exportCsv": {
+    "source_text": "Export CSV",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.exportCsvError": {
+    "source_text": "CSV export failed: {{error}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.exportCsvSuccess": {
+    "source_text": "Account statement successfully exported as CSV!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.filterAllCurrencies": {
+    "source_text": "All Currencies",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.filterAllDirections": {
+    "source_text": "All Directions",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.filterInbound": {
+    "source_text": "Income (+)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.filterOutbound": {
+    "source_text": "Expenses (-)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "history.from": {
     "source_text": "From",
@@ -3740,6 +4574,15 @@
     },
     "ai_hint": "Label or text in transaction history / activity log."
   },
+  "history.notes": {
+    "source_text": "Purpose",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "history.outbound": {
     "source_text": "Outbound Transfer",
     "status": {
@@ -3750,6 +4593,42 @@
     },
     "ai_hint": "Label or text in transaction history / activity log."
   },
+  "history.periodAll": {
+    "source_text": "All Time",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.periodLast30Days": {
+    "source_text": "Last 30 Days",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.periodThisYear": {
+    "source_text": "This Year",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.receiptNumber": {
+    "source_text": "Receipt #",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "history.recipientDid": {
     "source_text": "Recipient User ID (DID)",
     "status": {
@@ -3759,6 +4638,15 @@
       "it": "ai-translated"
     },
     "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.saveAsContact": {
+    "source_text": "+ Save as Contact",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "history.saveError": {
     "source_text": "Failed to export: {{error}}",
@@ -3811,7 +4699,7 @@
     "ai_hint": "Label or text in transaction history / activity log."
   },
   "history.searchPlaceholder": {
-    "source_text": "Search recipient, sender, notes, or DIDs...",
+    "source_text": "Search by contact, amount, currency, note, or ID...",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -3829,6 +4717,33 @@
       "it": "ai-translated"
     },
     "ai_hint": "Label or text in transaction history / activity log."
+  },
+  "history.summaryBookings": {
+    "source_text": "{{count}} booking(s)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.summaryInbound": {
+    "source_text": "Income",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "history.summaryOutbound": {
+    "source_text": "Expenses",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "history.to": {
     "source_text": "To",
@@ -3848,7 +4763,7 @@
       "es": "ai-translated",
       "it": "ai-translated"
     },
-    "source_text": "Transaction History"
+    "source_text": "Account Statement"
   },
   "history.txId": {
     "source_text": "Transfer Bundle ID",
@@ -3881,7 +4796,7 @@
     "ai_hint": "Label or text in transaction history / activity log."
   },
   "history.verified": {
-    "source_text": "Verified tamper-proof",
+    "source_text": "Cryptographically signed receipt (Layer 1)",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -4070,6 +4985,1712 @@
     },
     "ai_hint": "Title header for database integrity check report."
   },
+  "marketplace.acceptsOwnVouchers": {
+    "source_text": "Accepts own vouchers",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.activeSlotsLabel": {
+    "source_text": "Active Slots",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.addOfferBtn": {
+    "source_text": "Add Offer",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.addRequestBtn": {
+    "source_text": "Add Request",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.addToContacts": {
+    "source_text": "Add to Address Book",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.adminReadUrl": {
+    "source_text": "Public Read URL",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.adminTitle": {
+    "source_text": "Own Drop (Admin)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.adminWriteUrl": {
+    "source_text": "Admin Write URL",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.allStandards": {
+    "source_text": "All Standards",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.allTrustLevels": {
+    "source_text": "All Contacts",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.allowListLabel": {
+    "source_text": "Allow List (Additional DIDs)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.asOf": {
+    "source_text": "As of: {{date}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.authorizedBadge": {
+    "source_text": "Write Authorized",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.availableDropsDesc": {
+    "source_text": "Choose up to 3 drops for your contact card. Only write-authorized drops can be selected.",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.availableDropsTitle": {
+    "source_text": "Available Drops (Upload Targets)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.backToStep1Btn": {
+    "source_text": "Back to Step 1",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.blockBtn": {
+    "source_text": "Block",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.blockSlotDesc": {
+    "source_text": "Block abusive slots. Blocked slots will be immediately deleted from the server and permanently banned.",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.blockSlotTitle": {
+    "source_text": "Block Slot",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.blockedSlotsLabel": {
+    "source_text": "Blocked Slot IDs",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.cardDeletedSuccess": {
+    "source_text": "Contact card deleted.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.cardFileDownloaded": {
+    "source_text": "File downloaded.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.cardFileSaveFailed": {
+    "source_text": "Failed to save file.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.cardFileSaved": {
+    "source_text": "File saved successfully.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.cardFilterName": {
+    "source_text": "HuMoCo Contact Card (.hmcard)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.cardProfileHeader": {
+    "source_text": "Public Contact Card Profile",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.cardProfileSubtitle": {
+    "source_text": "These details are shared with your contact card",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.cardSavedSuccess": {
+    "source_text": "Contact card saved successfully!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.checkDropsBtn": {
+    "source_text": "Check Drops",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.chooseCardFileBtn": {
+    "source_text": "Select .hmcard file",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.connectionTestFailed": {
+    "source_text": "Connection test failed",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.connectionTestSuccess": {
+    "source_text": "Connection successful! Write and read access verified.",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.contactDetails": {
+    "source_text": "Contact Information",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.copyCardLinkBtn": {
+    "source_text": "Copy Link",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.copyCardLinkDesc": {
+    "source_text": "Copies humoco://card link",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.counterDirect": {
+    "source_text": "Direct Contacts",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.counterHop2": {
+    "source_text": "Hop-2 Contacts",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.counterTotal": {
+    "source_text": "Total / Maximum",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.creatorNotice": {
+    "source_text": "Your offer and needs will appear in the marketplace of users who hold or receive your vouchers.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.deleteAdminBtn": {
+    "source_text": "Reset Drop Administration",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.deleteAdminConfirmDesc": {
+    "source_text": "Your local admin credentials for the drop will be deleted. Files remaining on the server must be removed manually.",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.deleteAdminConfirmTitle": {
+    "source_text": "Reset Drop Administration?",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.deleteCardBtn": {
+    "source_text": "Delete contact card",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.deleteCardConfirmDesc": {
+    "source_text": "Your offers and requests will be deleted from your device and no longer actively shared.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.deleteCardConfirmTitle": {
+    "source_text": "Delete contact card?",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.deleteListingBtn": {
+    "source_text": "Delete Listing",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.denyListLabel": {
+    "source_text": "Deny List (Blocked DIDs)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.dropBaseUrlLabel": {
+    "source_text": "HTTPS Base URL of your Drop",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.dropBaseUrlPlaceholder": {
+    "source_text": "https://drop.example.com",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.dropsBtn": {
+    "source_text": "Drops",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.dropsBtnTitle": {
+    "source_text": "Manage drops and upload targets",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.dropsModalSubtitle": {
+    "source_text": "Manage network drops for offline exchange and your own drop",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.dropsModalTitle": {
+    "source_text": "Drop Management",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.editContact": {
+    "source_text": "Edit Contact",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.emptyDescription": {
+    "source_text": "Offers and requests appear automatically from creators of vouchers in your wallet and trusted contacts in your network.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.emptyTitle": {
+    "source_text": "No marketplace entries found",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.errorPricingTooLong": {
+    "source_text": "Maximum {{max}} characters allowed",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.errorTextTooLong": {
+    "source_text": "Maximum {{max}} characters allowed",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.errorTitleRequired": {
+    "source_text": "Title is required",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.errorTitleTooLong": {
+    "source_text": "Maximum {{max}} characters allowed",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.finalizeSetupBtn": {
+    "source_text": "Finalize Setup",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.forceUploadBtn": {
+    "source_text": "Force Upload Own Card",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.forwardCardBtn": {
+    "source_text": "Recommend",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.forwardCardSubtitle": {
+    "source_text": "Recommend the contact card of {{name}} to your contacts",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.forwardCardTitle": {
+    "source_text": "Recommend Contact Card",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.forwardMaxHopsReached": {
+    "source_text": "Maximum recommendation hops reached",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.generateConfigBtn": {
+    "source_text": "Generate Configuration & ZIP",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.importActionBtn": {
+    "source_text": "Import",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importBtn": {
+    "source_text": "Import",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importExpiredDesc": {
+    "source_text": "This contact card is expired and cannot be imported.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importExpiredTitle": {
+    "source_text": "Card Expired",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importHopsDesc": {
+    "source_text": "The contact card has exceeded the maximum allowed recommendation distance.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importHopsTitle": {
+    "source_text": "Recommendation Limit Exceeded",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importIgnoredDesc": {
+    "source_text": "This contact card already exists in the same or newer version.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importIgnoredTitle": {
+    "source_text": "Already Up to Date",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importInvalidTitle": {
+    "source_text": "Invalid Contact Card",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importModalSubtitle": {
+    "source_text": "Add a .hmcard file or paste a link",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importModalTitle": {
+    "source_text": "Import Contact Card",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importOffenderDesc": {
+    "source_text": "The author of this card is flagged as a malicious actor (Known Offender).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importOffenderTitle": {
+    "source_text": "Security Warning: Blocked",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importStatusTitle": {
+    "source_text": "Import Status",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importSuccessDesc": {
+    "source_text": "The contact card was successfully added to your marketplace.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importSuccessTitle": {
+    "source_text": "Contact Card Imported",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importUpdatedDesc": {
+    "source_text": "A newer version of this contact card was successfully saved.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.importUpdatedTitle": {
+    "source_text": "Contact Card Updated",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.inContacts": {
+    "source_text": "In Address Book",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.linkCopied": {
+    "source_text": "Link copied!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.listingPricingLabel": {
+    "source_text": "Pricing / Guideline (optional)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.listingPricingPlaceholder": {
+    "source_text": "e.g. 30 Minuto / hr or negotiable",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.listingTextLabel": {
+    "source_text": "Description (optional)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.listingTextPlaceholder": {
+    "source_text": "Describe your offer or request briefly and concisely...",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.listingTitleLabel": {
+    "source_text": "Title",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.listingTitlePlaceholder": {
+    "source_text": "e.g. Honey from own apiary / Looking for bike repair",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.listingsHeader": {
+    "source_text": "Listings ({{current}} / {{max}})",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.loadFailed": {
+    "source_text": "Failed to load marketplace: {{error}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.manualAccessIdPlaceholder": {
+    "source_text": "32-character hex Access-ID...",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.maxHops1": {
+    "source_text": "1 – Direct contacts only",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.maxHops2": {
+    "source_text": "2 – Direct contacts + their contacts (Default)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.maxHops3": {
+    "source_text": "3 – Up to one further level (Wide network)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.maxHopsDesc": {
+    "source_text": "Determines how far recipients may forward your contact card to their own contacts.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.maxHopsLabel": {
+    "source_text": "Network Recommendation Reach",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.maxUploadDropsReached": {
+    "source_text": "Maximum 3 drops allowed",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.modeEdit": {
+    "source_text": "Edit",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.modePreview": {
+    "source_text": "Preview",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.moveDownBtn": {
+    "source_text": "Move Down",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.moveUpBtn": {
+    "source_text": "Move Up",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.multiDeviceHintDesc": {
+    "source_text": "If you use the same identity on multiple devices, the newest card version replaces previous versions completely.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.multiDeviceHintTitle": {
+    "source_text": "Note for multiple devices",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.myOfferBtn": {
+    "source_text": "My Offer",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.myOfferSubtitle": {
+    "source_text": "Manage your digital contact card for the Human Money network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.myOfferTitle": {
+    "source_text": "My Offers & Requests",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.nextToStep2Btn": {
+    "source_text": "Next to Step 2",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.noDiscoveredDrops": {
+    "source_text": "No drops found in address book or marketplace.",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.noListings": {
+    "source_text": "No explicit listings provided",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.noMatchingFilter": {
+    "source_text": "No entries match your search criteria.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.noOwnListingsYet": {
+    "source_text": "No listings added yet. Add an offer or request above.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.originCard": {
+    "source_text": "From contact card",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.originFromVoucher": {
+    "source_text": "from voucher",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.originVoucher": {
+    "source_text": "From voucher profile",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.pasteCardPayloadHint": {
+    "source_text": "Accepts humoco://card links and contact card JSON envelopes.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.pasteCardPayloadLabel": {
+    "source_text": "Or paste link / text",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.pasteCardPayloadPlaceholder": {
+    "source_text": "Paste humoco://card?env=... or JSON",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.pay": {
+    "source_text": "Pay",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.policyBridgeMin": {
+    "source_text": "Minimum Trust for Bridge Contact",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.policyDirectMin": {
+    "source_text": "Minimum Trust for Direct Contacts",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.policyHop2Enabled": {
+    "source_text": "Enable Hop-2 (Friends of Contacts)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.policyHop2Min": {
+    "source_text": "Minimum Trust for Hop-2 Contact",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.policyMaxMembers": {
+    "source_text": "Maximum Member Count",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.previewBannerDesc": {
+    "source_text": "This is how other participants will see your contact card in their marketplace.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.qrScanHint": {
+    "source_text": "Scan with Human Money camera",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.qrTooLargeDesc": {
+    "source_text": "Due to extensive listings, data size is too large for a QR code. Please share the card as a file or direct link.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.qrTooLargeTitle": {
+    "source_text": "Too large for QR code",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.readOnlyBadge": {
+    "source_text": "Read Only",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.refresh": {
+    "source_text": "Refresh",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.resetFilter": {
+    "source_text": "Reset filters",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.saveAndPushBtn": {
+    "source_text": "Save & Push Configuration",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.saveCardBtn": {
+    "source_text": "Save",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.saveCardFileBtn": {
+    "source_text": "Save as File",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.saveCardFileDesc": {
+    "source_text": "Saves a .hmcard file",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.saveUploadDropsBtn": {
+    "source_text": "Save Upload Targets",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.saveZipBtn": {
+    "source_text": "Save ZIP Package (humoco-drop.zip)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.searchPlaceholder": {
+    "source_text": "Search offers, requests, names or standards...",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.shareCardBtn": {
+    "source_text": "Share",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.shareCardSubtitle": {
+    "source_text": "Share via QR code, file, or link",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.shareCardTitle": {
+    "source_text": "Share Contact Card",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.shareOwnCardSubtitle": {
+    "source_text": "Share your contact card via QR code, file, or direct link",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.shareOwnCardTitle": {
+    "source_text": "Share Own Contact Card",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.showUnknown": {
+    "source_text": "Show unknown creators",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.sourceCard": {
+    "source_text": "Contact card ({{hops}} hops)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.sourceDrop": {
+    "source_text": "Drop",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.sourceVoucher": {
+    "source_text": "From voucher profile",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.standardsIssued": {
+    "source_text": "Accepted Voucher Standards",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.subtitle": {
+    "source_text": "Offers and requests from your network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.syncDecryptedSlots": {
+    "source_text": "Decrypted {{count}} slot(s)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.syncImportedCards": {
+    "source_text": "Imported {{count}} card(s)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.syncNowBtn": {
+    "source_text": "Sync Now",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.syncPolledDrops": {
+    "source_text": "Polled {{count}} drop(s)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.syncSkippedWifi": {
+    "source_text": "Synchronization skipped (WiFi only mode active)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.syncStatus": {
+    "source_text": "Synchronization Status",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.syncUploadedTo": {
+    "source_text": "Uploaded to {{count}} drop(s)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.tabOffers": {
+    "source_text": "Offers",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.tabOwnDrop": {
+    "source_text": "Own Drop (Admin)",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.tabPeople": {
+    "source_text": "People",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.tabRequests": {
+    "source_text": "Requests",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.tabUseDrops": {
+    "source_text": "Use Drops",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.testConnectionBtn": {
+    "source_text": "Test Connection",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.title": {
+    "source_text": "Marketplace",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.trustTrusted": {
+    "source_text": "Trusted network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.trustUnknown": {
+    "source_text": "Unknown contact",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.trustedOnly": {
+    "source_text": "Trusted Only",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.unblockBtn": {
+    "source_text": "Unblock",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.untitled": {
+    "source_text": "Untitled",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.validUntilInfo": {
+    "source_text": "Valid until approx. {{date}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.validityDays14": {
+    "source_text": "14 Days",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.validityDays180": {
+    "source_text": "180 Days",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.validityDays30": {
+    "source_text": "30 Days",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.validityDays60": {
+    "source_text": "60 Days (Default)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.validityDays90": {
+    "source_text": "90 Days",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.validityLabel": {
+    "source_text": "Validity Period",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.wizardStep1Title": {
+    "source_text": "Step 1: Configuration & ZIP Package",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.wizardStep2Title": {
+    "source_text": "Step 2: Server URL & Connection Test",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "marketplace.yourCardPreview": {
+    "source_text": "Your Contact Card",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "marketplace.zipInstructions": {
+    "source_text": "Extract the ZIP archive and upload all files to your HTTPS webspace (PHP 8.1+ required). Ensure the data directory is writable by the web server.",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
   "profile.accessError": {
     "ai_hint": "Prefix for profile list loading error in login screen.",
     "status": {
@@ -4214,7 +6835,7 @@
     }
   },
   "profile.backupRestoreNoFileLink": {
-    "source_text": "No backup file available? Recreate empty identity from recovery words only",
+    "source_text": "No backup file available? Recovery words alone only derive an empty identity without vouchers:",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -4251,6 +6872,15 @@
   },
   "profile.backupRestoreReconciledNotice": {
     "source_text": "L2 reconciliation completed: {{active}} active vouchers verified, {{spent}} spent vouchers archived.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "profile.backupRestoreRecreateEmptyBtn": {
+    "source_text": "Recreate Empty Identity",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -5253,6 +7883,15 @@
     },
     "source_text": "{{ordinal}} Word (Optional Passphrase)"
   },
+  "profile.optionalPassphraseAccordion": {
+    "source_text": "Advanced: Add {{ordinal}} word (passphrase)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "profile.optionalPassphraseLabel": {
     "ai_hint": "Label for the optional passphrase input in RecreateProfile step 1.",
     "status": {
@@ -5477,6 +8116,15 @@
       "it": "ai-translated"
     },
     "source_text": "e.g., 'My Main Wallet'"
+  },
+  "profile.profileNameRequired": {
+    "source_text": "Please enter a profile name.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "profile.protocolAlert": {
     "ai_hint": "Feedback section heading shown for informational/success messages.",
@@ -5983,6 +8631,15 @@
     },
     "source_text": "Verifying..."
   },
+  "profile.voluntaryNotice": {
+    "source_text": "Personal profile details are voluntary. They only become relevant when you create your own vouchers or sign as a guarantor for others.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "profile.walletPassword": {
     "ai_hint": "Label for the wallet password input in delete password prompt.",
     "status": {
@@ -6089,6 +8746,15 @@
     },
     "source_text": "12 Words (Standard Security)"
   },
+  "profile.yourUserId": {
+    "source_text": "Your User ID (DID)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "profile.zipCode": {
     "source_text": "ZIP",
     "status": {
@@ -6145,7 +8811,7 @@
     }
   },
   "settings.advancedNetworkToggle": {
-    "source_text": "Advanced Server & PoS Configuration",
+    "source_text": "Advanced Gateway & Merchant Configuration",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6154,7 +8820,151 @@
     }
   },
   "settings.authTokenPlaceholder": {
-    "source_text": "Auth Token (optional)",
+    "source_text": "Auth / Credit Token (optional)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.autoBackupDisconnectedNotice": {
+    "source_text": "Backup folder currently unreachable. As soon as the drive (e.g. USB stick) is connected, the app will sync automatically.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.autoBackupPasswordNotice": {
+    "source_text": "Note: With a custom backup password, background sync is paused for security (manual sync only).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.autoBackupToggleDesc": {
+    "source_text": "Silently backs up your vouchers and contacts after every change.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.autoBackupToggleLabel": {
+    "source_text": "Automatically back up in the background",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeDisconnected": {
+    "source_text": "Drive disconnected",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeDisconnectedHint": {
+    "source_text": "Backup folder (e.g. USB drive) not connected – will sync automatically when plugged in",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeLocked": {
+    "source_text": "Wallet locked",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeLockedHint": {
+    "source_text": "Wallet session is locked",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeManual": {
+    "source_text": "Manual",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeManualHint": {
+    "source_text": "Manual backup configured",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeNotConfigured": {
+    "source_text": "No backup",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeNotConfiguredHint": {
+    "source_text": "No automated backup configured",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeOutdated": {
+    "source_text": "Backup pending",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeOutdatedHint": {
+    "source_text": "Last backup was over 14 days ago or unsaved changes exist",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeSynced": {
+    "source_text": "Backed up",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupBadgeSyncedHint": {
+    "source_text": "Auto-backup is up to date",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6180,8 +8990,26 @@
       "it": "ai-translated"
     }
   },
+  "settings.backupFolderDisconnectedDesc": {
+    "source_text": "The target backup folder is currently disconnected (e.g. USB drive unplugged). Backups will resume automatically as soon as it is plugged in.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.backupNever": {
     "source_text": "No backup created yet",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.backupOutdatedDesc": {
+    "source_text": "There are unbacked changes or the last backup was created more than 14 days ago.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6243,8 +9071,26 @@
       "it": "ai-translated"
     }
   },
+  "settings.changeFolder": {
+    "source_text": "Change folder",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.chooseFolderButton": {
     "source_text": "Choose Folder",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.clearFolderButton": {
+    "source_text": "Unlink folder",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6282,23 +9128,13 @@
     "ai_hint": "Action button label in settings."
   },
   "settings.customServersTitle": {
-    "source_text": "Custom Servers & Trusted Peers",
+    "source_text": "Known Gateways & Server Credentials",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
       "fr": "ai-translated",
       "it": "ai-translated"
     }
-  },
-  "settings.dataStewardshipTitle": {
-    "source_text": "Data Stewardship",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated"
-    },
-    "ai_hint": "Title header for app settings panel."
   },
   "settings.devModeUnlockedToast": {
     "source_text": "Developer mode unlocked",
@@ -6309,38 +9145,35 @@
       "it": "ai-translated"
     }
   },
-  "settings.deviceBindingDescription": {
-    "source_text": "This unique identifier binds your wallet cryptographic seals to this physical device installation to prevent unauthorized cloning.",
+  "settings.deviceIdFooterLabel": {
+    "source_text": "Device ID",
     "status": {
       "de": "ai-translated",
-      "fr": "ai-translated",
       "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
-    },
-    "ai_hint": "Descriptive helper text for settings configuration options."
+    }
   },
-  "settings.deviceBindingLabel": {
-    "source_text": "OS Machine ID / Fallback ID",
+  "settings.enablePosMode": {
+    "source_text": "Show Merchant Cashier Mode (PoS Checkout) in Receive View",
     "status": {
       "de": "ai-translated",
-      "fr": "ai-translated",
       "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
-    },
-    "ai_hint": "Label for input field in settings."
+    }
   },
-  "settings.deviceBindingTitle": {
-    "source_text": "Device Binding",
+  "settings.enablePosModeDesc": {
+    "source_text": "For shops, market stalls & sellers only: Adds real-time online double-spend verification before handing over goods.",
     "status": {
       "de": "ai-translated",
-      "fr": "ai-translated",
       "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
-    },
-    "ai_hint": "Title header for app settings panel."
+    }
   },
   "settings.exclusiveServersDesc": {
-    "source_text": "When active, only the custom servers above are used — no public seed peers.",
+    "source_text": "Leave unchecked by default (uses free public gateways). Enable only if you want to route requests exclusively through the gateways listed above.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6349,7 +9182,7 @@
     }
   },
   "settings.exclusiveServersLabel": {
-    "source_text": "Exclusively use custom servers (Strictly private)",
+    "source_text": "Only use registered gateways above (No public fallback)",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6367,7 +9200,7 @@
     }
   },
   "settings.exportFileDesc": {
-    "source_text": "Create a self-contained encrypted archive file you can save to a USB drive or transfer to another device.",
+    "source_text": "For manual point-in-time snapshots (e.g. archiving or moving your wallet directly to a new device).",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6376,7 +9209,7 @@
     }
   },
   "settings.exportFileTitle": {
-    "source_text": "Export Single Backup File (.hmcbackup)",
+    "source_text": "Export Single File (.hmcbackup)",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6412,25 +9245,140 @@
     },
     "ai_hint": "Text or status label in settings."
   },
-  "settings.historyStorageDescription": {
-    "source_text": "Sets the storage threshold for transaction history and transfer files.",
+  "settings.helpDeviceBindingLong": {
+    "source_text": "This technical identifier (OS Machine ID or local fallback ID) is used internally by your wallet to detect if a wallet folder or backup was activated on another device, warning you before accidental double-spends can happen.\n\nIn everyday use, you never need to copy or write down this ID. The small copy icon is only provided for rare technical support diagnostics.",
     "status": {
       "de": "ai-translated",
-      "fr": "ai-translated",
       "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
-    },
-    "ai_hint": "Descriptive helper text for settings configuration options."
+    }
   },
-  "settings.historyStorageLabel": {
-    "source_text": "History Storage (Days)",
+  "settings.helpDeviceBindingShort": {
+    "source_text": "Internal identifier that protects your wallet against accidental parallel installations.",
     "status": {
       "de": "ai-translated",
-      "fr": "ai-translated",
       "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
-    },
-    "ai_hint": "Label for input field in settings."
+    }
+  },
+  "settings.helpDeviceBindingTitle": {
+    "source_text": "Device ID (Local Device Binding)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpExclusiveGatewaysLong": {
+    "source_text": "**Recommendation for most users:** Leave this option **unchecked**. Your wallet will automatically use free public gateways with zero setup while sharing the same global protection network as everyone else.\n\n**When should you enable this?**\nThis setting does *not* isolate you into a separate network — global L2 lock verification remains identical. It simply ensures your wallet only sends HTTP gateway requests through the known gateway URLs you entered above (for example, where you purchased API credits or know the server operator) without falling back to unknown third-party gateways.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpExclusiveGatewaysShort": {
+    "source_text": "Prevents automatic fallback to unknown public free-tier gateways.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpExclusiveGatewaysTitle": {
+    "source_text": "Only Use Registered Gateways",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpGatewayTokensLong": {
+    "source_text": "Both fields are completely optional — on public free-tier gateways, your wallet automatically solves a tiny Proof-of-Work puzzle instead.\n\n• **Auth Token:** A Bearer credential used when you have a paid request quota with a gateway provider or run your own gateway.\n\n• **Peer Token (`f2f_…`):** A friend/community token (starting with `f2f_`) issued by a node operator you know to bypass free-tier rate limits and Proof-of-Work.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpGatewayTokensShort": {
+    "source_text": "Optional credentials for paid quotas or friend access provided by a gateway operator.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpGatewayTokensTitle": {
+    "source_text": "Auth Token & Peer Token",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpPosModeLong": {
+    "source_text": "Regular private users do not need this option.\n\nIf you sell goods or services in person (e.g. at a store, café, or market stall), enabling this reveals the **PoS Cashier toggle** and optional receipt ID in the Receive view.\n\nWhen active during checkout, the app immediately verifies incoming payments against the live Layer-2 server quorum (14/20) to block double-spends and replayed receipts before you hand over goods.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpPosModeShort": {
+    "source_text": "Real-time online verification when receiving payments at a shop or market stall before releasing goods.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpPosModeTitle": {
+    "source_text": "Merchant Cashier Mode (Point-of-Sale)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpPrivacyLong": {
+    "source_text": "Flexible voucher standards let you choose between two privacy modes:\n\n• **Stealth:** Cloaks your signature in the voucher proof chain and protects you against surveillance, tracking, and profiling by later participants. Your identity stays hidden unless you attempt a double-spend.\n\n• **Public:** Keeps your signature visible in the chain. Useful in local communities or trust circles where open provenance builds confidence.\n\n• **Interactive:** Leaves the choice open so you can pick per transfer with a single click.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpPrivacyShort": {
+    "source_text": "Controls whether your signature in voucher transfers is publicly visible or cloaked (Stealth) by default.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.helpPrivacyTitle": {
+    "source_text": "Default Transfer Privacy",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "settings.l2ModeConnectedDesc": {
     "source_text": "Active servers provide blind collision lock registry queries, fast PoS checkouts, and WalletSeal backup anchors.",
@@ -6532,6 +9480,126 @@
     },
     "ai_hint": "Error message in settings view. Contains variables: {{error}}."
   },
+  "settings.manageDropsBtn": {
+    "source_text": "Manage Drops",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "settings.marketPollWifiOnly": {
+    "source_text": "Sync drops on WiFi only",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "settings.marketPollWifiOnlyDesc": {
+    "source_text": "Saves mobile data by querying drops in the background only when connected to WiFi.",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "settings.marketSendCardOnPayment": {
+    "source_text": "Send contact card with payments",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.marketSendCardOnPaymentDesc": {
+    "source_text": "Automatically transmits your digital contact card to your payment partner.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.marketSendCardOnPaymentPrivacyNote": {
+    "source_text": "Privacy note: When enabled, the payment partner receives your public profile, listings, and drop addresses if configured.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.marketShowUnknown": {
+    "source_text": "Show unknown creators in marketplace",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.marketShowUnknownDesc": {
+    "source_text": "Display offers and requests from voucher creators who are not yet part of your trust network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.maxStoreHops": {
+    "source_text": "Store contact cards in marketplace up to",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.maxStoreHops1": {
+    "source_text": "1 Hop (Direct contacts only)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.maxStoreHops2": {
+    "source_text": "2 Hops (Recommendations from contacts – Default)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.maxStoreHops3": {
+    "source_text": "3 Hops (Wide network)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.maxStoreHopsDesc": {
+    "source_text": "Limits how many hops away recommended contact cards are stored in your local wallet.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.meshRefreshNone": {
     "source_text": "No regional mesh sources configured.",
     "status": {
@@ -6577,8 +9645,17 @@
       "it": "ai-translated"
     }
   },
+  "settings.openBackupSettings": {
+    "source_text": "Backup Settings",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.peerTokenPlaceholder": {
-    "source_text": "Peer Token (optional)",
+    "source_text": "Peer Token f2f_… (optional)",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6597,7 +9674,7 @@
     "ai_hint": "Text or status label in settings."
   },
   "settings.privacyModeInteractiveDesc": {
-    "source_text": "Always prompt",
+    "source_text": "Choose when sending",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6617,7 +9694,7 @@
     "ai_hint": "Text or status label in settings."
   },
   "settings.privacyModePublicDesc": {
-    "source_text": "Identity transparency",
+    "source_text": "Transparency for communities",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6637,7 +9714,7 @@
     "ai_hint": "Text or status label in settings."
   },
   "settings.privacyModeStealthDesc": {
-    "source_text": "Maximum privacy",
+    "source_text": "Protects against chain tracking",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -6788,8 +9865,37 @@
       "it": "ai-translated"
     }
   },
+  "settings.shareMinLevel": {
+    "source_text": "Minimum Trust Level to read my Drop",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "settings.shareMinLevelDesc": {
+    "source_text": "Only contacts with at least this trust level may decrypt your contact card from your upload targets.",
+    "status": {
+      "en": "manual-verified",
+      "de": "manual-verified",
+      "es": "manual-verified",
+      "fr": "manual-verified",
+      "it": "manual-verified"
+    }
+  },
+  "settings.syncFolderCloudTip": {
+    "source_text": "Tip: Place this folder inside Nextcloud, Syncthing, Proton Drive, or Dropbox to let their app sync your encrypted backup online automatically.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "settings.syncFolderDesc": {
-    "source_text": "Continuously sync updated and newly received vouchers to a local folder, USB drive, or cloud mount (e.g. Nextcloud).",
+    "source_text": "Choose a local folder on this device or a USB drive where updated vouchers and contacts are continuously backed up in encrypted form.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6807,7 +9913,16 @@
     }
   },
   "settings.syncFolderTitle": {
-    "source_text": "Differential Backup Sync Folder",
+    "source_text": "Local Backup Folder (Automatic Sync)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "settings.syncNow": {
+    "source_text": "Sync Now",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6921,6 +10036,15 @@
       "it": "ai-translated"
     }
   },
+  "standards.allowedRolesLabel": {
+    "source_text": "Allowed Roles",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "standards.cleartext": {
     "source_text": "Unencrypted (Cleartext)",
     "status": {
@@ -6932,6 +10056,33 @@
   },
   "standards.confirmImport": {
     "source_text": "Import Standard",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.copyToml": {
+    "source_text": "Copy TOML",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.customRulesCount": {
+    "source_text": "{{count}} active compliance rule(s) defined",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.decentralizedIssuer": {
+    "source_text": "Decentralized / Community",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -6959,6 +10110,33 @@
   },
   "standards.description": {
     "source_text": "Manage installed voucher standards (.standard).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.detailsButton": {
+    "source_text": "Details",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.detailsModalTitle": {
+    "source_text": "Voucher Standard Details",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.divisibleLabel": {
+    "source_text": "Divisible",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7002,6 +10180,15 @@
       "it": "ai-translated"
     }
   },
+  "standards.hideRawToml": {
+    "source_text": "Hide TOML definition",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "standards.import": {
     "source_text": "Import Standard (.standard)",
     "status": {
@@ -7038,6 +10225,24 @@
       "it": "ai-translated"
     }
   },
+  "standards.issuerLabel": {
+    "source_text": "Issuer / Organization",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.manageStandardsDescription": {
+    "source_text": "Manage and review installed voucher standards.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "standards.password": {
     "source_text": "Password",
     "status": {
@@ -7056,6 +10261,15 @@
       "it": "ai-translated"
     }
   },
+  "standards.privacyModeLabel": {
+    "source_text": "Privacy Mode",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "standards.rawToml": {
     "source_text": "Raw File (.toml)",
     "status": {
@@ -7065,8 +10279,53 @@
       "it": "ai-translated"
     }
   },
+  "standards.showRawToml": {
+    "source_text": "Show TOML definition",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.signaturesRequiredLabel": {
+    "source_text": "Additional Signatures / Guarantors",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "standards.title": {
     "source_text": "Voucher Standards",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.unitLabel": {
+    "source_text": "Unit",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.unlimitedValidity": {
+    "source_text": "Unlimited",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "standards.validityRangeLabel": {
+    "source_text": "Validity Range",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7093,6 +10352,15 @@
       "it": "ai-translated"
     },
     "ai_hint": "Fallback display name when no sender name is set."
+  },
+  "transfer.anonymousHint": {
+    "source_text": "Your name is hidden — the recipient will not see a sender name.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "transfer.assetSelectionRequired": {
     "source_text": "Asset selection required.",
@@ -7233,7 +10501,7 @@
     }
   },
   "transfer.checkout.fallbackCardTitle": {
-    "source_text": "L2 PoS Protection Unavailable",
+    "source_text": "Online Checkout Protection Unavailable",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7242,7 +10510,7 @@
     }
   },
   "transfer.checkout.fallbackNoServersDesc": {
-    "source_text": "No L2 servers are configured to lock vouchers against double-spends in real time. You can still accept this transfer on a trust basis using pure Layer-1 math (SST V4).",
+    "source_text": "No verification servers are configured to lock vouchers against double-spends in real time. You can still accept this payment on a trust basis using built-in offline fraud protection.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7251,7 +10519,7 @@
     }
   },
   "transfer.checkout.fallbackNotice": {
-    "source_text": "Offline transfers are cryptographically protected by SST V4 self-exposure if a double-spend is attempted.",
+    "source_text": "Offline payments are secured by mathematical fraud protection: attempted double-spends automatically expose the offender.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7260,7 +10528,7 @@
     }
   },
   "transfer.checkout.fallbackQuorumDesc": {
-    "source_text": "Could not reach an L2 quorum to verify lock status. You can either retry or accept on a trust basis (L1 verified).",
+    "source_text": "Could not reach server majority to verify online status. You can either retry or accept on a trust basis (offline verified).",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7359,7 +10627,7 @@
     }
   },
   "transfer.checkout.posFallbackTitle": {
-    "source_text": "PoS L2 Verification Unavailable",
+    "source_text": "Online Verification Unavailable",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7368,7 +10636,7 @@
     }
   },
   "transfer.checkout.posNoServersDesc": {
-    "source_text": "No regional mesh sources or L2 gateways are currently configured. Live 14/20 shard verification cannot be performed.",
+    "source_text": "No verification servers are currently configured. Live confirmation via server majority cannot be performed.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7377,7 +10645,7 @@
     }
   },
   "transfer.checkout.posQuorumUnavailableDesc": {
-    "source_text": "Layer 2 shard nodes are currently unreachable. Live 14/20 shard quorum could not be confirmed.",
+    "source_text": "Verification servers are currently unreachable. Live confirmation via server majority could not be confirmed.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7396,6 +10664,15 @@
   },
   "transfer.checkout.replayTitle": {
     "source_text": "Already Processed (Idempotent Replay)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.clipboardReadFailed": {
+    "source_text": "Could not read clipboard. Please paste the payment link directly into the recipient field.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7483,28 +10760,8 @@
     },
     "ai_hint": "Heading for the transfer summary bar showing total amounts."
   },
-  "transfer.discloseIdentity": {
-    "source_text": "Send sender name",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated"
-    },
-    "ai_hint": "Toggle label for disclosing sender identity in transfer."
-  },
-  "transfer.displayName": {
-    "source_text": "Display Name",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated"
-    },
-    "ai_hint": "Placeholder for the custom sender display name input."
-  },
-  "transfer.displayNamePlaceholder": {
-    "source_text": "Your name / company name",
+  "transfer.emptyClipboard": {
+    "source_text": "Clipboard is empty. Copy a payment link (humoco://pay…) first.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7518,6 +10775,24 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.globalDrop.description": {
+    "source_text": "Drop .transfer, .ask, .sig, .wot, or .standard files to import them automatically.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.globalDrop.title": {
+    "source_text": "Release File to Process",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -7549,7 +10824,7 @@
     }
   },
   "transfer.helpSenderNameLong": {
-    "source_text": "When enabled, the direct recipient of this transfer will see this name in addition to your cryptographic address (did:key) – similar to the account holder name in a bank transfer. For subsequent recipients down the chain (e.g. in stealth mode), your identity remains hidden.",
+    "source_text": "Keeping your sender name enabled is usually recommended: **only the direct recipient** of this payment sees it in their transaction list so they can recognize who paid them. Especially when transacting with someone new, sharing a readable name signals transparency and builds trust.\n\nSubsequent recipients in the voucher chain do not see this name (especially in Stealth mode). If needed, you can hide it for individual transfers using the subtle 'Send anonymously' toggle.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7558,7 +10833,7 @@
     }
   },
   "transfer.helpSenderNameShort": {
-    "source_text": "Shows the recipient who the payment is from.",
+    "source_text": "Shows your name to the direct recipient in their transaction history — builds trust and clarity.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -7953,6 +11228,15 @@
       "it": "ai-translated"
     }
   },
+  "transfer.invalidPaymentRequest": {
+    "source_text": "No valid payment request found in clipboard.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.inventoryDepleted": {
     "source_text": "No available balance",
     "status": {
@@ -7964,7 +11248,7 @@
     "ai_hint": "Empty state text when no vouchers match the filter."
   },
   "transfer.l2.bftQuorum": {
-    "source_text": "14/20 BFT Shard Quorum",
+    "source_text": "14/20 Server Majority",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -8080,6 +11364,15 @@
       "it": "ai-translated"
     }
   },
+  "transfer.l2.partitionLabel": {
+    "source_text": "Check group #{{id}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.l2.provisionalHint": {
     "source_text": "A smaller server network has verified and secured the payment. High security – fraud is extremely unlikely. Goods can be safely handed over.",
     "status": {
@@ -8107,8 +11400,17 @@
       "it": "ai-translated"
     }
   },
+  "transfer.l2.serverConfirmations": {
+    "source_text": "{{count}}/{{total}} confirmations",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.l2.shardConfirmation": {
-    "source_text": "Shard Confirmation",
+    "source_text": "Network Confirmation",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -8118,6 +11420,51 @@
   },
   "transfer.l2.showDetails": {
     "source_text": "Show Layer 2 details",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.statusConflict": {
+    "source_text": "Conflict",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.statusFinal": {
+    "source_text": "Confirmed",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.statusOffline": {
+    "source_text": "Offline",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.statusProvisional": {
+    "source_text": "Pending",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.l2.statusUnverified": {
+    "source_text": "Unverified",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -8216,6 +11563,15 @@
     },
     "ai_hint": "Helper text indicating privacy mode is forced by the standard."
   },
+  "transfer.noSenderNameProvided": {
+    "source_text": "No name entered",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.notePlaceholder": {
     "source_text": "Note or reference...",
     "status": {
@@ -8228,6 +11584,33 @@
   },
   "transfer.partialSend": {
     "source_text": "Partial Send",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.pastePaymentRequest": {
+    "source_text": "Paste Payment Request",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.pastePaymentRequestHint": {
+    "source_text": "Reads a copied payment link (humoco://pay…) from your clipboard and automatically fills in recipient, voucher type, amount, and note.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.paymentRequestApplied": {
+    "source_text": "Payment request applied successfully!",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -8307,6 +11690,33 @@
       "it": "ai-translated"
     }
   },
+  "transfer.planInvolvedVouchers": {
+    "source_text": "Selected Vouchers",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.planSplitRequired": {
+    "source_text": "Voucher split required",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.planTitle": {
+    "source_text": "Automatic Voucher Selection",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.posModeToggle": {
     "source_text": "PoS Cashier Mode (Point-of-Sale Checkout)",
     "status": {
@@ -8336,6 +11746,15 @@
     },
     "ai_hint": "Toggle label for expanding privacy details section."
   },
+  "transfer.privacyPublicSummary": {
+    "source_text": "Visible to recipients and network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.privacyRequired": {
     "source_text": "Privacy configuration required.",
     "status": {
@@ -8345,6 +11764,24 @@
       "it": "ai-translated"
     },
     "ai_hint": "Validation error when privacy mode is not selected."
+  },
+  "transfer.privacySelectPrompt": {
+    "source_text": "Please choose a mode for this transfer",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.privacyStealthSummary": {
+    "source_text": "Sender and amounts shielded",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "transfer.public": {
     "source_text": "Public",
@@ -8601,6 +12038,24 @@
       "it": "ai-translated"
     }
   },
+  "transfer.receiveTabs.importFile": {
+    "source_text": "Import File",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.receiveTabs.requestPayment": {
+    "source_text": "Request Payment",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.recipient": {
     "source_text": "Recipient",
     "status": {
@@ -8631,6 +12086,123 @@
     },
     "ai_hint": "Description text for the reputation warning banner."
   },
+  "transfer.requestPayment.amount": {
+    "source_text": "Amount",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.copied": {
+    "source_text": "Request Copied!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.copyButton": {
+    "source_text": "Copy Request for Chat / Email",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.copyFailed": {
+    "source_text": "Could not copy payment link.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.description": {
+    "source_text": "Generate a formatted payment request to share via email or chat.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.isTest": {
+    "source_text": "Test Voucher Request",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.previewTitle": {
+    "source_text": "Message Preview",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.purpose": {
+    "source_text": "Payment Purpose / Note",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.purposePlaceholder": {
+    "source_text": "e.g. 2 jars of honey",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.readyToShare": {
+    "source_text": "Ready for Chat / Email",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.selectStandard": {
+    "source_text": "Voucher Standard",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.title": {
+    "source_text": "Request Payment",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.requestPayment.unit": {
+    "source_text": "Currency / Unit",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.securityPrivacy": {
     "source_text": "Security & Privacy",
     "status": {
@@ -8651,6 +12223,15 @@
     },
     "source_text": "Send Vouchers"
   },
+  "transfer.sendAnonymously": {
+    "source_text": "Send anonymously",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.sendVoucher": {
     "source_text": "Send Vouchers",
     "status": {
@@ -8660,6 +12241,24 @@
       "it": "ai-translated"
     },
     "ai_hint": "Button label to initiate the transfer."
+  },
+  "transfer.senderNameLabel": {
+    "source_text": "Sender Name",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.senderNamePlaceholder": {
+    "source_text": "Your name for the recipient (recommended)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "transfer.sending": {
     "source_text": "Sending...",
@@ -8681,6 +12280,24 @@
     },
     "ai_hint": "Button label to sort vouchers by optimal selection."
   },
+  "transfer.sortOptimalHint": {
+    "source_text": "Your vouchers are automatically sorted for optimal selection.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.splitReassurance": {
+    "source_text": "Don't worry: The remaining balance automatically stays in your wallet as a change voucher.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "transfer.stealth": {
     "source_text": "Stealth",
     "status": {
@@ -8690,16 +12307,6 @@
       "it": "ai-translated"
     },
     "ai_hint": "Label for the stealth privacy mode option."
-  },
-  "transfer.stealthExecution": {
-    "source_text": "Stealth Transfer (Private)",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated"
-    },
-    "ai_hint": "Label for forced stealth execution mode."
   },
   "transfer.stealthMode": {
     "source_text": "🔒 Stealth Mode",
@@ -8780,6 +12387,15 @@
       "it": "ai-translated"
     },
     "ai_hint": "Label for the recipient ID display in success view."
+  },
+  "transfer.success.revealInFolder": {
+    "source_text": "Show in File Manager",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
   },
   "transfer.success.saveFile": {
     "source_text": "Save Transfer File",
@@ -8891,16 +12507,6 @@
     },
     "ai_hint": "Success feedback after a transfer completes."
   },
-  "transfer.transparentExecution": {
-    "source_text": "Public Transfer (Transparent)",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated"
-    },
-    "ai_hint": "Label for forced transparent execution mode."
-  },
   "transfer.userId": {
     "source_text": "User ID (DID)",
     "status": {
@@ -8933,6 +12539,33 @@
   },
   "transfer.wotImport.fromSender": {
     "source_text": "Received verified trust recommendations from {{name}}.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.wotImport.providerDescription": {
+    "source_text": "Import verified members from \"{{name}}\" into your trust network.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.wotImport.providerStats": {
+    "source_text": "{{count}} verified members",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "transfer.wotImport.providerTitle": {
+    "source_text": "Community Seal Import",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -8994,6 +12627,33 @@
       "it": "ai-translated"
     }
   },
+  "voucher.allSignaturesComplete": {
+    "source_text": "All required signatures are complete! The voucher is now valid.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.askSavedSuccessDesc": {
+    "source_text": "Send this file to the guarantor. Once you receive the countersignature (.sig), you can import it here.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.askSavedSuccessTitle": {
+    "source_text": "Guarantor Request (.ask) Saved",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.basics.amountLabel": {
     "source_text": "Amount (e.g., 60)",
     "status": {
@@ -9009,6 +12669,33 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.basics.guarantorRequiredTitle": {
+    "source_text": "Guarantor Requirement Notice",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.basics.guarantorRequirementGeneric": {
+    "source_text": "This voucher standard requires at least {{count}} guarantor(s).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.basics.guarantorRequirementMinuto": {
+    "source_text": "This voucher standard requires at least 2 guarantors with gender parity (at least one female and one male acc. to ISO 5218).",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -9058,7 +12745,7 @@
     }
   },
   "voucher.checkL2Status": {
-    "source_text": "Check L2 Lock Status",
+    "source_text": "Check online status",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -9067,7 +12754,7 @@
     }
   },
   "voucher.checkingL2Status": {
-    "source_text": "Checking L2...",
+    "source_text": "Checking online status...",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -9329,7 +13016,7 @@
     }
   },
   "voucher.create.publicDataNoticeDesc": {
-    "source_text": "The information embedded in this voucher serves as your cryptographic guarantee. All creator details will be permanently readable by anyone verifying this asset on the public ledger.",
+    "source_text": "The information embedded in this voucher serves as your cryptographic guarantee. All creator details will be permanently readable by anyone verifying this cryptographic voucher document.",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -9338,7 +13025,7 @@
     }
   },
   "voucher.create.success": {
-    "source_text": "Voucher created! Synchronizing ledger...",
+    "source_text": "Voucher created! Saved to local wallet...",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
@@ -9481,6 +13168,15 @@
       "it": "ai-translated"
     }
   },
+  "voucher.customRole": {
+    "source_text": "Role (e.g. guarantor)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.detailsHeader": {
     "source_text": "Details",
     "status": {
@@ -9526,6 +13222,24 @@
       "it": "ai-translated"
     }
   },
+  "voucher.enterSignaturePasswordDesc": {
+    "source_text": "This signature file (.sig) is protected with a password. Please enter the password to decrypt and attach the signature.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.enterSignaturePasswordTitle": {
+    "source_text": "Enter Password for Signature File",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.errorEnterPassword": {
     "source_text": "Please enter a password.",
     "status": {
@@ -9559,6 +13273,15 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.export.chooseContactPlaceholder": {
+    "source_text": "-- Select a contact --",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -9652,6 +13375,15 @@
       "it": "ai-translated"
     }
   },
+  "voucher.export.selectFromContacts": {
+    "source_text": "Select from Contacts",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.export.show": {
     "source_text": "SHOW",
     "status": {
@@ -9697,6 +13429,24 @@
       "it": "ai-translated"
     }
   },
+  "voucher.filter.byMode": {
+    "source_text": "Mode",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.byOrigin": {
+    "source_text": "Origin",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.filter.byStandard": {
     "source_text": "By Standard",
     "status": {
@@ -9715,6 +13465,24 @@
       "it": "ai-translated"
     }
   },
+  "voucher.filter.byValidity": {
+    "source_text": "Validity",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.expiringSoon": {
+    "source_text": "Expiring soon (< 30 days)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.filter.filters": {
     "source_text": "Filters",
     "status": {
@@ -9724,12 +13492,111 @@
       "it": "ai-translated"
     }
   },
+  "voucher.filter.modeAll": {
+    "source_text": "All",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.modeReal": {
+    "source_text": "Real Only",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.modeTest": {
+    "source_text": "Test Only",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.originAll": {
+    "source_text": "All",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.originOwn": {
+    "source_text": "Own Creation",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.originReceived": {
+    "source_text": "Received",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.filter.reset": {
     "source_text": "Reset Filters",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.searchPlaceholder": {
+    "source_text": "Search issuer, currency, standard, or ID...",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.sortAmountAsc": {
+    "source_text": "Amount (lowest first)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.sortAmountDesc": {
+    "source_text": "Amount (highest first)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.sortCreatorAsc": {
+    "source_text": "Issuer (A–Z)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.filter.sortExpiryAsc": {
+    "source_text": "Expiry date (urgent first)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -9760,8 +13627,53 @@
       "it": "ai-translated"
     }
   },
+  "voucher.guarantorStatusBothMissing": {
+    "source_text": "Requires 1 male and 1 female guarantor",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.guarantorStatusBothPresent": {
+    "source_text": "Parity fulfilled (1x male, 1x female)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.guarantorStatusCount": {
+    "source_text": "{{current}} of {{required}} guarantors present",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.guarantorStatusFemaleDoneMaleMissing": {
+    "source_text": "1 female guarantor signed, male guarantor still missing",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.guarantorStatusMaleDoneFemaleMissing": {
+    "source_text": "1 male guarantor signed, female guarantor still missing",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.helpCreatorLong": {
-    "source_text": "The creator is the person or institution who originally issued this voucher and guarantees its redemption. The ID (DID) is the unique digital address of the creator.",
+    "source_text": "The creator is the person or institution who originally issued this voucher and guarantees its redemption. The user ID is the unique digital address of the creator.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -9958,6 +13870,15 @@
       "it": "ai-translated"
     }
   },
+  "voucher.importSignatureBtn": {
+    "source_text": "Import Signature (.sig)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.independent": {
     "source_text": "Independent",
     "status": {
@@ -9995,7 +13916,7 @@
     }
   },
   "voucher.l2StatusOffline": {
-    "source_text": "L2 Unreachable",
+    "source_text": "Online sync unreachable",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -10004,7 +13925,7 @@
     }
   },
   "voucher.l2StatusSpent": {
-    "source_text": "Already Spent on L2 (Archived)",
+    "source_text": "Already spent online (Archived)",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -10013,7 +13934,7 @@
     }
   },
   "voucher.l2StatusUnspent": {
-    "source_text": "Unspent on L2 (Available)",
+    "source_text": "Verified online: available (unspent)",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -10171,6 +14092,24 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.redeemAtIssuerBtn": {
+    "source_text": "Redeem at Issuer",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.redeemNoteDefault": {
+    "source_text": "Redemption at issuer",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -10336,6 +14275,24 @@
       "it": "ai-translated"
     }
   },
+  "voucher.signRequest.genderRequiredDesc": {
+    "source_text": "For this standard, your gender must be set in your profile to fulfill the parity rule.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.signRequest.genderRequiredTitle": {
+    "source_text": "Gender Specification Required in Profile",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.signRequest.guarantorHumanHint": {
     "source_text": "As a guarantor, you stand with your good name toward your contacts that this issuer is real, reliable, and honors their promise.",
     "status": {
@@ -10435,6 +14392,15 @@
       "it": "ai-translated"
     }
   },
+  "voucher.signRequest.saveGenderAndVerify": {
+    "source_text": "Save to Profile & Verify",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.signRequest.selectRole": {
     "source_text": "Select Authority Role",
     "status": {
@@ -10498,6 +14464,24 @@
       "it": "ai-translated"
     }
   },
+  "voucher.signRequest.signatureSavedDesc": {
+    "source_text": "Please send this file back to the issuer so they can attach the guarantee to the voucher.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.signRequest.signatureSavedTitle": {
+    "source_text": "Signature (.sig) Saved!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.signRequest.signatureValid": {
     "source_text": "This signature is valid and ready for use.",
     "status": {
@@ -10549,6 +14533,42 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.signRequest.warnDetailsRequiredForGender": {
+    "source_text": "This voucher standard requires disclosing your identity to verify gender parity.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.signatureAttachFailed": {
+    "source_text": "Failed to attach signature: {{error}}",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.signatureAttachedDesc": {
+    "source_text": "The signature has been attached to the voucher.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.signatureAttachedTitle": {
+    "source_text": "Signature Successfully Attached!",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -10678,12 +14698,66 @@
       "it": "ai-translated"
     }
   },
+  "voucher.toggleJson": {
+    "source_text": "Show or hide technical raw data (JSON)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.transactionHistoryHeader": {
     "source_text": "Transaction History",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustAdditionalPaths": {
+    "source_text": "(+{{count}} paths)",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustAdditionalPathsCount": {
+    "source_text": "+{{count}} additional independent path(s) available",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustBadgeBlockedWarning": {
+    "source_text": "Warning: A cryptographic proof of double-spending exists for this issuer or voucher.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustBadgeExplanation": {
+    "source_text": "This voucher is cryptographically 100% valid. The percentage describes your personal trust proximity to the issuer through your own network.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
+  "voucher.trustBadgeModalTitle": {
+    "source_text": "Trust Evaluation",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated"
     }
   },
@@ -10795,6 +14869,15 @@
       "it": "ai-translated"
     }
   },
+  "voucher.unknownStandardRoleHint": {
+    "source_text": "The standard for this voucher is not installed locally yet. You can enter the role manually below or import the voucher standard first.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.validUntil": {
     "source_text": "Until {{date}}",
     "status": {
@@ -10877,7 +14960,7 @@
     }
   },
   "wallet.anchor.modalDescription": {
-    "source_text": "An outdated backup was detected or a device conflict exists. Newer transactions already exist on Layer 2 for this wallet.",
+    "source_text": "An outdated backup was detected or a device conflict exists. Newer transactions already exist in online protection for this wallet.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -10904,7 +14987,7 @@
     }
   },
   "wallet.anchor.offlineTooltip": {
-    "source_text": "Payments possible offline",
+    "source_text": "Online sync servers are currently unreachable. Offline payments still work normally.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -10922,7 +15005,7 @@
     }
   },
   "wallet.anchor.pendingTooltip": {
-    "source_text": "Payments possible offline",
+    "source_text": "Pending online sync – will complete automatically once connected.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -10940,7 +15023,7 @@
     }
   },
   "wallet.anchor.reconcileBtn": {
-    "source_text": "Verify & reconcile vouchers",
+    "source_text": "Verify & synchronize vouchers",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -10949,7 +15032,7 @@
     }
   },
   "wallet.anchor.reconcileHarmonizedDesc": {
-    "source_text": "Wallet state is harmonized with the L2 lock registry.",
+    "source_text": "Your wallet state is being aligned with online protection.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -10985,7 +15068,7 @@
     }
   },
   "wallet.anchor.reconciledNonceLabel": {
-    "source_text": "New Nonce Counter:",
+    "source_text": "New transaction counter:",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -11075,7 +15158,7 @@
     }
   },
   "wallet.anchor.syncLabel": {
-    "source_text": "L2 synchronized",
+    "source_text": "Online Sync Active",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -11084,7 +15167,7 @@
     }
   },
   "wallet.anchor.syncTooltip": {
-    "source_text": "State verified on Layer 2",
+    "source_text": "Your wallet is verified with online protection.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -11129,7 +15212,7 @@
     }
   },
   "wallet.syncNoServersHint": {
-    "source_text": "No Human Money Node servers are currently active. All vouchers and P2P payments work 100% offline with mathematical double-spend self-exposure (SST V4). L2 locks are prepared automatically.",
+    "source_text": "No online sync configured. You can still send and receive vouchers safely offline at any time.",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -11138,7 +15221,7 @@
     }
   },
   "wallet.syncServersUnreachable": {
-    "source_text": "L2 Unreachable",
+    "source_text": "Online Sync Unreachable",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -11154,6 +15237,6 @@
       "es": "ai-translated",
       "it": "ai-translated"
     },
-    "source_text": "Wallet"
+    "source_text": "My Vouchers"
   }
 }

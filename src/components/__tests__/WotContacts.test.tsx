@@ -155,6 +155,96 @@ describe('WoT Contacts & Trust Ratings', () => {
         expect(savedContact.desiredHops).toBeNull();
       });
     });
+
+    it('previews permission gain when trust level is upgraded', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'preview_contact_trust_change') {
+          return Promise.resolve({
+            canReadMyMarketBefore: false,
+            canReadMyMarketAfter: true,
+            canWriteMyDropBefore: false,
+            canWriteMyDropAfter: true,
+          });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <ContactDialog
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          initialDid="did:key:zDavePartner"
+        />
+      );
+
+      // Click Trust Level 2 (Good Contact / Guter Kontakt)
+      const level2Btn = screen.getByText(/contacts\.trustLevel2|Good Contact/i).closest('button');
+      expect(level2Btn).toBeInTheDocument();
+      fireEvent.click(level2Btn!);
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('preview_contact_trust_change', expect.objectContaining({
+          did: 'did:key:zDavePartner',
+          newLevel: 2,
+        }));
+      });
+
+      // Verify inline notices
+      await waitFor(() => {
+        expect(screen.getByTestId('trust-preview-gain-read')).toBeInTheDocument();
+        expect(screen.getByTestId('trust-preview-gain-write')).toBeInTheDocument();
+      });
+    });
+
+    it('previews permission loss when trust level is downgraded', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'preview_contact_trust_change') {
+          return Promise.resolve({
+            canReadMyMarketBefore: true,
+            canReadMyMarketAfter: false,
+            canWriteMyDropBefore: true,
+            canWriteMyDropAfter: false,
+          });
+        }
+        return Promise.resolve(undefined);
+      });
+
+      const existing: Contact = {
+        did: 'did:key:zEveTrusted',
+        profile: { id: 'did:key:zEveTrusted', firstName: 'Eve' },
+        tags: [],
+        addedAt: '2024-01-01T00:00:00Z',
+        trustLevel: 2,
+      };
+
+      render(
+        <ContactDialog
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          existingContact={existing}
+        />
+      );
+
+      // Downgrade to Level 0
+      const level0Btn = screen.getByText(/contacts\.trustLevel0|Real Person/i).closest('button');
+      expect(level0Btn).toBeInTheDocument();
+      fireEvent.click(level0Btn!);
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('preview_contact_trust_change', expect.objectContaining({
+          did: 'did:key:zEveTrusted',
+          newLevel: 0,
+        }));
+      });
+
+      // Verify inline notices
+      await waitFor(() => {
+        expect(screen.getByTestId('trust-preview-lose-read')).toBeInTheDocument();
+        expect(screen.getByTestId('trust-preview-lose-write')).toBeInTheDocument();
+      });
+    });
   });
 
   describe('AddressBook Component', () => {

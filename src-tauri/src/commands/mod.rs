@@ -9,5 +9,9 @@ pub mod integrity;
 pub mod standards;
 pub mod backup;
 pub mod wot;
+pub mod market;
+pub mod drops;
 
 pub use wot::*;
+pub use market::*;
+pub use drops::*;

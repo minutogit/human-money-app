@@ -4,6 +4,7 @@
  * Supports:
  * - Contact cards: humoco://contact?did=...&name=...
  * - Payment requests: humoco://pay?to=...&amount=...&unit=...&std=...&note=...
+ * - Market contact cards: humoco://card?env=...
  */
 
 export interface ContactCardParams {
@@ -40,6 +41,12 @@ export interface ParsedPaymentRequest {
 
 const CONTACT_URI_REGEX = /humoco:\/\/contact\?([^\s<>"'`]+)/i;
 const PAY_URI_REGEX = /humoco:\/\/pay\?([^\s<>"'`]+)/i;
+const CARD_URI_REGEX = /humoco:\/\/card\?([^\s<>"'`]+)/i;
+
+export interface ParsedCardUri {
+  envBase64: string;
+  envelopeJson?: string;
+}
 
 /**
  * Builds a friendly, human-readable contact card text block containing a humoco://contact URI.
@@ -197,3 +204,51 @@ export function parsePaymentRequest(input: string): ParsedPaymentRequest | null 
     return null;
   }
 }
+
+/**
+ * Builds a humoco://card URI from a base64-encoded CardEnvelope JSON.
+ */
+export function buildCardUri(envBase64: string): string {
+  return `humoco://card?env=${envBase64.trim()}`;
+}
+
+/**
+ * Parses a humoco://card URI from arbitrary text.
+ * 
+ * Extracts humoco://card?env=... and decodes the CardEnvelope JSON if possible.
+ */
+export function parseCardUri(input: string): ParsedCardUri | null {
+  if (!input || typeof input !== 'string') return null;
+
+  const match = input.match(CARD_URI_REGEX);
+  if (!match || !match[1]) return null;
+
+  try {
+    const searchParams = new URLSearchParams(match[1]);
+    const env = searchParams.get('env')?.trim();
+    if (!env) return null;
+
+    let envelopeJson: string | undefined;
+    try {
+      const b64 = env.replace(/-/g, '+').replace(/_/g, '/');
+      const binStr = typeof window !== 'undefined' ? window.atob(b64) : '';
+      if (binStr) {
+        const bytes = new Uint8Array(binStr.length);
+        for (let i = 0; i < binStr.length; i++) {
+          bytes[i] = binStr.charCodeAt(i);
+        }
+        envelopeJson = new TextDecoder().decode(bytes);
+      }
+    } catch {
+      // Decode fallback
+    }
+
+    return {
+      envBase64: env,
+      envelopeJson,
+    };
+  } catch {
+    return null;
+  }
+}
+

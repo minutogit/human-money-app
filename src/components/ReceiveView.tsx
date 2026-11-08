@@ -21,6 +21,7 @@ import { ConfirmationModal } from './ui/ConfirmationModal';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
 import { useOptionalNavigation } from '../context/NavigationContext';
+import { marketService } from '../services/marketService';
 import { HelpIcon } from './ui/HelpIcon';
 
 import { translateError, isBackendError, stringifyError } from '../utils/errorHelper';
@@ -98,7 +99,7 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
     const [confirmText, setConfirmText] = useState("");
     const [pendingPasswordImport, setPendingPasswordImport] = useState<{
         fileData: number[];
-        type: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof';
+        type: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | 'card';
         name: string;
     } | null>(null);
 
@@ -156,12 +157,13 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
             if (droppedFile.name.endsWith('.standard') || droppedFile.name.endsWith('.toml')) {
                 processStandardFile(droppedFile.bytes);
             } else {
-                let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | null = null;
+                let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | 'card' | null = null;
                 if (droppedFile.name.endsWith('.transfer')) detectedType = 'transfer';
                 else if (droppedFile.name.endsWith('.ask') || droppedFile.name.endsWith('.humocoreq')) detectedType = 'ask';
                 else if (droppedFile.name.endsWith('.sig') || droppedFile.name.endsWith('.humocosig')) detectedType = 'sig';
                 else if (droppedFile.name.endsWith('.wot')) detectedType = 'wot';
                 else if (droppedFile.name.endsWith('.hmcproof')) detectedType = 'proof';
+                else if (droppedFile.name.endsWith('.hmcard')) detectedType = 'card';
 
                 if (detectedType) {
                     executeReceiveDirectly(droppedFile.bytes, detectedType, droppedFile.name);
@@ -190,13 +192,14 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                 multiple: false,
                 defaultPath: settings?.lastUsedDirectory,
                 filters: [
-                    { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'standard', 'toml', 'humocoreq', 'humocosig', 'wot', 'hmcproof'] },
+                    { name: 'All Human Money Files', extensions: ['transfer', 'ask', 'sig', 'standard', 'toml', 'humocoreq', 'humocosig', 'wot', 'hmcproof', 'hmcard'] },
                     { name: 'Transfer File (.transfer)', extensions: ['transfer'] },
                     { name: 'Signature Request (.ask)', extensions: ['ask', 'humocoreq'] },
                     { name: 'Signature Response (.sig)', extensions: ['sig', 'humocosig'] },
                     { name: 'Double Spend Proof (.hmcproof)', extensions: ['hmcproof'] },
                     { name: 'Voucher Standard (.standard, .toml)', extensions: ['standard', 'toml'] },
                     { name: t('transfer.importFile.wotFilter'), extensions: ['wot'] },
+                    { name: t('marketplace.cardFilterName'), extensions: ['hmcard'] },
                     { name: 'All Files', extensions: ['*'] }
                 ]
             });
@@ -220,7 +223,7 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                 if (fileName.endsWith('.standard') || fileName.endsWith('.toml')) {
                     await processStandardFile(fileData);
                 } else {
-                    let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | null = null;
+                    let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | 'card' | null = null;
                     if (fileName.endsWith('.transfer')) {
                         detectedType = 'transfer';
                     } else if (fileName.endsWith('.ask') || fileName.endsWith('.humocoreq')) {
@@ -231,6 +234,8 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                         detectedType = 'wot';
                     } else if (fileName.endsWith('.hmcproof')) {
                         detectedType = 'proof';
+                    } else if (fileName.endsWith('.hmcard')) {
+                        detectedType = 'card';
                     }
 
                     if (detectedType) {
@@ -330,7 +335,7 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
 
     async function executeReceiveDirectly(
         fileData: number[],
-        type: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof',
+        type: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | 'card',
         name: string,
         password?: string
     ) {
@@ -523,6 +528,17 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                         content: <p className="text-sm font-medium text-theme-secondary">{t('conflict.proofImportedDesc')}</p>,
                         confirmText: t('conflict.viewProofBtn'),
                         proofId
+                    });
+                }
+            } else if (type === 'card') {
+                const text = new TextDecoder().decode(new Uint8Array(fileData));
+                const cardResult = await protectAction(async (walletPassword) => {
+                    return await marketService.importContactCard(text, walletPassword || undefined);
+                });
+                if (cardResult && navigate) {
+                    navigate({
+                        view: 'marketplace',
+                        selectedDid: cardResult.did ?? undefined,
                     });
                 }
             }

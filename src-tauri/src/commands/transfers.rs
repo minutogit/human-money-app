@@ -89,6 +89,43 @@ pub async fn create_transfer_bundle(
         let mut wot_sync_json: Option<String> = None;
         let mut pending_receipt: Option<humoco_wot::SyncReceipt> = None;
 
+        let mut contact_card_json: Option<String> = None;
+        let mut pending_card_sent: Option<([u8; 32], u64)> = None;
+
+        let settings = state
+            .get_cached_settings()
+            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
+            .unwrap_or_default();
+
+        if settings.market_send_card_on_payment {
+            let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
+            let own_card_opt: Option<crate::state::StoredOwnCard> = service
+                .load_encrypted_data(crate::state::MARKET_OWN_CARD_KEY, password.as_deref())
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+
+            if let Some(own_card) = own_card_opt {
+                if now_secs < own_card.card.valid_until {
+                    if let Ok(peer_pk) = human_money_core::crypto::get_pubkey_from_user_id(&recipient_id) {
+                        let peer_pk_bytes = *peer_pk.as_bytes();
+                        let store: humoco_market::CardStore = service
+                            .load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref())
+                            .ok()
+                            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                            .unwrap_or_default();
+
+                        if humoco_market::should_attach_card(&store, &peer_pk_bytes, own_card.card.v) {
+                            let env = humoco_market::own_envelope(own_card.card_jws);
+                            if let Ok(json) = serde_json::to_string(&env) {
+                                contact_card_json = Some(json);
+                                pending_card_sent = Some((peer_pk_bytes, own_card.card.v));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if let Ok(can_recipient) = crate::state::canonicalize_did(&recipient_id) {
             if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
                 if reg.own_contacts.get(&can_recipient).is_some_and(|e| e.level >= 1) {
@@ -116,10 +153,25 @@ pub async fn create_transfer_bundle(
             sender_profile_name,
             use_privacy_mode,
             wot_sync_json,
+            contact_card_json,
         };
 
         let archive = open_wallet_archive(&app, &service);
         let result=service.create_transfer_bundle_with_l2_intents(request,&standard_definitions_toml,archive.as_ref(),password.as_deref(),network).map_err(FrontendError::from)?;
+
+        if let Some((peer_pk_bytes, own_v)) = pending_card_sent {
+            let mut store: humoco_market::CardStore = service
+                .load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref())
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default();
+            humoco_market::mark_sent(&mut store, peer_pk_bytes, own_v);
+            if let Ok(bytes) = serde_json::to_vec(&store) {
+                if let Err(e) = service.save_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, &bytes, password.as_deref()) {
+                    log::warn!("Failed to save CardStore after sending card: {}", e);
+                }
+            }
+        }
 
         if let Some(receipt) = pending_receipt {
             if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
@@ -217,6 +269,10 @@ pub fn receive_bundle(
             } else {
                 None
             };
+
+            if let Some(ref card_json) = result.contact_card_json {
+                state.try_import_piggybacked_contact_card(&mut service, Some(card_json), password.as_deref());
+            }
 
             Ok(ReceiveSuccessPayload {
                 sender_id: result.header.sender_id,

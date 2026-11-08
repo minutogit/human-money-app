@@ -40,7 +40,8 @@ import {
     Copy,
     Check,
     Upload,
-    RefreshCw
+    RefreshCw,
+    Server
 } from 'lucide-react';
 
 interface AddressBookProps {
@@ -826,6 +827,16 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                                                 {t('contacts.peerListSynced')}
                                                             </span>
                                                         )
+                                                    )}
+                                                    {contact.drops && contact.drops.length > 0 && (
+                                                        <span
+                                                            data-testid="contact-has-drop-badge"
+                                                            className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm flex items-center gap-1"
+                                                            title={t('contacts.hasDropTooltip')}
+                                                        >
+                                                            <Server size={9} />
+                                                            {t('contacts.hasDrop')}
+                                                        </span>
                                                     )}
                                                 </div>
 

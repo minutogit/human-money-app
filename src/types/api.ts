@@ -2,6 +2,7 @@
 
 import { ReceiveSuccessPayload, IntentDispatchObservation } from './transaction';
 import { VoucherDetails } from './voucher';
+import { FrontendDropDescriptor } from './market';
 
 export interface ReceiveBundleArgs {
     bundleData: number[];
@@ -84,6 +85,12 @@ export interface AppSettings {
     devModeUnlocked?: boolean;
     regionalMeshSources?: RegionalSourceDto[];
     enablePosMode?: boolean;
+    marketShowUnknown?: boolean;
+    maxStoreHops?: number;
+    marketSendCardOnPayment?: boolean;
+    shareMinLevel?: number;
+    marketPollWifiOnly?: boolean;
+    marketSelectedDrops?: FrontendDropDescriptor[];
     balanceViewMode?: 'spendable' | 'net';
     autoBackupEnabled?: boolean;
     backupDirty?: boolean;
@@ -141,4 +148,5 @@ export type AppState =
     | { view: "conflict_details"; proofId: string; previousView?: AppState }
     | { view: "conflict_list" }
     | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string; initialFilter?: 'all' | 'received' | 'own' | 'expiringSoon' }
+    | { view: "marketplace"; selectedDid?: string }
     | { view: "concept"; previousView?: AppState };

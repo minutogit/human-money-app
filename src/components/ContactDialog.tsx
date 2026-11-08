@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Contact, PublicProfile } from '../types';
+import { Contact, PublicProfile, FrontendTrustChangeImpact } from '../types';
+import { marketService } from '../services/marketService';
 import Avatar from 'boring-avatars';
 import { translateError } from '../utils/errorHelper';
 import { HelpIcon } from './ui/HelpIcon';
 import { readFromClipboard } from '../utils/clipboard';
 import { parseContactCard } from '../utils/humocoUri';
-import { Clipboard } from 'lucide-react';
+import { Clipboard, CheckCircle2, AlertCircle } from 'lucide-react';
 
 interface ContactDialogProps {
     isOpen: boolean;
@@ -34,8 +35,30 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [notes, setNotes] = useState('');
     const [newTag, setNewTag] = useState('');
     const [trustLevel, setTrustLevel] = useState<number | null>(existingContact?.trustLevel ?? null);
+    const [trustImpact, setTrustImpact] = useState<FrontendTrustChangeImpact | null>(null);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        if (!did || !did.trim()) {
+            setTrustImpact(null);
+            return;
+        }
+        const targetLvl = trustLevel ?? 0;
+        marketService.previewContactTrustChange(did.trim(), targetLvl)
+            .then((impact) => {
+                if (!cancelled) {
+                    setTrustImpact(impact);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) setTrustImpact(null);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [did, trustLevel]);
 
     const predefinedTags = ["Friends", "Business", "Favorites"];
     const availableTags = Array.from(new Set([...predefinedTags, ...tags]));
@@ -317,6 +340,44 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                 );
                             })}
                         </div>
+
+                        {/* Permission Change Preview */}
+                        {trustImpact && (
+                            (trustImpact.canReadMyMarketBefore !== trustImpact.canReadMyMarketAfter ||
+                             trustImpact.canWriteMyDropBefore !== trustImpact.canWriteMyDropAfter) && (
+                                <div className="mt-2 space-y-1.5 p-2 bg-bg-app rounded-xl border border-theme-subtle/70">
+                                    {/* Reading permission change */}
+                                    {trustImpact.canReadMyMarketBefore !== trustImpact.canReadMyMarketAfter && (
+                                        trustImpact.canReadMyMarketAfter ? (
+                                            <div data-testid="trust-preview-gain-read" className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                                                <CheckCircle2 size={13} className="shrink-0" />
+                                                <span>{t('contacts.trustPreviewGainRead')}</span>
+                                            </div>
+                                        ) : (
+                                            <div data-testid="trust-preview-lose-read" className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                                                <AlertCircle size={13} className="shrink-0" />
+                                                <span>{t('contacts.trustPreviewLoseRead')}</span>
+                                            </div>
+                                        )
+                                    )}
+
+                                    {/* Writing permission change */}
+                                    {trustImpact.canWriteMyDropBefore !== trustImpact.canWriteMyDropAfter && (
+                                        trustImpact.canWriteMyDropAfter ? (
+                                            <div data-testid="trust-preview-gain-write" className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                                                <CheckCircle2 size={13} className="shrink-0" />
+                                                <span>{t('contacts.trustPreviewGainWrite')}</span>
+                                            </div>
+                                        ) : (
+                                            <div data-testid="trust-preview-lose-write" className="flex items-center gap-1.5 text-[11px] font-semibold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200">
+                                                <AlertCircle size={13} className="shrink-0" />
+                                                <span>{t('contacts.trustPreviewLoseWrite')}</span>
+                                            </div>
+                                        )
+                                    )}
+                                </div>
+                            )
+                        )}
                     </div>
 
 

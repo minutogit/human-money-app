@@ -175,6 +175,7 @@ mod tests {
             desired_hops: None,
             has_peer_list: false,
             peer_list_updated_at: None,
+            drops: vec![],
         });
 
         let state_raw = AppState {

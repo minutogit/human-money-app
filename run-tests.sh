@@ -100,10 +100,20 @@ if [ "$RUN_FRONTEND" = true ]; then
 fi
 
 if [ "$RUN_BACKEND" = true ]; then
-    # 5. Backend Lint Check (Clippy)
+    # 5. humoco-market Lint Check (Clippy)
+    run_step "humoco-market Linting (Clippy)" "cd crates/humoco-market && cargo clippy --all-targets -- -D warnings"
+
+    # 6. humoco-market Tests
+    if command -v cargo-nextest >/dev/null 2>&1 || cargo nextest --version >/dev/null 2>&1; then
+        run_step "humoco-market Tests (Nextest)" "cd crates/humoco-market && cargo nextest run --status-level fail"
+    else
+        run_step "humoco-market Tests (Cargo)" "cd crates/humoco-market && cargo test"
+    fi
+
+    # 7. Backend Lint Check (Clippy)
     run_step "Backend Linting (Clippy)" "cd src-tauri && cargo clippy -- -D warnings"
     
-    # 6. Backend Tests (Cargo)
+    # 8. Backend Tests (Cargo)
     run_step "Backend Integrationstests (Rust)" "cd src-tauri && cargo test"
 fi
 

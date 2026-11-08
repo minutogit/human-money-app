@@ -1,5 +1,7 @@
 // src/types/profile.ts
 
+import { FrontendDropDescriptor } from './market';
+
 export type MnemonicLanguage =
     | "english"
     | "german"
@@ -45,6 +47,8 @@ export interface PublicProfile {
     pictureUrl?: string;
 }
 
+export type FrontendUserProfile = PublicProfile;
+
 export interface Contact {
     did: string;
     profile: PublicProfile;
@@ -55,6 +59,7 @@ export interface Contact {
     desiredHops?: number | null;
     hasPeerList?: boolean;
     peerListUpdatedAt?: number | null;
+    drops?: FrontendDropDescriptor[];
 }
 
 export interface CreatorData {

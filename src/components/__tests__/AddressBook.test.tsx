@@ -149,4 +149,42 @@ describe('AddressBook Component', () => {
       }));
     });
   });
+
+  it('displays "Hat eine Ablage" badge when contact has drops configured', async () => {
+    const contactsWithDrops: Contact[] = [
+      {
+        did: 'did:key:zWithDrop',
+        profile: {
+          id: 'did:key:zWithDrop',
+          firstName: 'Alice',
+          lastName: 'DropHost',
+        },
+        tags: ['partner'],
+        addedAt: '2024-01-01',
+        drops: [
+          {
+            readUrl: 'https://drop.example.com/d-test',
+            writeUrl: 'https://drop.example.com/drop.php',
+            dropPub: 'DropPubTestKey12345',
+          },
+        ],
+      },
+    ];
+
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') {
+        return Promise.resolve(contactsWithDrops);
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Alice DropHost/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('contact-has-drop-badge')).toBeInTheDocument();
+    expect(screen.getByText(/Hat eine Ablage|Has a Drop/i)).toBeInTheDocument();
+  });
 });

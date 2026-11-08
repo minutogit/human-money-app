@@ -14,12 +14,52 @@ import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { AppRouter } from "./components/AppRouter";
 import { GlobalFileDropZone } from "./components/GlobalFileDropZone";
+import { parseCardUri } from "./utils/humocoUri";
+import { marketService } from "./services/marketService";
 
 function AppContent() {
     const { t } = useTranslation();
     const { appState, navigate } = useNavigation();
-    const { isForkLocked, isRecoveryRequired, clearLocks, isSessionActive, isAuthenticated } = useSession();
+    const { isForkLocked, isRecoveryRequired, clearLocks, isSessionActive, isAuthenticated, protectAction } = useSession();
     const isLoggedIn = isAuthenticated ?? isSessionActive;
+
+    useEffect(() => {
+        if (!isLoggedIn) return;
+
+        const handleUriImport = async (uri: string) => {
+            const parsed = parseCardUri(uri);
+            if (parsed) {
+                try {
+                    const res = await protectAction(async (pwd) => {
+                        return await marketService.importContactCard(uri, pwd || undefined);
+                    });
+                    if (res) {
+                        navigate({ view: 'marketplace', selectedDid: res.did ?? undefined });
+                    }
+                } catch (err) {
+                    logger.error("Failed to import card from URI: " + String(err));
+                }
+            }
+        };
+
+        if (typeof window !== 'undefined') {
+            const currentUrl = window.location.href;
+            if (currentUrl.includes('humoco://card') || currentUrl.includes('?env=')) {
+                handleUriImport(currentUrl);
+            }
+
+            const onDeepLink = (e: Event) => {
+                const customEv = e as CustomEvent<string>;
+                if (customEv.detail && (customEv.detail.includes('humoco://card') || customEv.detail.includes('?env='))) {
+                    handleUriImport(customEv.detail);
+                }
+            };
+            window.addEventListener('humoco:deeplink', onDeepLink);
+            return () => {
+                window.removeEventListener('humoco:deeplink', onDeepLink);
+            };
+        }
+    }, [isLoggedIn, navigate, protectAction]);
 
     useEffect(() => {
         if (isForkLocked || isRecoveryRequired) {

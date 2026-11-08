@@ -24,12 +24,14 @@ import {
   Heart,
   Bug,
   BookOpen,
-  Lock
+  Lock,
+  Store
 } from 'lucide-react';
 
 export const INTERNAL_VIEWS = [
   'logged_in', 
   'wallet', 
+  'marketplace',
   'activities', 
   'transaction_history', 
   'address_book', 
@@ -73,6 +75,7 @@ export const Sidebar: React.FC = () => {
       items: [
         { id: 'logged_in', label: t('dashboard.title'), icon: LayoutDashboard, view: { view: 'logged_in' } },
         { id: 'wallet', label: t('wallet.title'), icon: Wallet, view: { view: 'wallet' } },
+        { id: 'marketplace', label: t('marketplace.title'), icon: Store, view: { view: 'marketplace' } },
       ]
     },
     {

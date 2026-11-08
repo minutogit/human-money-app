@@ -8,6 +8,7 @@ pub mod standards;
 pub mod transfers;
 pub mod backup;
 pub mod wot;
+pub mod market;
 
 pub use error::*;
 pub use voucher::*;
@@ -19,3 +20,4 @@ pub use standards::*;
 pub use transfers::*;
 pub use backup::*;
 pub use wot::*;
+pub use market::*;
