@@ -1,0 +1,13 @@
+# Disable directory listing
+Options -Indexes
+
+# Protect configuration, lock, and temporary files from direct web access
+<FilesMatch "^(config\.php|\.lock|.*\.tmp.*)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
