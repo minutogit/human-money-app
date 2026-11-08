@@ -1,14 +1,17 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { voucherService, SigningRequestConfig } from "../../services/voucherService";
+import { postService } from "../../services/postService";
 import { settingsService } from "../../services/settingsService";
 import { contactService } from "../../services/contactService";
 import { save } from "@tauri-apps/plugin-dialog";
 import { logger } from "../../utils/log";
 import { translateError } from "../../utils/errorHelper";
 import { ConfirmationModal } from "../ui/ConfirmationModal";
+import { Button } from "../ui/Button";
 import { AppSettings, Contact } from "../../types";
 import { updateLastUsedDirectory } from "../../utils/settingsUtils";
+import { RefreshCw, UploadCloud, CheckCircle2 } from "lucide-react";
 
 interface ExportSigningRequestModalProps {
     isOpen: boolean;
@@ -39,6 +42,8 @@ export function ExportSigningRequestModal({
     const [exportPasswordConfirm, setExportPasswordConfirm] = useState("");
     const [showExportPassword, setShowExportPassword] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
+    const [isSendingViaPost, setIsSendingViaPost] = useState(false);
+    const [postSuccessMsg, setPostSuccessMsg] = useState("");
     const [exportError, setExportError] = useState("");
     const [availableContacts, setAvailableContacts] = useState<Contact[]>(contacts || []);
 
@@ -124,11 +129,47 @@ export function ExportSigningRequestModal({
         }
     };
 
+    const handleSendSigningRequestViaPost = async () => {
+        if (!voucherId) return;
+        if (!recipientId.trim()) {
+            setExportError(t('voucher.errorEnterRecipientDid'));
+            return;
+        }
+        setIsSendingViaPost(true);
+        setExportError("");
+        setPostSuccessMsg("");
+        try {
+            const config: SigningRequestConfig = {
+                type: "TargetDid",
+                value: [recipientId.trim(), "TrialDecryption"]
+            };
+            const bundleBytes = await voucherService.createSigningRequest(voucherId, config);
+            const res = await protectAction(async (pwd) => {
+                return await postService.sendSigningRequestViaPost(recipientId.trim(), bundleBytes, pwd || undefined);
+            });
+            if (res && res.depositedTo > 0) {
+                setPostSuccessMsg(t('voucher.signRequest.sentViaPostSuccess', '📦 Bürgschaftsanfrage in der Ablage hinterlegt (wartet auf Abholung)'));
+                setTimeout(() => {
+                    resetAndClose();
+                }, 1600);
+            } else if (res && res.errors && res.errors.length > 0) {
+                setExportError(res.errors.join('; '));
+            } else {
+                setExportError(t('voucher.signRequest.sentViaPostZeroDrops', 'Keine Ablage für diesen Kontakt erreichbar. Bitte nutze den .ask Datei-Export.'));
+            }
+        } catch (e) {
+            setExportError(translateError(e, t));
+        } finally {
+            setIsSendingViaPost(false);
+        }
+    };
+
     const resetAndClose = () => {
         setRecipientId("");
         setExportPassword("");
         setExportPasswordConfirm("");
         setExportError("");
+        setPostSuccessMsg("");
         onClose();
     };
 
@@ -188,6 +229,20 @@ export function ExportSigningRequestModal({
                                     autoFocus
                                 />
                             </div>
+
+                            <div className="pt-2">
+                                <Button
+                                    type="button"
+                                    variant="primary"
+                                    disabled={!recipientId.trim() || isSendingViaPost || isExporting}
+                                    onClick={handleSendSigningRequestViaPost}
+                                    data-testid="send-signing-request-post-button"
+                                    className="w-full gap-2 text-xs font-bold py-3 rounded-xl shadow-sm"
+                                >
+                                    {isSendingViaPost ? <RefreshCw size={14} className="animate-spin" /> : <UploadCloud size={14} />}
+                                    {isSendingViaPost ? t('voucher.signRequest.sendingViaPost', 'Sende über Ablage...') : t('voucher.signRequest.sendViaPostButton', 'Über Ablage anfragen')}
+                                </Button>
+                            </div>
                         </div>
                     ) : (
 
@@ -238,6 +293,12 @@ export function ExportSigningRequestModal({
                                     </div>
                                 </div>
                             )}
+                        </div>
+                    )}
+                    {postSuccessMsg && (
+                        <div className="p-3 bg-emerald-50 text-emerald-700 rounded-xl text-xs font-bold border border-emerald-200 flex items-center gap-2 animate-in fade-in">
+                            <CheckCircle2 size={16} className="shrink-0 text-emerald-600" />
+                            <span>{postSuccessMsg}</span>
                         </div>
                     )}
                     {exportError && (

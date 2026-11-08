@@ -2333,7 +2333,7 @@ checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
 name = "human_money_app"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "bip39",
@@ -2416,20 +2416,23 @@ dependencies = [
 
 [[package]]
 name = "humoco-market"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "blake3",
  "bs58",
  "chacha20poly1305",
  "chrono",
  "ed25519-dalek",
  "hex",
  "hkdf",
+ "hmac",
  "human_money_core",
  "rand 0.8.6",
  "serde",
  "serde_json",
  "serde_json_canonicalizer",
  "sha2",
+ "subtle",
  "thiserror 1.0.69",
  "x25519-dalek",
 ]
@@ -2446,7 +2449,7 @@ dependencies = [
 
 [[package]]
 name = "humoco-wot"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",

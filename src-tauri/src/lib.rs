@@ -26,7 +26,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*, market::*, drops::*};
+use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*, market::*, drops::*, post::*};
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
 
@@ -171,7 +171,7 @@ pub fn run() {
             check_wallet_integrity, repair_wallet_integrity, export_double_spend_proof, import_double_spend_proof,
             // Wallet Backups
             probe_wallet_backup, export_wallet_backup_file, sync_wallet_backup_folder, inspect_wallet_backup, restore_wallet_backup,
-            get_backup_status, run_auto_backup_sync,
+            get_backup_status, run_auto_backup_sync, sync_drop_backup, fetch_and_inspect_drop_backup, reconcile_restored_wallet_l2,
             // Web of Trust (WoT)
             get_wot_summary, set_wot_max_hops, export_wot_package, import_wot_package, evaluate_voucher_trust_preview,
             get_wot_providers, set_wot_provider_trust, remove_wot_provider, refresh_wot_provider_url,
@@ -196,6 +196,21 @@ pub fn run() {
             sync_market_drops,
             delete_own_drop_slots,
             preview_contact_trust_change,
+            probe_public_drop,
+            save_public_drop,
+            remove_public_drop,
+            rotate_drop_admin_key,
+            get_drop_overview_status,
+            deposit_transfer_to_post,
+            send_signing_request_via_post,
+            reply_detached_signature_via_post,
+            send_wot_handshake_via_post,
+            accept_wot_handshake,
+            send_market_inquiry_via_post,
+            reply_market_inquiry_via_post,
+            dismiss_pending_post_item,
+            get_post_inbox_summary,
+            sync_post_drops,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

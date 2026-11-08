@@ -44,21 +44,27 @@ impl From<humoco_market::ListingOrigin> for FrontendListingOrigin {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendMarketListing {
+    #[serde(default)]
+    pub listing_id: String,
     pub listing_type: FrontendListingType,
     pub title: String,
     pub text: Option<String>,
     pub pricing: Option<String>,
     pub origin: FrontendListingOrigin,
+    #[serde(default)]
+    pub allow_inquiries: bool,
 }
 
 impl From<humoco_market::MarketListing> for FrontendMarketListing {
     fn from(l: humoco_market::MarketListing) -> Self {
         Self {
+            listing_id: String::new(),
             listing_type: l.listing_type.into(),
             title: l.title,
             text: l.text,
             pricing: l.pricing,
             origin: l.origin.into(),
+            allow_inquiries: l.allow_inquiries,
         }
     }
 }
@@ -121,6 +127,8 @@ impl From<humoco_market::StandardRef> for FrontendStandardRef {
 pub struct FrontendDropDescriptor {
     pub write_url: String,
     pub read_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_id: Option<String>,
     pub drop_pub: String,
 }
 
@@ -129,6 +137,7 @@ impl From<humoco_market::DropDescriptor> for FrontendDropDescriptor {
         Self {
             write_url: d.write_url,
             read_url: d.read_url,
+            slot_id: d.slot_id,
             drop_pub: d.drop_pub,
         }
     }
@@ -139,6 +148,7 @@ impl From<FrontendDropDescriptor> for humoco_market::DropDescriptor {
         Self {
             write_url: d.write_url,
             read_url: d.read_url,
+            slot_id: d.slot_id,
             drop_pub: d.drop_pub,
         }
     }
@@ -151,6 +161,8 @@ pub struct FrontendCardListingInput {
     pub title: String,
     pub text: Option<String>,
     pub pricing: Option<String>,
+    #[serde(default)]
+    pub allow_inquiries: bool,
 }
 
 impl From<humoco_market::Listing> for FrontendCardListingInput {
@@ -160,6 +172,7 @@ impl From<humoco_market::Listing> for FrontendCardListingInput {
             title: l.title,
             text: l.text,
             pricing: l.pricing,
+            allow_inquiries: l.allow_inquiries,
         }
     }
 }
@@ -171,6 +184,7 @@ impl From<FrontendCardListingInput> for humoco_market::Listing {
             title: l.title,
             text: l.text,
             pricing: l.pricing,
+            allow_inquiries: l.allow_inquiries,
         }
     }
 }
@@ -253,10 +267,27 @@ pub struct FrontendMarketPerson {
 
 impl From<humoco_market::MarketPerson> for FrontendMarketPerson {
     fn from(p: humoco_market::MarketPerson) -> Self {
+        let did = p.did.clone();
         Self {
             did: p.did,
             profile: p.profile.into(),
-            listings: p.listings.into_iter().map(Into::into).collect(),
+            listings: p
+                .listings
+                .into_iter()
+                .map(|l| {
+                    let listing_id =
+                        humoco_market::compute_listing_id(&did, l.listing_type, &l.title);
+                    FrontendMarketListing {
+                        listing_id,
+                        listing_type: l.listing_type.into(),
+                        title: l.title,
+                        text: l.text,
+                        pricing: l.pricing,
+                        origin: l.origin.into(),
+                        allow_inquiries: l.allow_inquiries,
+                    }
+                })
+                .collect(),
             sources: p.sources.into_iter().map(Into::into).collect(),
             as_of: p.as_of,
             standards: p.standards.into_iter().map(Into::into).collect(),
@@ -309,8 +340,10 @@ impl From<FrontendMemberPolicyDto> for humoco_market::MemberPolicy {
 pub struct FrontendDropSetupDraft {
     pub descriptor: FrontendDropDescriptor,
     pub data_dir: String,
-    pub admin_token_hash: String,
+    pub admin_pubkey: String,
+    pub generation: u32,
     pub max_members: usize,
+    pub max_total_storage_mb: usize,
     pub policy: FrontendMemberPolicyDto,
     pub zip_base64: String,
 }
@@ -319,16 +352,25 @@ pub struct FrontendDropSetupDraft {
 #[serde(rename_all = "camelCase")]
 pub struct FrontendDropAdminStatus {
     pub descriptor: FrontendDropDescriptor,
+    pub admin_pubkey: String,
+    pub generation: u32,
+    pub rotation_retire_at: Option<u64>,
     pub data_dir: String,
     pub max_members: usize,
+    pub max_total_storage_mb: usize,
+    pub used_bytes: Option<u64>,
+    pub max_bytes: Option<u64>,
+    pub soft_warning: bool,
     pub card_policy: FrontendMemberPolicyDto,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
-    pub blocked_access_ids: Vec<String>,
+    pub blocked_pubkeys: Vec<String>,
     pub direct_member_count: usize,
     pub hop2_member_count: usize,
     pub total_member_count: usize,
     pub active_slot_ids: Vec<String>,
+    #[serde(default)]
+    pub channel_counts: std::collections::BTreeMap<String, usize>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
@@ -337,8 +379,31 @@ pub struct FrontendDropAdminUpdateRequest {
     pub card_policy: Option<FrontendMemberPolicyDto>,
     pub allow: Option<Vec<String>>,
     pub deny: Option<Vec<String>>,
-    pub blocked_access_ids: Option<Vec<String>>,
+    pub blocked_pubkeys: Option<Vec<String>>,
     pub max_members: Option<usize>,
+    pub max_total_storage_mb: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendPublicDropInfo {
+    pub write_url: String,
+    pub read_url: String,
+    pub drop_pub: String,
+    pub register_url: Option<String>,
+    pub access_pubkey: String, // R_hex64
+    pub authorized_channels: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendDropOverviewStatus {
+    pub connected_count: usize,
+    pub friend_drops: usize,
+    pub public_drops: usize,
+    pub has_own_drop: bool,
+    pub own_drop_soft_warning: bool,
+    pub last_sync_at: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -367,6 +432,7 @@ pub struct FrontendDropSyncResult {
     pub polled_drops: usize,
     pub decrypted_slots: usize,
     pub imported_cards: usize,
+    pub imported_wot_lists: usize,
     pub errors: Vec<String>,
 }
 
@@ -375,6 +441,10 @@ pub struct FrontendDropSyncResult {
 pub struct FrontendTrustChangeImpact {
     pub can_read_my_market_before: bool,
     pub can_read_my_market_after: bool,
+    pub can_read_my_wot_before: bool,
+    pub can_read_my_wot_after: bool,
     pub can_write_my_drop_before: bool,
     pub can_write_my_drop_after: bool,
+    pub can_send_me_post_before: bool,
+    pub can_send_me_post_after: bool,
 }

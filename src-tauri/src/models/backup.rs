@@ -74,3 +74,34 @@ pub struct FrontendAutoBackupStatusDto {
     pub sync_folder: Option<String>,
     pub changed_blobs: Option<usize>,
 }
+
+/// Result of an event-driven or manual drop backup sync run.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendDropBackupSyncResult {
+    pub uploaded_to: usize,
+    pub authorized_targets: usize,
+    pub padded_bytes: usize,
+    pub timestamp: Option<String>,
+    pub errors: Vec<String>,
+}
+
+/// Metadata and staged path of a backup fetched from a drop during recovery wizard.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendDropBackupFetchDto {
+    pub staged_path: String,
+    pub matched_key_kind: String, // "stealth" | "public" | "grace" | "own"
+    pub source_url: String,
+    pub inspection: FrontendBackupInspectionDto,
+}
+
+/// Outcome of reconciling a restored wallet against online L2 gateways.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendRestoreReconcileResultDto {
+    pub active_voucher_queries_count: usize,
+    pub reconciled_spent_count: usize,
+    pub l2_reconciliation_status: String, // "no_servers" | "offline" | "reconciled"
+    pub pending_restore_l2_reconciliation: bool,
+}

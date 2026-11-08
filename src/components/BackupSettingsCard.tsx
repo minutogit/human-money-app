@@ -22,6 +22,7 @@ import {
     ShieldCheck, 
     Folder,
     RefreshCw,
+    Server,
     X
 } from 'lucide-react';
 
@@ -41,9 +42,11 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     const [confirmBackupPassword, setConfirmBackupPassword] = useState('');
     const [syncFolder, setSyncFolder] = useState<string>(settings?.backupSyncFolder || '');
     const [autoBackupEnabled, setAutoBackupEnabled] = useState<boolean>(settings?.autoBackupEnabled ?? true);
+    const [dropBackupEnabled, setDropBackupEnabled] = useState<boolean>(settings?.dropBackupEnabled ?? true);
 
     const [isExporting, setIsExporting] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [isDropSyncing, setIsDropSyncing] = useState(false);
     const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
     const validateCustomPassword = (): boolean => {
@@ -72,6 +75,53 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
             } catch {
                 // best-effort
             }
+        }
+    };
+
+    const handleToggleDropBackup = async (enabled: boolean) => {
+        setDropBackupEnabled(enabled);
+        if (settings) {
+            const updated: AppSettings = {
+                ...settings,
+                dropBackupEnabled: enabled,
+            };
+            try {
+                await settingsService.saveSettings(updated);
+                if (onSettingsUpdated) onSettingsUpdated(updated);
+            } catch {
+                // best-effort
+            }
+        }
+    };
+
+    const handleManualDropBackup = async () => {
+        setIsDropSyncing(true);
+        setFeedback(null);
+        try {
+            const res = await backupService.syncDropBackup();
+            if (res.uploadedTo > 0) {
+                setFeedback({
+                    type: 'success',
+                    message: t('settings.dropBackupSuccess', `Sicherung erfolgreich in ${res.uploadedTo} Ablage(n) hinterlegt (${Math.round(res.paddedBytes / 1024)} KB).`),
+                });
+                if (settings && onSettingsUpdated) {
+                    onSettingsUpdated({ ...settings, lastDropBackupAt: res.timestamp ?? new Date().toISOString() });
+                }
+            } else if (res.authorizedTargets === 0) {
+                setFeedback({
+                    type: 'error',
+                    message: t('settings.noDropAuthorizedBackup', 'Keine verbundene Ablage hat den Backup-Kanal freigegeben. Bitte verbinde eine Freundes-, eigene oder öffentliche Ablage.'),
+                });
+            } else {
+                setFeedback({
+                    type: 'error',
+                    message: t('settings.dropBackupFailed', 'Sicherung in Ablage fehlgeschlagen: ' + res.errors.join(', ')),
+                });
+            }
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsDropSyncing(false);
         }
     };
 
@@ -387,6 +437,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                 <label className="flex items-start gap-2.5 cursor-pointer select-none">
                                     <input
                                         type="checkbox"
+                                        aria-label={t('settings.autoBackupToggleLabel', 'Automatisch im Hintergrund sichern')}
                                         checked={autoBackupEnabled}
                                         onChange={(e) => handleToggleAutoBackup(e.target.checked)}
                                         className="mt-0.5 rounded text-theme-primary focus:ring-theme-accent"
@@ -455,6 +506,67 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                 <>
                                     <FileArchive size={14} />
                                     {t('settings.exportFileButton')}
+                                </>
+                            )}
+                        </Button>
+                    </div>
+
+                    {/* Action Panel 3: Drop Off-Site Backup */}
+                    <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-theme-subtle flex flex-col justify-between space-y-4 shadow-sm md:col-span-2">
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <Server size={16} className="text-theme-primary" />
+                                    <h4 className="font-bold text-xs text-theme-secondary uppercase tracking-wider">
+                                        {t('settings.dropBackupTitle', 'Verschlüsseltes Off-Site-Backup in Ablagen')}
+                                    </h4>
+                                </div>
+                                {settings?.lastDropBackupAt && (
+                                    <span className="text-[10px] text-theme-light flex items-center gap-1 font-mono">
+                                        <Clock size={12} />
+                                        {new Date(settings.lastDropBackupAt).toLocaleString()}
+                                    </span>
+                                )}
+                            </div>
+                            <p className="text-[11px] text-theme-light leading-relaxed">
+                                {t('settings.dropBackupDesc', 'Sichert die verschlüsselte Wallet (.hmcbackup mit 64-KB-Padding) automatisch in verbundenen Freundes-, eigenen oder öffentlichen Ablagen.')}
+                            </p>
+
+                            <label className="flex items-start gap-2.5 cursor-pointer select-none pt-1">
+                                <input
+                                    type="checkbox"
+                                    aria-label={t('settings.dropBackupToggleLabel', 'Automatische Sicherung in Ablagen aktivieren')}
+                                    checked={dropBackupEnabled}
+                                    onChange={(e) => handleToggleDropBackup(e.target.checked)}
+                                    className="mt-0.5 rounded text-theme-primary focus:ring-theme-accent"
+                                />
+                                <div className="text-xs">
+                                    <span className="font-bold text-theme-secondary block">
+                                        {t('settings.dropBackupToggleLabel', 'Automatisch in Ablage sichern (30s Debounce)')}
+                                    </span>
+                                    <span className="text-[11px] text-theme-light block leading-relaxed">
+                                        {t('settings.dropBackupToggleDesc', 'Lädt bei jeder Zustandsänderung (Zahlungen, Gutscheine, Bürgschaften, Kontakte) nach 30 Sekunden automatisch die Sicherung hoch.')}
+                                    </span>
+                                </div>
+                            </label>
+                        </div>
+
+                        <Button
+                            type="button"
+                            onClick={handleManualDropBackup}
+                            disabled={isDropSyncing || !dropBackupEnabled}
+                            variant="secondary"
+                            className="w-full flex items-center justify-center gap-2 text-xs py-2.5"
+                        >
+                            {isDropSyncing ? (
+                                <>
+                                    <RefreshCw size={14} className="animate-spin mr-2" />
+                                    {t('settings.syncing', 'Sichere in Ablage...')}
+                                </>
+                            ) : (
+                                <>
+                                    <Server size={14} className="mr-2" />
+                                    {t('settings.syncDropNowButton', 'Jetzt in Ablage sichern')}
                                 </>
                             )}
                         </Button>

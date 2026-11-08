@@ -11,7 +11,9 @@ pub mod backup;
 pub mod wot;
 pub mod market;
 pub mod drops;
+pub mod post;
 
 pub use wot::*;
 pub use market::*;
 pub use drops::*;
+pub use post::*;

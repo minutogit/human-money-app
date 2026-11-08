@@ -28,18 +28,26 @@ pub enum ListingOrigin {
     Card,
 }
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Listing {
     pub listing_type: ListingType,
     pub title: String,
     pub text: Option<String>,
     pub pricing: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_inquiries: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DropDescriptor {
     pub write_url: String,
     pub read_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_id: Option<String>,
     pub drop_pub: String,
 }
 
@@ -119,6 +127,29 @@ pub struct MarketListing {
     pub text: Option<String>,
     pub pricing: Option<String>,
     pub origin: ListingOrigin,
+    #[serde(default)]
+    pub allow_inquiries: bool,
+}
+
+/// Deterministically computes a 16-character hex listing ID from owner DID, listing type and title.
+pub fn compute_listing_id(owner_did: &str, listing_type: ListingType, title: &str) -> String {
+    let canonical_did = match human_money_core::crypto::get_pubkey_from_user_id(owner_did.trim()) {
+        Ok(pk) => human_money_core::crypto::create_user_id(&pk, None)
+            .unwrap_or_else(|_| owner_did.trim().to_string()),
+        Err(_) => owner_did.trim().to_string(),
+    };
+    let type_str = match listing_type {
+        ListingType::Offer => "offer",
+        ListingType::Request => "request",
+    };
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(canonical_did.as_bytes());
+    hasher.update(b":");
+    hasher.update(type_str.as_bytes());
+    hasher.update(b":");
+    hasher.update(title.trim().as_bytes());
+    let hash = hasher.finalize();
+    hex::encode(&hash.as_bytes()[0..8])
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

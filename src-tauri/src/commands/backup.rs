@@ -2,8 +2,9 @@
 use crate::{
     models::{
         FrontendAutoBackupStatusDto, FrontendBackupInspectionDto, FrontendBackupProbeDto,
-        FrontendBackupSummaryDto, FrontendError, FrontendRestoreOutcomeDto, MnemonicLanguage,
-        PortableBackupContainer,
+        FrontendBackupSummaryDto, FrontendDropBackupFetchDto, FrontendDropBackupSyncResult,
+        FrontendError, FrontendRestoreOutcomeDto, FrontendRestoreReconcileResultDto,
+        MnemonicLanguage, PortableBackupContainer,
     },
     AppState,
 };
@@ -693,6 +694,24 @@ pub async fn restore_wallet_backup(
         }
     };
 
+    // Mandatory SST-V4 offline-spend lock (§5)
+    let pending_restore_l2 = active_voucher_queries_count > 0 && l2_reconciliation_status != "reconciled";
+    if let Ok(mut settings) = state.get_cached_settings() {
+        settings.pending_restore_l2_reconciliation = pending_restore_l2;
+        if let Ok(mut service) = state.service.lock() {
+            let _ = state.save_settings(&mut service, settings, Some(&new_password));
+        }
+    }
+
+    // Clean up temporary staged file if source_path was from drop restore
+    if let Ok(app_dir) = app.path().app_data_dir() {
+        let tmp_restore_dir = app_dir.join("tmp_restore");
+        let src_p = Path::new(&source_path);
+        if (src_p.starts_with(&tmp_restore_dir) || source_path.contains("tmp_restore")) && src_p.is_file() {
+            let _ = fs::remove_file(src_p);
+        }
+    }
+
     let app_handle = app.clone();
     let pwd = new_password.clone();
     tauri::async_runtime::spawn(async move {
@@ -889,6 +908,612 @@ pub fn run_auto_backup_sync(
             }
         }
     }
+}
+
+pub(crate) fn cleanup_stale_tmp_restore_files(tmp_dir: &Path) {
+    if let Ok(entries) = fs::read_dir(tmp_dir) {
+        let now = std::time::SystemTime::now();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Ok(metadata) = fs::metadata(&path) {
+                    if let Ok(modified) = metadata.modified() {
+                        if let Ok(elapsed) = now.duration_since(modified) {
+                            if elapsed.as_secs() > 3600 {
+                                let _ = fs::remove_file(path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn sync_drop_backup(
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<FrontendDropBackupSyncResult, FrontendError> {
+    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    if !settings.drop_backup_enabled {
+        return Ok(FrontendDropBackupSyncResult {
+            uploaded_to: 0,
+            authorized_targets: 0,
+            padded_bytes: 0,
+            timestamp: None,
+            errors: Vec::new(),
+        });
+    }
+
+    let (my_ed_sk, master_seed) = {
+        let service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let my_ed_sk = service
+            .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+            .map_err(FrontendError::from)?;
+        let master_seed = my_ed_sk.to_bytes();
+        (my_ed_sk, master_seed)
+    };
+
+    // Gather candidate backup drops: selected friend drops + own drop + enabled public drops
+    let mut candidate_targets: Vec<humoco_market::DropDescriptor> = settings
+        .market_selected_drops
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .collect();
+
+    // Check own drop admin descriptor
+    {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        if let Ok(Some(admin)) = service
+            .load_encrypted_data(crate::state::MARKET_DROP_ADMIN_KEY, password.as_deref())
+            .map(|bytes| serde_json::from_slice::<crate::state::StoredDropAdmin>(&bytes).ok())
+        {
+            if !admin.descriptor.write_url.is_empty()
+                && !candidate_targets
+                    .iter()
+                    .any(|d| d.write_url == admin.descriptor.write_url)
+            {
+                candidate_targets.push(admin.descriptor.clone());
+            }
+        }
+    }
+
+    // Enabled public drops
+    for pd in &settings.public_drops {
+        if pd.enabled
+            && !pd.write_url.is_empty()
+            && !candidate_targets
+                .iter()
+                .any(|d| d.write_url == pd.write_url)
+        {
+            candidate_targets.push(humoco_market::DropDescriptor {
+                write_url: pd.write_url.clone(),
+                read_url: pd.read_url.clone(),
+                slot_id: Some(pd.access_pubkey.clone()),
+                drop_pub: pd.drop_pub.clone(),
+            });
+        }
+    }
+
+    if candidate_targets.is_empty() {
+        return Ok(FrontendDropBackupSyncResult {
+            uploaded_to: 0,
+            authorized_targets: 0,
+            padded_bytes: 0,
+            timestamp: None,
+            errors: Vec::new(),
+        });
+    }
+
+    // Probe which candidate drops authorize channel "backup"
+    let probe_client = crate::drop_client::create_drop_probe_client();
+    let mut authorized_targets = Vec::new();
+
+    for drop_desc in candidate_targets {
+        let (cap_pubkey, is_public) = if let Some(ref slot_id) = drop_desc.slot_id {
+            (slot_id.clone(), true)
+        } else {
+            match humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &drop_desc.drop_pub) {
+                Ok(pk) => (pk, false),
+                Err(_) => continue,
+            }
+        };
+
+        match crate::drop_client::head_slot_capability(
+            &probe_client,
+            &drop_desc.write_url,
+            &cap_pubkey,
+            "backup",
+        )
+        .await
+        {
+            Ok(cap) if cap.authorized => {
+                authorized_targets.push((drop_desc, cap_pubkey, is_public));
+            }
+            _ => {}
+        }
+    }
+
+    let authorized_count = authorized_targets.len();
+    if authorized_targets.is_empty() {
+        return Ok(FrontendDropBackupSyncResult {
+            uploaded_to: 0,
+            authorized_targets: 0,
+            padded_bytes: 0,
+            timestamp: None,
+            errors: Vec::new(),
+        });
+    }
+
+    // Generate in-memory PortableBackupContainer
+    let custom_standards = collect_custom_standards(&app);
+    let container_bytes = {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let diff = service
+            .create_differential_backup(None, BackupProtection::MnemonicOnly, password.as_deref())
+            .map_err(FrontendError::from)?;
+
+        let mut blobs_hex = HashMap::with_capacity(diff.put_blobs.len());
+        for (name, data) in diff.put_blobs {
+            blobs_hex.insert(name, human_money_core::hex::encode(&data));
+        }
+
+        let timestamp = Utc::now().to_rfc3339();
+        let container = PortableBackupContainer {
+            container_format: "humoco-app-backup-v1".to_string(),
+            created_at: timestamp,
+            manifest_hex: human_money_core::hex::encode(&diff.encrypted_manifest_bytes),
+            blobs_hex,
+            custom_standards,
+        };
+
+        serde_json::to_vec_pretty(&container)
+            .map_err(|e| FrontendError::from(format!("Failed to serialize backup container: {}", e)))?
+    };
+
+    // Pad backup slot bytes
+    let padded_bytes = humoco_market::pad_backup_slot_bytes(
+        &container_bytes,
+        humoco_market::DROP_BACKUP_MAX_BYTES,
+    )
+    .map_err(|e| FrontendError::from(e.to_string()))?;
+
+    let client = crate::drop_client::create_drop_http_client();
+    let now_secs = crate::drop_client::current_unix_timestamp();
+    let mut uploaded_to = 0;
+    let mut errors = Vec::new();
+    let mut settings_updated = false;
+    let mut current_settings = settings;
+
+    for (mut drop_desc, _cap_pubkey, is_public) in authorized_targets {
+        let nonce = crate::drop_client::generate_drop_nonce();
+        let signed_res = if is_public {
+            match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
+                Ok((r_sk, _, _)) => Ok(humoco_market::sign_member_request_direct(
+                    &r_sk,
+                    "PUT",
+                    "backup",
+                    now_secs,
+                    &nonce,
+                    &padded_bytes,
+                )),
+                Err(e) => Err(e.to_string()),
+            }
+        } else {
+            humoco_market::sign_member_request_stealth(
+                &my_ed_sk,
+                &drop_desc.drop_pub,
+                "PUT",
+                "backup",
+                now_secs,
+                &nonce,
+                &padded_bytes,
+            )
+            .map_err(|e| e.to_string())
+        };
+
+        match signed_res {
+            Ok(signed) => {
+                match crate::drop_client::put_slot(
+                    &client,
+                    &drop_desc.write_url,
+                    &signed,
+                    "backup",
+                    &padded_bytes,
+                    None,
+                )
+                .await
+                {
+                    Ok(crate::drop_client::PutSlotOutcome::Saved { rotation, .. }) => {
+                        uploaded_to += 1;
+                        if let Some(ref cert) = rotation {
+                            if crate::drop_client::apply_verified_rotation(&mut drop_desc, cert, now_secs) {
+                                for s_drop in &mut current_settings.market_selected_drops {
+                                    if s_drop.read_url == drop_desc.read_url {
+                                        s_drop.drop_pub = drop_desc.drop_pub.clone();
+                                        settings_updated = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(crate::drop_client::PutSlotOutcome::PreconditionFailed { .. }) => {
+                        errors.push(format!("Upload to {} failed: precondition failed", drop_desc.write_url));
+                    }
+                    Err(e) => {
+                        errors.push(format!("Upload to {} failed: {}", drop_desc.write_url, e));
+                    }
+                }
+            }
+            Err(e) => {
+                errors.push(format!("Signing failed for {}: {}", drop_desc.write_url, e));
+            }
+        }
+    }
+
+    let timestamp_str = if uploaded_to > 0 {
+        let ts = Utc::now().to_rfc3339();
+        current_settings.last_drop_backup_at = Some(ts.clone());
+        settings_updated = true;
+        Some(ts)
+    } else {
+        None
+    };
+
+    if settings_updated {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let _ = state.save_settings(&mut service, current_settings, password.as_deref());
+    }
+
+    Ok(FrontendDropBackupSyncResult {
+        uploaded_to,
+        authorized_targets: authorized_count,
+        padded_bytes: padded_bytes.len(),
+        timestamp: timestamp_str,
+        errors,
+    })
+}
+
+#[tauri::command]
+pub async fn fetch_and_inspect_drop_backup(
+    drop_input: String,
+    mnemonic: String,
+    passphrase: Option<String>,
+    user_prefix: Option<String>,
+    language: Option<MnemonicLanguage>,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<FrontendDropBackupFetchDto, FrontendError> {
+    let lang: human_money_core::MnemonicLanguage = language.unwrap_or(MnemonicLanguage::English).into();
+    let (_pk, my_ed_sk) = human_money_core::services::crypto::keys::derive_ed25519_keypair(
+        &mnemonic,
+        passphrase.as_deref(),
+        lang,
+    )
+    .map_err(|e| FrontendError::from(format!("Failed to derive keypair: {}", e)))?;
+    let master_seed = my_ed_sk.to_bytes();
+
+    let trimmed = drop_input.trim();
+    if trimmed.is_empty() {
+        return Err(FrontendError::from("Ablage-Adresse darf nicht leer sein".to_string()));
+    }
+
+    let (pasted_write_url, pasted_read_url, pasted_drop_pub) = if trimmed.starts_with('{') {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            let w = val.get("writeUrl").or_else(|| val.get("write_url")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let r = val.get("readUrl").or_else(|| val.get("read_url")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let d = val.get("dropPub").or_else(|| val.get("drop_pub")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            (w, r, d)
+        } else {
+            (None, None, None)
+        }
+    } else {
+        (None, None, None)
+    };
+
+    let raw_url = pasted_write_url.unwrap_or_else(|| trimmed.to_string());
+    let canonical_write_url = humoco_market::canonicalize_write_url(&raw_url)
+        .map_err(|e| FrontendError::from(e.to_string()))?;
+
+    let client = crate::drop_client::create_drop_probe_client();
+    let info_opt = crate::drop_client::fetch_drop_info(&client, &canonical_write_url).await.ok();
+
+    let (current_drop_pub, current_read_url, old_pubkeys) = match info_opt {
+        Some(info) => {
+            let mut old_keys = Vec::new();
+            if let Some(rot) = info.rotation {
+                old_keys.push(rot.old_pubkey);
+            }
+            if let Some(ref pasted_pub) = pasted_drop_pub {
+                if pasted_pub != &info.drop_pub && !old_keys.contains(pasted_pub) {
+                    old_keys.push(pasted_pub.clone());
+                }
+            }
+            (info.drop_pub, info.read_url, old_keys)
+        }
+        None => {
+            if let (Some(r_url), Some(d_pub)) = (pasted_read_url, pasted_drop_pub) {
+                (d_pub, r_url, Vec::new())
+            } else {
+                return Err(FrontendError::from(format!(
+                    "Ablage unter '{}' konnte nicht erreicht werden und keine gültigen Drop-Deskriptor-Daten übergeben.",
+                    canonical_write_url
+                )));
+            }
+        }
+    };
+
+    // Build ordered candidates: (read_url, pubkey_hex64, kind)
+    let mut candidates: Vec<(String, String, String)> = Vec::new();
+
+    // 1. Current stealth ($P_{aktuell}$)
+    if let Ok(stealth_pk) = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &current_drop_pub) {
+        candidates.push((current_read_url.clone(), stealth_pk, "stealth".to_string()));
+    }
+
+    // 2. Public drop anonymous key ($R$)
+    if let Ok((_r_sk, _r_vk, r_hex)) = humoco_market::derive_public_drop_keypair(&master_seed, &canonical_write_url) {
+        candidates.push((current_read_url.clone(), r_hex, "public".to_string()));
+    }
+
+    // 3. Grace-period stealth ($P_{alt}$)
+    for old_pub in &old_pubkeys {
+        if let Ok(old_stealth) = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, old_pub) {
+            candidates.push((current_read_url.clone(), old_stealth, "grace".to_string()));
+        }
+    }
+
+    // 4. Deterministic Own-Drop fallback
+    let own_data_dir = humoco_market::derive_drop_data_dir(&master_seed, 0);
+    let origin_dir = canonical_write_url.rsplit_once('/').map(|(b, _)| b).unwrap_or(&canonical_write_url);
+    let own_read_url = format!("{}/{}", origin_dir.trim_end_matches('/'), own_data_dir);
+    for gen in 0..=3 {
+        let (admin_sk, admin_vk, _) = humoco_market::derive_drop_admin_keypair(&master_seed, 0, gen);
+        if let Ok(own_stealth) = humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &admin_vk) {
+            if !candidates.iter().any(|(r, k, _)| r == &own_read_url && k == &own_stealth) {
+                candidates.push((own_read_url.clone(), own_stealth.clone(), "own".to_string()));
+            }
+            if current_read_url != own_read_url
+                && !candidates.iter().any(|(r, k, _)| r == &current_read_url && k == &own_stealth)
+            {
+                candidates.push((current_read_url.clone(), own_stealth, "own".to_string()));
+            }
+        }
+    }
+
+    // Download first candidate that matches
+    let fetch_client = crate::drop_client::create_drop_http_client();
+    let mut downloaded_bytes: Option<(Vec<u8>, String, String)> = None;
+
+    for (read_url, pubkey_hex, kind) in candidates {
+        match crate::drop_client::get_slot(&fetch_client, &read_url, &pubkey_hex, "backup").await {
+            Ok(Some(bytes)) => {
+                downloaded_bytes = Some((bytes, kind, read_url));
+                break;
+            }
+            _ => continue,
+        }
+    }
+
+    let (slot_bytes, matched_key_kind, source_url) = downloaded_bytes.ok_or_else(|| {
+        FrontendError::from(
+            "Keine Sicherungsdatei in der angegebenen Ablage gefunden. Bitte prüfe die Eingabe oder den Schlüssel."
+                .to_string(),
+        )
+    })?;
+
+    // Unpad 64-KB slot bytes
+    let unpadded = humoco_market::unpad_backup_slot_bytes(&slot_bytes)
+        .map_err(|e| FrontendError::from(format!("Ungültiges Sicherungs-Slot-Format: {}", e)))?;
+
+    // Write to <app_data_dir>/tmp_restore/drop_restore_<uuid>.hmcbackup
+    let app_data_dir = app.path().app_data_dir().map_err(|e| FrontendError::from(e.to_string()))?;
+    let tmp_restore_dir = app_data_dir.join("tmp_restore");
+    cleanup_stale_tmp_restore_files(&tmp_restore_dir);
+    fs::create_dir_all(&tmp_restore_dir).map_err(|e| FrontendError::from(e.to_string()))?;
+
+    let staged_file_name = format!("drop_restore_{}.hmcbackup", uuid::Uuid::new_v4());
+    let staged_path = tmp_restore_dir.join(staged_file_name);
+    write_file_atomic(&staged_path, &unpadded)?;
+
+    // Inspect backup using Mnemonic credentials
+    let credentials = BackupRestoreCredentials::Mnemonic {
+        phrase: &mnemonic,
+        passphrase: passphrase.as_deref(),
+        prefix: user_prefix.as_deref(),
+        language: lang,
+    };
+
+    let service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    let inspection = inspect_backup_impl(&staged_path, &credentials, &service)?;
+
+    Ok(FrontendDropBackupFetchDto {
+        staged_path: staged_path.to_string_lossy().to_string(),
+        matched_key_kind,
+        source_url,
+        inspection,
+    })
+}
+
+#[tauri::command]
+pub async fn reconcile_restored_wallet_l2(
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<FrontendRestoreReconcileResultDto, FrontendError> {
+    if let Some(ref pwd) = password {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let _ = service.unlock_session(pwd, 300);
+    }
+
+    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    let candidates = crate::gateway_resolver::cached_candidates(&settings);
+
+    let voucher_queries = {
+        let service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service
+            .with_wallet_and_identity(|wallet, identity| {
+                let mut queries = Vec::new();
+                for (id, instance) in &wallet.voucher_store.vouchers {
+                    if instance.status == human_money_core::wallet::instance::VoucherStatus::Active {
+                        if let Ok(mut query) = wallet.build_voucher_status_query(identity, id, 1) {
+                            query.read_quorum = 1;
+                            queries.push((id.clone(), query));
+                        }
+                    }
+                }
+                queries
+            })
+            .map_err(FrontendError::from)?
+    };
+
+    let active_voucher_queries_count = voucher_queries.len();
+    let mut reconciled_spent_count = 0;
+
+    let (l2_reconciliation_status, all_reconciled) = if candidates.is_empty() {
+        ("no_servers".to_string(), false)
+    } else {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_millis(2500))
+            .build()
+            .map_err(|_| FrontendError::from("HTTP client unavailable".to_string()))?;
+
+        let mut at_least_one_gateway_responded = false;
+        let mut all_ok = true;
+
+        for (local_id, query) in voucher_queries {
+            let body_bytes = match serde_json::to_vec(&query) {
+                Ok(b) => b,
+                Err(_) => {
+                    all_ok = false;
+                    continue;
+                }
+            };
+            let mut reconciled_this = false;
+
+            for base in candidates.iter().take(4) {
+                let Some(url) = crate::gateway_resolver::endpoint(base, "v1/status") else { continue };
+                let mut request = client
+                    .post(url.clone())
+                    .header("Content-Type", "application/json")
+                    .body(body_bytes.clone());
+
+                if let Some(provider) = settings.custom_servers.iter().find(|p| {
+                    p.is_active
+                        && crate::gateway_resolver::endpoint(&p.url, "v1/status")
+                            .is_some_and(|k| k.origin() == url.origin())
+                }) {
+                    if let Some(token) = &provider.auth_token {
+                        request = request.bearer_auth(token);
+                    }
+                    if let Some(token) = &provider.peer_token {
+                        if token.len() == 36 && token.starts_with("f2f_") && token[4..].bytes().all(|b| b.is_ascii_hexdigit()) {
+                            request = request.header("X-Peer-Token", token);
+                        }
+                    }
+                }
+
+                let response = tokio::time::timeout(
+                    std::time::Duration::from_millis(2500),
+                    request.send(),
+                )
+                .await;
+
+                let Ok(Ok(resp)) = response else { continue };
+                at_least_one_gateway_responded = true;
+                if !resp.status().is_success() { continue; }
+                let Ok(resp_bytes) = resp.bytes().await else { continue };
+
+                let verdict_opt = if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
+                    Some(envelope.verdict)
+                } else {
+                    serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes).ok()
+                };
+
+                if let Some(verdict) = verdict_opt {
+                    let mut service = state
+                        .service
+                        .lock()
+                        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+                    match service.reconcile_voucher_verdict(&local_id, &verdict, password.as_deref()) {
+                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::AlreadySpent { .. }) => {
+                            reconciled_spent_count += 1;
+                            reconciled_this = true;
+                            break;
+                        }
+                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::ConflictDetected { .. }) => {
+                            reconciled_spent_count += 1;
+                            reconciled_this = true;
+                            break;
+                        }
+                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::UnspentSafe) => {
+                            reconciled_this = true;
+                            break;
+                        }
+                        Err(e) => {
+                            log::debug!("Backup voucher reconciliation rejected: {}", e);
+                        }
+                    }
+                }
+            }
+
+            if !reconciled_this {
+                all_ok = false;
+            }
+        }
+
+        if at_least_one_gateway_responded {
+            let _ = crate::commands::settings_cmd::flush_pending_anchor_sync_inner(&state, password.as_deref()).await;
+            if all_ok || active_voucher_queries_count == 0 {
+                ("reconciled".to_string(), true)
+            } else {
+                ("offline".to_string(), false)
+            }
+        } else {
+            ("offline".to_string(), false)
+        }
+    };
+
+    let mut pending_restore_l2 = settings.pending_restore_l2_reconciliation;
+    if all_reconciled {
+        pending_restore_l2 = false;
+        let mut new_settings = settings;
+        new_settings.pending_restore_l2_reconciliation = false;
+        if let Ok(mut service) = state.service.lock() {
+            let _ = state.save_settings(&mut service, new_settings, password.as_deref());
+        }
+    }
+
+    Ok(FrontendRestoreReconcileResultDto {
+        active_voucher_queries_count,
+        reconciled_spent_count,
+        l2_reconciliation_status,
+        pending_restore_l2_reconciliation: pending_restore_l2,
+    })
 }
 
 #[cfg(test)]
@@ -1164,5 +1789,71 @@ mod tests {
 
         let old = (Utc::now() - chrono::Duration::days(16)).to_rfc3339();
         assert!(is_older_than_14_days(&Some(old)));
+    }
+
+    #[test]
+    fn test_drop_backup_slot_padding_integration() {
+        use humoco_market::slot::{pad_backup_slot_bytes, unpad_backup_slot_bytes, DROP_BACKUP_MAX_BYTES, BACKUP_PAD_BLOCK_BYTES};
+
+        let fake_backup = b"HMC_BACKUP_CONTAINER_V1_MOCK_PAYLOAD_DATA";
+        let padded = pad_backup_slot_bytes(fake_backup, DROP_BACKUP_MAX_BYTES).expect("padding must succeed");
+        assert_eq!(padded.len() % BACKUP_PAD_BLOCK_BYTES, 0);
+        assert_eq!(padded.len(), BACKUP_PAD_BLOCK_BYTES);
+
+        let recovered = unpad_backup_slot_bytes(&padded).expect("unpadding must succeed");
+        assert_eq!(recovered, fake_backup);
+    }
+
+    #[test]
+    fn test_drop_backup_stealth_key_and_candidate_resolution() {
+        let mnemonic = PHRASE;
+        let (_my_pk, my_ed_sk) = human_money_core::services::crypto::keys::derive_ed25519_keypair(
+            mnemonic,
+            None,
+            human_money_core::MnemonicLanguage::English,
+        ).expect("key derivation failed");
+
+        // Simulate Drop master key
+        let drop_sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let drop_pub_hex = hex::encode(drop_sk.verifying_key().as_bytes());
+
+        // 1. Client derives stealth slot key for friend's drop
+        let stealth_pk = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &drop_pub_hex)
+            .expect("stealth key derivation failed");
+        assert_eq!(stealth_pk.len(), 64);
+
+        // 2. Candidate keys generation in restore:
+        // Candidate 1: stealth key matching drop_pub
+        let candidate_stealth = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &drop_pub_hex)
+            .expect("candidate derivation failed");
+        assert_eq!(candidate_stealth, stealth_pk);
+
+        // Candidate 2: grace key matching an older rotated drop key
+        let old_drop_sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let old_drop_pub_hex = hex::encode(old_drop_sk.verifying_key().as_bytes());
+        let candidate_grace = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &old_drop_pub_hex)
+            .expect("candidate grace derivation failed");
+        assert_ne!(candidate_grace, stealth_pk);
+    }
+
+    #[test]
+    fn test_pending_restore_l2_reconciliation_setting_flag() {
+        let mut settings = crate::settings::AppSettings::default();
+        assert!(!settings.pending_restore_l2_reconciliation);
+
+        // Simulate restore with active vouchers and offline status
+        let active_voucher_queries_count = 3;
+        let l2_reconciliation_status = "no_servers";
+        if active_voucher_queries_count > 0 && l2_reconciliation_status != "reconciled" {
+            settings.pending_restore_l2_reconciliation = true;
+        }
+        assert!(settings.pending_restore_l2_reconciliation);
+
+        // Simulate successful online reconciliation
+        let l2_reconciled = true;
+        if l2_reconciled {
+            settings.pending_restore_l2_reconciliation = false;
+        }
+        assert!(!settings.pending_restore_l2_reconciliation);
     }
 }

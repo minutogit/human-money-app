@@ -1012,14 +1012,16 @@ dependencies = [
 
 [[package]]
 name = "humoco-market"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "blake3",
  "bs58",
  "chacha20poly1305",
  "chrono",
  "ed25519-dalek",
  "hex",
  "hkdf",
+ "hmac",
  "human_money_core",
  "proptest",
  "rand 0.8.8",
@@ -1027,6 +1029,7 @@ dependencies = [
  "serde_json",
  "serde_json_canonicalizer",
  "sha2",
+ "subtle",
  "thiserror 1.0.69",
  "x25519-dalek",
 ]

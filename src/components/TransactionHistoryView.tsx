@@ -33,15 +33,21 @@ import {
     Copy, 
     Check, 
     UserPlus, 
-    Filter
+    Filter,
+    RefreshCw,
+    UploadCloud
 } from 'lucide-react';
 import { suggestFilename } from '../utils/userIdHelper';
 import { useNavigation } from '../context/NavigationContext';
+import { useOptionalSession } from '../context/SessionContext';
 import { useContactResolver } from '../hooks/useContactResolver';
+import { postService, POST_INBOX_UPDATED_EVENT } from '../services/postService';
 
 export function TransactionHistoryView() {
     const { t } = useTranslation();
     const { navigate, goBack } = useNavigation();
+    const session = useOptionalSession();
+    const protectAction = session?.protectAction ?? (<T,>(action: (password: string | null) => Promise<T>): Promise<T | void> => action(null));
     const { resolveIdentity, isKnownContact, refresh: refreshContacts } = useContactResolver();
 
     const [history, setHistory] = useState<TransactionRecord[]>([]);
@@ -51,6 +57,11 @@ export function TransactionHistoryView() {
     const [isSavingBundle, setIsSavingBundle] = useState<string | null>(null);
     const [expandedId, setExpandedId] = useState<string | null>(null);
     const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+    // Dual-Delivery post drop status
+    const [unacknowledgedPayments, setUnacknowledgedPayments] = useState<string[]>([]);
+    const [isRedepositingId, setIsRedepositingId] = useState<string | null>(null);
+    const [redepositFeedback, setRedepositFeedback] = useState<{ [key: string]: string }>({});
 
     // Filters
     const [searchQuery, setSearchQuery] = useState('');
@@ -81,6 +92,17 @@ export function TransactionHistoryView() {
             }
         }
         fetchHistory();
+
+        const loadPostSummary = () => {
+            postService.getPostInboxSummary()
+                .then(summary => setUnacknowledgedPayments(summary.unacknowledgedPayments || []))
+                .catch(() => {});
+        };
+        loadPostSummary();
+        window.addEventListener(POST_INBOX_UPDATED_EVENT, loadPostSummary);
+        return () => {
+            window.removeEventListener(POST_INBOX_UPDATED_EVENT, loadPostSummary);
+        };
     }, [t]);
 
     // Discover all unique currencies present in history
@@ -510,6 +532,12 @@ export function TransactionHistoryView() {
                                                     <span className="font-mono text-[10px] bg-theme-subtle/30 text-theme-light px-1.5 py-0.2 rounded font-bold">
                                                         #{shortReceiptNo}
                                                     </span>
+                                                    {isSent && record.bundleId && unacknowledgedPayments.includes(record.bundleId) && (
+                                                        <span data-testid="unacknowledged-payment-badge" className="font-semibold text-[9px] bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.2 rounded flex items-center gap-1">
+                                                            <span>📦</span>
+                                                            <span>{t('history.postWaitingForPickup', 'In Ablage')}</span>
+                                                        </span>
+                                                    )}
                                                 </div>
 
                                                 {/* Counterparty Name */}
@@ -676,7 +704,7 @@ export function TransactionHistoryView() {
                                                     </div>
 
                                                     {isSent && record.bundleData && record.bundleData.length > 0 && (
-                                                        <div className="pt-2">
+                                                        <div className="pt-2 space-y-2">
                                                             <Button 
                                                                 size="sm" 
                                                                 variant="secondary" 
@@ -694,6 +722,51 @@ export function TransactionHistoryView() {
                                                                 <span className="block text-center text-[10px] font-bold text-emerald-600 mt-1 animate-pulse">
                                                                     {bundleFeedback[record.id]}
                                                                 </span>
+                                                            )}
+
+                                                            {record.bundleId && (
+                                                                <div>
+                                                                    <Button
+                                                                        size="sm"
+                                                                        variant="outline"
+                                                                        className="w-full gap-1.5 rounded-xl text-xs border-amber-200 text-amber-900 hover:bg-amber-50"
+                                                                        onClick={async (e) => {
+                                                                            e.stopPropagation();
+                                                                            if (!record.bundleId) return;
+                                                                            setIsRedepositingId(record.bundleId);
+                                                                            try {
+                                                                                const res = await protectAction(async (pwd) => {
+                                                                                    return await postService.depositTransferToPost(record.bundleId!, pwd || undefined);
+                                                                                });
+                                                                                if (res && res.depositedTo > 0) {
+                                                                                    setRedepositFeedback(prev => ({
+                                                                                        ...prev,
+                                                                                        [record.bundleId!]: t('history.redepositSuccess', 'In {{count}} Ablage(n) hinterlegt', { count: res.depositedTo })
+                                                                                    }));
+                                                                                } else if (res && res.errors.length > 0) {
+                                                                                    setRedepositFeedback(prev => ({
+                                                                                        ...prev,
+                                                                                        [record.bundleId!]: res.errors.join('; ')
+                                                                                    }));
+                                                                                }
+                                                                            } catch (err) {
+                                                                                setRedepositFeedback(prev => ({ ...prev, [record.bundleId!]: stringifyError(err) }));
+                                                                            } finally {
+                                                                                setIsRedepositingId(null);
+                                                                            }
+                                                                        }}
+                                                                        disabled={isRedepositingId === record.bundleId}
+                                                                        data-testid="history-redeposit-button"
+                                                                    >
+                                                                        {isRedepositingId === record.bundleId ? <RefreshCw size={12} className="animate-spin" /> : <UploadCloud size={12} />}
+                                                                        {isRedepositingId === record.bundleId ? t('transfer.depositing', 'Hinterlege...') : t('history.redepositButton', 'Erneut in Ablage hinterlegen')}
+                                                                    </Button>
+                                                                    {redepositFeedback[record.bundleId] && (
+                                                                        <span className="block text-center text-[10px] font-bold text-amber-700 mt-1">
+                                                                            {redepositFeedback[record.bundleId]}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
                                                             )}
                                                         </div>
                                                     )}

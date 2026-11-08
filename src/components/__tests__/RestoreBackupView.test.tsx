@@ -45,6 +45,8 @@ vi.mock('../../services/backupService', () => ({
         probeBackup: vi.fn(),
         inspectBackup: vi.fn(),
         restoreBackup: vi.fn(),
+        fetchAndInspectDropBackup: vi.fn(),
+        reconcileRestoredWalletL2: vi.fn(),
     },
 }));
 
@@ -229,5 +231,111 @@ describe('RestoreBackupView', () => {
                 activeVoucherQueriesCount: 5,
             })
         );
+    });
+
+    it('allows restoring from a drop using mnemonic and drop address', async () => {
+        vi.mocked(backupService.fetchAndInspectDropBackup).mockResolvedValue({
+            stagedPath: '/tmp/drop_restore_123.hmcbackup',
+            inspection: {
+                profileName: 'Bob',
+                userId: 'hmc1bob1234567890',
+                epoch: 1,
+                txNonce: 5,
+                sealTimestamp: '2026-11-01T10:00:00Z',
+                blobCount: 10,
+                customStandardCount: 0,
+                protectionMode: 'mnemonic_only',
+            },
+            sourceUrl: 'https://drop.example.org',
+            matchedKeyKind: 'stealth',
+        });
+
+        vi.mocked(authService.getLocalInstanceId).mockResolvedValue('device-uuid-456');
+        vi.mocked(backupService.restoreBackup).mockResolvedValue({
+            folderName: 'profile_bob',
+            profileName: 'Bob',
+            activeVoucherQueriesCount: 2,
+            reconciledSpentCount: 0,
+            restoredStandardsCount: 0,
+            l2ReconciliationStatus: 'offline_or_failed',
+        });
+
+        vi.mocked(backupService.reconcileRestoredWalletL2).mockResolvedValue({
+            l2ReconciliationStatus: 'reconciled',
+            activeVoucherQueriesCount: 2,
+            reconciledSpentCount: 0,
+            pendingRestoreL2Reconciliation: false,
+        });
+
+        render(
+            <RestoreBackupView
+                onRestoreSuccess={onRestoreSuccess}
+                onSwitchToRecreate={onSwitchToRecreate}
+                onBack={onBack}
+            />
+        );
+
+        // 1. Click "Restore from Drop"
+        fireEvent.click(screen.getByText('Restore from Drop'));
+
+        await waitFor(() => {
+            expect(screen.getByText('Load Backup from Drop')).toBeInTheDocument();
+            expect(screen.getByText('Find & Load Backup')).toBeInTheDocument();
+        });
+
+        // Enter mnemonic words (paste phrase into first word input)
+        const firstWordInput = screen.getByTestId('restore-drop-word-0');
+        fireEvent.change(firstWordInput, {
+            target: {
+                value: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+            },
+        });
+
+        // Enter drop address
+        const dropAddressInput = screen.getByTestId('restore-drop-input');
+        fireEvent.change(dropAddressInput, { target: { value: 'https://drop.example.org' } });
+
+        // Click Find & Load Backup
+        fireEvent.click(screen.getByText('Find & Load Backup'));
+
+        await waitFor(() => {
+            expect(backupService.fetchAndInspectDropBackup).toHaveBeenCalledWith({
+                dropInput: 'https://drop.example.org',
+                mnemonic: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+                passphrase: null,
+                userPrefix: null,
+                language: 'english',
+            });
+            expect(screen.getByText('Verified Backup Manifest')).toBeInTheDocument();
+            expect(screen.getByText('Bob')).toBeInTheDocument();
+        });
+
+        // Set device password and restore
+        const newPasswordInput = screen.getByTestId('new-device-password-input');
+        const confirmNewPasswordInput = screen.getByTestId('confirm-device-password-input');
+
+        fireEvent.change(newPasswordInput, { target: { value: 'devicePassword456' } });
+        fireEvent.change(confirmNewPasswordInput, { target: { value: 'devicePassword456' } });
+
+        fireEvent.click(screen.getByTestId('restore-submit-btn'));
+
+        await waitFor(() => {
+            expect(backupService.restoreBackup).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    sourcePath: '/tmp/drop_restore_123.hmcbackup',
+                    credentialMode: 'mnemonic',
+                    newPassword: 'devicePassword456',
+                })
+            );
+            expect(screen.getByText('Online Security Reconciliation Recommended')).toBeInTheDocument();
+        });
+
+        // Click Reconcile online now
+        fireEvent.click(screen.getByRole('button', { name: /Reconcile online now/i }));
+
+        await waitFor(() => {
+            expect(backupService.reconcileRestoredWalletL2).toHaveBeenCalled();
+            expect(screen.getByText(/Online security reconciliation completed successfully/i)).toBeInTheDocument();
+        });
     });
 });

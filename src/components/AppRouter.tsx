@@ -135,6 +135,9 @@ export const AppRouter: React.FC = () => {
                 recipientId={appState.recipientId}
                 summary={appState.summary}
                 l2Dispatch={appState.l2Dispatch}
+                bundleId={appState.bundleId}
+                initialDepositedTo={appState.depositedTo}
+                depositError={appState.depositError}
                 onDone={() => navigate({ view: "logged_in" })}
             />;
         case "receive_success":
@@ -142,6 +145,8 @@ export const AppRouter: React.FC = () => {
         case "sign_request":
             return <SignRequestView
                 voucherData={appState.voucherData}
+                requestMsgId={appState.requestMsgId}
+                senderDid={appState.senderDid}
                 onBack={goBack}
             />;
         case "conflict_details":

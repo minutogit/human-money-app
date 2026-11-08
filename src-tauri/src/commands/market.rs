@@ -489,10 +489,12 @@ mod tests {
             text: Some("Professional design".to_string()),
             pricing: Some("50 Minuto".to_string()),
             origin: ListingOrigin::Voucher,
+            allow_inquiries: true,
         };
         let dto_listing: FrontendMarketListing = domain_listing.into();
         assert_eq!(dto_listing.listing_type, FrontendListingType::Offer);
         assert_eq!(dto_listing.origin, FrontendListingOrigin::Voucher);
+        assert!(dto_listing.allow_inquiries);
 
         let domain_person = MarketPerson {
             did: "did:key:z12345".to_string(),
@@ -508,6 +510,7 @@ mod tests {
                 text: None,
                 pricing: None,
                 origin: ListingOrigin::Voucher,
+                allow_inquiries: false,
             }],
             sources: vec![
                 EntrySource::Voucher,
@@ -598,6 +601,7 @@ mod tests {
                 title: "Handmade Tables".to_string(),
                 text: Some("Solid oak".to_string()),
                 pricing: Some("100 M".to_string()),
+                allow_inquiries: true,
             }],
             max_hops: 2,
             validity_days: Some(30),
@@ -646,6 +650,7 @@ mod tests {
                 title: "Local only".to_string(),
                 text: None,
                 pricing: None,
+                allow_inquiries: false,
             }],
             max_hops: 1,
             validity_days: Some(30),

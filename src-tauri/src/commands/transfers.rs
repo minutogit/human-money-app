@@ -73,6 +73,11 @@ pub async fn create_transfer_bundle(
     );
 
     let settings=state.get_cached_settings().map_err(FrontendError::from)?;
+    if settings.pending_restore_l2_reconciliation {
+        return Err(FrontendError::from(
+            "Nach einer Wiederherstellung aus der Sicherung ist vor dem Ausgeben von Gutscheinen ein einmaliger Online-Sicherheitsabgleich erforderlich.".to_string(),
+        ));
+    }
     validate_l2_routing(&settings)?;
     let network=match settings.active_network.to_lowercase().as_str() {"mainnet"=>0,"testnet"=>1,_=>return Err(FrontendError::from("Invalid L2 network".to_string()))};
     let source_transfers = sources

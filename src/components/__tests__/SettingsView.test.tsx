@@ -313,7 +313,7 @@ describe('SettingsView Component', () => {
     const advancedToggle = screen.getByRole('button', { name: /Advanced (Server & PoS|Gateway & Merchant) Configuration/i });
     await user.click(advancedToggle);
 
-    const posCheckbox = screen.getByRole('checkbox', { name: /PoS|Point-of-Sale/i });
+    const posCheckbox = screen.getByRole('checkbox', { name: /\bPoS\b|Point-of-Sale/i });
     expect(posCheckbox).not.toBeChecked();
     await user.click(posCheckbox);
     expect(posCheckbox).toBeChecked();

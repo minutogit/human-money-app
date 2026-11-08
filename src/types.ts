@@ -53,3 +53,26 @@ export interface RestoreOutcomeDto {
   l2ReconciliationStatus: 'no_servers' | 'offline' | 'reconciled' | string;
 }
 
+export interface FrontendDropBackupSyncResult {
+  uploadedTo: number;
+  authorizedTargets: number;
+  paddedBytes: number;
+  timestamp?: string | null;
+  errors: string[];
+}
+
+export interface FrontendDropBackupFetchDto {
+  stagedPath: string;
+  matchedKeyKind: 'stealth' | 'public' | 'grace' | 'own' | string;
+  sourceUrl: string;
+  inspection: BackupInspectionDto;
+}
+
+export interface FrontendRestoreReconcileResultDto {
+  activeVoucherQueriesCount: number;
+  reconciledSpentCount: number;
+  l2ReconciliationStatus: 'no_servers' | 'offline' | 'reconciled' | string;
+  pendingRestoreL2Reconciliation: boolean;
+}
+
+

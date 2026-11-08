@@ -2,12 +2,17 @@
 import { backupService } from '../services/backupService';
 import { logger } from './log';
 import { isBackendError, stringifyError } from './errorHelper';
-import { FrontendAutoBackupStatusDto } from '../types';
+import { FrontendAutoBackupStatusDto, FrontendDropBackupSyncResult } from '../types';
+import { notifyDropStatusUpdated } from './dropEvents';
 
 let backupInterval: number | null = null;
 let initialTimeout: number | null = null;
 let debounceTimer: number | null = null;
+let dropDebounceTimer: number | null = null;
 let isBackupRunning = false;
+let isDropBackupRunning = false;
+
+export const DROP_BACKUP_DEBOUNCE_MS = 30_000;
 
 /**
  * Event name dispatched when backup status updates.
@@ -53,6 +58,37 @@ export async function runAutoBackupPass(): Promise<FrontendAutoBackupStatusDto |
 }
 
 /**
+ * Runs a single drop backup pass if not already running.
+ */
+export async function runDropBackupPass(): Promise<FrontendDropBackupSyncResult | null> {
+    if (isDropBackupRunning) {
+        return null;
+    }
+    isDropBackupRunning = true;
+    try {
+        const result = await backupService.syncDropBackup();
+        dispatchBackupUpdated();
+        notifyDropStatusUpdated();
+        if (result && result.uploadedTo > 0) {
+            logger.info(`Drop backup synced: uploaded to ${result.uploadedTo} drop(s), ${result.paddedBytes} bytes.`);
+        }
+        return result;
+    } catch (e) {
+        const msg = stringifyError(e);
+        const code = isBackendError(e) ? e.code : '';
+        const isExpected = code === 'error.wallet.locked' || code === 'error.auth.sessionTimeout'
+            || msg.includes("Wallet is locked") || msg.includes("Session timed out")
+            || msg.includes("Wallet service unavailable");
+        if (!isExpected) {
+            logger?.warn?.(`Drop backup background run encountered an issue: ${msg}`);
+        }
+        return null;
+    } finally {
+        isDropBackupRunning = false;
+    }
+}
+
+/**
  * Starts the periodic auto backup loop.
  * Runs shortly after login (3s) and then every 60s.
  */
@@ -65,6 +101,7 @@ export function startAutoBackupLoop() {
     initialTimeout = window.setTimeout(() => {
         initialTimeout = null;
         runAutoBackupPass();
+        runDropBackupPass();
     }, 3000);
 
     // Run every 60 seconds (catches reconnected USB drives)
@@ -88,13 +125,19 @@ export function stopAutoBackupLoop() {
         window.clearTimeout(debounceTimer);
         debounceTimer = null;
     }
+    if (dropDebounceTimer) {
+        window.clearTimeout(dropDebounceTimer);
+        dropDebounceTimer = null;
+    }
 }
 
 /**
- * Triggers an immediate debounced auto-backup pass (2s debounce & in-flight guard).
+ * Triggers debounced backup passes:
+ * - 2s debounce for local USB/folder backup pass
+ * - 30s debounce for off-site Drop backup pass (configurable parameter for tests)
  * Call this after successful mutations (creating vouchers, receiving, signing, contacts).
  */
-export function triggerAutoBackup(delayMs = 2000) {
+export function triggerAutoBackup(delayMs = 2000, dropDelayMs = DROP_BACKUP_DEBOUNCE_MS) {
     if (debounceTimer) {
         window.clearTimeout(debounceTimer);
     }
@@ -102,4 +145,12 @@ export function triggerAutoBackup(delayMs = 2000) {
         debounceTimer = null;
         await runAutoBackupPass();
     }, delayMs);
+
+    if (dropDebounceTimer) {
+        window.clearTimeout(dropDebounceTimer);
+    }
+    dropDebounceTimer = window.setTimeout(async () => {
+        dropDebounceTimer = null;
+        await runDropBackupPass();
+    }, dropDelayMs);
 }

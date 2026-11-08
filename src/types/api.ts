@@ -2,7 +2,7 @@
 
 import { ReceiveSuccessPayload, IntentDispatchObservation } from './transaction';
 import { VoucherDetails } from './voucher';
-import { FrontendDropDescriptor } from './market';
+import { FrontendDropDescriptor, StoredPublicDrop } from './market';
 
 export interface ReceiveBundleArgs {
     bundleData: number[];
@@ -91,12 +91,18 @@ export interface AppSettings {
     shareMinLevel?: number;
     marketPollWifiOnly?: boolean;
     marketSelectedDrops?: FrontendDropDescriptor[];
+    publicDrops?: StoredPublicDrop[];
+    wotShareViaDrop?: boolean;
+    dropBackupEnabled?: boolean;
+    lastDropBackupAt?: string | null;
+    pendingRestoreL2Reconciliation?: boolean;
     balanceViewMode?: 'spendable' | 'net';
     autoBackupEnabled?: boolean;
     backupDirty?: boolean;
     backupSyncFolder?: string | null;
     backupProtectionMode?: string | null;
     lastBackupAt?: string | null;
+    postAcceptFromContacts?: boolean;
 }
 
 export type AutoBackupStatus =
@@ -132,7 +138,7 @@ export type AppState =
     | { view: "recreate_profile" }
     | { view: "restore_backup"; previousView?: AppState }
     | { view: "needs_recovery" }
-    | { view: "settings" }
+    | { view: "settings"; openDropsModal?: boolean; openDropsTab?: 'friend_drops' | 'public_drops' | 'own_drop' }
     | { view: "support" }
     | { view: "bug_report" }
     | { view: "create_voucher"; previousView?: AppState }
@@ -141,10 +147,10 @@ export type AppState =
     | { view: "receive_bundle"; droppedFile?: { name: string; bytes: number[] } }
     | { view: "transaction_history" }
     | { view: "activities"; previousView?: AppState }
-    | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string; l2Dispatch?: IntentDispatchObservation[] }
+    | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string; l2Dispatch?: IntentDispatchObservation[]; bundleId?: string; depositedTo?: number; depositError?: string }
     | { view: "receive_success"; payload: ReceiveSuccessPayload }
     | { view: "address_book"; initialSearchQuery?: string; previousView?: AppState }
-    | { view: "sign_request"; voucherData: VoucherDetails }
+    | { view: "sign_request"; voucherData: VoucherDetails; requestMsgId?: string; senderDid?: string }
     | { view: "conflict_details"; proofId: string; previousView?: AppState }
     | { view: "conflict_list" }
     | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string; initialFilter?: 'all' | 'received' | 'own' | 'expiringSoon' }

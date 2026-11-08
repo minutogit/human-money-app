@@ -62,6 +62,7 @@ fn extract_listing(raw_input: &str, listing_type: ListingType) -> Option<MarketL
         text,
         pricing: None,
         origin: ListingOrigin::Voucher,
+        allow_inquiries: false,
     })
 }
 
@@ -229,6 +230,7 @@ pub fn build_market_view<'a>(
                     text: l.text.clone(),
                     pricing: l.pricing.clone(),
                     origin: ListingOrigin::Card,
+                    allow_inquiries: l.allow_inquiries,
                 });
             }
             sources.push(EntrySource::Card { hops: stored.hops });

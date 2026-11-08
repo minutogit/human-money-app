@@ -1,12 +1,42 @@
 ---
 project: human-money-app
-version: "0.4.0"
+version: "0.5.0"
 phase: "beta"
 health: "green"
 last_updated: "2026-11-08"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-062"
+    title: "Channel post Dual-Delivery Payments, SST-V4-Safe Retries, Receipts, Async Co-Signing, Async WoT Handshake & Inquiries"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-061", "CORE-007", "CORE-010"]
+    description: "Implemented channel `post` workflows in src-tauri and UI: Dual-Delivery payments for online/offline receivers with SST-V4-safe retries (exact child lock preservation preventing self-inflicted double spending), non-blocking receipt delivery, async voucher co-signing (`VoucherForSigning` to `DetachedSignature`), async WoT handshake exchange, and 1-step marketplace inquiries with rate-limited slot uploads."
+  - id: "APP-061"
+    title: "humoco-market PostBoxEntry Crypto, tag16 Routing, 4-Tier Padding, Dummy Boxes & If-Match Slot Merging"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-058"]
+    description: "Implemented channel `post` slot crypto in `humoco-market`: `PostBoxEntry` containers, 16-byte blind recipient tags (`tag16`), 4-tier CSPRNG bucket padding (4 KiB, 16 KiB, 64 KiB, 256 KiB), indistinguishable dummy boxes, multi-device `If-Match` slot merging (HTTP 412 handling), 1-step marketplace inquiry models, and 10 msg/min recipient rate limiter (10/10 post unit/proptests passing)."
+  - id: "APP-060"
+    title: "Channel backup Debounced Padded Upload, Drop Restore Wizard, Grace-Key Search & Mandatory L2 WalletSeal Spend Lock"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-058", "APP-041"]
+    description: "Implemented channel `backup`: 30s-debounced 64-KB bucket-padded `.hmcbackup` upload to personal drop slots, drop restore wizard in React frontend supporting mnemonic recovery with 180-day grace-key candidate search, and mandatory L2 `WalletSeal` offline-spend lock check preventing double spending on restored wallets."
+  - id: "APP-059"
+    title: "Channel wot Multi-Class SlotBlob Sync & Segregated Trust-List Disclosures"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-058", "WOT-011"]
+    description: "Implemented channel `wot` multi-class `SlotBlob` synchronization in `humoco-market` and `src-tauri`: segregated trust list packaging per distance class (`DropSyncSubpackage`), independent 1-to-1 Sent-Log isolation, and non-blocking background synchronization with configured friend drops."
+  - id: "APP-058"
+    title: "Clean-Break 64-Hex Ed25519 Drop Auth, 1-Inode Rate Limiter, Binary PUT + If-Match, Key Rotation & Drop UI"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-057"]
+    description: "Implemented clean-break unified 64-hex Ed25519 authentication for stealth and public drops, 1-inode 64-KB fixed binary IP rate limiter (`ratelimit.bin.php`), raw binary PUT with atomic temp files and HTTP `If-Match` ETag concurrency, 180-day key rotation with verifiable transition certificates, `<DropStatusBadge />` in Header, and 3-section Drop settings UI in `SettingsView`."
   - id: "APP-057"
     title: "Ablagen Frontend, Address Book Trust Impact, Settings, i18n & E2E Market Integration"
     status: "completed"
@@ -361,7 +391,7 @@ priority_tasks:
 
 ## Current Focus
 
-Tauri v2 desktop/mobile wallet (`v0.4.0` Beta). Core voucher workflows, switchable Spendable/Net balance views, silent mount-safe auto-backups, `humoco://` contact & payment request sharing, global drag-and-drop, bank-grade Account Statement with CSV export, guided guarantor/redemption/proof workflows, unified navigation history & shared UI primitives (`APP-051`), global 1–4 hops reach selector, passwordless multi-contact `.wot` sharing & progressive-disclosure `BinaryFuse64` provider seals (`APP-052`), L2 PoS checkout, and full Offline-First Web of Trust (`humoco-wot`) are integrated across 5 locales.
+Tauri v2 desktop/mobile wallet (`v0.5.0` Beta). Core voucher workflows, switchable Spendable/Net balance views, silent mount-safe auto-backups, `humoco://` contact & payment request sharing, global drag-and-drop, bank-grade Account Statement with CSV export, guided guarantor/redemption/proof workflows, unified navigation history & shared UI primitives (`APP-051`), global 1–4 hops reach selector, passwordless multi-contact `.wot` sharing & progressive-disclosure `BinaryFuse64` provider seals (`APP-052`), L2 PoS checkout, full Offline-First Web of Trust (`humoco-wot`), and the multi-purpose 4-channel drop infrastructure (`APP-054`–`APP-062`: channels `card`, `wot`, `backup`, `post` with clean-break 64-hex Ed25519 stealth/public auth, 1-inode rate limiter, dual-delivery payments, async co-signing & WoT handshakes) are fully integrated across 5 locales.
 
 ## Architecture
 
@@ -609,6 +639,28 @@ Bumped `human-money-app` to `v0.4.0`. Delivered comprehensive user-centric impro
   - Added all Phase 3 keys across German, English, Spanish, French, and Italian and updated `i18n-lock.json`.
   - Added unit test suites for `DropManagementModal.test.tsx` (5 tests), `AddressBook.test.tsx` (6 tests), and `WotContacts.test.tsx` (13 tests).
   - All 44 Vitest test suites (379 tests), `tsc`, `eslint`, `i18n:check`, and full `./run-tests.sh -q` passing with 0 errors and 0 warnings.
+
+### 2026-11-08 — Multi-Purpose Drop Infrastructure: Clean-Break Auth, Channels wot/backup/post, Dual-Delivery & SST-V4 Retries (`APP-058`–`APP-062`)
+
+- **Clean Break & Server Hardening (`APP-058`)**:
+  - Implemented unified 64-hex Ed25519 authentication for stealth and public drops (`X-Drop-Signature`, `X-Drop-Timestamp`, raw binary PUT + HTTP `If-Match` ETags) with zero bearer token leftovers.
+  - Implemented 1-inode 64-KB fixed binary IP rate limiter (`ratelimit.bin.php`, 4096 entries, $O(1)$ under `flock`) and automatic 180-day key rotation with verifiable transition certificates.
+  - Added Header `<DropStatusBadge />` and 3-section Drop settings in `SettingsView`.
+- **Channel `wot` Distance-Class Synchronization (`APP-059`)**:
+  - Integrated `WOT-011` multi-class `SlotBlob` synchronization in `humoco-market` and Tauri bridge, segregating trust lists across distance classes with independent Sent-Log tracking.
+- **Channel `backup` Debounced Upload & Restore Wizard (`APP-060`)**:
+  - Implemented 30-second debounced 64-KB bucket-padded `.hmcbackup` upload to personal drop slots.
+  - Built drop restore wizard in `RestoreBackupView.tsx` with 180-day grace-key candidate search and mandatory L2 `WalletSeal` offline-spend lock check.
+- **Channel `post` Crypto, Padding & If-Match Slot Merging (`APP-061`)**:
+  - Implemented `humoco-market` `post.rs`: `PostBoxEntry` containers, 16-byte blind recipient tags (`tag16`), 4-tier CSPRNG bucket padding (4/16/64/256 KiB), indistinguishable dummy boxes, multi-device `If-Match` merge (HTTP 412), 1-step marketplace inquiry models, and 10 msg/min recipient rate limiter.
+- **Channel `post` End-to-End Workflows & UI Integration (`APP-062`)**:
+  - Implemented Dual-Delivery payments for online/offline receivers with strict SST-V4-safe retries (exact child lock preservation preventing self-inflicted double spending).
+  - Implemented non-blocking payment receipts, async voucher co-signing (`VoucherForSigning` to `DetachedSignature`), async WoT handshake exchange, and 1-step marketplace inquiries.
+- **Full Verification**:
+  - All 47 Vitest test suites (399 tests) passing.
+  - All 55 `humoco-market` unit/proptests passing.
+  - All 61 `src-tauri` integration/unit tests passing (116 total Rust tests, 515 total app tests).
+  - 0 ESLint warnings, 0 TypeScript errors, 0 Clippy warnings.
 
 
 

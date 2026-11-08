@@ -187,4 +187,38 @@ describe('AddressBook Component', () => {
     expect(screen.getByTestId('contact-has-drop-badge')).toBeInTheDocument();
     expect(screen.getByText(/Hat eine Ablage|Has a Drop/i)).toBeInTheDocument();
   });
+
+  it('triggers market sync via drops and shows feedback message', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') {
+        return Promise.resolve(mockContacts);
+      }
+      if (cmd === 'sync_market_drops') {
+        return Promise.resolve({
+          skippedWifiOnly: false,
+          uploadedTo: 1,
+          polledDrops: 2,
+          decryptedSlots: 3,
+          importedCards: 2,
+          importedWotLists: 1,
+          errors: [],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
+    });
+
+    const syncBtn = screen.getByText(/Sync via drops|Über Ablagen synchronisieren/i).closest('button')!;
+    expect(syncBtn).toBeInTheDocument();
+    fireEvent.click(syncBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('sync_market_drops', { forceUpload: true });
+    });
+  });
 });

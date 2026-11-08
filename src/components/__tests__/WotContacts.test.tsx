@@ -164,6 +164,8 @@ describe('WoT Contacts & Trust Ratings', () => {
             canReadMyMarketAfter: true,
             canWriteMyDropBefore: false,
             canWriteMyDropAfter: true,
+            canReadMyWotBefore: false,
+            canReadMyWotAfter: true,
           });
         }
         return Promise.resolve(undefined);
@@ -194,6 +196,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       await waitFor(() => {
         expect(screen.getByTestId('trust-preview-gain-read')).toBeInTheDocument();
         expect(screen.getByTestId('trust-preview-gain-write')).toBeInTheDocument();
+        expect(screen.getByTestId('trust-preview-gain-wot')).toBeInTheDocument();
       });
     });
 
@@ -205,6 +208,8 @@ describe('WoT Contacts & Trust Ratings', () => {
             canReadMyMarketAfter: false,
             canWriteMyDropBefore: true,
             canWriteMyDropAfter: false,
+            canReadMyWotBefore: true,
+            canReadMyWotAfter: false,
           });
         }
         return Promise.resolve(undefined);
@@ -243,6 +248,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       await waitFor(() => {
         expect(screen.getByTestId('trust-preview-lose-read')).toBeInTheDocument();
         expect(screen.getByTestId('trust-preview-lose-write')).toBeInTheDocument();
+        expect(screen.getByTestId('trust-preview-lose-wot')).toBeInTheDocument();
       });
     });
   });

@@ -15,7 +15,11 @@ use crate::card::forward_envelope;
 use crate::error::MarketError;
 use crate::model::{CardEnvelope, CardStore, MAX_FORWARDED_CARDS, MAX_SLOT_RECIPIENTS};
 
-const SLOT_MAGIC: &[u8; 8] = b"HMSLOT01";
+pub const SLOT_MAGIC: &[u8; 8] = b"HMSLOT01";
+pub const SLOT_MULTI_MAGIC: &[u8; 8] = b"HMSLOTM1";
+pub const BACKUP_SLOT_MAGIC: &[u8; 8] = b"HMBKP001";
+pub const BACKUP_PAD_BLOCK_BYTES: usize = 65_536; // 64 KB
+pub const DROP_BACKUP_MAX_BYTES: usize = 5 * 1024 * 1024; // 5 MB, §2
 const RECIPIENT_ENTRY_SIZE: usize = 92; // 32 (eph_pk) + 12 (nonce) + 48 (ct)
 const MAX_RECIPIENT_OVERHEAD: usize = 8 + 2 + 256 * RECIPIENT_ENTRY_SIZE + 24 + 16; // 23602 bytes
 
@@ -94,8 +98,8 @@ fn target_recipient_bucket(count: usize) -> Result<usize, MarketError> {
     }
 }
 
-pub fn seal_slot_blob(
-    bundle: &CardBundle,
+pub fn seal_slot_payload(
+    plaintext: &[u8],
     readers: &[VerifyingKey],
     max_bytes: usize,
 ) -> Result<Vec<u8>, MarketError> {
@@ -115,9 +119,6 @@ pub fn seal_slot_blob(
     OsRng.fill_bytes(&mut k);
 
     // 3. Encrypt payload with XChaCha20Poly1305
-    let payload_bytes = serde_json::to_vec(bundle)
-        .map_err(|e| MarketError::Serialization(e.to_string()))?;
-
     let mut payload_nonce_bytes = [0u8; 24];
     OsRng.fill_bytes(&mut payload_nonce_bytes);
     let payload_nonce = XNonce::from_slice(&payload_nonce_bytes);
@@ -125,7 +126,7 @@ pub fn seal_slot_blob(
     let payload_cipher = XChaCha20Poly1305::new_from_slice(&k)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
     let payload_ciphertext = payload_cipher
-        .encrypt(payload_nonce, payload_bytes.as_ref())
+        .encrypt(payload_nonce, plaintext)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
 
     // 4. Encapsulate content key for each reader
@@ -196,7 +197,7 @@ pub fn seal_slot_blob(
     blob.extend_from_slice(&payload_ciphertext);
 
     if blob.len() > max_bytes {
-        return Err(MarketError::Validation(format!(
+        return Err(MarketError::PayloadTooLarge(format!(
             "Sealed SlotBlob length {} exceeds max_bytes {}",
             blob.len(),
             max_bytes
@@ -206,10 +207,20 @@ pub fn seal_slot_blob(
     Ok(blob)
 }
 
-pub fn open_slot_blob(
+pub fn seal_slot_blob(
+    bundle: &CardBundle,
+    readers: &[VerifyingKey],
+    max_bytes: usize,
+) -> Result<Vec<u8>, MarketError> {
+    let payload_bytes = serde_json::to_vec(bundle)
+        .map_err(|e| MarketError::Serialization(e.to_string()))?;
+    seal_slot_payload(&payload_bytes, readers, max_bytes)
+}
+
+pub fn open_slot_payload(
     blob: &[u8],
     my_x25519_secret: &StaticSecret,
-) -> Result<Option<CardBundle>, MarketError> {
+) -> Result<Option<Vec<u8>>, MarketError> {
     if blob.len() < 10 {
         return Err(MarketError::Slot("SlotBlob too short".to_string()));
     }
@@ -273,10 +284,8 @@ pub fn open_slot_blob(
                     Ok(c) => c,
                     Err(_) => continue,
                 };
-                if let Ok(bundle_bytes) = payload_cipher.decrypt(payload_nonce, payload_ciphertext) {
-                    let bundle: CardBundle = serde_json::from_slice(&bundle_bytes)
-                        .map_err(|e| MarketError::Serialization(e.to_string()))?;
-                    return Ok(Some(bundle));
+                if let Ok(payload_bytes) = payload_cipher.decrypt(payload_nonce, payload_ciphertext) {
+                    return Ok(Some(payload_bytes));
                 }
             }
         }
@@ -284,3 +293,212 @@ pub fn open_slot_blob(
 
     Ok(None)
 }
+
+pub fn open_slot_blob(
+    blob: &[u8],
+    my_x25519_secret: &StaticSecret,
+) -> Result<Option<CardBundle>, MarketError> {
+    match open_slot_payload(blob, my_x25519_secret)? {
+        Some(bytes) => {
+            let bundle: CardBundle = serde_json::from_slice(&bytes)
+                .map_err(|e| MarketError::Serialization(e.to_string()))?;
+            Ok(Some(bundle))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Seals up to 3 distance-class payloads into a single multi-class `SlotBlob`.
+///
+/// Multi-class slot format:
+/// `[b"HMSLOTM1" (8B) || count: u8 || for each class: (blob_len: u32_be || sub_blob_bytes)]`
+///
+/// Guarantees that a reader in Class 2 cannot decrypt the payload of Class 1.
+pub fn seal_multi_class_slot_blob(
+    classes: &[(&[u8], &[VerifyingKey])],
+    max_total_bytes: usize,
+) -> Result<Vec<u8>, MarketError> {
+    if classes.is_empty() || classes.len() > 3 {
+        return Err(MarketError::Validation(format!(
+            "Classes count must be between 1 and 3, got {}",
+            classes.len()
+        )));
+    }
+
+    let mut sub_blobs = Vec::with_capacity(classes.len());
+    for (idx, (plaintext, readers)) in classes.iter().enumerate() {
+        if readers.is_empty() {
+            return Err(MarketError::Validation(format!(
+                "Class {} has empty reader list",
+                idx + 1
+            )));
+        }
+        let sub_blob = seal_slot_payload(plaintext, readers, max_total_bytes)?;
+        sub_blobs.push(sub_blob);
+    }
+
+    let total_len: usize = 9 + sub_blobs.iter().map(|b| 4 + b.len()).sum::<usize>();
+    if total_len > max_total_bytes {
+        return Err(MarketError::PayloadTooLarge(format!(
+            "Sealed multi-class slot blob length {} exceeds max_total_bytes {}",
+            total_len, max_total_bytes
+        )));
+    }
+
+    let mut encoded = Vec::with_capacity(total_len);
+    encoded.extend_from_slice(SLOT_MULTI_MAGIC);
+    encoded.push(classes.len() as u8);
+
+    for sub_blob in &sub_blobs {
+        let len_bytes = (sub_blob.len() as u32).to_be_bytes();
+        encoded.extend_from_slice(&len_bytes);
+        encoded.extend_from_slice(sub_blob);
+    }
+
+    Ok(encoded)
+}
+
+/// Opens a multi-class `SlotBlob` and returns the first subpackage decrypted by `my_x25519_secret`.
+///
+/// Returns `Ok(Some(plaintext))` on the first decrypted class payload, or `Ok(None)` if no class
+/// payload was decryptable by this secret. Returns `Err(MarketError::Slot(...))` on invalid magic
+/// or truncated/malformed buffers without panicking.
+pub fn open_multi_class_slot_blob(
+    blob: &[u8],
+    my_x25519_secret: &StaticSecret,
+) -> Result<Option<Vec<u8>>, MarketError> {
+    if blob.len() < 9 {
+        return Err(MarketError::Slot("Multi-class SlotBlob too short".to_string()));
+    }
+
+    if &blob[0..8] != SLOT_MULTI_MAGIC {
+        return Err(MarketError::Slot("Invalid multi-class SlotBlob magic header".to_string()));
+    }
+
+    let count = blob[8] as usize;
+    if !(1..=3).contains(&count) {
+        return Err(MarketError::Slot(format!(
+            "Invalid multi-class count: {}",
+            count
+        )));
+    }
+
+    let mut offset = 9;
+    for _ in 0..count {
+        if offset + 4 > blob.len() {
+            return Err(MarketError::Slot(
+                "Truncated class length in multi-class SlotBlob".to_string(),
+            ));
+        }
+        let sub_len = u32::from_be_bytes([
+            blob[offset],
+            blob[offset + 1],
+            blob[offset + 2],
+            blob[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        if offset + sub_len > blob.len() {
+            return Err(MarketError::Slot(
+                "Truncated sub-blob in multi-class SlotBlob".to_string(),
+            ));
+        }
+
+        let sub_blob = &blob[offset..offset + sub_len];
+        offset += sub_len;
+
+        if let Some(plaintext) = open_slot_payload(sub_blob, my_x25519_secret)? {
+            return Ok(Some(plaintext));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Pads encrypted `.hmcbackup` bytes into a fixed-block multiple (64 KB) backup slot blob (§5).
+///
+/// Output format: `[b"HMBKP001" (8B) || (inner_len as u32_be) (4B) || inner_bytes || CSPRNG padding]`
+/// rounded UP to an exact multiple of 65,536 bytes (minimum 65,536 bytes).
+pub fn pad_backup_slot_bytes(
+    hmcbackup_bytes: &[u8],
+    max_bytes: usize,
+) -> Result<Vec<u8>, MarketError> {
+    if hmcbackup_bytes.is_empty() {
+        return Err(MarketError::Validation(
+            "Backup payload cannot be empty".to_string(),
+        ));
+    }
+    let inner_len = hmcbackup_bytes.len();
+    if inner_len > u32::MAX as usize {
+        return Err(MarketError::PayloadTooLarge(format!(
+            "Backup payload length {} exceeds 32-bit limit",
+            inner_len
+        )));
+    }
+
+    let unpadded_len = 12 + inner_len;
+    let remainder = unpadded_len % BACKUP_PAD_BLOCK_BYTES;
+    let padded_len = if remainder == 0 {
+        unpadded_len
+    } else {
+        unpadded_len + (BACKUP_PAD_BLOCK_BYTES - remainder)
+    };
+
+    if padded_len > max_bytes {
+        return Err(MarketError::PayloadTooLarge(format!(
+            "Padded backup slot size {} exceeds max allowed {}",
+            padded_len, max_bytes
+        )));
+    }
+
+    let mut out = Vec::with_capacity(padded_len);
+    out.extend_from_slice(BACKUP_SLOT_MAGIC);
+    out.extend_from_slice(&(inner_len as u32).to_be_bytes());
+    out.extend_from_slice(hmcbackup_bytes);
+
+    let pad_len = padded_len - out.len();
+    if pad_len > 0 {
+        let mut pad = vec![0u8; pad_len];
+        OsRng.fill_bytes(&mut pad);
+        out.extend_from_slice(&pad);
+    }
+
+    Ok(out)
+}
+
+/// Unpads a 64-KB-multiple backup slot blob, returning the original `.hmcbackup` bytes.
+pub fn unpad_backup_slot_bytes(slot_bytes: &[u8]) -> Result<Vec<u8>, MarketError> {
+    if slot_bytes.len() < BACKUP_PAD_BLOCK_BYTES
+        || !slot_bytes.len().is_multiple_of(BACKUP_PAD_BLOCK_BYTES)
+    {
+        return Err(MarketError::Slot(format!(
+            "Invalid backup slot size: {} (must be a non-empty multiple of {} bytes)",
+            slot_bytes.len(),
+            BACKUP_PAD_BLOCK_BYTES
+        )));
+    }
+
+    if &slot_bytes[0..8] != BACKUP_SLOT_MAGIC {
+        return Err(MarketError::Slot(
+            "Invalid backup slot magic header".to_string(),
+        ));
+    }
+
+    let inner_len = u32::from_be_bytes([
+        slot_bytes[8],
+        slot_bytes[9],
+        slot_bytes[10],
+        slot_bytes[11],
+    ]) as usize;
+
+    if inner_len == 0 || 12 + inner_len > slot_bytes.len() {
+        return Err(MarketError::Slot(format!(
+            "Invalid inner backup payload length: {} in slot size {}",
+            inner_len,
+            slot_bytes.len()
+        )));
+    }
+
+    Ok(slot_bytes[12..12 + inner_len].to_vec())
+}
+

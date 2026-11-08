@@ -62,18 +62,22 @@ describe('MarketplaceView Component', () => {
       },
       listings: [
         {
+          listingId: 'listing-alice-honey',
           listingType: 'offer',
           title: 'Bio Honey 500g',
           text: 'Fresh summer flower honey from regional bees',
           pricing: '5 FreeTaler',
           origin: 'voucher',
+          allowInquiries: true,
         },
         {
+          listingId: 'listing-alice-jars',
           listingType: 'request',
           title: 'Need 100 Glass Jars',
           text: 'Empty clean glass jars with lids',
           pricing: null,
           origin: 'voucher',
+          allowInquiries: true,
         },
       ],
       sources: [{ kind: 'voucher' }, { kind: 'card', hops: 1 }],
@@ -81,7 +85,13 @@ describe('MarketplaceView Component', () => {
       standards: [{ name: 'FreeTaler', uuid: 'std-freetaler-uuid' }],
       trust: 'trusted',
       canForward: true,
-      cardDrops: [],
+      cardDrops: [
+        {
+          writeUrl: 'https://drop.alice.org/write',
+          readUrl: 'https://drop.alice.org/read',
+          dropPub: 'ed25519-drop-pub-alice',
+        },
+      ],
     },
     {
       did: 'did:key:z6MkuBob',
@@ -109,11 +119,13 @@ describe('MarketplaceView Component', () => {
       },
       listings: [
         {
+          listingId: 'listing-charlie-tickets',
           listingType: 'offer',
           title: 'Movie Tickets',
           text: 'Classic comedy screening',
           pricing: '10 Minuto',
           origin: 'card',
+          allowInquiries: true,
         },
       ],
       sources: [{ kind: 'card', hops: 3 }],
@@ -208,6 +220,14 @@ describe('MarketplaceView Component', () => {
           status: 'accepted',
           did: 'did:key:z6MkuAlice',
           replaced: false,
+        });
+      }
+      if (cmd === 'get_post_inbox_summary') {
+        return Promise.resolve({
+          pendingSignRequests: [],
+          pendingWotHandshakes: [],
+          sellerInquiries: [],
+          buyerInquiries: [],
         });
       }
       return Promise.resolve(null);
@@ -538,5 +558,153 @@ describe('MarketplaceView Component', () => {
     await waitFor(() => {
       expect(screen.getByText('Alice Honey Farm')).toBeInTheDocument();
     });
+  });
+
+  it('enforces <= 280 chars on inquiry input and sends 1-step inquiry via post', async () => {
+    render(<MarketplaceView />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Bio Honey 500g')).toBeInTheDocument();
+    });
+
+    // Click "Reserve / Inquire" button on Alice's listing
+    const inquiryBtn = screen.getByTestId('inquiry-button');
+    fireEvent.click(inquiryBtn);
+
+    // Modal opens
+    await waitFor(() => {
+      expect(screen.getByTestId('inquiry-message-input')).toBeInTheDocument();
+    });
+
+    const input = screen.getByTestId('inquiry-message-input') as HTMLTextAreaElement;
+
+    // Type a string longer than 280 characters
+    const longMessage = 'A'.repeat(300);
+    fireEvent.change(input, { target: { value: longMessage } });
+
+    // Enforces maximum 280 characters
+    expect(input.value.length).toBe(280);
+
+    // Confirm sending inquiry
+    const confirmBtn = screen.getByTestId('send-inquiry-confirm-button');
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('send_market_inquiry_via_post', expect.objectContaining({
+        recipientDid: 'did:key:z6MkuAlice',
+        listingId: 'listing-alice-honey',
+        message: 'A'.repeat(280),
+      }));
+    });
+  });
+
+  it('renders seller inbox with 1-step reply (confirm/decline, NO chat) and buyer 1-click Pay Now', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_market_view') return Promise.resolve(mockMarketPeople);
+      if (cmd === 'get_app_settings') {
+        return Promise.resolve({
+          marketShowUnknown: true,
+          sessionTimeoutSeconds: 300,
+          privacyDefault: 'ask',
+          maxStoreHops: 2,
+          marketSendCardOnPayment: false,
+        });
+      }
+      if (cmd === 'get_contacts') return Promise.resolve([]);
+      if (cmd === 'get_user_profile') {
+        return Promise.resolve({ id: 'did:key:z6MkuSelf', firstName: 'Owner', lastName: 'User' });
+      }
+      if (cmd === 'get_post_inbox_summary') {
+        return Promise.resolve({
+          pendingSignRequests: [],
+          pendingWotHandshakes: [],
+          sellerInquiries: [
+            {
+              inquiryId: 'inq-seller-1',
+              counterpartyDid: 'did:key:z6MkuBuyer',
+              counterpartyName: 'Buyer Bob',
+              listingId: 'listing-own-1',
+              listingTitle: 'My Handcrafted Table',
+              message: 'Can I pick it up tomorrow at 10?',
+              reply: null,
+              createdAt: 1731000000,
+            },
+          ],
+          buyerInquiries: [
+            {
+              inquiryId: 'inq-buyer-1',
+              counterpartyDid: 'did:key:z6MkuAlice',
+              counterpartyName: 'Alice Wonderland',
+              listingId: 'listing-alice-honey',
+              listingTitle: 'Bio Honey 500g',
+              message: 'Is it available?',
+              reply: { decision: 'confirm', note: 'Yes, reserved for you!' },
+              createdAt: 1731000000,
+            },
+          ],
+        });
+      }
+      if (cmd === 'reply_market_inquiry_via_post') {
+        return Promise.resolve({
+          inquiryId: 'inq-seller-1',
+          decision: 'confirm',
+          note: 'Reserved until 5pm',
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<MarketplaceView />);
+
+    // 1. Seller Inbox is displayed
+    await waitFor(() => {
+      expect(screen.getByTestId('seller-inbox-section')).toBeInTheDocument();
+      expect(screen.getByText('My Handcrafted Table')).toBeInTheDocument();
+      expect(screen.getByText(/"Can I pick it up tomorrow at 10\?"/)).toBeInTheDocument();
+    });
+
+    // Verify 1-step action buttons exist and NO continuous chat input exists
+    const confirmBtn = screen.getByTestId('confirm-inquiry-button');
+    const declineBtn = screen.getByTestId('decline-inquiry-button');
+    expect(confirmBtn).toBeInTheDocument();
+    expect(declineBtn).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/write a message|type a message/i)).not.toBeInTheDocument();
+
+    // Seller confirms inquiry with optional note
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('execute-reply-button')).toBeInTheDocument();
+    });
+
+    const noteInput = screen.getByPlaceholderText(/E\.g\. Reserved until tomorrow/i);
+    fireEvent.change(noteInput, { target: { value: 'Reserved until 5pm' } });
+
+    fireEvent.click(screen.getByTestId('execute-reply-button'));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('reply_market_inquiry_via_post', expect.objectContaining({
+        inquiryId: 'inq-seller-1',
+        decision: 'confirm',
+        note: 'Reserved until 5pm',
+      }));
+    });
+
+    // 2. Buyer Inquiries Section is displayed
+    expect(screen.getByTestId('buyer-inquiries-section')).toBeInTheDocument();
+    expect(screen.getByText(/"Yes, reserved for you!"/)).toBeInTheDocument();
+
+    // Buyer 1-Click Pay Now button
+    const payNowBtn = screen.getByTestId('pay-confirmed-inquiry-button');
+    expect(payNowBtn).toBeInTheDocument();
+
+    fireEvent.click(payNowBtn);
+
+    // Navigates directly to send_vouchers
+    expect(mockNavigate).toHaveBeenCalledWith(expect.objectContaining({
+      view: 'send_vouchers',
+      initialRecipientId: 'did:key:z6MkuAlice',
+      initialNote: 'Yes, reserved for you!',
+    }));
   });
 });

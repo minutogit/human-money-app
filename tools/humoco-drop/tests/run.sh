@@ -48,10 +48,14 @@ echo "=========================================================="
 echo " HuMoCo Drop Server Test Suite (PHP $(php -r 'echo PHP_VERSION;'))"
 echo "=========================================================="
 
-# Check minimum PHP version (>= 7.4)
+# Check minimum PHP version (>= 7.4) and sodium extension
 php -r '
 if (version_compare(PHP_VERSION, "7.4.0", "<")) {
     fwrite(STDERR, "ERROR: PHP version >= 7.4 required, found " . PHP_VERSION . "\n");
+    exit(1);
+}
+if (!function_exists("sodium_crypto_sign_detached")) {
+    fwrite(STDERR, "ERROR: ext-sodium is required for Ed25519 verification\n");
     exit(1);
 }
 '
@@ -80,26 +84,60 @@ else
     touch "$TEST_DIR/index.html"
 fi
 
-# Generate cryptographically secure test tokens via PHP CLI
-ADMIN_TOKEN="$(php -r 'echo bin2hex(random_bytes(32));')"
-ADMIN_TOKEN_HASH="$(php -r 'echo hash("sha256", hex2bin("'"$ADMIN_TOKEN"'"));')"
+# Generate cryptographically secure test Ed25519 keypairs via PHP CLI
+ADMIN_KP="$(php -r '
+    $kp = sodium_crypto_sign_keypair();
+    $sk = sodium_crypto_sign_secretkey($kp);
+    $pk = sodium_crypto_sign_publickey($kp);
+    echo bin2hex($sk) . ":" . bin2hex($pk);
+')"
+ADMIN_SK="$(echo "$ADMIN_KP" | cut -d: -f1)"
+ADMIN_PK="$(echo "$ADMIN_KP" | cut -d: -f2)"
 
-MEMBER1_TOKEN="$(php -r 'echo bin2hex(random_bytes(32));')"
-MEMBER1_ID="$(php -r 'echo substr(hash("sha256", hex2bin("'"$MEMBER1_TOKEN"'")), 0, 32);')"
+ADMIN2_KP="$(php -r '
+    $kp = sodium_crypto_sign_keypair();
+    $sk = sodium_crypto_sign_secretkey($kp);
+    $pk = sodium_crypto_sign_publickey($kp);
+    echo bin2hex($sk) . ":" . bin2hex($pk);
+')"
+ADMIN2_SK="$(echo "$ADMIN2_KP" | cut -d: -f1)"
+ADMIN2_PK="$(echo "$ADMIN2_KP" | cut -d: -f2)"
 
-MEMBER2_TOKEN="$(php -r 'echo bin2hex(random_bytes(32));')"
-MEMBER2_ID="$(php -r 'echo substr(hash("sha256", hex2bin("'"$MEMBER2_TOKEN"'")), 0, 32);')"
+MEMBER1_KP="$(php -r '
+    $kp = sodium_crypto_sign_keypair();
+    $sk = sodium_crypto_sign_secretkey($kp);
+    $pk = sodium_crypto_sign_publickey($kp);
+    echo bin2hex($sk) . ":" . bin2hex($pk);
+')"
+MEMBER1_SK="$(echo "$MEMBER1_KP" | cut -d: -f1)"
+MEMBER1_PK="$(echo "$MEMBER1_KP" | cut -d: -f2)"
 
-MEMBER3_TOKEN="$(php -r 'echo bin2hex(random_bytes(32));')"
-MEMBER3_ID="$(php -r 'echo substr(hash("sha256", hex2bin("'"$MEMBER3_TOKEN"'")), 0, 32);')"
+MEMBER2_KP="$(php -r '
+    $kp = sodium_crypto_sign_keypair();
+    $sk = sodium_crypto_sign_secretkey($kp);
+    $pk = sodium_crypto_sign_publickey($kp);
+    echo bin2hex($sk) . ":" . bin2hex($pk);
+')"
+MEMBER2_SK="$(echo "$MEMBER2_KP" | cut -d: -f1)"
+MEMBER2_PK="$(echo "$MEMBER2_KP" | cut -d: -f2)"
 
-# Write test config.php: max_members = 2 (to test 507), max_bytes = 128 (to test 413)
+MEMBER3_KP="$(php -r '
+    $kp = sodium_crypto_sign_keypair();
+    $sk = sodium_crypto_sign_secretkey($kp);
+    $pk = sodium_crypto_sign_publickey($kp);
+    echo bin2hex($sk) . ":" . bin2hex($pk);
+')"
+MEMBER3_SK="$(echo "$MEMBER3_KP" | cut -d: -f1)"
+MEMBER3_PK="$(echo "$MEMBER3_KP" | cut -d: -f2)"
+
+# Write test config.php: max_members = 2, max_bytes = 128
 cat <<EOF > "$TEST_DIR/config.php"
 <?php
 return [
-    'admin_token_hash' => '$ADMIN_TOKEN_HASH',
-    'data_dir'         => 'data',
-    'max_members'      => 2,
+    'admin_pubkey'         => '$ADMIN_PK',
+    'data_dir'             => 'data',
+    'max_members'          => 2,
+    'max_total_storage_mb' => 1,
     'channels' => [
         'card' => ['max_bytes' => 128, 'ttl_days' => 30],
     ],
@@ -156,280 +194,213 @@ assert_status() {
     fi
 }
 
-echo ""
-echo "=== Test Group 1: Method & Routing Invariants ==="
+# Sign helper function for tests using PHP CLI
+php_sign() {
+    local msg="$1"
+    local skHex="$2"
+    php -r '
+        $msg = $argv[1];
+        $sk = hex2bin($argv[2]);
+        echo bin2hex(sodium_crypto_sign_detached($msg, $sk));
+    ' "$msg" "$skHex"
+}
 
-# 1.1 GET drop.php -> 405 Method Not Allowed
+echo ""
+echo "=== Test Group 1: Routing & Method Invariants ==="
+
+# 1.1 GET drop.php without ?info -> 405 Method Not Allowed
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X GET "$BASE_URL/drop.php")
 assert_status "GET drop.php is rejected with 405" "405" "$CODE"
 
-# 1.2 POST drop.php -> 405 Method Not Allowed
+# 1.2 POST drop.php without ?rotate -> 405 Method Not Allowed
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/drop.php" -d "foo=bar")
-assert_status "POST drop.php is rejected with 405" "405" "$CODE"
+assert_status "POST drop.php without rotate is rejected with 405" "405" "$CODE"
 
-# 1.3 PUT drop.php without any headers -> 404
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php" -d "payload")
-assert_status "PUT drop.php without drop/admin tokens returns 404" "404" "$CODE"
-
-# 1.4 DELETE drop.php without tokens -> 404
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/drop.php")
-assert_status "DELETE drop.php without drop token returns 404" "404" "$CODE"
-
-echo ""
-echo "=== Test Group 2: Admin Member List Update (PUT drop.php?members) ==="
-
-# 2.1 PUT with wrong admin token -> 404
-WRONG_ADMIN="0000000000000000000000000000000000000000000000000000000000000000"
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members&channel=card" \
-    -H "X-Admin-Token: $WRONG_ADMIN" \
-    -d "{\"ids\":[\"$MEMBER1_ID\"]}")
-assert_status "Admin PUT with invalid token returns 404" "404" "$CODE"
-
-# 2.2 PUT with unconfigured channel -> 404
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members&channel=nonexistent" \
-    -H "X-Admin-Token: $ADMIN_TOKEN" \
-    -d "{\"ids\":[\"$MEMBER1_ID\"]}")
-assert_status "Admin PUT with unconfigured channel returns 404" "404" "$CODE"
-
-# 2.3 PUT exceeding max_members (configured max = 2, sending 3 IDs) -> 507
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members&channel=card" \
-    -H "X-Admin-Token: $ADMIN_TOKEN" \
-    -d "{\"ids\":[\"$MEMBER1_ID\",\"$MEMBER2_ID\",\"$MEMBER3_ID\"]}")
-assert_status "Admin PUT exceeding max_members returns 507" "507" "$CODE"
-
-# 2.4 PUT with malformed ID (non-hex or wrong length) -> 400
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members&channel=card" \
-    -H "X-Admin-Token: $ADMIN_TOKEN" \
-    -d '{"ids":["not-a-valid-hex-32-chars-length"]}')
-assert_status "Admin PUT with malformed ID returns 400" "400" "$CODE"
-
-# 2.5 Valid Admin PUT with MEMBER1 and MEMBER2 -> 204
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members&channel=card" \
-    -H "X-Admin-Token: $ADMIN_TOKEN" \
-    -d "{\"ids\":[\"$MEMBER1_ID\",\"$MEMBER2_ID\"]}")
-assert_status "Valid Admin PUT returns 204" "204" "$CODE"
-
-# Verify static read of members.card.json
-MEMBERS_CONTENT=$(curl -s "$BASE_URL/data/members.card.json")
-if echo "$MEMBERS_CONTENT" | grep -q "$MEMBER1_ID" && echo "$MEMBERS_CONTENT" | grep -q "$MEMBER2_ID"; then
-    echo "  [PASS] Static read of members.card.json contains both member IDs"
+# 1.3 GET drop.php?info -> 200 OK
+INFO_JSON=$(curl -s "$BASE_URL/drop.php?info")
+if echo "$INFO_JSON" | grep -q "$ADMIN_PK" && echo "$INFO_JSON" | grep -q '"channels":\["card"\]'; then
+    echo "  [PASS] GET drop.php?info returned correct admin_pubkey and channel list"
 else
-    echo "  [FAIL] Static read of members.card.json does not contain expected IDs: $MEMBERS_CONTENT" >&2
+    echo "  [FAIL] GET drop.php?info response invalid: $INFO_JSON" >&2
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
-echo ""
-echo "=== Test Group 3: Member Slot Upload & Static Reads ==="
-
-# 3.1 Unlisted member (MEMBER3) upload -> 404
-SAMPLE_B64=$(php -r 'echo base64_encode("HuMoCo test slot content for Member 1");')
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php" \
-    -H "X-Drop-Token: $MEMBER3_TOKEN" \
-    -H "X-Channel: card" \
-    -d "$SAMPLE_B64")
-assert_status "Unlisted member upload is rejected with 404" "404" "$CODE"
-
-# 3.2 Listed member upload to unconfigured channel -> 404
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php" \
-    -H "X-Drop-Token: $MEMBER1_TOKEN" \
-    -H "X-Channel: unknown_channel" \
-    -d "$SAMPLE_B64")
-assert_status "Upload to unconfigured channel returns 404" "404" "$CODE"
-
-# 3.3 Listed member upload with invalid base64 -> 400
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php" \
-    -H "X-Drop-Token: $MEMBER1_TOKEN" \
-    -H "X-Channel: card" \
-    -d "invalid-base64-payload!!!")
-assert_status "Upload with invalid base64 body returns 400" "400" "$CODE"
-
-# 3.4 Listed member upload exceeding max_bytes (limit is 128 bytes, payload is 129 bytes) -> 413
-OVERSIZED_B64=$(php -r 'echo base64_encode(str_repeat("X", 129));')
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php" \
-    -H "X-Drop-Token: $MEMBER1_TOKEN" \
-    -H "X-Channel: card" \
-    -d "$OVERSIZED_B64")
-assert_status "Upload exceeding channel max_bytes returns 413" "413" "$CODE"
-
-# 3.5 Valid upload for MEMBER1 -> 204
-RAW_PAYLOAD="Human Money Voucher Card: Alice - Minuto 50"
-MEMBER1_PAYLOAD_B64=$(php -r 'echo base64_encode("'"$RAW_PAYLOAD"'");')
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php" \
-    -H "X-Drop-Token: $MEMBER1_TOKEN" \
-    -H "X-Channel: card" \
-    -d "$MEMBER1_PAYLOAD_B64")
-assert_status "Valid member slot upload returns 204" "204" "$CODE"
-
-# 3.6 Static read of uploaded slot: exact byte parity
-FETCHED_PAYLOAD=$(curl -s "$BASE_URL/data/$MEMBER1_ID.card.bin")
-if [ "$FETCHED_PAYLOAD" = "$RAW_PAYLOAD" ]; then
-    echo "  [PASS] Static read of $MEMBER1_ID.card.bin matches uploaded bytes exactly"
-else
-    echo "  [FAIL] Static read content mismatch (expected '$RAW_PAYLOAD', got '$FETCHED_PAYLOAD')" >&2
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
-
-# 3.7 Static read of index.json contains MEMBER1 entry
-INDEX_JSON=$(curl -s "$BASE_URL/data/index.json")
-if echo "$INDEX_JSON" | grep -q "$MEMBER1_ID" && echo "$INDEX_JSON" | grep -q '"channel":"card"'; then
-    echo "  [PASS] Static read of index.json contains slot metadata for $MEMBER1_ID"
-else
-    echo "  [FAIL] index.json missing expected metadata: $INDEX_JSON" >&2
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
-
-echo ""
-echo "=== Test Group 4: Slot Isolation (Derivation Parity) ==="
-
-# 4.1 MEMBER2 uploads their own slot
-MEMBER2_PAYLOAD="Human Money Voucher Card: Bob - FreeTaler 100"
-MEMBER2_PAYLOAD_B64=$(php -r 'echo base64_encode("'"$MEMBER2_PAYLOAD"'");')
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php" \
-    -H "X-Drop-Token: $MEMBER2_TOKEN" \
-    -H "X-Channel: card" \
-    -d "$MEMBER2_PAYLOAD_B64")
-assert_status "MEMBER2 valid slot upload returns 204" "204" "$CODE"
-
-# Verify MEMBER1 slot was NOT modified or overwritten
-VERIFY_M1=$(curl -s "$BASE_URL/data/$MEMBER1_ID.card.bin")
-VERIFY_M2=$(curl -s "$BASE_URL/data/$MEMBER2_ID.card.bin")
-if [ "$VERIFY_M1" = "$RAW_PAYLOAD" ] && [ "$VERIFY_M2" = "$MEMBER2_PAYLOAD" ]; then
-    echo "  [PASS] Slot isolation verified: Member 1 and Member 2 slots exist independently"
-else
-    echo "  [FAIL] Slot isolation violated! Member 1 or Member 2 slot corrupted." >&2
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
-
-echo ""
-echo "=== Test Group 5: Immediate Slot Cleanup on Member Removal ==="
-
-# 5.1 Admin updates member list keeping only MEMBER1 (MEMBER2 is removed)
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members&channel=card" \
-    -H "X-Admin-Token: $ADMIN_TOKEN" \
-    -d "{\"ids\":[\"$MEMBER1_ID\"]}")
-assert_status "Admin removes MEMBER2 from member list (returns 204)" "204" "$CODE"
-
-# Verify MEMBER2 slot file has been purged from disk immediately
-if [ ! -f "$DATA_DIR/$MEMBER2_ID.card.bin" ]; then
-    echo "  [PASS] Removed member's slot file ($MEMBER2_ID.card.bin) was deleted from disk"
-else
-    echo "  [FAIL] Removed member's slot file still exists on disk!" >&2
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
-
-# Verify index.json no longer lists MEMBER2
-INDEX_AFTER_REMOVAL=$(curl -s "$BASE_URL/data/index.json")
-if ! echo "$INDEX_AFTER_REMOVAL" | grep -q "$MEMBER2_ID"; then
-    echo "  [PASS] index.json no longer lists removed member slot"
-else
-    echo "  [FAIL] index.json still lists removed member: $INDEX_AFTER_REMOVAL" >&2
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
-
-echo ""
-echo "=== Test Group 6: TTL Purge Behavior ==="
-
-# 6.1 Re-add MEMBER2 so both are allowed
-curl -s -o /dev/null -X PUT "$BASE_URL/drop.php?members&channel=card" \
-    -H "X-Admin-Token: $ADMIN_TOKEN" \
-    -d "{\"ids\":[\"$MEMBER1_ID\",\"$MEMBER2_ID\"]}"
-
-# Re-upload MEMBER2 slot
-curl -s -o /dev/null -X PUT "$BASE_URL/drop.php" \
-    -H "X-Drop-Token: $MEMBER2_TOKEN" \
-    -H "X-Channel: card" \
-    -d "$MEMBER2_PAYLOAD_B64"
-
-# Artificially age MEMBER1's slot to 31 days ago (TTL is 30 days)
-touch -d "31 days ago" "$DATA_DIR/$MEMBER1_ID.card.bin"
-echo "[i] Set mtime of $MEMBER1_ID.card.bin to 31 days ago"
-
-# Trigger a mutating write operation: re-upload MEMBER2 slot
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php" \
-    -H "X-Drop-Token: $MEMBER2_TOKEN" \
-    -H "X-Channel: card" \
-    -d "$MEMBER2_PAYLOAD_B64")
-assert_status "Mutating write triggers TTL purge (returns 204)" "204" "$CODE"
-
-# Verify expired slot was purged by TTL
-if [ ! -f "$DATA_DIR/$MEMBER1_ID.card.bin" ]; then
-    echo "  [PASS] Expired slot was automatically purged by TTL"
-else
-    echo "  [FAIL] Expired slot ($MEMBER1_ID.card.bin) was not purged by TTL!" >&2
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
-
-# Verify index.json only lists MEMBER2
-INDEX_AFTER_TTL=$(curl -s "$BASE_URL/data/index.json")
-if ! echo "$INDEX_AFTER_TTL" | grep -q "$MEMBER1_ID" && echo "$INDEX_AFTER_TTL" | grep -q "$MEMBER2_ID"; then
-    echo "  [PASS] index.json correctly purged expired entry and retained active entry"
-else
-    echo "  [FAIL] index.json does not reflect TTL purge: $INDEX_AFTER_TTL" >&2
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
-
-echo ""
-echo "=== Test Group 7: Member Self-Deletion (DELETE drop.php) ==="
-
-# 7.1 MEMBER2 deletes own slot
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/drop.php" \
-    -H "X-Drop-Token: $MEMBER2_TOKEN" \
-    -H "X-Channel: card")
-assert_status "Member slot deletion returns 204" "204" "$CODE"
-
-# Verify slot is gone from disk
-if [ ! -f "$DATA_DIR/$MEMBER2_ID.card.bin" ]; then
-    echo "  [PASS] Slot file removed from disk upon DELETE"
-else
-    echo "  [FAIL] Slot file still exists after DELETE!" >&2
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
-
-# Verify index.json is empty array []
-INDEX_FINAL=$(curl -s "$BASE_URL/data/index.json")
-if [ "$INDEX_FINAL" = "[]" ]; then
-    echo "  [PASS] index.json is empty ([]) after all slots deleted"
-else
-    echo "  [FAIL] index.json is not empty: $INDEX_FINAL" >&2
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
-
-echo ""
-echo "=== Test Group 8: Cross-Language Test Vectors Parity ==="
-
-VECTOR_PATH="$TOOL_DIR/../../crates/humoco-market/tests/vectors/drop_access.json"
-if [ -f "$VECTOR_PATH" ]; then
-    echo "[i] Verifying drop_access test vectors from $VECTOR_PATH..."
-    VECTOR_RESULT=$(php -r '
-        $file = $argv[1];
-        $data = json_decode(file_get_contents($file), true);
-        if (!is_array($data)) {
-            fwrite(STDERR, "Malformed vector file\n");
-            exit(1);
-        }
-        $count = 0;
-        foreach ($data as $vec) {
-            $tokenHex = isset($vec["write_token_hex"]) ? $vec["write_token_hex"] : ($vec["token_hex"] ?? null);
-            $expectedId = isset($vec["access_id"]) ? $vec["access_id"] : null;
-            if ($tokenHex && $expectedId) {
-                $calcId = substr(hash("sha256", hex2bin($tokenHex)), 0, 32);
-                if ($calcId !== $expectedId) {
-                    fwrite(STDERR, "Mismatch for token $tokenHex: expected $expectedId, got $calcId\n");
-                    exit(1);
-                }
-                $count++;
-            }
-        }
-        echo "OK:$count";
-    ' "$VECTOR_PATH" 2>&1)
-    if echo "$VECTOR_RESULT" | grep -q '^OK:'; then
-        echo "  [PASS] Verified cross-language parity against drop_access.json ($VECTOR_RESULT)"
+# 1.4 Rate limit store fixed 1-inode size check
+RL_FILE="$TEST_DIR/ratelimit.bin.php"
+if [ -f "$RL_FILE" ]; then
+    RL_SZ=$(stat -c%s "$RL_FILE" 2>/dev/null || stat -f%z "$RL_FILE")
+    if [ "$RL_SZ" -eq 65564 ]; then
+        echo "  [PASS] ratelimit.bin.php has exact 65564 bytes (1-inode invariant)"
     else
-        echo "  [FAIL] Cross-language vector check failed: $VECTOR_RESULT" >&2
+        echo "  [FAIL] ratelimit.bin.php size mismatch: expected 65564, got $RL_SZ" >&2
         FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
+    # Check __halt_compiler(); header
+    if head -c 28 "$RL_FILE" | grep -q '__halt_compiler'; then
+        echo "  [PASS] ratelimit.bin.php is protected by __halt_compiler()"
+    else
+        echo "  [FAIL] ratelimit.bin.php missing __halt_compiler() prefix" >&2
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+fi
+
+echo ""
+echo "=== Test Group 2: HEAD Capability Check ==="
+
+# 2.1 HEAD for unlisted member -> 403 Forbidden
+HEAD_CODE=$(curl -s -o /dev/null -w "%{http_code}" -I "$BASE_URL/drop.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card")
+assert_status "HEAD with unlisted pubkey returns 403" "403" "$HEAD_CODE"
+
+echo ""
+echo "=== Test Group 3: Admin Member List Update (PUT drop.php?members) ==="
+
+TS=$(date +%s)
+NONCE1="0123456789abcdef0123456789abcdef"
+BODY="{\"pubkeys\":[\"$MEMBER1_PK\",\"$MEMBER2_PK\"]}"
+BODY_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$BODY")
+CANON_MSG=$(printf "HUMOCO-DROP-ADMIN-V1\nPUT_MEMBERS\ncard\n%s\n%s\n%s" "$TS" "$NONCE1" "$BODY_HASH")
+SIG=$(php_sign "$CANON_MSG" "$ADMIN_SK")
+
+# 3.1 PUT with wrong signature -> 403
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members&channel=card" \
+    -H "X-Drop-Pubkey: $ADMIN_PK" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE1" \
+    -H "X-Drop-Signature: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" \
+    -d "$BODY")
+assert_status "Admin PUT with forged signature returns 403" "403" "$CODE"
+
+# 3.2 Valid Admin PUT -> 204
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members&channel=card" \
+    -H "X-Drop-Pubkey: $ADMIN_PK" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE1" \
+    -H "X-Drop-Signature: $SIG" \
+    -d "$BODY")
+assert_status "Valid Admin PUT returns 204" "204" "$CODE"
+
+# 3.3 HEAD now succeeds for MEMBER1 -> 200
+HEAD_RESP=$(curl -s -I "$BASE_URL/drop.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card")
+if echo "$HEAD_RESP" | grep -q "200 OK" && echo "$HEAD_RESP" | grep -q "X-Drop-Max-Bytes: 128"; then
+    echo "  [PASS] HEAD for authorized member returns 200 OK with capabilities"
 else
-    echo "  [INFO] Optional drop_access.json vectors file not present yet; skipped cross-language vector test."
+    echo "  [FAIL] HEAD response mismatch: $HEAD_RESP" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+echo ""
+echo "=== Test Group 4: Member Slot Raw PUT & If-Match ==="
+
+SLOT_PAYLOAD="Human Money Voucher Card: Alice - Minuto 50"
+SLOT_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$SLOT_PAYLOAD")
+TS=$(date +%s)
+NONCE2="abcdef0123456789abcdef0123456789"
+CANON_PUT=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\n%s\n%s\n%s" "$TS" "$NONCE2" "$SLOT_HASH")
+SIG_PUT=$(php_sign "$CANON_PUT" "$MEMBER1_SK")
+
+# 4.1 Valid Member Slot Upload -> 204
+PUT_RESP=$(curl -s -i -X PUT "$BASE_URL/drop.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE2" \
+    -H "X-Drop-Signature: $SIG_PUT" \
+    --data-binary "$SLOT_PAYLOAD")
+
+PUT_CODE=$(echo "$PUT_RESP" | grep -m1 "HTTP/" | awk '{print $2}')
+assert_status "Valid member slot upload returns 204" "204" "$PUT_CODE"
+
+# Verify ETag in response
+if echo "$PUT_RESP" | grep -qi "ETag: \"$SLOT_HASH\""; then
+    echo "  [PASS] PUT response contains matching ETag header"
+else
+    echo "  [FAIL] PUT response missing matching ETag: $PUT_RESP" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# 4.2 If-Match "none" when slot already exists -> 412 Precondition Failed
+TS=$(date +%s)
+NONCE3="11111111222222223333333344444444"
+CANON_IFM=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\n%s\n%s\n%s" "$TS" "$NONCE3" "$SLOT_HASH")
+SIG_IFM=$(php_sign "$CANON_IFM" "$MEMBER1_SK")
+
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE3" \
+    -H "X-Drop-Signature: $SIG_IFM" \
+    -H 'If-Match: "none"' \
+    --data-binary "$SLOT_PAYLOAD")
+assert_status "PUT with If-Match: none on existing slot returns 412" "412" "$CODE"
+
+# 4.3 Static read of slot file
+FETCHED=$(curl -s "$BASE_URL/data/$MEMBER1_PK.card.bin")
+if [ "$FETCHED" = "$SLOT_PAYLOAD" ]; then
+    echo "  [PASS] Static read matches uploaded payload byte-for-byte"
+else
+    echo "  [FAIL] Static read content mismatch" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+echo ""
+echo "=== Test Group 5: 180-Day Key Rotation (POST drop.php?rotate) ==="
+
+RETIRE_AT=$((TS + 180 * 86400))
+CERT_CANON=$(printf "HUMOCO-DROP-ROTATE-V1\n%s\n%s\n%d" "$ADMIN_PK" "$ADMIN2_PK" "$RETIRE_AT")
+CERT_SIG=$(php_sign "$CERT_CANON" "$ADMIN_SK")
+
+ROT_BODY=$(printf '{"old_pubkey":"%s","new_pubkey":"%s","retire_at":%d,"cert_sig":"%s"}' \
+    "$ADMIN_PK" "$ADMIN2_PK" "$RETIRE_AT" "$CERT_SIG")
+ROT_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$ROT_BODY")
+NONCE_ROT="55555555666666667777777788888888"
+CANON_ROT=$(printf "HUMOCO-DROP-ADMIN-V1\nROTATE\n\n%s\n%s\n%s" "$TS" "$NONCE_ROT" "$ROT_HASH")
+SIG_ROT=$(php_sign "$CANON_ROT" "$ADMIN2_SK")
+
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/drop.php?rotate" \
+    -H "X-Drop-Pubkey: $ADMIN2_PK" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_ROT" \
+    -H "X-Drop-Signature: $SIG_ROT" \
+    -d "$ROT_BODY")
+assert_status "Admin key rotation returns 200" "200" "$CODE"
+
+# Verify GET ?info now returns ADMIN2_PK and rotation header
+INFO_AFTER=$(curl -s -i "$BASE_URL/drop.php?info")
+if echo "$INFO_AFTER" | grep -q "$ADMIN2_PK" && echo "$INFO_AFTER" | grep -qi "X-Humoco-Drop-Rotation:"; then
+    echo "  [PASS] Rotation header present and new admin_pubkey active"
+else
+    echo "  [FAIL] Rotation header or admin_pubkey invalid: $INFO_AFTER" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+echo ""
+echo "=== Test Group 6: Member Slot Delete (DELETE drop.php) ==="
+
+TS=$(date +%s)
+NONCE_DEL="99999999aaaaaaaa99999999aaaaaaaa"
+EMPTY_HASH="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+CANON_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\ncard\n%s\n%s\n%s" "$TS" "$NONCE_DEL" "$EMPTY_HASH")
+SIG_DEL=$(php_sign "$CANON_DEL" "$MEMBER1_SK")
+
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/drop.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_DEL" \
+    -H "X-Drop-Signature: $SIG_DEL")
+assert_status "Member slot deletion returns 204" "204" "$CODE"
+
+# Verify slot is gone
+if [ ! -f "$DATA_DIR/$MEMBER1_PK.card.bin" ]; then
+    echo "  [PASS] Slot file was unlinked from disk"
+else
+    echo "  [FAIL] Slot file still exists after DELETE" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
 echo ""

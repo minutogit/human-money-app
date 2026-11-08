@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { voucherService } from '../services/voucherService';
+import { postService } from '../services/postService';
 import { settingsService } from '../services/settingsService';
+import { triggerAutoBackup } from '../utils/autoBackup';
 import { standardsService } from '../services/standardsService';
 import { profileService } from '../services/profileService';
 import { wotService } from '../services/wotService';
@@ -39,10 +41,12 @@ import {
 
 interface SignRequestViewProps {
     voucherData: VoucherDetails;
+    requestMsgId?: string;
+    senderDid?: string;
     onBack: () => void;
 }
 
-export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
+export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }: SignRequestViewProps) {
     const { t } = useTranslation();
     const { protectAction } = useSession();
     const [allowedRoles, setAllowedRoles] = useState<string[]>([]);
@@ -59,6 +63,7 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
     const [isImpactLoading, setIsImpactLoading] = useState(false);
     const [previewTrust, setPreviewTrust] = useState<VoucherTrustDto | null>(null);
     const [savedSigFilePath, setSavedSigFilePath] = useState<string | null>(null);
+    const [postSentSuccess, setPostSentSuccess] = useState(false);
     const [selectedGender, setSelectedGender] = useState<string>("1");
     const [isSavingGender, setIsSavingGender] = useState(false);
     const [standardsLoaded, setStandardsLoaded] = useState(false);
@@ -194,40 +199,69 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
         setFeedbackMsg('');
         setFeedbackType(null);
         try {
+            const targetCreatorDid = senderDid || voucherData.voucher?.creator?.id;
             const bundleBytes = await protectAction(async (password) => {
                 return await voucherService.createDetachedSignatureResponseBundle({
                     voucher: voucherData.voucher,
                     role: selectedRole,
                     includeDetails: includeDetails,
-                    config: { type: "TargetDid", value: [voucherData.voucher.creator.id!, "TrialDecryption"] },
+                    config: { type: "TargetDid", value: [targetCreatorDid!, "TrialDecryption"] },
                     password: password || undefined
                 });
             });
 
             if (!bundleBytes) return;
 
-            const filePath = await save({
-                defaultPath: settings?.lastUsedDirectory
-                    ? `${settings.lastUsedDirectory}/signature-${voucherData.voucher.voucherId.slice(0, 8)}.sig`
-                    : `signature-${voucherData.voucher.voucherId.slice(0, 8)}.sig`,
-                filters: [
-                    { name: t('voucher.signRequest.signatureResponseFilter'), extensions: ['sig'] },
-                    { name: t('voucher.export.allFiles'), extensions: ['*'] }
-                ]
-            });
-
-            if (filePath) {
-                const uint8Array = new Uint8Array(bundleBytes);
-                const { writeFile } = await import("@tauri-apps/plugin-fs");
-                await writeFile(filePath, uint8Array);
-                
-                if (settings) {
-                    updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
-                        settingsService.getSettings().then(setSettings).catch(() => {});
-                    });
+            let postDeposited = false;
+            if (senderDid || requestMsgId) {
+                try {
+                    const recipient = senderDid || voucherData.voucher?.creator?.id;
+                    if (recipient) {
+                        const res = await protectAction(async (password) => {
+                            return await postService.replyDetachedSignatureViaPost(
+                                requestMsgId || undefined,
+                                recipient,
+                                bundleBytes,
+                                password || undefined
+                            );
+                        });
+                        if (res && res.depositedTo > 0) {
+                            postDeposited = true;
+                            triggerAutoBackup();
+                            setPostSentSuccess(true);
+                        }
+                    }
+                } catch (err) {
+                    logger.warn(`Failed to reply detached signature via post: ${stringifyError(err)}`);
                 }
+            }
 
-                setSavedSigFilePath(filePath);
+            // Asymmetry Rule (§6.2): If not deposited to any drop (Bob has NO writable drop or network error)
+            // OR pure offline file flow, immediately offer the 1-click .sig file save dialog:
+            if (!postDeposited) {
+                const filePath = await save({
+                    defaultPath: settings?.lastUsedDirectory
+                        ? `${settings.lastUsedDirectory}/signature-${voucherData.voucher.voucherId.slice(0, 8)}.sig`
+                        : `signature-${voucherData.voucher.voucherId.slice(0, 8)}.sig`,
+                    filters: [
+                        { name: t('voucher.signRequest.signatureResponseFilter'), extensions: ['sig'] },
+                        { name: t('voucher.export.allFiles'), extensions: ['*'] }
+                    ]
+                });
+
+                if (filePath) {
+                    const uint8Array = new Uint8Array(bundleBytes);
+                    const { writeFile } = await import("@tauri-apps/plugin-fs");
+                    await writeFile(filePath, uint8Array);
+                    
+                    if (settings) {
+                        updateLastUsedDirectory(filePath, settings, protectAction).then(() => {
+                            settingsService.getSettings().then(setSettings).catch(() => {});
+                        });
+                    }
+
+                    setSavedSigFilePath(filePath);
+                }
             }
         } catch (e) {
             setFeedbackMsg(t('voucher.signRequest.signFailed', { error: translateError(e, t) }));
@@ -237,8 +271,36 @@ export function SignRequestView({ voucherData, onBack }: SignRequestViewProps) {
         }
     }
 
-
     const formatDateTime = (iso?: string) => iso ? new Date(iso).toLocaleString() : t('common.na');
+
+    if (postSentSuccess) {
+        return (
+            <PageLayout 
+                title={t('voucher.signRequest.postSentTitle', 'Unterschrift über Ablage gesendet')} 
+                description={t('voucher.signRequest.postSentDesc', 'Deine Unterschrift wurde verschlüsselt in der Ablage hinterlegt und wird automatisch vom Aussteller abgeholt.')} 
+                onBack={onBack}
+            >
+                <div className="max-w-xl mx-auto space-y-6 py-12 text-center animate-in fade-in">
+                    <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-3xl mx-auto flex items-center justify-center shadow-premium-sm border border-emerald-200">
+                        <CheckCircle2 size={40} />
+                    </div>
+                    <div className="space-y-2">
+                        <h2 className="text-2xl font-black text-theme-primary">
+                            {t('voucher.signRequest.postSentTitle', 'Unterschrift über Ablage gesendet')}
+                        </h2>
+                        <p className="text-sm font-medium text-theme-secondary max-w-md mx-auto leading-relaxed">
+                            {t('voucher.signRequest.postSentDesc', 'Deine Unterschrift wurde verschlüsselt in der Ablage hinterlegt und wird automatisch vom Aussteller abgeholt.')}
+                        </p>
+                    </div>
+                    <div className="pt-4">
+                        <Button onClick={onBack} className="flex items-center justify-center gap-2 mx-auto">
+                            {t('common.done', 'Fertig')}
+                        </Button>
+                    </div>
+                </div>
+            </PageLayout>
+        );
+    }
 
     if (savedSigFilePath) {
         return (

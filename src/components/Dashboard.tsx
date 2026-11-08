@@ -11,7 +11,8 @@ import { copyToClipboard } from "../utils/clipboard";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
-import { AggregatedBalance, VoucherSummary, WalletEvent, AppSettings } from "../types";
+import { AggregatedBalance, VoucherSummary, WalletEvent, AppSettings, FrontendPendingSignRequest, FrontendPendingWotHandshake } from "../types";
+import { postService, POST_INBOX_UPDATED_EVENT } from "../services/postService";
 import { useSession } from "../context/SessionContext";
 import { IntegrityReportModal } from "./IntegrityReportModal";
 import { PageLayout } from "./ui/PageLayout";
@@ -26,7 +27,11 @@ import {
     Clock,
     AlertCircle,
     Archive,
-    Info
+    Info,
+    FileSignature,
+    UserCheck,
+    X,
+    RefreshCw
 } from "lucide-react";
 import { truncateUserId } from "../utils/userIdHelper";
 import { stringifyError } from "../utils/errorHelper";
@@ -37,7 +42,7 @@ import { useContactResolver } from "../hooks/useContactResolver";
 export function Dashboard() {
     const { t } = useTranslation();
     const { navigate } = useNavigation();
-    const { profileName, integrityReport } = useSession();
+    const { profileName, integrityReport, protectAction } = useSession();
     const { resolveIdentity } = useContactResolver();
 
     const [userId, setUserId] = useState("");
@@ -48,6 +53,11 @@ export function Dashboard() {
     const [activeVouchersCount, setActiveVouchersCount] = useState(0);
     const [incompleteCount, setIncompleteCount] = useState(0);
     const [quarantinedCount, setQuarantinedCount] = useState(0);
+
+    // Channel post inbox items (§6.4.1 & §6.4.2)
+    const [pendingSignRequests, setPendingSignRequests] = useState<FrontendPendingSignRequest[]>([]);
+    const [pendingWotHandshakes, setPendingWotHandshakes] = useState<FrontendPendingWotHandshake[]>([]);
+    const [isOpeningSignRequest, setIsOpeningSignRequest] = useState<string | null>(null);
     const [expiringSoonCount, setExpiringSoonCount] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [voucherCountsByStandard, setVoucherCountsByStandard] = useState<Record<string, number>>({});
@@ -168,7 +178,54 @@ export function Dashboard() {
             }
         }
         fetchData();
+
+        const loadPostInbox = () => {
+            postService.getPostInboxSummary()
+                .then(summary => {
+                    setPendingSignRequests(summary.pendingSignRequests || []);
+                    setPendingWotHandshakes(summary.pendingWotHandshakes || []);
+                })
+                .catch(() => {});
+        };
+
+        loadPostInbox();
+        postService.syncPostDrops().catch(() => {});
+        window.addEventListener(POST_INBOX_UPDATED_EVENT, loadPostInbox);
+
+        return () => {
+            window.removeEventListener(POST_INBOX_UPDATED_EVENT, loadPostInbox);
+        };
     }, []);
+
+    const handleOpenSignRequest = async (req: FrontendPendingSignRequest) => {
+        setIsOpeningSignRequest(req.msgId);
+        try {
+            const voucherData = await protectAction(async (pwd) => {
+                return await voucherService.openSigningRequest(req.containerBytes, pwd || undefined);
+            });
+            if (voucherData) {
+                navigate({
+                    view: 'sign_request',
+                    voucherData,
+                    requestMsgId: req.msgId,
+                    senderDid: req.senderDid,
+                });
+            }
+        } catch (e) {
+            logger.error(`Failed to open signing request: ${stringifyError(e)}`);
+        } finally {
+            setIsOpeningSignRequest(null);
+        }
+    };
+
+    const handleDismissSignRequest = async (msgId: string) => {
+        try {
+            await postService.dismissPendingPostItem('sign_request', msgId);
+            setPendingSignRequests(prev => prev.filter(r => r.msgId !== msgId));
+        } catch (e) {
+            logger.error(`Failed to dismiss sign request: ${stringifyError(e)}`);
+        }
+    };
 
     async function handleViewModeChange(mode: 'spendable' | 'net') {
         setBalanceViewMode(mode);
@@ -332,6 +389,84 @@ export function Dashboard() {
 
                 {/* Warning Banners Section */}
                 <div className="space-y-3">
+                    {/* Incoming Pending Sign Requests (§6.4.1) */}
+                    {pendingSignRequests.map(req => {
+                        const senderName = req.senderName || resolveIdentity(req.senderDid, null) || truncateUserId(req.senderDid);
+                        const isOpening = isOpeningSignRequest === req.msgId;
+                        return (
+                            <Card
+                                key={req.msgId}
+                                variant="glass"
+                                className="py-3 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-l-4 border-l-teal-500 bg-teal-50/40"
+                                data-testid="pending-sign-request-card"
+                            >
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <div className="p-2 rounded-xl bg-teal-500 text-white shrink-0">
+                                        <FileSignature size={20} />
+                                    </div>
+                                    <div className="min-w-0">
+                                        <p className="font-bold text-sm text-theme-secondary truncate">
+                                            {t('dashboard.pendingSignRequestTitle', 'Offene Bürgschaftsanfrage von {{name}}', { name: senderName })}
+                                        </p>
+                                        <p className="text-xs text-theme-light truncate">
+                                            {t('dashboard.pendingSignRequestDesc', 'Über Ablage empfangen. Bitte prüfe den Gutschein und signiere bei Einverständnis.')}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                                    <Button
+                                        variant="outline"
+                                        size="xs"
+                                        disabled={isOpening}
+                                        onClick={() => handleDismissSignRequest(req.msgId)}
+                                        data-testid="dismiss-sign-request-button"
+                                        className="text-theme-light hover:text-rose-600 gap-1"
+                                    >
+                                        <X size={12} />
+                                        <span>{t('common.dismiss', 'Verwerfen')}</span>
+                                    </Button>
+                                    <Button
+                                        variant="primary"
+                                        size="xs"
+                                        disabled={isOpening}
+                                        onClick={() => handleOpenSignRequest(req)}
+                                        data-testid="open-sign-request-button"
+                                        className="gap-1 bg-teal-600 hover:bg-teal-700 text-white"
+                                    >
+                                        {isOpening ? <RefreshCw size={12} className="animate-spin" /> : <FileSignature size={12} />}
+                                        <span>{t('dashboard.checkAndSign', 'Prüfen & Unterschreiben')}</span>
+                                    </Button>
+                                </div>
+                            </Card>
+                        );
+                    })}
+
+                    {/* Incoming Pending WoT Handshakes (§6.4.2) */}
+                    {pendingWotHandshakes.length > 0 && (
+                        <Card 
+                            variant="glass" 
+                            className="py-2.5 px-4 flex items-center justify-between border-l-4 border-l-sky-500 cursor-pointer bg-sky-50/40"
+                            hover
+                            onClick={() => navigate({ view: 'address_book' })}
+                            data-testid="pending-wot-handshake-dashboard-card"
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className="p-2 rounded-xl bg-sky-500 text-white shrink-0">
+                                    <UserCheck size={20} />
+                                </div>
+                                <div>
+                                    <p className="font-bold text-sm text-theme-secondary">
+                                        {t('dashboard.pendingWotHandshakesCount', '{{count}} offene Vertrauensbestätigung(en) über Ablagen', { count: pendingWotHandshakes.length })}
+                                    </p>
+                                    <p className="text-xs opacity-70">
+                                        {t('dashboard.pendingWotHandshakesHint', 'Tippe hier, um die Bestätigungen im Adressbuch zu prüfen.')}
+                                    </p>
+                                </div>
+                            </div>
+                            <ArrowUpRight size={18} className="opacity-30" />
+                        </Card>
+                    )}
+
                     {integrityReport && integrityReport.type !== 'valid' && (
                         <Card 
                             variant="glass" 

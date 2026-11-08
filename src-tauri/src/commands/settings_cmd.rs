@@ -620,6 +620,15 @@ pub async fn reconcile_rollback(
             .map_err(FrontendError::from)?
     };
 
+    if let Ok(mut settings) = state.get_cached_settings() {
+        if settings.pending_restore_l2_reconciliation && !candidates.is_empty() {
+            settings.pending_restore_l2_reconciliation = false;
+            if let Ok(mut service) = state.service.lock() {
+                let _ = state.save_settings(&mut service, settings, password.as_deref());
+            }
+        }
+    }
+
     Ok(report.into())
 }
 

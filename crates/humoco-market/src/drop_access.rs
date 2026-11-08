@@ -1,16 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use ed25519_dalek::{SigningKey, VerifyingKey};
-use hkdf::Hkdf;
-use human_money_core::crypto::{
-    create_user_id, ed25519_pub_to_x25519, ed25519_sk_to_x25519_sk, get_pubkey_from_user_id,
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use human_money_core::crypto::{create_user_id, get_pubkey_from_user_id};
+use human_money_core::services::crypto::dh::{ed25519_pub_to_x25519, ed25519_sk_to_x25519_sk};
+use human_money_core::services::crypto::keys::{
+    derive_stealth_ephemeral_point, derive_stealth_secret_key,
 };
-use rand::{CryptoRng, RngCore};
+use human_money_core::services::crypto::utils::sign_ed25519_scalar;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
 use crate::error::MarketError;
+
+pub const DROP_ROTATION_GRACE_SECS: u64 = 180 * 86_400;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct MemberPolicy {
@@ -31,84 +33,6 @@ impl Default for MemberPolicy {
     }
 }
 
-pub fn generate_drop_keypair(rng: &mut (impl RngCore + CryptoRng)) -> ([u8; 32], String) {
-    let secret = StaticSecret::random_from_rng(rng);
-    let secret_bytes = secret.to_bytes();
-    let public = X25519PublicKey::from(&secret);
-    let drop_pub = bs58::encode(public.as_bytes()).into_string();
-    (secret_bytes, drop_pub)
-}
-
-pub fn derive_write_token_admin(
-    drop_secret: &[u8; 32],
-    member_ed_pub: &VerifyingKey,
-) -> [u8; 32] {
-    let admin_secret = StaticSecret::from(*drop_secret);
-    let drop_pub = X25519PublicKey::from(&admin_secret);
-    let member_x25519_pub = ed25519_pub_to_x25519(member_ed_pub);
-
-    let shared = admin_secret.diffie_hellman(&member_x25519_pub);
-
-    let mut info = Vec::with_capacity(b"humoco-drop-write".len() + 32);
-    info.extend_from_slice(b"humoco-drop-write");
-    info.extend_from_slice(drop_pub.as_bytes());
-
-    let hkdf = Hkdf::<Sha256>::new(None, shared.as_bytes());
-    let mut write_token = [0u8; 32];
-    hkdf.expand(&info, &mut write_token)
-        .expect("32 bytes is valid length for HKDF-SHA256");
-    write_token
-}
-
-pub fn derive_write_token_member(
-    member_ed_sk: &SigningKey,
-    drop_pub_b58: &str,
-) -> Result<[u8; 32], MarketError> {
-    let drop_pub_vec = bs58::decode(drop_pub_b58)
-        .into_vec()
-        .map_err(|e| MarketError::Validation(format!("Invalid base58 drop_pub: {}", e)))?;
-    let drop_pub_arr: [u8; 32] = drop_pub_vec
-        .try_into()
-        .map_err(|_| MarketError::Validation("drop_pub must decode to 32 bytes".to_string()))?;
-    let drop_pub = X25519PublicKey::from(drop_pub_arr);
-
-    let member_x25519_sk = ed25519_sk_to_x25519_sk(member_ed_sk);
-    let shared = member_x25519_sk.diffie_hellman(&drop_pub);
-
-    let mut info = Vec::with_capacity(b"humoco-drop-write".len() + 32);
-    info.extend_from_slice(b"humoco-drop-write");
-    info.extend_from_slice(drop_pub.as_bytes());
-
-    let hkdf = Hkdf::<Sha256>::new(None, shared.as_bytes());
-    let mut write_token = [0u8; 32];
-    hkdf.expand(&info, &mut write_token)
-        .expect("32 bytes is valid length for HKDF-SHA256");
-    Ok(write_token)
-}
-
-pub fn derive_access_id(write_token: &[u8; 32]) -> String {
-    let hash = Sha256::digest(write_token);
-    hex::encode(&hash[..16])
-}
-
-pub fn derive_admin_token(drop_secret: &[u8; 32]) -> [u8; 32] {
-    let hkdf = Hkdf::<Sha256>::new(None, drop_secret);
-    let mut admin_token = [0u8; 32];
-    hkdf.expand(b"humoco-drop-admin", &mut admin_token)
-        .expect("32 bytes is valid length for HKDF-SHA256");
-    admin_token
-}
-
-pub fn admin_token_hash_hex(admin_token: &[u8; 32]) -> String {
-    let hash = Sha256::digest(admin_token);
-    hex::encode(hash)
-}
-
-fn canonicalize_did(did: &str) -> Option<String> {
-    let pk = get_pubkey_from_user_id(did.trim()).ok()?;
-    create_user_id(&pk, None).ok()
-}
-
 pub type DisclosedContact = (String, u8);
 pub type BridgeContact = (String, u8, Vec<DisclosedContact>);
 
@@ -118,6 +42,11 @@ pub struct DropMembersStats {
     pub direct_count: usize,
     pub hop2_count: usize,
     pub total_count: usize,
+}
+
+fn canonicalize_did(did: &str) -> Option<String> {
+    let pk = get_pubkey_from_user_id(did.trim()).ok()?;
+    create_user_id(&pk, None).ok()
 }
 
 pub fn compute_drop_members(
@@ -141,7 +70,7 @@ pub fn compute_drop_members_with_stats(
 ) -> DropMembersStats {
     let deny_set: BTreeSet<String> = deny.iter().filter_map(|d| canonicalize_did(d)).collect();
 
-    // Map: canonical_did -> (is_direct, effective_level)
+    // Map: canonical_did -> effective_level
     let mut direct_members: BTreeMap<String, u8> = BTreeMap::new();
     let mut hop2_members: BTreeMap<String, u8> = BTreeMap::new();
 
@@ -175,7 +104,7 @@ pub fn compute_drop_members_with_stats(
                     if deny_set.contains(&can_did) {
                         continue;
                     }
-                    // ADR-00: Level 0 never traverses Hop 2. Clamped to >= 1.
+                    // Level 0 never traverses Hop 2.
                     if *contact_level < hop2_min_threshold {
                         continue;
                     }
@@ -272,4 +201,485 @@ pub fn compute_drop_members_with_stats(
         hop2_count,
         total_count,
     }
+}
+
+// =========================================================================
+//  PARSING & VALIDATION
+// =========================================================================
+
+pub fn parse_ed25519_pubkey_hex64(hex_str: &str) -> Result<VerifyingKey, MarketError> {
+    if hex_str.len() != 64 || !hex_str.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return Err(MarketError::Validation(format!(
+            "Public key must be a 64-character lowercase hex string, got '{}'",
+            hex_str
+        )));
+    }
+    let mut bytes = [0u8; 32];
+    hex::decode_to_slice(hex_str, &mut bytes)
+        .map_err(|e| MarketError::Validation(format!("Invalid hex encoding: {}", e)))?;
+    VerifyingKey::from_bytes(&bytes)
+        .map_err(|e| MarketError::Validation(format!("Invalid Ed25519 public key bytes: {}", e)))
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let hash = Sha256::digest(data);
+    hex::encode(hash)
+}
+
+// =========================================================================
+//  DETERMINISTIC ADMIN KEY & DATADIR (§7.1)
+// =========================================================================
+
+pub fn derive_drop_admin_seed(
+    master_seed: &[u8; 32],
+    drop_index: u32,
+    generation: u32,
+) -> [u8; 32] {
+    let mut material = [0u8; 40];
+    material[..32].copy_from_slice(master_seed);
+    material[32..36].copy_from_slice(&drop_index.to_be_bytes());
+    material[36..40].copy_from_slice(&generation.to_be_bytes());
+    blake3::derive_key("HUMOCO_DROP_ADMIN_KEY_V1", &material)
+}
+
+pub fn derive_drop_admin_keypair(
+    master_seed: &[u8; 32],
+    drop_index: u32,
+    generation: u32,
+) -> (SigningKey, VerifyingKey, String) {
+    let seed = derive_drop_admin_seed(master_seed, drop_index, generation);
+    let sk = SigningKey::from_bytes(&seed);
+    let vk = sk.verifying_key();
+    let vk_hex = hex::encode(vk.as_bytes());
+    (sk, vk, vk_hex)
+}
+
+pub fn derive_drop_data_dir(master_seed: &[u8; 32], drop_index: u32) -> String {
+    let seed_0 = derive_drop_admin_seed(master_seed, drop_index, 0);
+    let derived = blake3::derive_key("HUMOCO_DROP_DATADIR_V1", &seed_0);
+    format!("d-{}", &hex::encode(derived)[..16])
+}
+
+// =========================================================================
+//  64-HEX ED25519 STEALTH MEMBER KEYS (§7.1)
+// =========================================================================
+
+pub fn derive_member_stealth_pubkey_admin(
+    admin_ed_sk: &SigningKey,
+    member_ed_pub: &VerifyingKey,
+) -> Result<String, MarketError> {
+    let admin_x_sk = ed25519_sk_to_x25519_sk(admin_ed_sk);
+    let member_x_pub = ed25519_pub_to_x25519(member_ed_pub);
+    let shared = admin_x_sk.diffie_hellman(&member_x_pub);
+    if !shared.was_contributory() {
+        return Err(MarketError::Crypto(
+            "Non-contributory Diffie-Hellman exchange".to_string(),
+        ));
+    }
+    let stealth_seed = blake3::derive_key("HUMOCO_DROP_STEALTH_SEED_V1", shared.as_bytes());
+    let point = derive_stealth_ephemeral_point(member_ed_pub, &stealth_seed)
+        .map_err(|e| MarketError::Crypto(e.to_string()))?;
+    Ok(hex::encode(point.compress().as_bytes()))
+}
+
+pub fn derive_member_stealth_pubkey(
+    member_ed_sk: &SigningKey,
+    drop_pub_hex64: &str,
+) -> Result<String, MarketError> {
+    let drop_pub = parse_ed25519_pubkey_hex64(drop_pub_hex64)?;
+    let member_x_sk = ed25519_sk_to_x25519_sk(member_ed_sk);
+    let drop_x_pub = ed25519_pub_to_x25519(&drop_pub);
+    let shared = member_x_sk.diffie_hellman(&drop_x_pub);
+    if !shared.was_contributory() {
+        return Err(MarketError::Crypto(
+            "Non-contributory Diffie-Hellman exchange".to_string(),
+        ));
+    }
+    let stealth_seed = blake3::derive_key("HUMOCO_DROP_STEALTH_SEED_V1", shared.as_bytes());
+    let (_, _, p_pub) = derive_stealth_secret_key(member_ed_sk, &stealth_seed)
+        .map_err(|e| MarketError::Crypto(e.to_string()))?;
+    Ok(hex::encode(p_pub.as_bytes()))
+}
+
+pub fn sign_member_stealth_message(
+    member_ed_sk: &SigningKey,
+    drop_pub_hex64: &str,
+    message: &[u8],
+) -> Result<(String, String), MarketError> {
+    let drop_pub = parse_ed25519_pubkey_hex64(drop_pub_hex64)?;
+    let member_x_sk = ed25519_sk_to_x25519_sk(member_ed_sk);
+    let drop_x_pub = ed25519_pub_to_x25519(&drop_pub);
+    let shared = member_x_sk.diffie_hellman(&drop_x_pub);
+    if !shared.was_contributory() {
+        return Err(MarketError::Crypto(
+            "Non-contributory Diffie-Hellman exchange".to_string(),
+        ));
+    }
+    let stealth_seed = blake3::derive_key("HUMOCO_DROP_STEALTH_SEED_V1", shared.as_bytes());
+    let (scalar, public_point, p_pub) = derive_stealth_secret_key(member_ed_sk, &stealth_seed)
+        .map_err(|e| MarketError::Crypto(e.to_string()))?;
+    let sig = sign_ed25519_scalar(&scalar, &public_point, message);
+    Ok((hex::encode(p_pub.as_bytes()), hex::encode(sig.to_bytes())))
+}
+
+// =========================================================================
+//  PUBLIC / PROVIDER DROP REGISTRATION KEYS (§7.3)
+// =========================================================================
+
+pub fn canonicalize_write_url(raw_url: &str) -> Result<String, MarketError> {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        return Err(MarketError::Validation(
+            "write_url cannot be empty".to_string(),
+        ));
+    }
+    let url_string = if !trimmed.contains("://") {
+        format!("https://{}", trimmed)
+    } else {
+        trimmed.to_string()
+    };
+
+    let (scheme, rest) = url_string
+        .split_once("://")
+        .ok_or_else(|| MarketError::Validation("Missing URL scheme".to_string()))?;
+    let scheme_lower = scheme.to_ascii_lowercase();
+
+    // Strip fragment (#) and query (?)
+    let before_fragment = rest.split_once('#').map(|(a, _)| a).unwrap_or(rest);
+    let before_query = before_fragment
+        .split_once('?')
+        .map(|(a, _)| a)
+        .unwrap_or(before_fragment);
+
+    // Split authority and path
+    let (authority, raw_path) = match before_query.split_once('/') {
+        Some((auth, path)) => (auth, format!("/{}", path)),
+        None => (before_query, "/".to_string()),
+    };
+
+    if authority.is_empty() {
+        return Err(MarketError::Validation("Missing host in URL".to_string()));
+    }
+
+    // Split host and port in authority.
+    let (host, port_opt) = if authority.starts_with('[') {
+        if let Some(end_bracket) = authority.find(']') {
+            let host_part = &authority[..=end_bracket];
+            let after = &authority[end_bracket + 1..];
+            if let Some(port_str) = after.strip_prefix(':') {
+                (host_part, Some(port_str))
+            } else if after.is_empty() {
+                (host_part, None)
+            } else {
+                return Err(MarketError::Validation(format!(
+                    "Invalid IPv6 authority: {}",
+                    authority
+                )));
+            }
+        } else {
+            return Err(MarketError::Validation(format!(
+                "Unclosed IPv6 bracket in {}",
+                authority
+            )));
+        }
+    } else if let Some((h, p)) = authority.split_once(':') {
+        (h, Some(p))
+    } else {
+        (authority, None)
+    };
+
+    let host_lower = host.to_ascii_lowercase();
+
+    let port_num: Option<u16> = if let Some(p) = port_opt {
+        let p_num = p.parse::<u16>().map_err(|e| {
+            MarketError::Validation(format!("Invalid port '{}': {}", p, e))
+        })?;
+        Some(p_num)
+    } else {
+        None
+    };
+
+    let is_loopback = host_lower == "localhost"
+        || host_lower == "127.0.0.1"
+        || host_lower == "[::1]";
+
+    match scheme_lower.as_str() {
+        "https" => {}
+        "http" => {
+            if !is_loopback {
+                return Err(MarketError::Validation(format!(
+                    "http:// is only allowed for loopback addresses (127.0.0.1, localhost, [::1]), got host '{}'",
+                    host_lower
+                )));
+            }
+        }
+        other => {
+            return Err(MarketError::Validation(format!(
+                "Unsupported scheme '{}', only https (and loopback http) are allowed",
+                other
+            )));
+        }
+    }
+
+    // Strip default ports: 443 for https, 80 for http
+    let final_port = match (scheme_lower.as_str(), port_num) {
+        ("https", Some(443)) => None,
+        ("http", Some(80)) => None,
+        (_, other_port) => other_port,
+    };
+
+    let canonical_authority = match final_port {
+        Some(p) => format!("{}:{}", host_lower, p),
+        None => host_lower,
+    };
+
+    // Normalize path
+    let canonical_path = if raw_path.is_empty() || raw_path == "/" {
+        "/drop.php".to_string()
+    } else if raw_path.ends_with('/') {
+        format!("{}drop.php", raw_path)
+    } else {
+        raw_path
+    };
+
+    Ok(format!(
+        "{}://{}{}",
+        scheme_lower, canonical_authority, canonical_path
+    ))
+}
+
+pub fn derive_public_drop_keypair(
+    master_seed: &[u8; 32],
+    write_url: &str,
+) -> Result<(SigningKey, VerifyingKey, String), MarketError> {
+    let canonical = canonicalize_write_url(write_url)?;
+    let mut material = Vec::with_capacity(32 + canonical.len());
+    material.extend_from_slice(master_seed);
+    material.extend_from_slice(canonical.as_bytes());
+    let seed_reg = blake3::derive_key("HUMOCO_PUBLIC_DROP_USER_V1", &material);
+    let r = SigningKey::from_bytes(&seed_reg);
+    let r_pk = r.verifying_key();
+    let r_hex = hex::encode(r_pk.as_bytes());
+    Ok((r, r_pk, r_hex))
+}
+
+// =========================================================================
+//  CANONICAL HTTP REQUEST SIGNING & VERIFICATION HELPERS
+// =========================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedDropHeaders {
+    pub pubkey_hex: String,
+    pub timestamp: u64,
+    pub nonce_hex: String,
+    pub signature_hex: String,
+}
+
+pub fn format_member_request_message(
+    method: &str,
+    channel: &str,
+    timestamp: u64,
+    nonce_hex: &str,
+    body: &[u8],
+) -> String {
+    format!(
+        "HUMOCO-DROP-REQ-V1\n{}\n{}\n{}\n{}\n{}",
+        method,
+        channel,
+        timestamp,
+        nonce_hex,
+        sha256_hex(body)
+    )
+}
+
+pub fn format_admin_request_message(
+    action: &str,
+    channel: &str,
+    timestamp: u64,
+    nonce_hex: &str,
+    body: &[u8],
+) -> String {
+    format!(
+        "HUMOCO-DROP-ADMIN-V1\n{}\n{}\n{}\n{}\n{}",
+        action,
+        channel,
+        timestamp,
+        nonce_hex,
+        sha256_hex(body)
+    )
+}
+
+pub fn verify_ed25519_detached_hex(
+    pubkey_hex64: &str,
+    message: &[u8],
+    sig_hex128: &str,
+) -> Result<(), MarketError> {
+    let vk = parse_ed25519_pubkey_hex64(pubkey_hex64)?;
+    if sig_hex128.len() != 128
+        || !sig_hex128
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(MarketError::Crypto(format!(
+            "Signature must be a 128-character lowercase hex string, got '{}'",
+            sig_hex128
+        )));
+    }
+    let mut sig_bytes = [0u8; 64];
+    hex::decode_to_slice(sig_hex128, &mut sig_bytes)
+        .map_err(|e| MarketError::Crypto(format!("Invalid signature hex: {}", e)))?;
+    let sig = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+    vk.verify_strict(message, &sig)
+        .map_err(|e| MarketError::Crypto(format!("Invalid Ed25519 signature: {}", e)))
+}
+
+pub fn sign_member_request_stealth(
+    member_ed_sk: &SigningKey,
+    drop_pub_hex64: &str,
+    method: &str,
+    channel: &str,
+    timestamp: u64,
+    nonce_hex: &str,
+    body: &[u8],
+) -> Result<SignedDropHeaders, MarketError> {
+    let msg = format_member_request_message(method, channel, timestamp, nonce_hex, body);
+    let (pubkey_hex, signature_hex) =
+        sign_member_stealth_message(member_ed_sk, drop_pub_hex64, msg.as_bytes())?;
+    Ok(SignedDropHeaders {
+        pubkey_hex,
+        timestamp,
+        nonce_hex: nonce_hex.to_string(),
+        signature_hex,
+    })
+}
+
+pub fn sign_member_request_direct(
+    signing_key: &SigningKey,
+    method: &str,
+    channel: &str,
+    timestamp: u64,
+    nonce_hex: &str,
+    body: &[u8],
+) -> SignedDropHeaders {
+    let msg = format_member_request_message(method, channel, timestamp, nonce_hex, body);
+    let sig = signing_key.sign(msg.as_bytes());
+    SignedDropHeaders {
+        pubkey_hex: hex::encode(signing_key.verifying_key().as_bytes()),
+        timestamp,
+        nonce_hex: nonce_hex.to_string(),
+        signature_hex: hex::encode(sig.to_bytes()),
+    }
+}
+
+pub fn sign_admin_request(
+    admin_sk: &SigningKey,
+    action: &str,
+    channel: &str,
+    timestamp: u64,
+    nonce_hex: &str,
+    body: &[u8],
+) -> SignedDropHeaders {
+    let msg = format_admin_request_message(action, channel, timestamp, nonce_hex, body);
+    let sig = admin_sk.sign(msg.as_bytes());
+    SignedDropHeaders {
+        pubkey_hex: hex::encode(admin_sk.verifying_key().as_bytes()),
+        timestamp,
+        nonce_hex: nonce_hex.to_string(),
+        signature_hex: hex::encode(sig.to_bytes()),
+    }
+}
+
+// =========================================================================
+//  180-DAY KEY ROTATION CERTIFICATE (§7.2)
+// =========================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DropRotationCertificate {
+    pub old_pubkey: String,
+    pub new_pubkey: String,
+    pub retire_at: u64,
+    pub cert_sig: String,
+}
+
+impl DropRotationCertificate {
+    pub fn to_header_value(&self) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.old_pubkey, self.new_pubkey, self.retire_at, self.cert_sig
+        )
+    }
+
+    pub fn from_header_value(hdr: &str) -> Result<Self, MarketError> {
+        let parts: Vec<&str> = hdr.split(':').collect();
+        if parts.len() != 4 {
+            return Err(MarketError::Validation(format!(
+                "Invalid DropRotationCertificate header, expected 4 colon-separated parts, got {}",
+                parts.len()
+            )));
+        }
+        let old_pubkey = parts[0].to_string();
+        let new_pubkey = parts[1].to_string();
+        let retire_at = parts[2].parse::<u64>().map_err(|e| {
+            MarketError::Validation(format!("Invalid retire_at in rotation certificate: {}", e))
+        })?;
+        let cert_sig = parts[3].to_string();
+        Ok(Self {
+            old_pubkey,
+            new_pubkey,
+            retire_at,
+            cert_sig,
+        })
+    }
+}
+
+pub fn create_drop_rotation_certificate(
+    old_admin_sk: &SigningKey,
+    new_admin_pk: &VerifyingKey,
+    retire_at: u64,
+) -> DropRotationCertificate {
+    let old_pubkey = hex::encode(old_admin_sk.verifying_key().as_bytes());
+    let new_pubkey = hex::encode(new_admin_pk.as_bytes());
+    let canonical = format!(
+        "HUMOCO-DROP-ROTATE-V1\n{}\n{}\n{}",
+        old_pubkey, new_pubkey, retire_at
+    );
+    let sig = old_admin_sk.sign(canonical.as_bytes());
+    DropRotationCertificate {
+        old_pubkey,
+        new_pubkey,
+        retire_at,
+        cert_sig: hex::encode(sig.to_bytes()),
+    }
+}
+
+pub fn verify_drop_rotation_certificate(
+    cert: &DropRotationCertificate,
+    expected_old_pubkey_hex64: &str,
+    now_secs: u64,
+) -> Result<(), MarketError> {
+    if cert.old_pubkey != expected_old_pubkey_hex64 {
+        return Err(MarketError::Validation(format!(
+            "Rotation certificate old_pubkey mismatch: expected '{}', got '{}'",
+            expected_old_pubkey_hex64, cert.old_pubkey
+        )));
+    }
+    if cert.old_pubkey == cert.new_pubkey {
+        return Err(MarketError::Validation(
+            "Rotation certificate old_pubkey and new_pubkey must not be identical".to_string(),
+        ));
+    }
+    if now_secs >= cert.retire_at {
+        return Err(MarketError::Validation(format!(
+            "Rotation certificate expired: now {} >= retire_at {}",
+            now_secs, cert.retire_at
+        )));
+    }
+    parse_ed25519_pubkey_hex64(&cert.old_pubkey)?;
+    parse_ed25519_pubkey_hex64(&cert.new_pubkey)?;
+
+    let canonical = format!(
+        "HUMOCO-DROP-ROTATE-V1\n{}\n{}\n{}",
+        cert.old_pubkey, cert.new_pubkey, cert.retire_at
+    );
+    verify_ed25519_detached_hex(&cert.old_pubkey, canonical.as_bytes(), &cert.cert_sig)
 }

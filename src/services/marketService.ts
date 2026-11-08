@@ -16,6 +16,8 @@ import {
     FrontendDropDescriptor,
     FrontendDropSyncResult,
     FrontendTrustChangeImpact,
+    FrontendPublicDropInfo,
+    FrontendDropOverviewStatus,
 } from "../types";
 
 export const marketService = {
@@ -46,12 +48,13 @@ export const marketService = {
     // --- Phase 3: Drop Management (Ablagen) ---
 
     prepareDropSetup: async (
-        args?: { policy?: FrontendMemberPolicyDto; maxMembers?: number },
+        args?: { policy?: FrontendMemberPolicyDto; maxMembers?: number; maxTotalStorageMb?: number },
         password?: string
     ): Promise<FrontendDropSetupDraft> => {
         return await invoke<FrontendDropSetupDraft>("prepare_drop_setup", {
             policy: args?.policy,
             maxMembers: args?.maxMembers,
+            maxTotalStorageMb: args?.maxTotalStorageMb,
             password: password || undefined,
         });
     },
@@ -93,11 +96,58 @@ export const marketService = {
         });
     },
 
-    blockDropSlot: async (accessId: string, password?: string): Promise<FrontendDropAdminStatus> => {
+    blockDropSlot: async (pubkeyHex64: string, password?: string): Promise<FrontendDropAdminStatus> => {
         return await invoke<FrontendDropAdminStatus>("block_drop_slot", {
-            accessId,
+            pubkeyHex64,
             password: password || undefined,
         });
+    },
+
+    probePublicDrop: async (url: string, password?: string): Promise<FrontendPublicDropInfo> => {
+        return await invoke<FrontendPublicDropInfo>("probe_public_drop", {
+            url,
+            password: password || undefined,
+        });
+    },
+
+    savePublicDrop: async (
+        params: {
+            writeUrl: string;
+            readUrl: string;
+            dropPub: string;
+            registerUrl?: string | null;
+            enabled: boolean;
+        },
+        password?: string
+    ): Promise<FrontendPublicDropInfo> => {
+        return await invoke<FrontendPublicDropInfo>("save_public_drop", {
+            writeUrl: params.writeUrl,
+            readUrl: params.readUrl,
+            dropPub: params.dropPub,
+            registerUrl: params.registerUrl || undefined,
+            enabled: params.enabled,
+            password: password || undefined,
+        });
+    },
+
+    removePublicDrop: async (
+        writeUrl: string,
+        deleteRemoteSlots: boolean = false,
+        password?: string
+    ): Promise<void> => {
+        return await invoke<void>("remove_public_drop", {
+            writeUrl,
+            deleteRemoteSlots,
+            password: password || undefined,
+        });
+    },
+
+    rotateDropAdminKey: async (password?: string): Promise<FrontendDropAdminStatus> => {
+        return await invoke<FrontendDropAdminStatus>("rotate_drop_admin_key", password ? { password } : {});
+    },
+
+    getDropOverviewStatus: async (password?: string): Promise<FrontendDropOverviewStatus> => {
+        return await invoke<FrontendDropOverviewStatus>("get_drop_overview_status", password ? { password } : {});
     },
 
     deleteDropAdmin: async (password?: string): Promise<void> => {

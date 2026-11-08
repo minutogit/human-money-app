@@ -41,6 +41,17 @@ export const BackupStatusBadge: React.FC<BackupStatusBadgeProps> = ({
     const [isChecking, setIsChecking] = useState(false);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isManualSyncing, setIsManualSyncing] = useState(false);
+    const [isDropSyncing, setIsDropSyncing] = useState(false);
+
+    const handleSyncDrop = async () => {
+        setIsDropSyncing(true);
+        try {
+            await backupService.syncDropBackup();
+            await refreshStatus();
+        } finally {
+            setIsDropSyncing(false);
+        }
+    };
 
     const refreshStatus = useCallback(async () => {
         if (!isSessionActive) {
@@ -289,6 +300,18 @@ export const BackupStatusBadge: React.FC<BackupStatusBadgeProps> = ({
                             </Button>
 
                             <div className="flex items-center gap-2">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleSyncDrop}
+                                    disabled={isDropSyncing}
+                                    className="flex items-center gap-1.5"
+                                    title={t("settings.syncDropTooltip", "Sicherung in verbundenen Ablagen aktualisieren")}
+                                >
+                                    <RefreshCw size={14} className={isDropSyncing ? "animate-spin" : ""} />
+                                    <span>{isDropSyncing ? t("settings.syncing", "Sichere...") : t("settings.syncDropNow", "In Ablage sichern")}</span>
+                                </Button>
+
                                 {backupStatus.status !== "notConfigured" && (
                                     <Button
                                         variant="primary"

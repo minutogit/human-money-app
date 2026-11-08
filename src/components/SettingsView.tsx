@@ -15,7 +15,7 @@ import { copyToClipboard } from '../utils/clipboard';
 import { ProfileSettings } from './ProfileSettings';
 import { BackupSettingsCard } from './BackupSettingsCard';
 import { StandardsManager } from './StandardsManager';
-import { DropManagementModal } from './marketplace/DropManagementModal';
+import { DropManagementModal, DropModalTab } from './marketplace/DropManagementModal';
 import { PageLayout } from './ui/PageLayout';
 import { SegmentedTabs } from './ui/SegmentedTabs';
 import { AlertBanner } from './ui/AlertBanner';
@@ -43,6 +43,7 @@ import {
     ChevronDown,
     ChevronUp,
     Wifi,
+    Users,
     WifiOff
 } from 'lucide-react';
 
@@ -63,9 +64,22 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     const [activeTab, setActiveTab] = useState<'app' | 'profile'>('profile');
     const [isStandardsOpen, setIsStandardsOpen] = useState(false);
     const [isDropModalOpen, setIsDropModalOpen] = useState(false);
+    const [dropModalTab, setDropModalTab] = useState<DropModalTab>('friend_drops');
 
     const nav = useOptionalNavigation();
     const appVersion = nav?.appVersion || '0.3.0';
+
+    useEffect(() => {
+        if (nav?.appState.view === 'settings') {
+            const state = nav.appState as { view: 'settings'; openDropsModal?: boolean; openDropsTab?: DropModalTab };
+            if (state.openDropsModal) {
+                setIsDropModalOpen(true);
+                if (state.openDropsTab) {
+                    setDropModalTab(state.openDropsTab);
+                }
+            }
+        }
+    }, [nav?.appState]);
 
     // Dev mode hidden trigger (7 clicks)
     const [devClickCount, setDevClickCount] = useState(0);
@@ -560,24 +574,105 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                                                 </div>
                                             </div>
 
-                                            {/* Manage Drops Quick Action */}
-                                            <div className="flex items-center justify-between p-3 bg-bg-app border border-theme-subtle rounded-xl">
-                                                <div className="flex items-center gap-2">
-                                                    <Server size={16} className="text-theme-primary" />
-                                                    <span className="text-xs font-bold text-theme-secondary">
-                                                        {t('marketplace.dropsModalTitle')}
-                                                    </span>
+                                            {/* WoT Share Via Drop Toggle */}
+                                            <div className="flex items-start gap-3 p-3 bg-white border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
+                                                <input
+                                                    type="checkbox"
+                                                    id="wotShareViaDrop"
+                                                    checked={settings?.wotShareViaDrop ?? true}
+                                                    onChange={(e) => setSettings(s => s ? { ...s, wotShareViaDrop: e.target.checked } : null)}
+                                                    className="mt-0.5 accent-theme-primary"
+                                                />
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <label htmlFor="wotShareViaDrop" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
+                                                            {t('settings.wotShareViaDrop', 'Vertrauensliste über Ablagen teilen')}
+                                                        </label>
+                                                    </div>
+                                                    <label htmlFor="wotShareViaDrop" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
+                                                        {t('settings.wotShareViaDropDesc', 'Erlaubt Kontakten ab Vertrauensstufe 1 (Bekannt), deine selektiv offen gelegte Vertrauensliste verschlüsselt über gemeinsame Ablagen abzurufen.')}
+                                                    </label>
                                                 </div>
-                                                <Button
-                                                    type="button"
-                                                    size="sm"
-                                                    variant="secondary"
-                                                    onClick={() => setIsDropModalOpen(true)}
-                                                    className="text-xs gap-1.5"
-                                                >
-                                                    <Server size={13} />
-                                                    <span>{t('settings.manageDropsBtn')}</span>
-                                                </Button>
+                                            </div>
+
+                                            {/* Post-Empfang (§7.5) */}
+                                            <div className="flex items-start gap-3 p-3 bg-bg-app border border-theme-subtle rounded-xl">
+                                                <input
+                                                    type="checkbox"
+                                                    id="postAcceptFromContacts"
+                                                    checked={settings?.postAcceptFromContacts ?? true}
+                                                    onChange={(e) => setSettings(s => s ? { ...s, postAcceptFromContacts: e.target.checked } : null)}
+                                                    className="mt-0.5 accent-theme-primary"
+                                                />
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <label htmlFor="postAcceptFromContacts" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
+                                                            {t('settings.postAcceptFromContacts', 'Zahlungen & Bürgschaftsanfragen über Ablagen empfangen')}
+                                                        </label>
+                                                    </div>
+                                                    <label htmlFor="postAcceptFromContacts" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
+                                                        {t('settings.postAcceptFromContactsDesc', 'Ermöglicht den asynchronen Empfang von Zahlungen, Unterschriftsanfragen und WoT-Bestätigungen über gemeinsame Ablagen von berechtigten Kontakten.')}
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            {/* Ablagen & Speicherziele (§7.6) */}
+                                            <div className="p-4 bg-bg-app border border-theme-subtle rounded-xl space-y-3">
+                                                <div>
+                                                    <div className="flex items-center gap-2">
+                                                        <Server size={16} className="text-theme-primary" />
+                                                        <h3 className="text-xs font-bold text-theme-secondary uppercase tracking-wider">
+                                                            {t('settings.dropsSectionTitle', 'Ablagen & Speicherziele')}
+                                                        </h3>
+                                                    </div>
+                                                    <p className="text-[11px] text-theme-light mt-0.5 leading-relaxed">
+                                                        {t('settings.dropsSectionDesc', 'Synchronisiere Angebote, Sicherungen und Vertrauenslisten über private Freundes-Ablagen, öffentliche Anbieter oder deinen eigenen Webspace.')}
+                                                    </p>
+                                                </div>
+
+                                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                                                    <Button
+                                                        type="button"
+                                                        size="sm"
+                                                        variant="outline"
+                                                        onClick={() => {
+                                                            setDropModalTab('friend_drops');
+                                                            setIsDropModalOpen(true);
+                                                        }}
+                                                        className="text-xs justify-start gap-2 bg-white"
+                                                    >
+                                                        <Users size={14} className="text-theme-primary" />
+                                                        <span className="truncate">{t('marketplace.tabFriendDrops', 'Freunde')}</span>
+                                                    </Button>
+
+                                                    <Button
+                                                        type="button"
+                                                        size="sm"
+                                                        variant="outline"
+                                                        onClick={() => {
+                                                            setDropModalTab('public_drops');
+                                                            setIsDropModalOpen(true);
+                                                        }}
+                                                        className="text-xs justify-start gap-2 bg-white"
+                                                    >
+                                                        <Globe size={14} className="text-theme-primary" />
+                                                        <span className="truncate">{t('marketplace.tabPublicDrops', 'Öffentlich')}</span>
+                                                    </Button>
+
+                                                    <Button
+                                                        type="button"
+                                                        size="sm"
+                                                        variant="outline"
+                                                        onClick={() => {
+                                                            setDropModalTab('own_drop');
+                                                            setIsDropModalOpen(true);
+                                                        }}
+                                                        className="text-xs justify-start gap-2 bg-white"
+                                                    >
+                                                        <Server size={14} className="text-theme-primary" />
+                                                        <span className="truncate">{t('marketplace.tabOwnDrop', 'Eigene Ablage')}</span>
+                                                    </Button>
+                                                </div>
                                             </div>
 
                                             {/* Network Selection */}
@@ -940,6 +1035,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             <DropManagementModal
                 isOpen={isDropModalOpen}
                 onClose={() => setIsDropModalOpen(false)}
+                initialTab={dropModalTab}
             />
         </PageLayout>
     );

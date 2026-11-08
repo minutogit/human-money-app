@@ -26,6 +26,7 @@ fn valid_card(sk: &SigningKey) -> ContactCard {
             title: "Test Service".to_string(),
             text: Some("Description".to_string()),
             pricing: Some("10 M".to_string()),
+            allow_inquiries: false,
         }],
         drops: vec![],
     }
@@ -41,6 +42,7 @@ fn test_limits_listings_count() {
             title: format!("Title {}", i),
             text: None,
             pricing: None,
+            allow_inquiries: false,
         })
         .collect();
     assert!(sign_card(card.clone(), &sk).is_ok());
@@ -50,6 +52,7 @@ fn test_limits_listings_count() {
         title: "Eleventh".to_string(),
         text: None,
         pricing: None,
+        allow_inquiries: false,
     });
     assert!(sign_card(card, &sk).is_err());
 }
@@ -95,10 +98,12 @@ fn test_limits_text_and_pricing_chars() {
 fn test_limits_drops() {
     let sk = make_key(4);
     let mut card = valid_card(&sk);
+    let valid_vk_hex = hex::encode(make_key(99).verifying_key().as_bytes());
     let valid_drop = DropDescriptor {
         write_url: "https://drop.example.com/write".to_string(),
         read_url: "https://drop.example.com/read".to_string(),
-        drop_pub: bs58::encode([42u8; 32]).into_string(),
+        slot_id: None,
+        drop_pub: valid_vk_hex.clone(),
     };
 
     card.drops = vec![valid_drop.clone(), valid_drop.clone(), valid_drop.clone()];
@@ -112,7 +117,36 @@ fn test_limits_drops() {
     card.drops = vec![DropDescriptor {
         write_url: "http://insecure.com".to_string(),
         read_url: "https://secure.com".to_string(),
-        drop_pub: bs58::encode([42u8; 32]).into_string(),
+        slot_id: None,
+        drop_pub: valid_vk_hex.clone(),
+    }];
+    assert!(sign_card(card.clone(), &sk).is_err());
+
+    // Invalid drop_pub (not 64-hex)
+    card.drops = vec![DropDescriptor {
+        write_url: "https://drop.example.com/write".to_string(),
+        read_url: "https://drop.example.com/read".to_string(),
+        slot_id: None,
+        drop_pub: "not-a-hex-key".to_string(),
+    }];
+    assert!(sign_card(card.clone(), &sk).is_err());
+
+    // Valid slot_id
+    let valid_slot_vk_hex = hex::encode(make_key(88).verifying_key().as_bytes());
+    card.drops = vec![DropDescriptor {
+        write_url: "https://drop.example.com/write".to_string(),
+        read_url: "https://drop.example.com/read".to_string(),
+        slot_id: Some(valid_slot_vk_hex),
+        drop_pub: valid_vk_hex.clone(),
+    }];
+    assert!(sign_card(card.clone(), &sk).is_ok());
+
+    // Invalid slot_id (not 64-hex)
+    card.drops = vec![DropDescriptor {
+        write_url: "https://drop.example.com/write".to_string(),
+        read_url: "https://drop.example.com/read".to_string(),
+        slot_id: Some("invalid-slot-id".to_string()),
+        drop_pub: valid_vk_hex,
     }];
     assert!(sign_card(card, &sk).is_err());
 }

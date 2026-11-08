@@ -1,18 +1,20 @@
 # HuMoCo Drop Server (`humoco-drop`)
 
-The **HuMoCo Drop Server** is an ultra-lightweight, zero-dependency PHP script designed for privacy-preserving, asynchronous contact card exchange and end-to-end encrypted payload distribution in the decentralized **Human Money (HuMoCo)** ecosystem.
+The **HuMoCo Drop Server** is an ultra-lightweight, zero-dependency PHP script designed for privacy-preserving, asynchronous contact card exchange, Web of Trust synchronization, encrypted off-site backups, and dual-delivery peer-to-peer messaging (payments, co-signing, attestations) in the decentralized **Human Money (HuMoCo)** ecosystem.
 
 ---
 
 ## 1. Architecture & Security Invariants
 
-* **Zero Dependencies:** Pure PHP (>= 7.4). No Composer, no SQL or SQLite database, no background daemons, and no external extensions beyond standard `hash` and `json`.
-* **Zero Plaintext Knowledge:** The server operator, hoster, and any network observer see only encrypted binary blobs (`SlotBlob`). The server cannot decrypt contact cards, marketplace listings, or determine sender/recipient identities.
-* **Blind Stealth Access Lists:** Write access is decoupled from identity. A member's write authorization is proved via a 32-byte secret token derived from an ephemeral Diffie-Hellman key exchange. The server only sees the blind access ID:
-  $$\text{access\_id} = \text{hex}(\text{SHA-256}(\text{write\_token}))[0..32]$$
-  No `did:key` or user identity is ever sent to or stored on the server.
-* **Direct Static Reads (Zero PHP overhead on reads):** Clients poll `<read_url>/index.json`, `<read_url>/members.<channel>.json`, and `<read_url>/<id>.<channel>.bin` directly via static web server delivery (Apache / Nginx / Caddy), completely bypassing PHP execution.
-* **Automatic TTL Purge & Atomic Concurrency:** Expired slots are purged automatically on write operations under an exclusive filesystem lock (`flock`), preventing race conditions and unbounded disk growth.
+* **Zero Dependencies:** Pure PHP (>= 7.4 with core `ext-sodium`). No Composer, no SQL or SQLite database, no background daemons, and no external extensions.
+* **Zero Plaintext Knowledge:** The server operator, hoster, and network observers see only encrypted binary blobs (`SlotBlob` / `PostBoxEntry` / `.hmcbackup`). The server cannot decrypt contact cards, marketplace listings, trust lists, or messages.
+* **Strict 64-Hex Ed25519 Request Signatures:** Every mutating request is signed with detached Ed25519 signatures validated via `sodium_crypto_sign_verify_detached`:
+  - **Private Drops:** Members sign with a stealth key derived via ECDH + `HUMOCO_DROP_STEALTH_SEED_V1` ($P$).
+  - **Public Drops:** Users sign with a deterministic registration key ($R$) derived from mnemonic + provider canonical URL.
+* **Direct Static Reads (Zero PHP overhead on reads):** Clients poll `<read_url>/index.json` and `<read_url>/<pubkey64>.<channel>.bin` directly via static web server delivery (Apache / Nginx / Caddy), completely bypassing PHP execution.
+* **Fixed 1-Inode IP Rate Limiter (`ratelimit.bin.php`):** A single 65,564-byte file with 4,096 buckets (16 bytes each) handles IP lockout under `flock`. It never allocates extra files, preventing inode exhaustion on shared web hosting.
+* **Proxy-Safe Member Exemption:** Authenticated Ed25519-signed requests bypass IP failure throttling (avoiding Cloudflare/Carrier-NAT lockout) and are rate-limited per pubkey via a dedicated token bucket.
+* **Tamper-Resistant 180-Day Key Rotation:** Admins can rotate keys ($D_{\text{alt}} \to D_{\text{neu}}$) using a cryptographically signed rotation certificate broadcast in the `X-Humoco-Drop-Rotation` header during a 180-day grace period.
 
 ---
 
@@ -20,131 +22,66 @@ The **HuMoCo Drop Server** is an ultra-lightweight, zero-dependency PHP script d
 
 ```
 tools/humoco-drop/
-├── drop.php             # Write & admin API endpoint
-├── config.php           # Server configuration (editable by admin)
-├── .htaccess            # Hardening: directory indexing off, config.php protected
+├── drop.php             # Core API endpoint
+├── config.php           # Server configuration (admin pubkey, storage limits, channels)
+├── .htaccess            # Hardening: directory indexing off, internal files protected
+├── .state.php           # Internal server state (salt, admin pubkey, rotation, nonces)
+├── ratelimit.bin.php    # Fixed 64 KiB 1-inode rate limiter storage
+├── members.<ch>.php     # Authorized member pubkey lists per channel
 ├── robots.txt           # Crawling prevention (User-agent: * / Disallow: /)
 ├── index.html           # Empty blank landing page
-├── README.md            # Installation, configuration, and legal orientation
+├── README.md            # Installation and documentation
 └── tests/run.sh         # Automated test suite using `php -S` and curl
 ```
 
-Once running, `drop.php` automatically creates the configured `<data_dir>` (default: `0755`) and injects an isolated `.htaccess` inside it that disables PHP execution, hides locks and temporary files, and sets correct MIME types (`application/octet-stream` for `.bin`, `application/json` for `.json`).
+`<data_dir>` contains **only**:
+- `index.json`: Public catalog of published slots (`[{"id": "<pubkey64>", "channel": "<ch>", "mtime": <int>, "size": <int>, "etag": "<sha256>"}]`)
+- `<pubkey64>.<channel>.bin`: Encrypted binary slot files.
 
 ---
 
-## 3. Quick Setup & Installation
-
-### Option A: Via HuMoCo Desktop / Mobile App Wizard
-1. Open the HuMoCo App and navigate to **Settings / Marketplace / Setup Drop ("Ablage einrichten")**.
-2. Complete the setup wizard. The app will generate the cryptographic keys, compute your `admin_token_hash`, and export a ready-to-upload ZIP archive containing `drop.php`, `.htaccess`, `robots.txt`, and a pre-configured `config.php`.
-3. Extract the ZIP into a public directory on your HTTPS-enabled webspace (e.g., `/public_html/drop/` or a dedicated subdomain like `https://drop.example.org/`).
-4. Enter your public base URL into the HuMoCo App to verify the connection.
-
-### Option B: Manual Installation
-1. Upload the files from `tools/humoco-drop/` to your web server over HTTPS.
-2. Ensure that PHP >= 7.4 is available and the web server user (`www-data`, `nginx`, or your shared hosting user) has write permissions to create and manage the directory specified in `config.php`.
-3. Open `config.php` in a text editor and customize the settings (see below).
-4. Verify accessibility:
-   - `write_url`: `https://example.org/drop/drop.php`
-   - `read_url`: `https://example.org/drop/<data_dir>/` (e.g. `https://example.org/drop/d-8f3a12/`)
-
----
-
-## 4. Configuration Reference (`config.php`)
+## 3. Configuration Reference (`config.php`)
 
 ```php
 <?php
 return [
-    // SHA-256 hex digest of the 32-byte raw admin_token (generated by the HuMoCo App)
-    'admin_token_hash' => '0000000000000000000000000000000000000000000000000000000000000000',
+    // 64-hex lowercase Ed25519 VerifyingKey of the drop admin
+    'admin_pubkey'         => '0000000000000000000000000000000000000000000000000000000000000000',
 
-    // Obscured folder name where slots and indices are stored. Forms part of read_url.
-    'data_dir'         => 'd-change-me',
+    // Deterministic directory name, part of read_url
+    'data_dir'             => 'd-0000000000000000',
 
-    // Hard ceiling for maximum number of member access IDs allowed per channel list
-    'max_members'      => 300,
+    // Optional URL where new users can register on public drops
+    'register_url'         => null,
 
-    // Configured channels: uploads to unlisted channels return 404
+    // Maximum number of member public keys per channel
+    'max_members'          => 300,
+
+    // Total storage quota in megabytes across all channels
+    'max_total_storage_mb' => 256,
+
+    // Configured channels: max byte sizes and retention TTL
     'channels' => [
-        // 'card': Contact cards and marketplace listings
-        'card' => [
-            'max_bytes' => 65536, // Max decoded binary size in bytes (64 KiB)
-            'ttl_days'  => 30,    // Slots older than 30 days are automatically deleted
-        ],
-        // Additional future channels can be enabled as needed:
-        // 'wot'    => ['max_bytes' => 65536,   'ttl_days' => 30],
-        // 'backup' => ['max_bytes' => 5242880, 'ttl_days' => 180],
-        // 'outbox' => ['max_bytes' => 262144,  'ttl_days' => 14],
+        'card'   => ['max_bytes' => 65536,   'ttl_days' => 30],
+        'wot'    => ['max_bytes' => 131072,  'ttl_days' => 30],
+        'backup' => ['max_bytes' => 5242880, 'ttl_days' => 180],
+        'post'   => ['max_bytes' => 524288,  'ttl_days' => 21],
     ],
 ];
 ```
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `admin_token_hash` | String (64 hex) | – | SHA-256 hash of the admin secret. Must not be left as all zeros. |
-| `data_dir` | String | `d-change-me` | Subdirectory name holding published blobs. Should be random/unguessable. |
-| `max_members` | Integer | `300` | Upper limit of active member slots per channel (returns HTTP 507 if exceeded). |
-| `channels.<name>.max_bytes` | Integer | `65536` | Maximum decoded size per member payload (returns HTTP 413 if exceeded). |
-| `channels.<name>.ttl_days` | Integer | `30` | Inactivity expiry: slot is unlinked if unmodified after `ttl_days`. |
-
 ---
 
-## 5. API Protocol & Routes
+## 4. API Protocol & Endpoints
 
-All mutating requests must use custom HTTP headers rather than the standard `Authorization` header to avoid stripping by Apache FastCGI/FPM wrappers.
+All mutating requests must use custom HTTP headers:
 
-| Action | Route & Headers | Response Codes | Description |
-|---|---|---|---|
-| **Admin Member List Update** | `PUT drop.php?members&channel=<name>`<br>`X-Admin-Token: <64-hex>`<br>Body: `{"ids": ["<32-hex>", ...]}` | `204 No Content`<br>`400 Bad Request`<br>`404 Not Found`<br>`507 Insufficient Storage` | Overwrites `members.<channel>.json`. Slots belonging to removed IDs are deleted immediately. Runs TTL purge & rebuilds `index.json`. |
-| **Member Slot Upload** | `PUT drop.php`<br>`X-Drop-Token: <64-hex>`<br>`X-Channel: <name>`<br>Body: Base64-encoded binary payload | `204 No Content`<br>`400 Bad Request`<br>`404 Not Found`<br>`413 Payload Too Large` | Derives `access_id = sha256(hex2bin(token))[0..32]`. Validates membership in channel. Writes `<data_dir>/<access_id>.<channel>.bin`. Runs TTL purge & updates `index.json`. |
-| **Member Slot Delete** | `DELETE drop.php`<br>`X-Drop-Token: <64-hex>`<br>`X-Channel: <name>` | `204 No Content`<br>`404 Not Found` | Deletes member's own slot `<data_dir>/<access_id>.<channel>.bin` and updates `index.json`. |
-| **Static Reads** (Direct web server) | `GET <read_url>/index.json`<br>`GET <read_url>/members.<channel>.json`<br>`GET <read_url>/<id>.<channel>.bin` | Standard HTTP / static file responses | Pure static file serving, completely bypassing PHP. |
-| **Other Methods** | `GET drop.php`, `POST drop.php`, etc. | `405 Method Not Allowed` | All non-supported methods on the PHP script are rejected. |
-
----
-
-## 6. Maintenance & Abuse Mitigation
-
-### Manual Slot Removal on Disk
-If a slot needs to be purged manually from the server filesystem (e.g. after an abuse report or notice):
-```bash
-# Locate data directory
-cd /path/to/humoco-drop/d-change-me/
-
-# Delete the specific slot file (e.g. for card channel)
-rm <access_id>.card.bin
-```
-On the next write operation (member upload or admin sync), `index.json` will be automatically regenerated without the deleted entry.
-
-### Blocking a Member via HuMoCo App
-The recommended way to block an abusive participant is through the HuMoCo App:
-1. In the **Admin View**, locate the contact or access ID and choose **"Block Slot" ("Slot sperren")** or remove them from your trust circle.
-2. The app syncs the updated member list (`PUT drop.php?members&channel=card`).
-3. The server immediately unlinks the removed member's `.bin` slot file and blocks all future uploads from that token with `404 Not Found`.
-
----
-
-## 7. Legal Orientation (EU / German Law)
-
-> [!NOTE]
-> *Disclaimer: This section provides general architectural orientation and non-binding informational guidance based on German and EU law. It does not constitute formal legal advice.*
-
-Operating a personal drop server is straightforward, but operators should understand the following legal frameworks:
-
-1. **Hosting Privilege & Notice-and-Takedown (Digital Services Act - DSA Art. 6 / formerly TMG § 10):**
-   * As an operator providing server storage for encrypted third-party payloads, you act as a hosting service provider.
-   * Because all payloads are end-to-end encrypted by the sender for designated recipient keys, the operator has **no knowledge or control** over decrypted contents.
-   * Under DSA Art. 6, hosting providers are not liable for third-party content stored at the request of a recipient of the service, provided that the provider has no actual knowledge of illegal activity or content.
-   * If an operator receives a substantiated notification of illegal content associated with a slot, they can promptly block or delete the slot via the App Admin view or direct file removal (`rm <id>.<channel>.bin`).
-
-2. **GDPR / DSGVO (General Data Protection Regulation):**
-   * **Household Exemption (Art. 2(2)(c) GDPR):** If the drop server is operated strictly for a closed circle of personally known family and friends (direct trust contacts / F2F trust levels), processing generally falls under the purely personal or household activity exemption.
-   * **Hop-2 & Public Drops:** If the drop server is opened to transitive (Hop-2) contacts or shared in public forums, the household exemption may no longer apply. In such scenarios, operators should provide a standard privacy policy (*Datenschutzerklärung*) informing users of data processing practices, and ensure a Data Processing Agreement (*Auftragsverarbeitungsvertrag - AVV*) is in place with their web hosting provider.
-
-3. **Provider Identification / Impressum (§ 5 DDG - Digitale-Dienste-Gesetz):**
-   * The German statutory requirement for an *Impressum* applies primarily to commercial or business-like services (*"geschäftsmäßige, in der Regel gegen Entgelt angebotene Telemedien"*).
-   * A private drop folder on a personal subdomain with no public landing page, no commercial offerings, and restricted access for a private circle of trust generally does not fall within the scope of § 5 DDG.
-
-4. **Web Server Access Logs:**
-   * It is good privacy hygiene and compliance practice to configure web server access logs with a minimal retention period (e.g. 7 days or immediate IP pseudonymization) to avoid accumulating unnecessary client IP records.
+| Method & Route | Required Headers | Description |
+|---|---|---|
+| `GET drop.php?info` | – | Self-description: returns `drop_pub`, `read_url`, `register_url`, `channels`. |
+| `HEAD drop.php` | `X-Drop-Pubkey`, `X-Channel` | Capability check: returns `200 OK` with `X-Drop-Max-Bytes`, `X-Drop-TTL-Days`, `X-Drop-Slot-Etag` if member; `403` otherwise. |
+| `PUT drop.php` | `X-Drop-Pubkey`, `X-Channel`, `X-Drop-Timestamp`, `X-Drop-Nonce`, `X-Drop-Signature`, optional `If-Match` | Raw binary slot upload. Enforces content length, replay nonce, `If-Match` concurrency, and global quota. |
+| `DELETE drop.php` | `X-Drop-Pubkey`, `X-Channel`, `X-Drop-Timestamp`, `X-Drop-Nonce`, `X-Drop-Signature` | Member slot deletion. |
+| `PUT drop.php?members&channel=<name>` | `X-Drop-Pubkey`, `X-Drop-Timestamp`, `X-Drop-Nonce`, `X-Drop-Signature`, Body: `{"pubkeys": [...]}` | Admin updates member list. Prunes slots for removed keys. |
+| `POST drop.php?rotate` | `X-Drop-Pubkey: <new>`, `X-Drop-Timestamp`, `X-Drop-Nonce`, `X-Drop-Signature`, Body: `DropRotationCertificate` | Admin activates 180-day key rotation with old admin signature. |
+| `GET drop.php?status` | `X-Drop-Pubkey`, `X-Drop-Timestamp`, `X-Drop-Nonce`, `X-Drop-Signature` | Admin dashboard status (used bytes, quotas, slot counts). |

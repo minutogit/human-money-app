@@ -13,7 +13,41 @@ pub const MARKET_CARD_STORE_KEY: &str = "market_card_store";
 pub const MARKET_OWN_CARD_KEY: &str = "market_own_card";
 pub const MARKET_DROP_ADMIN_KEY: &str = "market_drop_admin";
 pub const MARKET_DROP_SYNC_KEY: &str = "market_drop_sync";
+pub const MARKET_POST_STATE_KEY: &str = "market_post_state";
 pub const BUNDLE_RETENTION_DAYS: i64 = 90;
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PostOutboxEntry {
+    pub msg_id: String,
+    pub recipient_did: String,
+    pub tag16_hex: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_id: Option<String>,
+    pub entry: humoco_market::PostBoxEntry,
+    pub created_at: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct StoredPostState {
+    #[serde(default)]
+    pub outbox_entries: Vec<PostOutboxEntry>,
+    #[serde(default)]
+    pub slot_etags_by_write_url: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub processed_msg_ids: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    pub pending_sign_requests: Vec<crate::models::FrontendPendingSignRequest>,
+    #[serde(default)]
+    pub pending_wot_handshakes: Vec<crate::models::FrontendPendingWotHandshake>,
+    #[serde(default)]
+    pub pending_wot_packages_by_msg_id: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub seller_inquiries: Vec<crate::models::FrontendMarketInquiryItem>,
+    #[serde(default)]
+    pub buyer_inquiries: Vec<crate::models::FrontendMarketInquiryItem>,
+    #[serde(default)]
+    pub inquiry_rate_tracker: humoco_market::InquiryRateTracker,
+}
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct StoredOwnCard {
@@ -24,13 +58,28 @@ pub struct StoredOwnCard {
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct StoredDropAdmin {
     pub descriptor: humoco_market::DropDescriptor,
-    pub drop_secret_hex: String,
+    #[serde(default)]
+    pub drop_index: u32,
+    #[serde(default)]
+    pub generation: u32,
+    #[serde(default)]
+    pub previous_generation: Option<u32>,
+    #[serde(default)]
+    pub rotation_retire_at: Option<u64>,
     pub data_dir: String,
     pub max_members: usize,
+    #[serde(default = "default_max_total_storage_mb")]
+    pub max_total_storage_mb: usize,
+    #[serde(default)]
+    pub register_url: Option<String>,
     pub policies: std::collections::BTreeMap<String, humoco_market::MemberPolicy>,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
-    pub blocked_access_ids: Vec<String>,
+    pub blocked_pubkeys: Vec<String>,
+}
+
+fn default_max_total_storage_mb() -> usize {
+    256
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]

@@ -25,6 +25,24 @@ impl From<String> for FrontendError {
     }
 }
 
+impl From<humoco_market::MarketError> for FrontendError {
+    fn from(error: humoco_market::MarketError) -> Self {
+        FrontendError::from(error.to_string())
+    }
+}
+
+impl From<human_money_core::crypto::GetPubkeyError> for FrontendError {
+    fn from(error: human_money_core::crypto::GetPubkeyError) -> Self {
+        FrontendError::from(error.to_string())
+    }
+}
+
+impl From<humoco_wot::WotError> for FrontendError {
+    fn from(error: humoco_wot::WotError) -> Self {
+        FrontendError::from(error.to_string())
+    }
+}
+
 impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
     fn from(error: human_money_core::app_service::AppFacadeError) -> Self {
         let message = error.to_string();

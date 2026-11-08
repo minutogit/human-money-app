@@ -3,9 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { voucherService } from "../services/voucherService";
 import { transferService, CreateBundleResult } from "../services/transferService";
 import { settingsService } from "../services/settingsService";
+import { backupService } from "../services/backupService";
 import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
 import { contactService } from "../services/contactService";
+import { postService } from "../services/postService";
 import { logger } from "../utils/log";
 import { translateError, stringifyError } from "../utils/errorHelper";
 import { 
@@ -39,7 +41,9 @@ import {
     UserCheck,
     Search,
     X,
-    Clipboard
+    Clipboard,
+    AlertTriangle,
+    RefreshCw
 } from "lucide-react";
 import Avatar from "boring-avatars";
 
@@ -168,6 +172,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
     const [standardIdToUuidMap, setStandardIdToUuidMap] = useState<Map<string, string>>(new Map());
     const [uuidToPrecisionMap, setUuidToPrecisionMap] = useState<Map<string, number>>(new Map());
     const [standardsDict, setStandardsDict] = useState<Record<string, VoucherStandardDefinition>>({});
+    const [isReconcilingL2, setIsReconcilingL2] = useState(false);
 
     const { selectedMap, toggleVoucher, setVoucherAmount, selectAmount, selectionStats, currentPlan, autoSelectGravitational } = useVoucherSelection(availableVouchers);
     const detectedPrivacy = usePrivacyDetection(
@@ -427,6 +432,10 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
 
     const handlePrepareTransfer = (e: FormEvent) => {
         e.preventDefault();
+        if (appSettings?.pendingRestoreL2Reconciliation) {
+            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.pendingL2ReconciliationBlocked', 'Ausgaben sind vorübergehend gesperrt, bis der Online-Sicherheitsabgleich durchgeführt wurde.') });
+            return;
+        }
         if (!state.recipientId) { 
             dispatch({ type: 'SET_RECIPIENT_ERROR', value: true }); 
             document.getElementById('recipientId')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); 
@@ -500,8 +509,20 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                 senderProfileName: senderName || undefined,
             };
 
+            let depositedTo = 0;
+            let depositError: string | undefined = undefined;
+
             await protectAction(async (password) => {
-                 await transferService.saveTransactionRecord(record, password || undefined);
+                await transferService.saveTransactionRecord(record, password || undefined);
+                try {
+                    const depositRes = await postService.depositTransferToPost(bundleResult.bundleId, password || undefined);
+                    depositedTo = depositRes.depositedTo;
+                    if (depositRes.errors && depositRes.errors.length > 0) {
+                        depositError = depositRes.errors.join('; ');
+                    }
+                } catch (err) {
+                    depositError = String(err);
+                }
             });
 
             const summaryString = Object.entries(selectionStats)
@@ -509,7 +530,16 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                 .join(', ');
 
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferSuccess') });
-            navigationTimerRef.current = setTimeout(() => navigate({ view: 'transfer_success', bundleData: bundleResult.bundleData, recipientId: state.recipientId, summary: summaryString, l2Dispatch: bundleResult.l2Dispatch }), 1500);
+            navigationTimerRef.current = setTimeout(() => navigate({
+                view: 'transfer_success',
+                bundleData: bundleResult.bundleData,
+                recipientId: state.recipientId,
+                summary: summaryString,
+                l2Dispatch: bundleResult.l2Dispatch,
+                bundleId: bundleResult.bundleId,
+                depositedTo,
+                depositError,
+            }), 1500);
         } catch (e) {
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferFailed', { error: translateError(e, t) }) });
             dispatch({ type: 'SET_PROCESSING', value: false });
@@ -546,6 +576,42 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     <AlertBanner variant="error">
                         {state.feedbackMsg}
                     </AlertBanner>
+                )}
+
+                {appSettings?.pendingRestoreL2Reconciliation && (
+                    <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-2 mb-4">
+                        <div className="flex items-center gap-2 font-bold text-amber-800">
+                            <AlertTriangle size={16} className="shrink-0" />
+                            <span>{t('transfer.pendingL2ReconciliationTitle', 'Online-Sicherheitsabgleich erforderlich')}</span>
+                        </div>
+                        <p className="leading-relaxed">
+                            {t('transfer.pendingL2ReconciliationDesc', 'Nach einer Wiederherstellung aus der Sicherung ist vor dem Ausgeben von Gutscheinen ein einmaliger Online-Sicherheitsabgleich erforderlich, um SST-V4-Konflikte auszuschließen.')}
+                        </p>
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={isReconcilingL2}
+                            onClick={async () => {
+                                setIsReconcilingL2(true);
+                                try {
+                                    await protectAction(async (password) => {
+                                        const res = await backupService.reconcileRestoredWalletL2(password || undefined);
+                                        if (res.l2ReconciliationStatus === 'reconciled') {
+                                            setAppSettings((prev) => prev ? { ...prev, pendingRestoreL2Reconciliation: false } : prev);
+                                        }
+                                    });
+                                } catch (err) {
+                                    logger.error(`Reconcile failed: ${stringifyError(err)}`);
+                                } finally {
+                                    setIsReconcilingL2(false);
+                                }
+                            }}
+                            className="w-full mt-1"
+                        >
+                            <RefreshCw size={14} className={isReconcilingL2 ? "animate-spin mr-2" : "mr-2"} />
+                            {isReconcilingL2 ? t('profile.backupRestoreReconcilingL2', 'Gleiche mit Layer 2 ab...') : t('profile.backupRestoreReconcileL2Btn', 'Jetzt online abgleichen')}
+                        </Button>
+                    </div>
                 )}
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">

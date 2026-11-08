@@ -1,9 +1,13 @@
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use human_money_core::crypto::{create_user_id, ed25519_sk_to_x25519_sk};
 use humoco_market::{
-    build_card_bundle, open_slot_blob, seal_slot_blob, CardBundle, CardEnvelope, CardStore,
-    ContactCard, StoredCard,
+    build_card_bundle, open_multi_class_slot_blob, open_slot_blob, open_slot_payload,
+    pad_backup_slot_bytes, seal_multi_class_slot_blob, seal_slot_blob, seal_slot_payload,
+    unpad_backup_slot_bytes, CardBundle, CardEnvelope, CardStore, ContactCard, MarketError,
+    StoredCard, BACKUP_PAD_BLOCK_BYTES, BACKUP_SLOT_MAGIC, DROP_BACKUP_MAX_BYTES,
+    SLOT_MULTI_MAGIC,
 };
+use proptest::prelude::*;
 
 fn dummy_card(did: &str, v: u64) -> ContactCard {
     ContactCard {
@@ -151,3 +155,221 @@ fn test_build_card_bundle_sorting_and_trimming() {
     // Max 1 own + 20 forwarded = 21 cards
     assert_eq!(bundle.envelopes.len(), 21);
 }
+
+#[test]
+fn test_slot_payload_raw_bytes_roundtrip() {
+    let reader_sk = SigningKey::from_bytes(&[7u8; 32]);
+    let reader_vk = reader_sk.verifying_key();
+    let reader_x_sk = ed25519_sk_to_x25519_sk(&reader_sk);
+
+    let stranger_sk = SigningKey::from_bytes(&[8u8; 32]);
+    let stranger_x_sk = ed25519_sk_to_x25519_sk(&stranger_sk);
+
+    let raw_payload = b"arbitrary-binary-payload-for-wot-or-backup-0123456789";
+    let blob = seal_slot_payload(raw_payload, &[reader_vk], 65536).unwrap();
+
+    let opened = open_slot_payload(&blob, &reader_x_sk).unwrap();
+    assert_eq!(opened, Some(raw_payload.to_vec()));
+
+    let stranger_opened = open_slot_payload(&blob, &stranger_x_sk).unwrap();
+    assert_eq!(stranger_opened, None);
+}
+
+#[test]
+fn test_multi_class_slot_blob_separation_and_privacy() {
+    let reader1_sk = SigningKey::from_bytes(&[11u8; 32]);
+    let reader1_vk = reader1_sk.verifying_key();
+    let reader1_x_sk = ed25519_sk_to_x25519_sk(&reader1_sk);
+
+    let reader2_sk = SigningKey::from_bytes(&[12u8; 32]);
+    let reader2_vk = reader2_sk.verifying_key();
+    let reader2_x_sk = ed25519_sk_to_x25519_sk(&reader2_sk);
+
+    let reader3_sk = SigningKey::from_bytes(&[13u8; 32]);
+    let reader3_vk = reader3_sk.verifying_key();
+    let reader3_x_sk = ed25519_sk_to_x25519_sk(&reader3_sk);
+
+    let stranger_sk = SigningKey::from_bytes(&[99u8; 32]);
+    let stranger_x_sk = ed25519_sk_to_x25519_sk(&stranger_sk);
+
+    let payload1 = b"CLASS_1_FULL_WOT_DIRECT_FRIENDS";
+    let payload2 = b"CLASS_2_REDACTED_WOT_HOP2";
+    let payload3 = b"CLASS_3_REDACTED_WOT_HOP3";
+
+    let classes: Vec<(&[u8], &[VerifyingKey])> = vec![
+        (payload1, std::slice::from_ref(&reader1_vk)),
+        (payload2, std::slice::from_ref(&reader2_vk)),
+        (payload3, std::slice::from_ref(&reader3_vk)),
+    ];
+
+    let multi_blob = seal_multi_class_slot_blob(&classes, 131_072).unwrap();
+    assert_eq!(&multi_blob[0..8], SLOT_MULTI_MAGIC);
+    assert_eq!(multi_blob[8], 3);
+
+    // Class 1 reader sees Class 1 payload
+    let open1 = open_multi_class_slot_blob(&multi_blob, &reader1_x_sk).unwrap();
+    assert_eq!(open1, Some(payload1.to_vec()));
+
+    // Class 2 reader sees Class 2 payload (CANNOT see Class 1 payload!)
+    let open2 = open_multi_class_slot_blob(&multi_blob, &reader2_x_sk).unwrap();
+    assert_eq!(open2, Some(payload2.to_vec()));
+
+    // Class 3 reader sees Class 3 payload
+    let open3 = open_multi_class_slot_blob(&multi_blob, &reader3_x_sk).unwrap();
+    assert_eq!(open3, Some(payload3.to_vec()));
+
+    // Outsider cannot decrypt anything
+    let open_stranger = open_multi_class_slot_blob(&multi_blob, &stranger_x_sk).unwrap();
+    assert_eq!(open_stranger, None);
+}
+
+#[test]
+fn test_multi_class_slot_blob_validation_and_errors() {
+    let reader_sk = SigningKey::from_bytes(&[21u8; 32]);
+    let reader_vk = reader_sk.verifying_key();
+    let reader_x_sk = ed25519_sk_to_x25519_sk(&reader_sk);
+
+    let payload = b"hello";
+
+    // 0 classes -> Err(Validation)
+    let err_empty = seal_multi_class_slot_blob(&[], 65536);
+    assert!(matches!(err_empty, Err(MarketError::Validation(_))));
+
+    // 4 classes -> Err(Validation)
+    let four_classes: Vec<(&[u8], &[VerifyingKey])> = vec![
+        (payload, std::slice::from_ref(&reader_vk)),
+        (payload, std::slice::from_ref(&reader_vk)),
+        (payload, std::slice::from_ref(&reader_vk)),
+        (payload, std::slice::from_ref(&reader_vk)),
+    ];
+    let err_four = seal_multi_class_slot_blob(&four_classes, 131_072);
+    assert!(matches!(err_four, Err(MarketError::Validation(_))));
+
+    // Class with empty readers -> Err(Validation)
+    let empty_readers: Vec<(&[u8], &[VerifyingKey])> = vec![(payload, &[])];
+    let err_readers = seal_multi_class_slot_blob(&empty_readers, 65536);
+    assert!(matches!(err_readers, Err(MarketError::Validation(_))));
+
+    // Payload too large
+    let valid_single: Vec<(&[u8], &[VerifyingKey])> = vec![(payload, std::slice::from_ref(&reader_vk))];
+    let err_too_large = seal_multi_class_slot_blob(&valid_single, 100);
+    assert!(matches!(err_too_large, Err(MarketError::PayloadTooLarge(_))));
+
+    // Truncated buffers
+    let valid_blob = seal_multi_class_slot_blob(&valid_single, 65536).unwrap();
+
+    // Too short (< 9 bytes)
+    assert!(open_multi_class_slot_blob(&valid_blob[0..8], &reader_x_sk).is_err());
+
+    // Bad magic
+    let mut bad_magic = valid_blob.clone();
+    bad_magic[0] = b'X';
+    assert!(open_multi_class_slot_blob(&bad_magic, &reader_x_sk).is_err());
+
+    // Count is 0
+    let mut bad_count = valid_blob.clone();
+    bad_count[8] = 0;
+    assert!(open_multi_class_slot_blob(&bad_count, &reader_x_sk).is_err());
+
+    // Count is 4
+    let mut bad_count4 = valid_blob.clone();
+    bad_count4[8] = 4;
+    assert!(open_multi_class_slot_blob(&bad_count4, &reader_x_sk).is_err());
+
+    // Truncated during length header or sub-blob
+    for len in 9..valid_blob.len() - 1 {
+        let truncated = &valid_blob[..len];
+        assert!(open_multi_class_slot_blob(truncated, &reader_x_sk).is_err());
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(50))]
+
+    #[test]
+    fn proptest_open_multi_class_arbitrary_bytes_no_panic(bytes in prop::collection::vec(any::<u8>(), 0..1024)) {
+        let sk = SigningKey::from_bytes(&[42u8; 32]);
+        let x_sk = ed25519_sk_to_x25519_sk(&sk);
+        // Must never panic on random input
+        let _ = open_multi_class_slot_blob(&bytes, &x_sk);
+    }
+
+    #[test]
+    fn proptest_backup_slot_padding_roundtrip(bytes in prop::collection::vec(any::<u8>(), 1..70_000)) {
+        let padded = pad_backup_slot_bytes(&bytes, DROP_BACKUP_MAX_BYTES).unwrap();
+        prop_assert_eq!(padded.len() % BACKUP_PAD_BLOCK_BYTES, 0);
+        let unpadded = unpad_backup_slot_bytes(&padded).unwrap();
+        prop_assert_eq!(unpadded, bytes);
+    }
+
+    #[test]
+    fn proptest_unpad_backup_slot_arbitrary_bytes_no_panic(bytes in prop::collection::vec(any::<u8>(), 0..1024)) {
+        let _ = unpad_backup_slot_bytes(&bytes);
+    }
+}
+
+#[test]
+fn test_backup_slot_padding_exact_multiples_across_sizes() {
+    let check_size = |size: usize, expected_padded_len: usize| {
+        let payload = vec![0x42u8; size];
+        let padded = pad_backup_slot_bytes(&payload, DROP_BACKUP_MAX_BYTES).unwrap();
+        assert_eq!(padded.len(), expected_padded_len);
+        assert_eq!(padded.len() % BACKUP_PAD_BLOCK_BYTES, 0);
+        assert_eq!(&padded[0..8], BACKUP_SLOT_MAGIC);
+        let unpadded = unpad_backup_slot_bytes(&padded).unwrap();
+        assert_eq!(unpadded, payload);
+    };
+
+    // 1 Byte -> 12 + 1 = 13 bytes -> rounded up to 65,536 bytes
+    check_size(1, 65_536);
+
+    // 65,524 Bytes -> 12 + 65,524 = 65,536 bytes -> exactly 65,536 bytes
+    check_size(65_524, 65_536);
+
+    // 65,525 Bytes -> 12 + 65,525 = 65,537 bytes -> rounded up to 131,072 bytes
+    check_size(65_525, 131_072);
+
+    // 200 KB = 204,800 bytes -> 12 + 204,800 = 204,812 bytes -> 4 * 65,536 = 262,144 bytes
+    check_size(200 * 1024, 262_144);
+}
+
+#[test]
+fn test_backup_slot_padding_rejections_and_limits() {
+    // Empty payload rejected
+    assert!(matches!(
+        pad_backup_slot_bytes(&[], DROP_BACKUP_MAX_BYTES),
+        Err(MarketError::Validation(_))
+    ));
+
+    // Exceeds max_bytes
+    let payload = vec![0x55u8; 65_525]; // needs 131,072 bytes
+    let err_too_large = pad_backup_slot_bytes(&payload, 65_536);
+    assert!(matches!(err_too_large, Err(MarketError::PayloadTooLarge(_))));
+
+    // Valid padding
+    let valid_padded = pad_backup_slot_bytes(&[0x77u8; 100], DROP_BACKUP_MAX_BYTES).unwrap();
+
+    // Rejection: size too short (< 65536)
+    assert!(unpad_backup_slot_bytes(&valid_padded[0..100]).is_err());
+
+    // Rejection: size not a multiple of 65,536
+    let mut bad_len = valid_padded.clone();
+    bad_len.push(0);
+    assert!(unpad_backup_slot_bytes(&bad_len).is_err());
+
+    // Rejection: bad magic
+    let mut bad_magic = valid_padded.clone();
+    bad_magic[0] = b'X';
+    assert!(unpad_backup_slot_bytes(&bad_magic).is_err());
+
+    // Rejection: inner_len == 0
+    let mut bad_zero_len = valid_padded.clone();
+    bad_zero_len[8..12].copy_from_slice(&0u32.to_be_bytes());
+    assert!(unpad_backup_slot_bytes(&bad_zero_len).is_err());
+
+    // Rejection: inner_len exceeds slot length
+    let mut bad_huge_len = valid_padded.clone();
+    bad_huge_len[8..12].copy_from_slice(&1_000_000u32.to_be_bytes());
+    assert!(unpad_backup_slot_bytes(&bad_huge_len).is_err());
+}
+

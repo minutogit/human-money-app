@@ -344,7 +344,9 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                         {/* Permission Change Preview */}
                         {trustImpact && (
                             (trustImpact.canReadMyMarketBefore !== trustImpact.canReadMyMarketAfter ||
-                             trustImpact.canWriteMyDropBefore !== trustImpact.canWriteMyDropAfter) && (
+                             trustImpact.canWriteMyDropBefore !== trustImpact.canWriteMyDropAfter ||
+                             trustImpact.canReadMyWotBefore !== trustImpact.canReadMyWotAfter ||
+                             trustImpact.canSendMePostBefore !== trustImpact.canSendMePostAfter) && (
                                 <div className="mt-2 space-y-1.5 p-2 bg-bg-app rounded-xl border border-theme-subtle/70">
                                     {/* Reading permission change */}
                                     {trustImpact.canReadMyMarketBefore !== trustImpact.canReadMyMarketAfter && (
@@ -372,6 +374,36 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                             <div data-testid="trust-preview-lose-write" className="flex items-center gap-1.5 text-[11px] font-semibold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200">
                                                 <AlertCircle size={13} className="shrink-0" />
                                                 <span>{t('contacts.trustPreviewLoseWrite')}</span>
+                                            </div>
+                                        )
+                                    )}
+
+                                    {/* WoT reading permission change */}
+                                    {trustImpact.canReadMyWotBefore !== trustImpact.canReadMyWotAfter && (
+                                        trustImpact.canReadMyWotAfter ? (
+                                            <div data-testid="trust-preview-gain-wot" className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                                                <CheckCircle2 size={13} className="shrink-0" />
+                                                <span>{t('contacts.trustPreviewGainWot')}</span>
+                                            </div>
+                                        ) : (
+                                            <div data-testid="trust-preview-lose-wot" className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                                                <AlertCircle size={13} className="shrink-0" />
+                                                <span>{t('contacts.trustPreviewLoseWot')}</span>
+                                            </div>
+                                        )
+                                    )}
+
+                                    {/* Post sending permission change */}
+                                    {trustImpact.canSendMePostBefore !== trustImpact.canSendMePostAfter && (
+                                        trustImpact.canSendMePostAfter ? (
+                                            <div data-testid="trust-preview-gain-post" className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                                                <CheckCircle2 size={13} className="shrink-0" />
+                                                <span>{t('contacts.trustPreviewGainPost', 'Kann mir über Ablagen senden')}</span>
+                                            </div>
+                                        ) : (
+                                            <div data-testid="trust-preview-lose-post" className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                                                <AlertCircle size={13} className="shrink-0" />
+                                                <span>{t('contacts.trustPreviewLosePost', 'Kann mir keine Nachrichten über Ablagen mehr senden')}</span>
                                             </div>
                                         )
                                     )}

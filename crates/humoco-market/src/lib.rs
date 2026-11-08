@@ -6,6 +6,7 @@ pub mod drop_access;
 pub mod error;
 pub mod market_view;
 pub mod model;
+pub mod post;
 pub mod qr;
 pub mod slot;
 
@@ -15,5 +16,6 @@ pub use drop_access::*;
 pub use error::*;
 pub use market_view::*;
 pub use model::*;
+pub use post::*;
 pub use qr::*;
 pub use slot::*;

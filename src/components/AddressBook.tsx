@@ -5,12 +5,15 @@ import { PageLayout } from './ui/PageLayout';
 import { Button } from './ui/Button';
 import { contactService } from '../services/contactService';
 import { wotService } from '../services/wotService';
+import { postService, POST_INBOX_UPDATED_EVENT } from '../services/postService';
 import { settingsService } from '../services/settingsService';
+import { marketService } from '../services/marketService';
+import { notifyDropStatusUpdated } from '../utils/dropEvents';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeFile, readFile } from '@tauri-apps/plugin-fs';
 import { copyToClipboard } from '../utils/clipboard';
 import { HelpIcon } from './ui/HelpIcon';
-import { Contact, WotSummaryDto, WotProviderDto } from '../types';
+import { Contact, WotSummaryDto, WotProviderDto, FrontendPendingWotHandshake } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import Avatar from 'boring-avatars';
 import ContactDialog from './ContactDialog';
@@ -41,7 +44,8 @@ import {
     Check,
     Upload,
     RefreshCw,
-    Server
+    Server,
+    Handshake
 } from 'lucide-react';
 
 interface AddressBookProps {
@@ -74,12 +78,22 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const [isWotPasswordModalOpen, setIsWotPasswordModalOpen] = useState(false);
     const [wotContainerPassword, setWotContainerPassword] = useState('');
     const [isImportingWot, setIsImportingWot] = useState(false);
+    const [isSyncingDrops, setIsSyncingDrops] = useState(false);
     const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+    // Async WoT Handshakes (§6.4.2)
+    const [pendingHandshakes, setPendingHandshakes] = useState<FrontendPendingWotHandshake[]>([]);
+    const [handshakeAcceptedLevels, setHandshakeAcceptedLevels] = useState<{ [msgId: string]: number }>({});
+    const [handshakeReturnFlags, setHandshakeReturnFlags] = useState<{ [msgId: string]: boolean }>({});
+    const [isAcceptingHandshake, setIsAcceptingHandshake] = useState<string | null>(null);
+    const [sendHandshakeContact, setSendHandshakeContact] = useState<Contact | null>(null);
+    const [sendHandshakeLevel, setSendHandshakeLevel] = useState<number>(1);
+    const [isSendingHandshake, setIsSendingHandshake] = useState(false);
 
     const loadContacts = useCallback(async () => {
         setIsLoading(true);
         try {
-            const [contactsResult, summaryResult, providersResult] = await Promise.all([
+            const [contactsResult, summaryResult, providersResult, postInbox] = await Promise.all([
                 contactService.getContacts(),
                 wotService.getSummary().catch(e => {
                     logger.warn("Failed to load WoT summary: " + stringifyError(e));
@@ -88,11 +102,15 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                 wotService.getProviders().catch(e => {
                     logger.warn("Failed to load WoT providers: " + stringifyError(e));
                     return [];
-                })
+                }),
+                postService.getPostInboxSummary().catch(() => null)
             ]);
             setContacts(contactsResult);
             setWotSummary(summaryResult ?? null);
             setProviders(providersResult ?? []);
+            if (postInbox) {
+                setPendingHandshakes(postInbox.pendingWotHandshakes || []);
+            }
         } catch (err) {
             logger.error("Failed to load contacts: " + stringifyError(err));
         } finally {
@@ -102,6 +120,11 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
 
     useEffect(() => {
         loadContacts();
+        postService.syncPostDrops().catch(() => {});
+        window.addEventListener(POST_INBOX_UPDATED_EVENT, loadContacts);
+        return () => {
+            window.removeEventListener(POST_INBOX_UPDATED_EVENT, loadContacts);
+        };
     }, [loadContacts]);
 
     useEffect(() => {
@@ -381,6 +404,91 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         }
     };
 
+    const handleSyncDrops = async () => {
+        setIsSyncingDrops(true);
+        try {
+            const [res] = await Promise.all([
+                marketService.syncMarketDrops({ forceUpload: true }),
+                postService.syncPostDrops().catch(() => null)
+            ]);
+            notifyDropStatusUpdated();
+            await loadContacts();
+            const msg = t('contacts.syncDropsSuccess', 'Ablagen synchronisiert: {{wot}} Vertrauensliste(n), {{cards}} Angebot(e).', {
+                wot: res.importedWotLists,
+                cards: res.importedCards,
+            });
+            setFeedbackMsg({ type: 'success', message: msg });
+        } catch (err) {
+            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsSyncingDrops(false);
+        }
+    };
+
+    const handleAcceptHandshake = async (handshake: FrontendPendingWotHandshake) => {
+        const level = handshakeAcceptedLevels[handshake.msgId] ?? handshake.proposedLevel ?? 1;
+        const returnHandshake = handshakeReturnFlags[handshake.msgId] ?? handshake.replyRequested ?? true;
+        setIsAcceptingHandshake(handshake.msgId);
+        try {
+            const res = await protectAction(async (pwd) => {
+                return await postService.acceptWotHandshake(handshake.msgId, level, returnHandshake, pwd || undefined);
+            });
+            if (res) {
+                setFeedbackMsg({
+                    type: 'success',
+                    message: t('contacts.handshakeAcceptedSuccess', 'Vertrauensbestätigung akzeptiert (Stufe {{level}})', { level })
+                });
+                await loadContacts();
+            }
+        } catch (e) {
+            setFeedbackMsg({ type: 'error', message: translateError(e, t) });
+        } finally {
+            setIsAcceptingHandshake(null);
+        }
+    };
+
+    const handleDismissHandshake = async (msgId: string) => {
+        try {
+            await postService.dismissPendingPostItem('wot_handshake', msgId);
+            setPendingHandshakes(prev => prev.filter(h => h.msgId !== msgId));
+        } catch (e) {
+            setFeedbackMsg({ type: 'error', message: translateError(e, t) });
+        }
+    };
+
+    const handleExecuteSendHandshake = async () => {
+        if (!sendHandshakeContact) return;
+        setIsSendingHandshake(true);
+        try {
+            const res = await protectAction(async (pwd) => {
+                return await postService.sendWotHandshakeViaPost(
+                    sendHandshakeContact.did,
+                    sendHandshakeLevel,
+                    true,
+                    pwd || undefined
+                );
+            });
+            if (res && res.depositedTo > 0) {
+                setFeedbackMsg({
+                    type: 'success',
+                    message: t('contacts.handshakeSentSuccess', '📦 Vertrauensbestätigung (F2F) in Ablage hinterlegt')
+                });
+                setSendHandshakeContact(null);
+            } else if (res && res.errors && res.errors.length > 0) {
+                setFeedbackMsg({ type: 'error', message: res.errors.join('; ') });
+            } else {
+                setFeedbackMsg({
+                    type: 'error',
+                    message: t('contacts.handshakeNoDrop', 'Keine gemeinsame Ablage für diesen Kontakt erreichbar.')
+                });
+            }
+        } catch (e) {
+            setFeedbackMsg({ type: 'error', message: translateError(e, t) });
+        } finally {
+            setIsSendingHandshake(false);
+        }
+    };
+
     const allTags = Array.from(new Set(contacts.flatMap(c => c.tags)));
 
     const filteredContacts = contacts.filter(contact => {
@@ -462,6 +570,17 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                             <Button
                                 type="button"
                                 variant="secondary"
+                                onClick={handleSyncDrops}
+                                disabled={isSyncingDrops}
+                                className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
+                                title={t('contacts.syncDropsTooltip', 'Vertrauenslisten und Angebote über konfigurierte Ablagen abgleichen')}
+                            >
+                                <RefreshCw size={14} className={isSyncingDrops ? 'animate-spin' : ''} />
+                                {isSyncingDrops ? t('settings.syncing', 'Synchronisiere...') : t('contacts.syncDropsButton', 'Über Ablagen synchronisieren')}
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="secondary"
                                 onClick={handleImportWot}
                                 disabled={isImportingWot}
                                 className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
@@ -526,6 +645,88 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                         </div>
                     </div>
                 </div>
+
+                {/* Incoming Pending WoT Handshakes (§6.4.2) */}
+                {pendingHandshakes.length > 0 && (
+                    <div className="space-y-3 p-5 bg-sky-50/70 border border-sky-200 rounded-3xl" data-testid="pending-handshakes-section">
+                        <div className="flex items-center gap-2 text-sky-950 font-bold text-sm">
+                            <Handshake size={20} className="text-sky-600 shrink-0" />
+                            <span>{t('contacts.incomingHandshakesTitle', 'Eingehende Vertrauensbestätigungen (WoT Handshake)')}</span>
+                        </div>
+                        <p className="text-xs text-sky-900/80 leading-relaxed">
+                            {t('contacts.incomingHandshakesDesc', 'Kontakte haben dir nach einem persönlichen Treffen eine Vertrauensbestätigung über eine Ablage gesendet.')}
+                        </p>
+                        <div className="space-y-3 pt-1">
+                            {pendingHandshakes.map(h => {
+                                const name = h.senderName || truncateUserId(h.senderDid);
+                                const currentLevel = handshakeAcceptedLevels[h.msgId] ?? (h.proposedLevel <= 3 ? h.proposedLevel : 1);
+                                const returnChecked = handshakeReturnFlags[h.msgId] ?? h.replyRequested ?? true;
+                                const isAccepting = isAcceptingHandshake === h.msgId;
+
+                                return (
+                                    <div key={h.msgId} className="p-4 bg-white rounded-2xl border border-sky-100 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                        <div className="min-w-0">
+                                            <p className="font-bold text-sm text-theme-primary">{name}</p>
+                                            <p className="text-[11px] font-mono text-theme-light truncate" title={h.senderDid}>{h.senderDid}</p>
+                                            <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-sky-100 text-sky-800">
+                                                {t('contacts.proposedLevelBadge', 'Vorgeschlagene Stufe: {{level}}', { level: h.proposedLevel })}
+                                            </span>
+                                        </div>
+
+                                        <div className="flex flex-wrap items-center gap-3">
+                                            <div className="flex items-center gap-1.5 text-xs">
+                                                <label className="text-[11px] font-semibold text-theme-secondary">{t('contacts.acceptAsLevel', 'Stufe:')}</label>
+                                                <select
+                                                    value={currentLevel}
+                                                    onChange={(e) => setHandshakeAcceptedLevels(prev => ({ ...prev, [h.msgId]: Number(e.target.value) }))}
+                                                    className="px-2 py-1 text-xs font-bold rounded-lg border border-theme-subtle bg-bg-app"
+                                                >
+                                                    <option value={0}>0 - {t('contacts.trustLevel0', 'F2F Existenz')}</option>
+                                                    <option value={1}>1 - {t('contacts.trustLevel1', 'Bekannt')}</option>
+                                                    <option value={2}>2 - {t('contacts.trustLevel2', 'Vertrauenswürdig')}</option>
+                                                    <option value={3}>3 - {t('contacts.trustLevel3', 'Voll vertrauenswürdig')}</option>
+                                                </select>
+                                            </div>
+
+                                            <label className="flex items-center gap-1.5 text-xs font-medium text-theme-secondary cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={returnChecked}
+                                                    onChange={(e) => setHandshakeReturnFlags(prev => ({ ...prev, [h.msgId]: e.target.checked }))}
+                                                    className="rounded accent-sky-600"
+                                                />
+                                                <span>{t('contacts.sendReturnHandshakeLabel', 'Gegenbestätigung zurücksenden')}</span>
+                                            </label>
+
+                                            <div className="flex items-center gap-2">
+                                                <Button
+                                                    size="xs"
+                                                    variant="outline"
+                                                    onClick={() => handleDismissHandshake(h.msgId)}
+                                                    data-testid="dismiss-handshake-button"
+                                                    className="text-theme-light hover:text-rose-600"
+                                                >
+                                                    {t('common.dismiss', 'Verwerfen')}
+                                                </Button>
+                                                <Button
+                                                    size="xs"
+                                                    variant="primary"
+                                                    disabled={isAccepting}
+                                                    onClick={() => handleAcceptHandshake(h)}
+                                                    data-testid="accept-handshake-button"
+                                                    className="bg-sky-600 hover:bg-sky-700 text-white gap-1"
+                                                >
+                                                    {isAccepting ? <RefreshCw size={12} className="animate-spin" /> : <Check size={12} />}
+                                                    <span>{t('common.confirm', 'Bestätigen')}</span>
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
 
                 {/* Progressive Disclosure Tab Bar */}
                 {providers.length > 0 && (
@@ -739,6 +940,18 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                                     </div>
                                                 </div>
                                                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button
+                                                        onClick={() => {
+                                                            setSendHandshakeContact(contact);
+                                                            const lvl = contact.trustLevel ?? 0;
+                                                            setSendHandshakeLevel(lvl >= 1 ? Math.min(lvl, 1) : 1);
+                                                        }}
+                                                        className="p-2 hover:bg-theme-subtle/20 rounded-xl text-theme-light hover:text-sky-600 transition-all cursor-pointer"
+                                                        title={t('contacts.sendWotHandshakeButton', 'F2F-Bestätigung über Ablage senden')}
+                                                        data-testid="send-wot-handshake-button"
+                                                    >
+                                                        <Handshake size={18} />
+                                                    </button>
                                                     <button
                                                         onClick={() => handleShareContactWot(contact)}
                                                         className="p-2 hover:bg-theme-subtle/20 rounded-xl text-theme-light hover:text-theme-primary transition-all cursor-pointer"
@@ -1031,6 +1244,38 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                     />
                 </div>
             </ModalShell>
+
+            {/* Send WoT Handshake Confirmation Modal */}
+            <ConfirmationModal
+                isOpen={!!sendHandshakeContact}
+                title={t('contacts.sendHandshakeModalTitle', 'Vertrauensbestätigung (F2F) über Ablage')}
+                description={
+                    <div className="space-y-4 pt-2">
+                        <p className="text-xs text-theme-secondary leading-relaxed">
+                            {t('contacts.sendHandshakeModalDesc', 'Sende eine asynchrone Vertrauensbestätigung an {{name}}, wenn dein oder sein Gerät beim persönlichen Treffen offline war.', {
+                                name: sendHandshakeContact ? ([sendHandshakeContact.profile.firstName, sendHandshakeContact.profile.lastName].filter(Boolean).join(' ') || sendHandshakeContact.profile.organization || truncateUserId(sendHandshakeContact.did)) : ''
+                            })}
+                        </p>
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-theme-secondary">
+                                {t('contacts.chooseProposedLevel', 'Vorgeschlagene Vertrauensstufe:')}
+                            </label>
+                            <select
+                                value={sendHandshakeLevel}
+                                onChange={(e) => setSendHandshakeLevel(Number(e.target.value))}
+                                className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-theme-subtle bg-bg-app text-theme-primary"
+                            >
+                                <option value={0}>0 - {t('contacts.trustLevel0', 'F2F Existenz')}</option>
+                                <option value={1}>1 - {t('contacts.trustLevel1', 'Bekannt')}</option>
+                            </select>
+                        </div>
+                    </div>
+                }
+                confirmText={t('contacts.sendHandshakeConfirm', 'In Ablage senden')}
+                onConfirm={handleExecuteSendHandshake}
+                onCancel={() => setSendHandshakeContact(null)}
+                isProcessing={isSendingHandshake}
+            />
         </PageLayout>
     );
 };

@@ -2,13 +2,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-    Cloud,
     Server,
+    Globe,
+    Users,
     RefreshCw,
     Upload,
     CheckCircle2,
     XCircle,
     AlertCircle,
+    AlertTriangle,
     Copy,
     Check,
     Trash2,
@@ -17,6 +19,10 @@ import {
     ArrowRight,
     ArrowLeft,
     Plus,
+    ExternalLink,
+    Shield,
+    HardDrive,
+    KeyRound,
 } from 'lucide-react';
 import {
     FrontendDropAdminStatus,
@@ -26,8 +32,12 @@ import {
     FrontendDropSetupDraft,
     FrontendMemberPolicyDto,
     FrontendDropConnectionTestResult,
+    FrontendPublicDropInfo,
+    StoredPublicDrop,
 } from '../../types';
 import { marketService } from '../../services/marketService';
+import { settingsService } from '../../services/settingsService';
+import { notifyDropStatusUpdated } from '../../utils/dropEvents';
 import { ModalShell } from '../ui/ModalShell';
 import { SegmentedTabs, SegmentedTabItem } from '../ui/SegmentedTabs';
 import { Button } from '../ui/Button';
@@ -39,35 +49,50 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { translateError } from '../../utils/errorHelper';
 import { logger } from '../../utils/log';
 import { save } from '@tauri-apps/plugin-dialog';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import { backupService } from '../../services/backupService';
+
+export type DropModalTab = 'friend_drops' | 'public_drops' | 'own_drop';
 
 export interface DropManagementModalProps {
     isOpen: boolean;
     onClose: () => void;
     onSyncComplete?: (importedCards: number) => void;
+    initialTab?: DropModalTab;
 }
-
-type TabType = 'use_drops' | 'own_drop';
 
 export function DropManagementModal({
     isOpen,
     onClose,
     onSyncComplete,
+    initialTab = 'friend_drops',
 }: DropManagementModalProps) {
     const { t } = useTranslation();
 
-    const [activeTab, setActiveTab] = useState<TabType>('use_drops');
+    const [activeTab, setActiveTab] = useState<DropModalTab>(initialTab);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-    // Tab 1 state: Use Drops (Sync & Upload Targets)
+    // Tab 1 state: Friends' Drops (Sync & Upload Targets)
     const [isSyncing, setIsSyncing] = useState<boolean>(false);
     const [lastSyncResult, setLastSyncResult] = useState<FrontendDropSyncResult | null>(null);
     const [discoveredDrops, setDiscoveredDrops] = useState<FrontendDiscoveredDrop[]>([]);
     const [selectedUploadUrls, setSelectedUploadUrls] = useState<Set<string>>(new Set());
     const [isSavingTargets, setIsSavingTargets] = useState<boolean>(false);
 
-    // Tab 2 state: Own Drop (Admin & Setup Wizard)
+    // Tab 2 state: Public Drops
+    const [publicDropInputUrl, setPublicDropInputUrl] = useState<string>('');
+    const [isProbingPublic, setIsProbingPublic] = useState<boolean>(false);
+    const [probedPublicDrop, setProbedPublicDrop] = useState<FrontendPublicDropInfo | null>(null);
+    const [configuredPublicDrops, setConfiguredPublicDrops] = useState<StoredPublicDrop[]>([]);
+    const [isSavingPublic, setIsSavingPublic] = useState<boolean>(false);
+    const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(false);
+    const [deletePublicTarget, setDeletePublicTarget] = useState<StoredPublicDrop | null>(null);
+    const [deleteRemoteSlots, setDeleteRemoteSlots] = useState<boolean>(false);
+    const [isDeletingPublic, setIsDeletingPublic] = useState<boolean>(false);
+
+    // Tab 3 state: Own Drop (Admin & Setup Wizard)
     const [adminStatus, setAdminStatus] = useState<FrontendDropAdminStatus | null>(null);
     const [wizardStep, setWizardStep] = useState<1 | 2>(1);
     const [setupDraft, setSetupDraft] = useState<FrontendDropSetupDraft | null>(null);
@@ -78,6 +103,7 @@ export function DropManagementModal({
         hop2Min: 2,
     });
     const [wizardMaxMembers, setWizardMaxMembers] = useState<number>(300);
+    const [wizardMaxStorageMb, setWizardMaxStorageMb] = useState<number>(50);
     const [wizardBaseUrl, setWizardBaseUrl] = useState<string>('');
     const [testResult, setTestResult] = useState<FrontendDropConnectionTestResult | null>(null);
     const [isTestingConn, setIsTestingConn] = useState<boolean>(false);
@@ -93,13 +119,16 @@ export function DropManagementModal({
         hop2Min: 2,
     });
     const [adminMaxMembers, setAdminMaxMembers] = useState<number>(300);
+    const [adminMaxStorageMb, setAdminMaxStorageMb] = useState<number>(50);
     const [adminAllow, setAdminAllow] = useState<string[]>([]);
     const [adminDeny, setAdminDeny] = useState<string[]>([]);
     const [newAllowDid, setNewAllowDid] = useState<string>('');
     const [newDenyDid, setNewDenyDid] = useState<string>('');
-    const [manualBlockAccessId, setManualBlockAccessId] = useState<string>('');
+    const [manualBlockPubkey, setManualBlockPubkey] = useState<string>('');
     const [isUpdatingAdmin, setIsUpdatingAdmin] = useState<boolean>(false);
     const [isBlockingSlot, setIsBlockingSlot] = useState<boolean>(false);
+    const [isRotateConfirmOpen, setIsRotateConfirmOpen] = useState<boolean>(false);
+    const [isRotatingKey, setIsRotatingKey] = useState<boolean>(false);
     const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState<boolean>(false);
     const [isDeletingAdmin, setIsDeletingAdmin] = useState<boolean>(false);
     const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
@@ -109,9 +138,10 @@ export function DropManagementModal({
         setIsLoading(true);
         setError(null);
         try {
-            const [status, discovered] = await Promise.all([
+            const [status, discovered, settings] = await Promise.all([
                 marketService.getDropAdminStatus().catch(() => null),
                 marketService.discoverAvailableDrops().catch(() => []),
+                settingsService.getSettings().catch(() => null),
             ]);
 
             setAdminStatus(status);
@@ -123,6 +153,7 @@ export function DropManagementModal({
                     hop2Min: 2,
                 });
                 setAdminMaxMembers(status.maxMembers || 300);
+                setAdminMaxStorageMb(status.maxTotalStorageMb || 50);
                 setAdminAllow(status.allow || []);
                 setAdminDeny(status.deny || []);
             }
@@ -135,6 +166,10 @@ export function DropManagementModal({
                 }
             }
             setSelectedUploadUrls(selected);
+
+            if (settings?.publicDrops) {
+                setConfiguredPublicDrops(settings.publicDrops);
+            }
         } catch (err) {
             setError(translateError(err, t));
         } finally {
@@ -144,14 +179,16 @@ export function DropManagementModal({
 
     useEffect(() => {
         if (isOpen) {
+            setActiveTab(initialTab);
             loadData();
             setStatusMsg(null);
             setLastSyncResult(null);
             setWizardStep(1);
             setSetupDraft(null);
             setTestResult(null);
+            setProbedPublicDrop(null);
         }
-    }, [isOpen, loadData]);
+    }, [isOpen, initialTab, loadData]);
 
     const handleCopy = async (text: string) => {
         const ok = await copyToClipboard(text);
@@ -161,7 +198,7 @@ export function DropManagementModal({
         }
     };
 
-    // --- Tab 1 Actions: Sync & Upload Targets ---
+    // --- Tab 1 Actions: Friends' Drops ---
 
     const handleSync = async (forceUpload: boolean = false) => {
         setIsSyncing(true);
@@ -173,13 +210,42 @@ export function DropManagementModal({
             if (res.importedCards > 0 && onSyncComplete) {
                 onSyncComplete(res.importedCards);
             }
-            // Refresh discovered drops
+            notifyDropStatusUpdated();
             const discovered = await marketService.discoverAvailableDrops().catch(() => []);
             setDiscoveredDrops(discovered);
         } catch (err) {
             setError(translateError(err, t));
         } finally {
             setIsSyncing(false);
+        }
+    };
+
+    const [isDropBackupSyncing, setIsDropBackupSyncing] = useState(false);
+
+    const handleSyncDropBackup = async () => {
+        setIsDropBackupSyncing(true);
+        setError(null);
+        setStatusMsg(null);
+        try {
+            const res = await backupService.syncDropBackup();
+            if (res.uploadedTo > 0) {
+                setStatusMsg({
+                    type: 'success',
+                    message: t('settings.dropBackupSuccess', `Sicherung erfolgreich in ${res.uploadedTo} Ablage(n) hinterlegt (${Math.round(res.paddedBytes / 1024)} KB).`),
+                });
+            } else if (res.authorizedTargets === 0) {
+                setStatusMsg({
+                    type: 'success',
+                    message: t('settings.noDropAuthorizedBackup', 'Keine verbundene Ablage hat den Backup-Kanal freigegeben.'),
+                });
+            } else {
+                setError(t('settings.dropBackupFailed', 'Sicherung in Ablage fehlgeschlagen: ' + res.errors.join(', ')));
+            }
+            notifyDropStatusUpdated();
+        } catch (err) {
+            setError(translateError(err, t));
+        } finally {
+            setIsDropBackupSyncing(false);
         }
     };
 
@@ -212,6 +278,7 @@ export function DropManagementModal({
             }
             await marketService.setSelectedUploadDrops(targetsToSave);
             setStatusMsg({ type: 'success', message: t('marketplace.cardSavedSuccess') });
+            notifyDropStatusUpdated();
             await loadData();
         } catch (err) {
             setError(translateError(err, t));
@@ -220,7 +287,94 @@ export function DropManagementModal({
         }
     };
 
-    // --- Tab 2 Setup Wizard Actions ---
+    // --- Tab 2 Actions: Public Drop with Registration ---
+
+    const handleProbePublic = async () => {
+        if (!publicDropInputUrl.trim()) return;
+        setIsProbingPublic(true);
+        setError(null);
+        try {
+            const info = await marketService.probePublicDrop(publicDropInputUrl.trim());
+            setProbedPublicDrop(info);
+        } catch (err) {
+            setError(translateError(err, t));
+        } finally {
+            setIsProbingPublic(false);
+        }
+    };
+
+    const handleCheckPublicAuth = async () => {
+        if (!probedPublicDrop) return;
+        setIsCheckingAuth(true);
+        setError(null);
+        try {
+            const info = await marketService.probePublicDrop(probedPublicDrop.writeUrl);
+            setProbedPublicDrop(info);
+        } catch (err) {
+            setError(translateError(err, t));
+        } finally {
+            setIsCheckingAuth(false);
+        }
+    };
+
+    const handleSavePublicDrop = async () => {
+        if (!probedPublicDrop) return;
+        setIsSavingPublic(true);
+        setError(null);
+        try {
+            await marketService.savePublicDrop({
+                writeUrl: probedPublicDrop.writeUrl,
+                readUrl: probedPublicDrop.readUrl,
+                dropPub: probedPublicDrop.dropPub,
+                registerUrl: probedPublicDrop.registerUrl,
+                enabled: true,
+            });
+            setStatusMsg({ type: 'success', message: t('marketplace.publicDropSavedSuccess') });
+            setProbedPublicDrop(null);
+            setPublicDropInputUrl('');
+            notifyDropStatusUpdated();
+            await loadData();
+        } catch (err) {
+            setError(translateError(err, t));
+        } finally {
+            setIsSavingPublic(false);
+        }
+    };
+
+    const handleTogglePublicDropEnabled = async (drop: StoredPublicDrop) => {
+        try {
+            await marketService.savePublicDrop({
+                writeUrl: drop.writeUrl,
+                readUrl: drop.readUrl,
+                dropPub: drop.dropPub,
+                registerUrl: drop.registerUrl,
+                enabled: !drop.enabled,
+            });
+            notifyDropStatusUpdated();
+            await loadData();
+        } catch (err) {
+            setError(translateError(err, t));
+        }
+    };
+
+    const handleConfirmRemovePublicDrop = async () => {
+        if (!deletePublicTarget) return;
+        setIsDeletingPublic(true);
+        try {
+            await marketService.removePublicDrop(deletePublicTarget.writeUrl, deleteRemoteSlots);
+            setDeletePublicTarget(null);
+            setDeleteRemoteSlots(false);
+            setStatusMsg({ type: 'success', message: t('marketplace.publicDropRemovedSuccess') });
+            notifyDropStatusUpdated();
+            await loadData();
+        } catch (err) {
+            setError(translateError(err, t));
+        } finally {
+            setIsDeletingPublic(false);
+        }
+    };
+
+    // --- Tab 3 Actions: Own Drop & Wizard ---
 
     const handlePrepareSetup = async () => {
         setIsCreatingDraft(true);
@@ -229,6 +383,7 @@ export function DropManagementModal({
             const draft = await marketService.prepareDropSetup({
                 policy: wizardPolicy,
                 maxMembers: wizardMaxMembers,
+                maxTotalStorageMb: wizardMaxStorageMb,
             });
             setSetupDraft(draft);
         } catch (err) {
@@ -312,6 +467,7 @@ export function DropManagementModal({
             const status = await marketService.finalizeDropSetup(wizardBaseUrl.trim());
             setAdminStatus(status);
             setStatusMsg({ type: 'success', message: t('marketplace.connectionTestSuccess') });
+            notifyDropStatusUpdated();
             await loadData();
         } catch (err) {
             setError(translateError(err, t));
@@ -319,8 +475,6 @@ export function DropManagementModal({
             setIsFinalizing(false);
         }
     };
-
-    // --- Tab 2 Admin Actions ---
 
     const handleUpdateAdminConfig = async () => {
         setIsUpdatingAdmin(true);
@@ -331,6 +485,7 @@ export function DropManagementModal({
                 {
                     cardPolicy: adminPolicy,
                     maxMembers: adminMaxMembers,
+                    maxTotalStorageMb: adminMaxStorageMb,
                     allow: adminAllow,
                     deny: adminDeny,
                 },
@@ -338,6 +493,7 @@ export function DropManagementModal({
             );
             setAdminStatus(status);
             setStatusMsg({ type: 'success', message: t('marketplace.cardSavedSuccess') });
+            notifyDropStatusUpdated();
         } catch (err) {
             setError(translateError(err, t));
         } finally {
@@ -345,15 +501,33 @@ export function DropManagementModal({
         }
     };
 
-    const handleBlockSlot = async (accessId: string) => {
-        if (!accessId.trim()) return;
+    const handleRotateKey = async () => {
+        setIsRotatingKey(true);
+        setError(null);
+        try {
+            const status = await marketService.rotateDropAdminKey();
+            setAdminStatus(status);
+            setIsRotateConfirmOpen(false);
+            setStatusMsg({ type: 'success', message: t('marketplace.rotateKeySuccess') });
+            notifyDropStatusUpdated();
+            await loadData();
+        } catch (err) {
+            setError(translateError(err, t));
+        } finally {
+            setIsRotatingKey(false);
+        }
+    };
+
+    const handleBlockSlot = async (pubkeyHex64: string) => {
+        if (!pubkeyHex64.trim()) return;
         setIsBlockingSlot(true);
         setError(null);
         try {
-            const status = await marketService.blockDropSlot(accessId.trim());
+            const status = await marketService.blockDropSlot(pubkeyHex64.trim());
             setAdminStatus(status);
-            setManualBlockAccessId('');
+            setManualBlockPubkey('');
             setStatusMsg({ type: 'success', message: t('marketplace.cardSavedSuccess') });
+            notifyDropStatusUpdated();
         } catch (err) {
             setError(translateError(err, t));
         } finally {
@@ -361,17 +535,18 @@ export function DropManagementModal({
         }
     };
 
-    const handleUnblockSlot = async (accessId: string) => {
+    const handleUnblockSlot = async (pubkeyHex64: string) => {
         if (!adminStatus) return;
         setIsUpdatingAdmin(true);
         setError(null);
         try {
-            const updatedBlocked = adminStatus.blockedAccessIds.filter((id) => id !== accessId);
+            const updatedBlocked = adminStatus.blockedPubkeys.filter((id) => id !== pubkeyHex64);
             const status = await marketService.updateDropAdminConfig(
-                { blockedAccessIds: updatedBlocked },
+                { blockedPubkeys: updatedBlocked },
                 true
             );
             setAdminStatus(status);
+            notifyDropStatusUpdated();
         } catch (err) {
             setError(translateError(err, t));
         } finally {
@@ -387,6 +562,7 @@ export function DropManagementModal({
             setSetupDraft(null);
             setWizardStep(1);
             setIsDeleteConfirmOpen(false);
+            notifyDropStatusUpdated();
             await loadData();
         } catch (err) {
             setError(translateError(err, t));
@@ -395,15 +571,20 @@ export function DropManagementModal({
         }
     };
 
-    const tabs: SegmentedTabItem<TabType>[] = [
+    const tabs: SegmentedTabItem<DropModalTab>[] = [
         {
-            id: 'use_drops',
-            label: t('marketplace.tabUseDrops'),
-            icon: <Cloud size={14} />,
+            id: 'friend_drops',
+            label: t('marketplace.tabFriendDrops', "Ablagen von Freunden"),
+            icon: <Users size={14} />,
+        },
+        {
+            id: 'public_drops',
+            label: t('marketplace.tabPublicDrops', "Öffentliche Ablage"),
+            icon: <Globe size={14} />,
         },
         {
             id: 'own_drop',
-            label: t('marketplace.tabOwnDrop'),
+            label: t('marketplace.tabOwnDrop', "Eigene Ablage betreiben"),
             icon: <Server size={14} />,
         },
     ];
@@ -431,7 +612,7 @@ export function DropManagementModal({
                 }
             >
                 <div className="space-y-4">
-                    {/* Tabs navigation */}
+                    {/* 3-Section Tabs Navigation */}
                     <SegmentedTabs
                         tabs={tabs}
                         activeTab={activeTab}
@@ -461,8 +642,8 @@ export function DropManagementModal({
                         </AlertBanner>
                     )}
 
-                    {/* TAB 1: Use Drops (Sync & Upload Targets) */}
-                    {activeTab === 'use_drops' && (
+                    {/* SECTION 1: Ablagen von Freunden */}
+                    {activeTab === 'friend_drops' && (
                         <div className="space-y-4">
                             {/* Sync Actions Card */}
                             <Card className="p-4 space-y-3">
@@ -493,6 +674,17 @@ export function DropManagementModal({
                                             <RefreshCw size={13} className={isSyncing ? 'animate-spin' : ''} />
                                             <span>{t('marketplace.syncNowBtn')}</span>
                                         </Button>
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={isDropBackupSyncing}
+                                            onClick={handleSyncDropBackup}
+                                            className="text-xs gap-1.5"
+                                            title={t('settings.syncDropNowButton', 'Jetzt in Ablage sichern')}
+                                        >
+                                            <HardDrive size={13} className={isDropBackupSyncing ? 'animate-spin' : ''} />
+                                            <span>{isDropBackupSyncing ? t('settings.syncing', 'Sichere...') : t('settings.syncDropNowButton', 'Jetzt in Ablage sichern')}</span>
+                                        </Button>
                                     </div>
                                 </div>
 
@@ -504,7 +696,7 @@ export function DropManagementModal({
                                                 <span>{t('marketplace.syncSkippedWifi')}</span>
                                             </div>
                                         ) : (
-                                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                                                 <div className="p-2.5 bg-bg-app rounded-xl border border-theme-subtle/60 text-center">
                                                     <div className="text-base font-extrabold text-theme-secondary">
                                                         {lastSyncResult.uploadedTo}
@@ -535,6 +727,14 @@ export function DropManagementModal({
                                                     </div>
                                                     <div className="text-[10px] text-emerald-700">
                                                         {t('marketplace.syncImportedCards', { count: lastSyncResult.importedCards })}
+                                                    </div>
+                                                </div>
+                                                <div className="p-2.5 bg-indigo-50 rounded-xl border border-indigo-200 text-center">
+                                                    <div className="text-base font-extrabold text-indigo-800">
+                                                        {lastSyncResult.importedWotLists}
+                                                    </div>
+                                                    <div className="text-[10px] text-indigo-700">
+                                                        {t('marketplace.syncImportedWotLists', { count: lastSyncResult.importedWotLists })}
                                                     </div>
                                                 </div>
                                             </div>
@@ -642,7 +842,207 @@ export function DropManagementModal({
                         </div>
                     )}
 
-                    {/* TAB 2: Own Drop (Setup Wizard or Admin View) */}
+                    {/* SECTION 2: Öffentliche Ablage (mit Registrierung) */}
+                    {activeTab === 'public_drops' && (
+                        <div className="space-y-4">
+                            {/* Probe & Setup New Public Drop */}
+                            <Card className="p-4 space-y-3.5">
+                                <div>
+                                    <h3 className="text-xs font-bold text-theme-secondary uppercase tracking-wider">
+                                        {t('marketplace.publicDropTitle', "Öffentliche Ablage hinzufügen")}
+                                    </h3>
+                                    <p className="text-[11px] text-theme-light mt-0.5">
+                                        {t('marketplace.publicDropSubtitle', "Verbinde dich mit einer öffentlichen Ablage über einen anonymen Schlüssel")}
+                                    </p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="block text-[11px] font-bold text-theme-secondary">
+                                        {t('marketplace.publicDropUrlLabel', "Anbieter-Adresse oder URL")}
+                                    </label>
+                                    <div className="flex gap-2">
+                                        <Input
+                                            type="text"
+                                            placeholder={t('marketplace.publicDropUrlPlaceholder', "z. B. ablage.verein.de oder https://ablage.verein.de")}
+                                            value={publicDropInputUrl}
+                                            onChange={(e) => setPublicDropInputUrl(e.target.value)}
+                                            className="text-xs"
+                                        />
+                                        <Button
+                                            size="sm"
+                                            disabled={!publicDropInputUrl.trim() || isProbingPublic}
+                                            onClick={handleProbePublic}
+                                            className="text-xs gap-1.5 shrink-0"
+                                        >
+                                            <RefreshCw size={13} className={isProbingPublic ? 'animate-spin' : ''} />
+                                            <span>{isProbingPublic ? t('marketplace.probingDrop', "Prüfe...") : t('marketplace.probePublicDropBtn', "Ablage prüfen")}</span>
+                                        </Button>
+                                    </div>
+                                </div>
+
+                                {probedPublicDrop && (
+                                    <div className="p-3.5 bg-bg-app rounded-xl border border-theme-subtle space-y-3 animate-in fade-in duration-150">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-bold text-theme-primary">
+                                                {probedPublicDrop.writeUrl}
+                                            </span>
+                                            <div className="flex items-center gap-1.5">
+                                                {['card', 'wot', 'backup', 'post'].map((ch) => {
+                                                    const isAuth = probedPublicDrop.authorizedChannels.includes(ch);
+                                                    return (
+                                                        <span
+                                                            key={ch}
+                                                            className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                                                                isAuth
+                                                                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                                                    : 'bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                                                            }`}
+                                                        >
+                                                            {ch}
+                                                        </span>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+
+                                        {/* Anonymous Access Key R */}
+                                        <div className="space-y-1">
+                                            <span className="text-[10px] font-bold text-theme-light uppercase tracking-wider block">
+                                                {t('marketplace.anonymousAccessKeyLabel', "Dein anonymer Zugangs-Schlüssel (R)")}
+                                            </span>
+                                            <div className="flex items-center justify-between p-2 bg-card rounded-lg border border-theme-subtle font-mono text-[11px] text-theme-secondary">
+                                                <span className="truncate pr-2 select-all">{probedPublicDrop.accessPubkey}</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleCopy(probedPublicDrop.accessPubkey)}
+                                                    className="p-1 text-theme-light hover:text-theme-primary transition-colors shrink-0"
+                                                    title={t('common.copy', "Kopieren")}
+                                                >
+                                                    {copiedUrl === probedPublicDrop.accessPubkey ? (
+                                                        <Check size={14} className="text-emerald-600" />
+                                                    ) : (
+                                                        <Copy size={14} />
+                                                    )}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {/* Actions */}
+                                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-theme-subtle/50">
+                                            <div className="flex items-center gap-2">
+                                                {probedPublicDrop.registerUrl && (
+                                                    <Button
+                                                        size="sm"
+                                                        variant="secondary"
+                                                        onClick={() => openUrl(probedPublicDrop.registerUrl!)}
+                                                        className="text-xs gap-1.5"
+                                                    >
+                                                        <ExternalLink size={13} />
+                                                        <span>{t('marketplace.goToRegisterBtn', "Zur Registrierung beim Anbieter")}</span>
+                                                    </Button>
+                                                )}
+                                                <Button
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    disabled={isCheckingAuth}
+                                                    onClick={handleCheckPublicAuth}
+                                                    className="text-xs gap-1.5"
+                                                >
+                                                    <RefreshCw size={13} className={isCheckingAuth ? 'animate-spin' : ''} />
+                                                    <span>{t('marketplace.checkAuthorizationBtn', "Freischaltung prüfen")}</span>
+                                                </Button>
+                                            </div>
+
+                                            <Button
+                                                size="sm"
+                                                variant="primary"
+                                                disabled={isSavingPublic}
+                                                onClick={handleSavePublicDrop}
+                                                className="text-xs gap-1.5"
+                                            >
+                                                <CheckCircle2 size={13} />
+                                                <span>{t('marketplace.savePublicDropBtn', "Ablage speichern")}</span>
+                                            </Button>
+                                        </div>
+                                    </div>
+                                )}
+                            </Card>
+
+                            {/* Configured Public Drops */}
+                            <Card className="p-4 space-y-3">
+                                <h3 className="text-xs font-bold text-theme-secondary uppercase tracking-wider">
+                                    {t('marketplace.savedPublicDropsTitle', "Gespeicherte öffentliche Ablagen")}
+                                </h3>
+
+                                {configuredPublicDrops.length === 0 ? (
+                                    <div className="p-6 text-center text-xs text-theme-light italic bg-bg-app rounded-xl border border-dashed border-theme-subtle">
+                                        {t('marketplace.noPublicDropsConfigured', "Noch keine öffentlichen Ablagen hinterlegt.")}
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {configuredPublicDrops.map((drop) => (
+                                            <div
+                                                key={drop.writeUrl}
+                                                className="p-3 bg-white rounded-xl border border-theme-subtle/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                                            >
+                                                <div className="min-w-0 space-y-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs font-bold text-theme-secondary truncate">
+                                                            {drop.writeUrl}
+                                                        </span>
+                                                        <span className="flex items-center gap-1">
+                                                            {['card', 'wot', 'backup', 'post'].map((ch) => {
+                                                                const isAuth = drop.authorizedChannels.includes(ch);
+                                                                return (
+                                                                    <span
+                                                                        key={ch}
+                                                                        className={`px-1 py-0.2 rounded text-[8px] font-bold uppercase ${
+                                                                            isAuth
+                                                                                ? 'bg-emerald-100 text-emerald-800'
+                                                                                : 'bg-slate-100 text-slate-500'
+                                                                        }`}
+                                                                    >
+                                                                        {ch}
+                                                                    </span>
+                                                                );
+                                                            })}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-[10px] font-mono text-theme-light truncate">
+                                                        Schlüssel: {drop.accessPubkey.substring(0, 16)}...
+                                                    </p>
+                                                </div>
+
+                                                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                                                    <label className="flex items-center gap-1.5 text-xs text-theme-secondary cursor-pointer mr-1">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={drop.enabled}
+                                                            onChange={() => handleTogglePublicDropEnabled(drop)}
+                                                            className="h-3.5 w-3.5 rounded accent-theme-primary cursor-pointer"
+                                                        />
+                                                        <span className="text-[11px] font-medium">Aktiv</span>
+                                                    </label>
+
+                                                    <Button
+                                                        size="sm"
+                                                        variant="danger"
+                                                        onClick={() => setDeletePublicTarget(drop)}
+                                                        className="text-[10px] p-1.5"
+                                                        title={t('common.remove', "Entfernen")}
+                                                    >
+                                                        <Trash2 size={12} />
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </Card>
+                        </div>
+                    )}
+
+                    {/* SECTION 3: Eigene Ablage betreiben */}
                     {activeTab === 'own_drop' && (
                         <div>
                             {!adminStatus || !adminStatus.descriptor.writeUrl ? (
@@ -685,6 +1085,17 @@ export function DropManagementModal({
                                                         type="number"
                                                         value={wizardMaxMembers}
                                                         onChange={(e) => setWizardMaxMembers(Math.max(1, Number(e.target.value)))}
+                                                    />
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-[11px] font-bold text-theme-secondary mb-1">
+                                                        {t('marketplace.maxTotalStorageMbLabel', "Max. Gesamtspeicher (MB)")}
+                                                    </label>
+                                                    <Input
+                                                        type="number"
+                                                        value={wizardMaxStorageMb}
+                                                        onChange={(e) => setWizardMaxStorageMb(Math.max(1, Number(e.target.value)))}
                                                     />
                                                 </div>
 
@@ -929,6 +1340,101 @@ export function DropManagementModal({
                                         </div>
                                     </Card>
 
+                                    {/* Storage Quota & Soft Warning */}
+                                    <Card className="p-4 space-y-2.5">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <HardDrive size={15} className="text-theme-primary" />
+                                                <h3 className="text-xs font-bold text-theme-secondary uppercase tracking-wider">
+                                                    {t('marketplace.dropStorageLabel', "Speicher-Kontingent")}
+                                                </h3>
+                                            </div>
+                                            <span className="text-xs font-semibold text-theme-secondary">
+                                                {adminStatus.maxTotalStorageMb} MB
+                                            </span>
+                                        </div>
+
+                                        {adminStatus.softWarning && (
+                                            <div className="p-2.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-xl text-amber-800 dark:text-amber-200 text-xs flex items-start gap-2">
+                                                <AlertTriangle size={15} className="shrink-0 mt-0.5 text-amber-600" />
+                                                <span>{t('marketplace.dropStorageWarning', "Warnung: Der Speicherplatz deiner Ablage ist zu mindestens 80% belegt!")}</span>
+                                            </div>
+                                        )}
+
+                                        {adminStatus.usedBytes != null && adminStatus.maxBytes != null && (
+                                            <div className="space-y-1">
+                                                <div className="w-full bg-bg-app rounded-full h-2 border border-theme-subtle overflow-hidden">
+                                                    <div
+                                                        className={`h-full transition-all ${
+                                                            adminStatus.softWarning ? 'bg-amber-500' : 'bg-theme-primary'
+                                                        }`}
+                                                        style={{
+                                                            width: `${Math.min(100, Math.round((adminStatus.usedBytes / adminStatus.maxBytes) * 100))}%`,
+                                                        }}
+                                                    />
+                                                </div>
+                                                <div className="flex justify-between text-[10px] text-theme-light font-mono">
+                                                    <span>{(adminStatus.usedBytes / (1024 * 1024)).toFixed(1)} MB</span>
+                                                    <span>{(adminStatus.maxBytes / (1024 * 1024)).toFixed(1)} MB ({Math.round((adminStatus.usedBytes / adminStatus.maxBytes) * 100)}%)</span>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </Card>
+
+                                    {/* 180-Day Key Rotation */}
+                                    <Card className="p-4 space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <KeyRound size={15} className="text-theme-primary" />
+                                                <h3 className="text-xs font-bold text-theme-secondary uppercase tracking-wider">
+                                                    {t('marketplace.rotationTitle', "Admin-Schlüsselrotation")}
+                                                </h3>
+                                            </div>
+                                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-theme-primary/10 text-theme-primary">
+                                                {t('marketplace.generationLabel', "Generation")} {adminStatus.generation}
+                                            </span>
+                                        </div>
+
+                                        <div className="p-2 bg-bg-app rounded-lg border border-theme-subtle/60 text-xs space-y-1">
+                                            <span className="text-[10px] font-bold text-theme-light block">
+                                                {t('marketplace.adminPubkeyLabel', "Admin-Public-Key (Ed25519)")}:
+                                            </span>
+                                            <div className="flex items-center justify-between font-mono text-[11px] text-theme-secondary">
+                                                <span className="truncate pr-2">{adminStatus.adminPubkey}</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleCopy(adminStatus.adminPubkey)}
+                                                    className="p-1 text-theme-light hover:text-theme-primary"
+                                                >
+                                                    {copiedUrl === adminStatus.adminPubkey ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {adminStatus.rotationRetireAt && (
+                                            <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 text-blue-800 dark:text-blue-200 text-xs flex items-center gap-1.5">
+                                                <Shield size={14} className="text-blue-600 shrink-0" />
+                                                <span>
+                                                    {t('marketplace.rotationGraceActive', "Schlüsselrotation aktiv (Übergangsfrist läuft bis: {{date}})", {
+                                                        date: new Date(adminStatus.rotationRetireAt * 1000).toLocaleDateString(),
+                                                    })}
+                                                </span>
+                                            </div>
+                                        )}
+
+                                        <div className="flex justify-end pt-1">
+                                            <Button
+                                                size="sm"
+                                                variant="secondary"
+                                                onClick={() => setIsRotateConfirmOpen(true)}
+                                                className="text-xs gap-1.5"
+                                            >
+                                                <RefreshCw size={13} />
+                                                <span>{t('marketplace.rotateKeyBtn', "Admin-Schlüssel rotieren")}</span>
+                                            </Button>
+                                        </div>
+                                    </Card>
+
                                     {/* Member Counters */}
                                     <div className="grid grid-cols-3 gap-2">
                                         <Card className="p-3 text-center">
@@ -988,6 +1494,17 @@ export function DropManagementModal({
                                                     type="number"
                                                     value={adminMaxMembers}
                                                     onChange={(e) => setAdminMaxMembers(Math.max(1, Number(e.target.value)))}
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-[11px] font-bold text-theme-secondary mb-1">
+                                                    {t('marketplace.maxTotalStorageMbLabel', "Max. Gesamtspeicher (MB)")}
+                                                </label>
+                                                <Input
+                                                    type="number"
+                                                    value={adminMaxStorageMb}
+                                                    onChange={(e) => setAdminMaxStorageMb(Math.max(1, Number(e.target.value)))}
                                                 />
                                             </div>
 
@@ -1156,21 +1673,21 @@ export function DropManagementModal({
                                             </p>
                                         </div>
 
-                                        {/* Manual Access-ID blocking */}
+                                        {/* Manual 64-hex Pubkey blocking */}
                                         <div className="flex gap-2">
                                             <Input
                                                 type="text"
-                                                placeholder={t('marketplace.manualAccessIdPlaceholder')}
-                                                value={manualBlockAccessId}
-                                                onChange={(e) => setManualBlockAccessId(e.target.value.toLowerCase().trim())}
+                                                placeholder={t('marketplace.manualPubkeyHexPlaceholder', "64-stelliger Hex Ed25519 Public Key...")}
+                                                value={manualBlockPubkey}
+                                                onChange={(e) => setManualBlockPubkey(e.target.value.toLowerCase().trim())}
                                                 className="text-xs font-mono"
                                             />
                                             <Button
                                                 size="sm"
                                                 variant="danger"
-                                                disabled={!manualBlockAccessId.trim() || isBlockingSlot}
-                                                onClick={() => handleBlockSlot(manualBlockAccessId)}
-                                                className="text-xs gap-1"
+                                                disabled={!manualBlockPubkey.trim() || isBlockingSlot}
+                                                onClick={() => handleBlockSlot(manualBlockPubkey)}
+                                                className="text-xs gap-1 shrink-0"
                                             >
                                                 <Lock size={12} />
                                                 <span>{t('marketplace.blockBtn')}</span>
@@ -1204,21 +1721,21 @@ export function DropManagementModal({
                                         )}
 
                                         {/* Blocked Slots List */}
-                                        {adminStatus.blockedAccessIds.length > 0 && (
+                                        {adminStatus.blockedPubkeys.length > 0 && (
                                             <div className="space-y-1.5 pt-1">
                                                 <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider block">
-                                                    {t('marketplace.blockedSlotsLabel')} ({adminStatus.blockedAccessIds.length})
+                                                    {t('marketplace.blockedSlotsLabel')} ({adminStatus.blockedPubkeys.length})
                                                 </span>
                                                 <div className="max-h-28 overflow-y-auto space-y-1 p-1 bg-rose-50/50 rounded-xl border border-rose-200/60 text-[11px] font-mono">
-                                                    {adminStatus.blockedAccessIds.map((accessId) => (
+                                                    {adminStatus.blockedPubkeys.map((pubkey) => (
                                                         <div
-                                                            key={accessId}
+                                                            key={pubkey}
                                                             className="flex items-center justify-between p-1.5 rounded-lg bg-white border border-rose-200/50"
                                                         >
-                                                            <span className="truncate pr-2 text-rose-900">{accessId}</span>
+                                                            <span className="truncate pr-2 text-rose-900">{pubkey}</span>
                                                             <button
                                                                 type="button"
-                                                                onClick={() => handleUnblockSlot(accessId)}
+                                                                onClick={() => handleUnblockSlot(pubkey)}
                                                                 className="px-2 py-0.5 rounded text-[10px] font-bold text-teal-700 hover:bg-teal-50 border border-teal-200 transition-colors"
                                                             >
                                                                 {t('marketplace.unblockBtn')}
@@ -1236,6 +1753,18 @@ export function DropManagementModal({
                 </div>
             </ModalShell>
 
+            {/* Key Rotation Confirmation Modal */}
+            <ConfirmationModal
+                isOpen={isRotateConfirmOpen}
+                title={t('marketplace.rotateKeyConfirmTitle', "Admin-Schlüssel jetzt rotieren?")}
+                description={t('marketplace.rotateKeyConfirmDesc', "Ein neues Ed25519-Schlüsselpaar wird erzeugt. Während der 180-tägigen Übergangsfrist akzeptiert die Ablage sowohl den alten als auch den neuen Schlüssel. Fortfahren?")}
+                confirmVariant="primary"
+                confirmText={t('marketplace.rotateKeyBtn', "Rotieren")}
+                onConfirm={handleRotateKey}
+                onCancel={() => setIsRotateConfirmOpen(false)}
+                isProcessing={isRotatingKey}
+            />
+
             {/* Delete Admin Confirmation Modal */}
             <ConfirmationModal
                 isOpen={isDeleteConfirmOpen}
@@ -1247,6 +1776,36 @@ export function DropManagementModal({
                 onCancel={() => setIsDeleteConfirmOpen(false)}
                 isProcessing={isDeletingAdmin}
             />
+
+            {/* Remove Public Drop Confirmation Modal */}
+            <ConfirmationModal
+                isOpen={!!deletePublicTarget}
+                title={t('marketplace.removePublicDropConfirmTitle', "Öffentliche Ablage entfernen?")}
+                description={
+                    <div className="space-y-3">
+                        <p>{t('marketplace.removePublicDropConfirmDesc', "Möchtest du diese öffentliche Ablage aus deinen Einstellungen entfernen?")}</p>
+                        <label className="flex items-center gap-2 p-2 bg-bg-app rounded-lg border border-theme-subtle text-xs cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={deleteRemoteSlots}
+                                onChange={(e) => setDeleteRemoteSlots(e.target.checked)}
+                                className="h-4 w-4 rounded accent-theme-primary cursor-pointer"
+                            />
+                            <span>{t('marketplace.deleteRemoteSlotsLabel', "Auch meine Daten auf der Ablage löschen")}</span>
+                        </label>
+                    </div>
+                }
+                confirmVariant="danger"
+                confirmText={t('common.remove')}
+                onConfirm={handleConfirmRemovePublicDrop}
+                onCancel={() => {
+                    setDeletePublicTarget(null);
+                    setDeleteRemoteSlots(false);
+                }}
+                isProcessing={isDeletingPublic}
+            />
         </>
     );
 }
+
+export default DropManagementModal;

@@ -47,6 +47,10 @@ export function useSession() {
     return context;
 }
 
+export function useOptionalSession() {
+    return useContext(SessionContext);
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSessionActive, setIsSessionActive] = useState(false);
@@ -223,7 +227,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             logger.error(`Error in protectAction: ${stringifyError(e)}`);
             throw e;
         }
-    }, []);
+    }, [triggerSecurityLockdown]);
 
     const handleModalConfirm = async (password: string) => {
         if (!pendingAction) return;

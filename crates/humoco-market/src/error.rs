@@ -16,4 +16,6 @@ pub enum MarketError {
     InvalidJws(String),
     #[error("Slot error: {0}")]
     Slot(String),
+    #[error("Payload too large: {0}")]
+    PayloadTooLarge(String),
 }

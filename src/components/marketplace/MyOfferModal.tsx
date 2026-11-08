@@ -163,6 +163,7 @@ export function MyOfferModal({ isOpen, onClose, onCardUpdated }: MyOfferModalPro
                 title: '',
                 text: '',
                 pricing: '',
+                allowInquiries: true,
             },
         ]);
     };
@@ -657,6 +658,21 @@ export function MyOfferModal({ isOpen, onClose, onCardUpdated }: MyOfferModalPro
                                                                 {itemError.text}
                                                             </p>
                                                         )}
+                                                    </div>
+
+                                                    {/* Allow Inquiries Checkbox (§6.4.3) */}
+                                                    <div className="flex items-center gap-2 pt-2 border-t border-theme-subtle/50">
+                                                        <input
+                                                            type="checkbox"
+                                                            id={`listing-allow-inquiries-${idx}`}
+                                                            checked={item.allowInquiries ?? true}
+                                                            onChange={(e) => handleUpdateListing(idx, { allowInquiries: e.target.checked })}
+                                                            className="rounded accent-theme-primary h-4 w-4"
+                                                            data-testid={`allow-inquiries-checkbox-${idx}`}
+                                                        />
+                                                        <label htmlFor={`listing-allow-inquiries-${idx}`} className="text-xs font-semibold text-theme-secondary cursor-pointer">
+                                                            {t('marketplace.allowInquiriesLabel', 'Anfragen über Ablage erlauben')}
+                                                        </label>
                                                     </div>
                                                 </Card>
                                             );

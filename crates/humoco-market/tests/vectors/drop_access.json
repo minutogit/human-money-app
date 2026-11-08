@@ -1,20 +1,56 @@
 {
-  "drop_secret_hex": "0101010101010101010101010101010101010101010101010101010101010101",
-  "drop_pub_b58": "C6cUahgsea11j7dTmSFiNydnaPG9kg7yPFagXqerHGnC",
-  "admin_token_hex": "960d509b7b6ba2a38e81c2e40d345e2711c206ddfcbee1b42d12d6373004f368",
-  "admin_token_hash": "3e3a0547f01f0c849fcf37f1ead8793f95b93c946dd2a459d443a7520a1dd65e",
+  "master_seed_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+  "drop_index": 0,
+  "generation_0": {
+    "generation": 0,
+    "seed_hex": "a9cef6a634aa6800a96ffa9d539a210adb348d35e35e9eb74b56057d74cb798c",
+    "admin_pubkey_hex": "e9aca6e52f5444a81b4046efd78f902d9b94548d5a4556ec20e3303fbc6023cf"
+  },
+  "generation_1": {
+    "generation": 1,
+    "seed_hex": "dafdf85e1d70df2e2c76790b5e0608094e716cd714b2081a9966bd05b1b0d36e",
+    "admin_pubkey_hex": "26aa56b4706c0bddc8976d7f2b185eaf79d5c3d9f6ffb8dc3d0a49cb6e54c491"
+  },
+  "data_dir": "d-d86422b9f891b322",
   "members": [
     {
-      "ed25519_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
-      "did": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
-      "write_token_hex": "f6ebe4ce70b5665af0ef3f96dc4b662af5cb4d62f6ac1f58ebc60f0030078ccc",
-      "access_id": "5e24aa36c629dc577ae1ac12647d1c2a"
+      "member_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "member_did": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
+      "stealth_pubkey_hex": "0ecbc5b8ed9254b450bcde7ddf7124b77e9a64105d14313610da213ee348e2e8",
+      "test_message": "Humoco Stealth Protocol Test Message V1",
+      "stealth_signature_hex": "f665d9bc65d4c632bb36a7715db66e0f60f409b3c9dc50cbc4535360f546e59cd585014b2db24d4c446aeb5b40980c6532817a909bae45ef4677a37af4256801"
     },
     {
-      "ed25519_seed_hex": "2222222222222222222222222222222222222222222222222222222222222222",
-      "did": "did:key:z6MkqGC3nWZhYieEVTVDKW5v588CiGfsDSmRVG9ZwwWTvLSK",
-      "write_token_hex": "4d43204242cbe5c764ffced65e5128c2c84b289696e86b1f82c461c97ba9bd84",
-      "access_id": "247735c0acdef52674425732585019cb"
+      "member_seed_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "member_did": "did:key:z6MkqGC3nWZhYieEVTVDKW5v588CiGfsDSmRVG9ZwwWTvLSK",
+      "stealth_pubkey_hex": "a3c285bff47dbc98fbf5664dc53603d47b474f07aa87241b064d8cadc93098ed",
+      "test_message": "Humoco Stealth Protocol Test Message V1",
+      "stealth_signature_hex": "af30299d8ccc1a4603d78bc5fedc4e193475da8ce1f145a48b42daf0af833d76032d88896aafaefa146dfe25d65db32ef5cdbf8924ae8589b984b5e47adc890c"
     }
-  ]
+  ],
+  "public_drops": [
+    {
+      "input_url": "https://drop.humoco.org/drop.php",
+      "canonical_url": "https://drop.humoco.org/drop.php",
+      "public_user_pubkey_hex": "2d30010241a465fb7319d5da2b16f9f9a40232672eef28a0b67257361f76a720"
+    },
+    {
+      "input_url": "drop.verein.de/",
+      "canonical_url": "https://drop.verein.de/drop.php",
+      "public_user_pubkey_hex": "151a030230b03a542a41593ed4620e052332c9b1b389c69afb63567d8eb49fb6"
+    },
+    {
+      "input_url": "http://127.0.0.1:8080/humoco/",
+      "canonical_url": "http://127.0.0.1:8080/humoco/drop.php",
+      "public_user_pubkey_hex": "4d095ac47ad4754a3322a7b4a3231b65282b2d202abd64c4362033e8bdc2fdef"
+    }
+  ],
+  "rotation_certificate": {
+    "old_pubkey": "e9aca6e52f5444a81b4046efd78f902d9b94548d5a4556ec20e3303fbc6023cf",
+    "new_pubkey": "26aa56b4706c0bddc8976d7f2b185eaf79d5c3d9f6ffb8dc3d0a49cb6e54c491",
+    "retire_at": 1800000000,
+    "cert_sig": "58908d008aa5faded626503432c54f13041a25cec619afd0027809ff3ff2511a52e4dfb362af509c9104ad2814188acbef6e45c5af48dcf7da40ab97453f510d"
+  },
+  "sample_member_request_message": "HUMOCO-DROP-REQ-V1\nPUT\ncard\n1700000000\n0123456789abcdef0123456789abcdef\n93a23971a914e5eacbf0a8d25154cda309c3c1c72fbb9914d47c60f3cb681588",
+  "sample_admin_request_message": "HUMOCO-DROP-ADMIN-V1\nPUT_MEMBERS\ncard\n1700000000\n0123456789abcdef0123456789abcdef\n93a23971a914e5eacbf0a8d25154cda309c3c1c72fbb9914d47c60f3cb681588"
 }

@@ -1,6 +1,6 @@
 [package]
 name = "humoco-market"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -12,12 +12,15 @@ chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 hkdf = "0.12"
+hmac = "0.12"
 chacha20poly1305 = "0.10.1"
 sha2 = "0.10"
 bs58 = "0.5"
 hex = "0.4.3"
 rand = "0.8"
 serde_json_canonicalizer = "0.3.0"
+blake3 = "1.5"
+subtle = "2.5"
 
 [dev-dependencies]
 proptest = "1.11"

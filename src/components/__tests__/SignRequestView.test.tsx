@@ -39,6 +39,13 @@ vi.mock('../../context/SessionContext', () => ({
   }),
 }));
 
+vi.mock('../../services/postService', () => ({
+  postService: {
+    replyDetachedSignatureViaPost: vi.fn(),
+  },
+  POST_INBOX_UPDATED_EVENT: 'humoco://post-inbox-updated',
+}));
+
 describe('SignRequestView Component (Minuto Standard)', () => {
   const mockVoucherDetails: VoucherDetails = {
     localInstanceId: 'voucher-123',
@@ -234,5 +241,75 @@ uuid = "minuto-uuid-123"`,
     // Clicking Done calls onBack
     fireEvent.click(screen.getByRole('button', { name: /Done/i }));
     expect(mockOnBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('replies via post when senderDid is provided and depositedTo > 0 (shows PostSent screen)', async () => {
+    const { postService } = await import('../../services/postService');
+    const replyMock = vi.mocked(postService.replyDetachedSignatureViaPost).mockResolvedValue({
+      msgId: 'msg-reply-123',
+      depositedTo: 1,
+      errors: [],
+    });
+
+    render(
+      <SignRequestView
+        voucherData={mockVoucherDetails}
+        senderDid="did:key:z6Mku7...alice"
+        requestMsgId="msg-req-123"
+        onBack={mockOnBack}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Sign Now/i })).toBeInTheDocument();
+    });
+
+    const signButton = screen.getByRole('button', { name: /Sign Now/i });
+    fireEvent.click(signButton);
+
+    await waitFor(() => {
+      expect(replyMock).toHaveBeenCalledWith(
+        'msg-req-123',
+        'did:key:z6Mku7...alice',
+        expect.any(Array),
+        'test-password'
+      );
+      expect(screen.getAllByText(/Signature Sent via Post/i).length).toBeGreaterThan(0);
+      expect(screen.getByRole('button', { name: /Done/i })).toBeInTheDocument();
+    });
+  });
+
+  it('falls back to .sig file save dialog when replyDetachedSignatureViaPost has depositedTo === 0 (§6.2 asymmetry rule)', async () => {
+    const { postService } = await import('../../services/postService');
+    vi.mocked(postService.replyDetachedSignatureViaPost).mockResolvedValue({
+      msgId: 'msg-reply-123',
+      depositedTo: 0,
+      errors: ['No reachable drops'],
+    });
+
+    (save as Mock).mockResolvedValue('/tmp/signature-fallback.sig');
+
+    render(
+      <SignRequestView
+        voucherData={mockVoucherDetails}
+        senderDid="did:key:z6Mku7...alice"
+        requestMsgId="msg-req-123"
+        onBack={mockOnBack}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Sign Now/i })).toBeInTheDocument();
+    });
+
+    const signButton = screen.getByRole('button', { name: /Sign Now/i });
+    fireEvent.click(signButton);
+
+    await waitFor(() => {
+      // Must fall back to file save
+      expect(save).toHaveBeenCalled();
+      expect(screen.getAllByText(/Signature \(\.sig\) Saved!/i).length).toBeGreaterThan(0);
+      expect(screen.getByText('/tmp/signature-fallback.sig')).toBeInTheDocument();
+    });
   });
 });

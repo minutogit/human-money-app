@@ -14,16 +14,25 @@ import {
     SlidersHorizontal,
     X,
     Download,
-    Server
+    Server,
+    MessageSquare,
+    Check,
+    Clock,
+    User
 } from 'lucide-react';
-import { FrontendMarketPerson, FrontendMarketListing } from '../../types';
+import { FrontendMarketPerson, FrontendMarketListing, FrontendMarketInquiryItem } from '../../types';
 import { useNavigation } from '../../context/NavigationContext';
+import { useSession } from '../../context/SessionContext';
 import { marketService } from '../../services/marketService';
+import { postService, POST_INBOX_UPDATED_EVENT } from '../../services/postService';
+import { profileService } from '../../services/profileService';
 import { settingsService } from '../../services/settingsService';
 import { PageLayout } from '../ui/PageLayout';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
+import { Textarea } from '../ui/Textarea';
+import { ModalShell } from '../ui/ModalShell';
 import { AlertBanner } from '../ui/AlertBanner';
 import { PageLoadingState, PageEmptyState } from '../ui/PageState';
 import { MarketPersonView } from './MarketPersonView';
@@ -40,10 +49,28 @@ export interface MarketplaceViewProps {
 export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
     const { t } = useTranslation();
     const { navigate, goBack, appState } = useNavigation();
+    const { protectAction } = useSession();
 
     const [people, setPeople] = useState<FrontendMarketPerson[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [error, setError] = useState<string | null>(null);
+    const [ownDid, setOwnDid] = useState<string>('');
+
+    // Marketplace post inquiries (§6.4.3)
+    const [sellerInquiries, setSellerInquiries] = useState<FrontendMarketInquiryItem[]>([]);
+    const [buyerInquiries, setBuyerInquiries] = useState<FrontendMarketInquiryItem[]>([]);
+
+    // 1-Step inquiry sending state (NO Chat! max 280 chars)
+    const [inquiryTarget, setInquiryTarget] = useState<{ person: FrontendMarketPerson; listing: FrontendMarketListing } | null>(null);
+    const [inquiryMessage, setInquiryMessage] = useState('');
+    const [isSendingInquiry, setIsSendingInquiry] = useState(false);
+    const [inquirySendError, setInquirySendError] = useState<string | null>(null);
+
+    // 1-Step inquiry replying state
+    const [replyingInquiry, setReplyingInquiry] = useState<FrontendMarketInquiryItem | null>(null);
+    const [replyDecision, setReplyDecision] = useState<'confirm' | 'decline'>('confirm');
+    const [replyNote, setReplyNote] = useState('');
+    const [isReplyingInquiry, setIsReplyingInquiry] = useState(false);
 
     // Navigation sub-view state
     const didFromNav = appState.view === 'marketplace' ? appState.selectedDid : undefined;
@@ -71,8 +98,19 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
         setIsLoading(true);
         setError(null);
         try {
-            const data = await marketService.getMarketView();
+            const [data, postSummary, myId] = await Promise.all([
+                marketService.getMarketView(),
+                postService.getPostInboxSummary().catch(() => null),
+                profileService.getUserId().catch(() => '')
+            ]);
             setPeople(data || []);
+            if (postSummary) {
+                setSellerInquiries(postSummary.sellerInquiries || []);
+                setBuyerInquiries(postSummary.buyerInquiries || []);
+            }
+            if (myId) {
+                setOwnDid(myId);
+            }
         } catch (err) {
             setError(translateError(err, t));
         } finally {
@@ -95,7 +133,79 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
     useEffect(() => {
         loadMarketView();
         triggerDropSync();
+        postService.syncPostDrops().catch(() => {});
+        window.addEventListener(POST_INBOX_UPDATED_EVENT, loadMarketView);
+        return () => {
+            window.removeEventListener(POST_INBOX_UPDATED_EVENT, loadMarketView);
+        };
     }, [loadMarketView, triggerDropSync]);
+
+    const handleSendInquiry = async () => {
+        if (!inquiryTarget || !inquiryMessage.trim()) return;
+        setIsSendingInquiry(true);
+        setInquirySendError(null);
+        try {
+            const created = await protectAction(async (pwd) => {
+                return await postService.sendMarketInquiryViaPost(
+                    inquiryTarget.person.did,
+                    inquiryTarget.listing.listingId,
+                    inquiryTarget.listing.title,
+                    inquiryMessage.trim(),
+                    inquiryTarget.person.cardDrops,
+                    pwd || undefined
+                );
+            });
+            if (created) {
+                setBuyerInquiries(prev => [...prev.filter(i => i.inquiryId !== created.inquiryId), created]);
+                setInquiryTarget(null);
+                setInquiryMessage('');
+            }
+        } catch (err) {
+            setInquirySendError(translateError(err, t));
+        } finally {
+            setIsSendingInquiry(false);
+        }
+    };
+
+    const handleExecuteReply = async () => {
+        if (!replyingInquiry) return;
+        setIsReplyingInquiry(true);
+        try {
+            const updated = await protectAction(async (pwd) => {
+                return await postService.replyMarketInquiryViaPost(
+                    replyingInquiry.inquiryId,
+                    replyDecision,
+                    replyNote.trim() || undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    pwd || undefined
+                );
+            });
+            if (updated) {
+                setSellerInquiries(prev => prev.map(i => i.inquiryId === updated.inquiryId ? updated : i));
+                setReplyingInquiry(null);
+                setReplyNote('');
+            }
+        } catch (err) {
+            console.error("Failed to reply to inquiry:", err);
+        } finally {
+            setIsReplyingInquiry(false);
+        }
+    };
+
+    const handleDismissInquiry = async (kind: 'seller_inquiry' | 'buyer_inquiry', id: string) => {
+        try {
+            await postService.dismissPendingPostItem(kind, id);
+            if (kind === 'seller_inquiry') {
+                setSellerInquiries(prev => prev.filter(i => i.inquiryId !== id));
+            } else {
+                setBuyerInquiries(prev => prev.filter(i => i.inquiryId !== id));
+            }
+        } catch (err) {
+            console.error("Failed to dismiss inquiry:", err);
+        }
+    };
 
     useEffect(() => {
         async function fetchSettings() {
@@ -399,6 +509,162 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
                     </AlertBanner>
                 )}
 
+                {/* Seller Inbox Section (§6.4.3) */}
+                {sellerInquiries.length > 0 && (
+                    <div className="p-5 bg-teal-50/70 border border-teal-200 rounded-3xl space-y-3" data-testid="seller-inbox-section">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-teal-950 font-bold text-sm">
+                                <MessageSquare size={18} className="text-teal-600" />
+                                <span>{t('marketplace.sellerInboxTitle', 'Anfragen zu deinen Angeboten ({{count}})', { count: sellerInquiries.length })}</span>
+                            </div>
+                        </div>
+                        <div className="space-y-3 pt-1">
+                            {sellerInquiries.map(inq => {
+                                const buyerName = inq.counterpartyName || truncateUserId(inq.counterpartyDid);
+                                const hasReplied = !!inq.reply;
+
+                                return (
+                                    <div key={inq.inquiryId} className="p-4 bg-white rounded-2xl border border-teal-150 shadow-xs flex flex-col md:flex-row md:items-start justify-between gap-4">
+                                        <div className="space-y-1.5 min-w-0 flex-1">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="font-bold text-sm text-theme-primary">{inq.listingTitle}</span>
+                                                <span className="text-[11px] text-theme-light flex items-center gap-1">
+                                                    <User size={11} /> {buyerName}
+                                                </span>
+                                            </div>
+                                            <p className="text-xs text-theme-secondary/90 bg-bg-app p-2.5 rounded-xl border border-theme-subtle/50 whitespace-pre-wrap leading-relaxed">
+                                                "{inq.message}"
+                                            </p>
+                                            {hasReplied && (
+                                                <div className="flex items-center gap-2 text-xs pt-1">
+                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${inq.reply?.decision === 'confirm' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                                                        {inq.reply?.decision === 'confirm' ? t('marketplace.inquiryStatusConfirmed', 'Bestätigt') : t('marketplace.inquiryStatusDeclined', 'Abgesagt')}
+                                                    </span>
+                                                    {inq.reply?.note && (
+                                                        <span className="text-theme-light italic">"{inq.reply.note}"</span>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                                            {!hasReplied ? (
+                                                <>
+                                                    <Button
+                                                        size="xs"
+                                                        variant="outline"
+                                                        onClick={() => {
+                                                            setReplyingInquiry(inq);
+                                                            setReplyDecision('decline');
+                                                            setReplyNote('');
+                                                        }}
+                                                        data-testid="decline-inquiry-button"
+                                                        className="text-theme-light hover:text-rose-600"
+                                                    >
+                                                        {t('marketplace.inquiryDeclineBtn', 'Absagen')}
+                                                    </Button>
+                                                    <Button
+                                                        size="xs"
+                                                        variant="primary"
+                                                        onClick={() => {
+                                                            setReplyingInquiry(inq);
+                                                            setReplyDecision('confirm');
+                                                            setReplyNote('');
+                                                        }}
+                                                        data-testid="confirm-inquiry-button"
+                                                        className="bg-teal-600 hover:bg-teal-700 text-white"
+                                                    >
+                                                        {t('marketplace.inquiryConfirmBtn', 'Bestätigen')}
+                                                    </Button>
+                                                </>
+                                            ) : (
+                                                <Button
+                                                    size="xs"
+                                                    variant="outline"
+                                                    onClick={() => handleDismissInquiry('seller_inquiry', inq.inquiryId)}
+                                                    data-testid="dismiss-seller-inquiry-button"
+                                                    className="text-theme-light"
+                                                >
+                                                    {t('common.dismiss', 'Verwerfen')}
+                                                </Button>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                {/* Buyer Sent Inquiries Section (§6.4.3) */}
+                {buyerInquiries.length > 0 && (
+                    <div className="p-4 bg-sky-50/60 border border-sky-200 rounded-3xl space-y-2.5" data-testid="buyer-inquiries-section">
+                        <div className="flex items-center gap-2 text-sky-950 font-bold text-xs uppercase tracking-wider">
+                            <Clock size={14} className="text-sky-600" />
+                            <span>{t('marketplace.buyerInquiriesTitle', 'Deine gesendeten Anfragen')}</span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                            {buyerInquiries.map(inq => {
+                                const isConfirmed = inq.reply?.decision === 'confirm';
+                                const isDeclined = inq.reply?.decision === 'decline';
+                                const isWaiting = !inq.reply;
+
+                                return (
+                                    <div key={inq.inquiryId} className="p-3 bg-white rounded-2xl border border-sky-100 shadow-xs flex items-center justify-between gap-3 text-xs">
+                                        <div className="min-w-0">
+                                            <p className="font-bold text-theme-primary truncate">{inq.listingTitle}</p>
+                                            <div className="flex items-center gap-1.5 mt-0.5">
+                                                {isWaiting && (
+                                                    <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                                        {t('marketplace.inquiryWaiting', 'Wartet auf Antwort')}
+                                                    </span>
+                                                )}
+                                                {isConfirmed && (
+                                                    <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                                        {t('marketplace.inquiryConfirmed', 'Bestätigt')}
+                                                    </span>
+                                                )}
+                                                {isDeclined && (
+                                                    <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                                                        {t('marketplace.inquiryDeclined', 'Abgesagt')}
+                                                    </span>
+                                                )}
+                                                {inq.reply?.note && (
+                                                    <span className="text-[10px] text-theme-light italic truncate max-w-[140px]">"{inq.reply.note}"</span>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-2 shrink-0">
+                                            {isConfirmed && (
+                                                <Button
+                                                    size="xs"
+                                                    variant="primary"
+                                                    onClick={() => navigate({ view: 'send_vouchers', initialRecipientId: inq.counterpartyDid, initialNote: inq.reply?.note || inq.listingTitle })}
+                                                    data-testid="pay-confirmed-inquiry-button"
+                                                    className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                                                >
+                                                    <Send size={11} />
+                                                    <span>{t('marketplace.payNowBtn', 'Jetzt bezahlen')}</span>
+                                                </Button>
+                                            )}
+                                            <Button
+                                                size="xs"
+                                                variant="outline"
+                                                onClick={() => handleDismissInquiry('buyer_inquiry', inq.inquiryId)}
+                                                className="text-theme-light hover:text-rose-600 p-1 h-auto"
+                                                title={t('common.dismiss')}
+                                            >
+                                                <X size={12} />
+                                            </Button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
                 {/* Navigation Segments / Tabs */}
                 <div className="flex items-center gap-2 border-b border-theme-subtle pb-1">
                     <button
@@ -539,14 +805,92 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
                                                                     <Ticket size={12} />
                                                                 </span>
                                                             )}
+                                                            {formattedDate && (
+                                                                <span className="shrink-0 text-[10px] text-theme-light opacity-75">
+                                                                    {t('marketplace.asOf', { date: formattedDate })}
+                                                                </span>
+                                                            )}
                                                         </div>
 
-                                                        {/* Date */}
-                                                        {formattedDate && (
-                                                            <span className="shrink-0 text-[10px] text-theme-light opacity-75">
-                                                                {t('marketplace.asOf', { date: formattedDate })}
-                                                            </span>
-                                                        )}
+                                                        {/* Actions & Inquiry Status (§6.4.3) */}
+                                                        <div className="flex items-center gap-2 shrink-0">
+                                                            {(() => {
+                                                                const buyerInquiry = buyerInquiries.find(i => i.listingId === listing.listingId);
+                                                                const isOwn = person.did === ownDid;
+
+                                                                if (buyerInquiry) {
+                                                                    if (!buyerInquiry.reply) {
+                                                                        return (
+                                                                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                                                                {t('marketplace.inquiryWaiting', 'Wartet auf Antwort')}
+                                                                            </span>
+                                                                        );
+                                                                    }
+                                                                    if (buyerInquiry.reply.decision === 'confirm') {
+                                                                        return (
+                                                                            <div className="flex items-center gap-1.5">
+                                                                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                                                                    {t('marketplace.inquiryConfirmed', 'Bestätigt')}
+                                                                                </span>
+                                                                                <Button
+                                                                                    size="xs"
+                                                                                    variant="primary"
+                                                                                    onClick={(e) => {
+                                                                                        e.stopPropagation();
+                                                                                        navigate({ view: 'send_vouchers', initialRecipientId: person.did, initialNote: buyerInquiry.reply?.note || listing.title });
+                                                                                    }}
+                                                                                    data-testid="pay-confirmed-listing-button"
+                                                                                    className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1 text-[11px]"
+                                                                                >
+                                                                                    <Send size={11} />
+                                                                                    <span>{t('marketplace.payNowBtn', 'Jetzt bezahlen')}</span>
+                                                                                </Button>
+                                                                            </div>
+                                                                        );
+                                                                    }
+                                                                    if (buyerInquiry.reply.decision === 'decline') {
+                                                                        return (
+                                                                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                                                                                {t('marketplace.inquiryDeclined', 'Abgesagt')}
+                                                                            </span>
+                                                                        );
+                                                                    }
+                                                                }
+
+                                                                return (
+                                                                    <>
+                                                                        {!isOwn && listing.allowInquiries && person.cardDrops && person.cardDrops.length > 0 && (
+                                                                            <Button
+                                                                                size="xs"
+                                                                                variant="outline"
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    setInquiryTarget({ person, listing });
+                                                                                    setInquiryMessage('');
+                                                                                }}
+                                                                                data-testid="inquiry-button"
+                                                                                className="gap-1 text-[11px] border-theme-subtle"
+                                                                            >
+                                                                                <MessageSquare size={11} />
+                                                                                <span>{t('marketplace.inquiryButton', 'Reservieren / Anfragen')}</span>
+                                                                            </Button>
+                                                                        )}
+                                                                        <Button
+                                                                            size="xs"
+                                                                            variant="outline"
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                navigate({ view: 'send_vouchers', initialRecipientId: person.did, initialNote: listing.title });
+                                                                            }}
+                                                                            className="gap-1 text-[11px]"
+                                                                        >
+                                                                            <Send size={11} />
+                                                                            <span>{t('marketplace.pay', 'Bezahlen')}</span>
+                                                                        </Button>
+                                                                    </>
+                                                                );
+                                                            })()}
+                                                        </div>
                                                     </div>
                                                 </Card>
                                             );
@@ -631,14 +975,92 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
                                                                     <Ticket size={12} />
                                                                 </span>
                                                             )}
+                                                            {formattedDate && (
+                                                                <span className="shrink-0 text-[10px] text-theme-light opacity-75">
+                                                                    {t('marketplace.asOf', { date: formattedDate })}
+                                                                </span>
+                                                            )}
                                                         </div>
 
-                                                        {/* Date */}
-                                                        {formattedDate && (
-                                                            <span className="shrink-0 text-[10px] text-theme-light opacity-75">
-                                                                {t('marketplace.asOf', { date: formattedDate })}
-                                                            </span>
-                                                        )}
+                                                        {/* Actions & Inquiry Status (§6.4.3) */}
+                                                        <div className="flex items-center gap-2 shrink-0">
+                                                            {(() => {
+                                                                const buyerInquiry = buyerInquiries.find(i => i.listingId === listing.listingId);
+                                                                const isOwn = person.did === ownDid;
+
+                                                                if (buyerInquiry) {
+                                                                    if (!buyerInquiry.reply) {
+                                                                        return (
+                                                                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                                                                {t('marketplace.inquiryWaiting', 'Wartet auf Antwort')}
+                                                                            </span>
+                                                                        );
+                                                                    }
+                                                                    if (buyerInquiry.reply.decision === 'confirm') {
+                                                                        return (
+                                                                            <div className="flex items-center gap-1.5">
+                                                                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                                                                    {t('marketplace.inquiryConfirmed', 'Bestätigt')}
+                                                                                </span>
+                                                                                <Button
+                                                                                    size="xs"
+                                                                                    variant="primary"
+                                                                                    onClick={(e) => {
+                                                                                        e.stopPropagation();
+                                                                                        navigate({ view: 'send_vouchers', initialRecipientId: person.did, initialNote: buyerInquiry.reply?.note || listing.title });
+                                                                                    }}
+                                                                                    data-testid="pay-confirmed-listing-button"
+                                                                                    className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1 text-[11px]"
+                                                                                >
+                                                                                    <Send size={11} />
+                                                                                    <span>{t('marketplace.payNowBtn', 'Jetzt bezahlen')}</span>
+                                                                                </Button>
+                                                                            </div>
+                                                                        );
+                                                                    }
+                                                                    if (buyerInquiry.reply.decision === 'decline') {
+                                                                        return (
+                                                                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                                                                                {t('marketplace.inquiryDeclined', 'Abgesagt')}
+                                                                            </span>
+                                                                        );
+                                                                    }
+                                                                }
+
+                                                                return (
+                                                                    <>
+                                                                        {!isOwn && listing.allowInquiries && person.cardDrops && person.cardDrops.length > 0 && (
+                                                                            <Button
+                                                                                size="xs"
+                                                                                variant="outline"
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    setInquiryTarget({ person, listing });
+                                                                                    setInquiryMessage('');
+                                                                                }}
+                                                                                data-testid="inquiry-button"
+                                                                                className="gap-1 text-[11px] border-theme-subtle"
+                                                                            >
+                                                                                <MessageSquare size={11} />
+                                                                                <span>{t('marketplace.inquiryButton', 'Reservieren / Anfragen')}</span>
+                                                                            </Button>
+                                                                        )}
+                                                                        <Button
+                                                                            size="xs"
+                                                                            variant="outline"
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                navigate({ view: 'send_vouchers', initialRecipientId: person.did, initialNote: listing.title });
+                                                                            }}
+                                                                            className="gap-1 text-[11px]"
+                                                                        >
+                                                                            <Send size={11} />
+                                                                            <span>{t('marketplace.pay', 'Bezahlen')}</span>
+                                                                        </Button>
+                                                                    </>
+                                                                );
+                                                            })()}
+                                                        </div>
                                                     </div>
                                                 </Card>
                                             );
@@ -803,6 +1225,125 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
                     }
                 }}
             />
+
+            {/* 1-Step Inquiry Modal (§6.4.3 - NO Chat! max 280 chars) */}
+            {inquiryTarget && (
+                <ModalShell
+                    isOpen={!!inquiryTarget}
+                    onClose={() => { setInquiryTarget(null); setInquiryMessage(''); setInquirySendError(null); }}
+                    title={t('marketplace.inquiryModalTitle', 'Anfrage senden')}
+                >
+                    <div className="space-y-4 p-2">
+                        <div className="p-3 bg-bg-app rounded-xl border border-theme-subtle space-y-1">
+                            <span className="text-[10px] font-black uppercase tracking-wider text-theme-light">{t('marketplace.targetListing', 'Angebot')}</span>
+                            <p className="font-bold text-sm text-theme-primary">{inquiryTarget.listing.title}</p>
+                            <p className="text-xs text-theme-light">
+                                {t('marketplace.toRecipient', 'An: {{name}}', { name: getDisplayName(inquiryTarget.person) })}
+                            </p>
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs">
+                                <label className="font-bold text-theme-secondary">{t('marketplace.inquiryMessageLabel', 'Deine kurze Nachricht')}</label>
+                                <span className={`text-[10px] font-mono ${inquiryMessage.length > 280 ? 'text-rose-600 font-bold' : 'text-theme-light'}`}>
+                                    {inquiryMessage.length} / 280
+                                </span>
+                            </div>
+                            <Textarea
+                                value={inquiryMessage}
+                                onChange={(e) => setInquiryMessage(e.target.value.slice(0, 280))}
+                                placeholder={t('marketplace.inquiryMessagePlaceholder', 'z.B. Ich würde das Angebot gerne reservieren / anfragen. Wann passt es dir?')}
+                                rows={3}
+                                className="text-xs"
+                                autoFocus
+                                data-testid="inquiry-message-input"
+                            />
+                        </div>
+
+                        {inquirySendError && (
+                            <div className="p-2.5 bg-rose-50 text-rose-600 rounded-xl text-xs font-semibold border border-rose-200">
+                                {inquirySendError}
+                            </div>
+                        )}
+
+                        <div className="flex items-center justify-end gap-2 pt-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => { setInquiryTarget(null); setInquiryMessage(''); setInquirySendError(null); }}
+                            >
+                                {t('common.cancel', 'Abbrechen')}
+                            </Button>
+                            <Button
+                                variant="primary"
+                                size="sm"
+                                disabled={!inquiryMessage.trim() || isSendingInquiry}
+                                onClick={handleSendInquiry}
+                                data-testid="send-inquiry-confirm-button"
+                                className="gap-1.5"
+                            >
+                                {isSendingInquiry ? <RefreshCw size={14} className="animate-spin" /> : <Send size={14} />}
+                                <span>{isSendingInquiry ? t('marketplace.sendingInquiry', 'Sende...') : t('marketplace.sendInquiryBtn', 'Anfrage absenden')}</span>
+                            </Button>
+                        </div>
+                    </div>
+                </ModalShell>
+            )}
+
+            {/* 1-Step Reply Modal (§6.4.3 - strictly Confirm or Decline) */}
+            {replyingInquiry && (
+                <ModalShell
+                    isOpen={!!replyingInquiry}
+                    onClose={() => { setReplyingInquiry(null); setReplyNote(''); }}
+                    title={replyDecision === 'confirm' ? t('marketplace.replyConfirmTitle', 'Anfrage bestätigen') : t('marketplace.replyDeclineTitle', 'Anfrage absagen')}
+                >
+                    <div className="space-y-4 p-2">
+                        <div className="p-3 bg-bg-app rounded-xl border border-theme-subtle space-y-1">
+                            <p className="font-bold text-sm text-theme-primary">{replyingInquiry.listingTitle}</p>
+                            <p className="text-xs text-theme-secondary italic">"{replyingInquiry.message}"</p>
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-bold text-theme-secondary">
+                                {replyDecision === 'confirm' 
+                                    ? t('marketplace.confirmNoteLabel', 'Optionaler Hinweis oder Zahlungsdetails für den Käufer:')
+                                    : t('marketplace.declineNoteLabel', 'Optionaler Grund für die Absage:')}
+                            </label>
+                            <Input
+                                value={replyNote}
+                                onChange={(e) => setReplyNote(e.target.value)}
+                                placeholder={replyDecision === 'confirm' 
+                                    ? t('marketplace.confirmNotePlaceholder', 'z.B. Abholung morgen ab 18:00 Uhr möglich.')
+                                    : t('marketplace.declineNotePlaceholder', 'z.B. Leider bereits vergeben.')}
+                                className="text-xs"
+                                autoFocus
+                                data-testid="reply-note-input"
+                            />
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 pt-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => { setReplyingInquiry(null); setReplyNote(''); }}
+                            >
+                                {t('common.cancel', 'Abbrechen')}
+                            </Button>
+                            <Button
+                                variant="primary"
+                                size="sm"
+                                disabled={isReplyingInquiry}
+                                onClick={handleExecuteReply}
+                                data-testid="execute-reply-button"
+                                className={replyDecision === 'confirm' ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-rose-600 hover:bg-rose-700 text-white'}
+                            >
+                                {isReplyingInquiry ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
+                                <span>{replyDecision === 'confirm' ? t('marketplace.inquiryConfirmBtn', 'Bestätigen') : t('marketplace.inquiryDeclineBtn', 'Absagen')}</span>
+                            </Button>
+                        </div>
+                    </div>
+                </ModalShell>
+            )}
         </PageLayout>
     );
 }

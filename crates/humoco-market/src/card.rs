@@ -23,6 +23,13 @@ pub fn next_card_version(last_v: Option<u64>, now_unix: u64) -> u64 {
     last_v.map_or(now_unix, |lv| lv.saturating_add(1).max(now_unix))
 }
 
+fn is_loopback_http(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("http://127.0.0.1")
+        || lower.starts_with("http://localhost")
+        || lower.starts_with("http://[::1]")
+}
+
 fn validate_card_fields(
     max_hops: u8,
     listings: &[Listing],
@@ -89,27 +96,24 @@ fn validate_card_fields(
     }
 
     for (i, drop) in drops.iter().enumerate() {
-        if !drop.write_url.starts_with("https://") {
+        if !drop.write_url.starts_with("https://") && !is_loopback_http(&drop.write_url) {
             return Err(MarketError::Validation(format!(
                 "drop[{}] write_url must start with https://, got {}",
                 i, drop.write_url
             )));
         }
-        if !drop.read_url.starts_with("https://") {
+        if !drop.read_url.starts_with("https://") && !is_loopback_http(&drop.read_url) {
             return Err(MarketError::Validation(format!(
                 "drop[{}] read_url must start with https://, got {}",
                 i, drop.read_url
             )));
         }
-        let decoded = bs58::decode(&drop.drop_pub)
-            .into_vec()
-            .map_err(|e| MarketError::Validation(format!("drop[{}] drop_pub base58 error: {}", i, e)))?;
-        if decoded.len() != 32 {
-            return Err(MarketError::Validation(format!(
-                "drop[{}] drop_pub must decode to 32 bytes, got {}",
-                i,
-                decoded.len()
-            )));
+        crate::drop_access::parse_ed25519_pubkey_hex64(&drop.drop_pub)
+            .map_err(|e| MarketError::Validation(format!("drop[{}] drop_pub error: {}", i, e)))?;
+
+        if let Some(ref slot_id) = drop.slot_id {
+            crate::drop_access::parse_ed25519_pubkey_hex64(slot_id)
+                .map_err(|e| MarketError::Validation(format!("drop[{}] slot_id error: {}", i, e)))?;
         }
     }
 

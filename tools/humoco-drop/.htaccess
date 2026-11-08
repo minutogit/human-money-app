@@ -1,8 +1,8 @@
 # Disable directory listing
 Options -Indexes
 
-# Protect configuration, lock, and temporary files from direct web access
-<FilesMatch "^(config\.php|\.lock|.*\.tmp.*)$">
+# Protect configuration, internal state, rate-limiter, member lists, lock, and temporary files from direct web access
+<FilesMatch "^(config\.php|\.state\.php|ratelimit\.bin\.php|members\..*\.php|\.lock|.*\.tmp.*)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>

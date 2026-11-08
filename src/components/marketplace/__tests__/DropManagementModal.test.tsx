@@ -9,6 +9,7 @@ import {
   FrontendDropSyncResult,
   FrontendDropSetupDraft,
   FrontendDropConnectionTestResult,
+  FrontendPublicDropInfo,
 } from '../../../types';
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -18,6 +19,10 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   save: vi.fn(() => Promise.resolve('/path/to/humoco-drop.zip')),
   open: vi.fn(() => Promise.resolve('/path/to/file')),
+}));
+
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openUrl: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock('../../../utils/clipboard', () => ({
@@ -64,8 +69,15 @@ describe('DropManagementModal Component', () => {
       readUrl: 'https://mydrop.org/d-9999',
       dropPub: 'DropPubAdmin9999999999999999999999999999',
     },
+    adminPubkey: 'AdminPubkey12345678901234567890123456789012345678901234567890123456',
+    generation: 1,
+    rotationRetireAt: null,
     dataDir: 'd-9999',
     maxMembers: 300,
+    maxTotalStorageMb: 50,
+    usedBytes: 10 * 1024 * 1024,
+    maxBytes: 50 * 1024 * 1024,
+    softWarning: false,
     cardPolicy: {
       directMin: 2,
       hop2Enabled: true,
@@ -74,11 +86,12 @@ describe('DropManagementModal Component', () => {
     },
     allow: ['did:key:zCustomFriend'],
     deny: ['did:key:zBadActor'],
-    blockedAccessIds: ['deadbeef000011112222333344445555'],
+    blockedPubkeys: ['deadbeef0000111122223333444455556666777788889999aaaabbbbccccdddd'],
     directMemberCount: 12,
     hop2MemberCount: 45,
     totalMemberCount: 57,
     activeSlotIds: ['0123456789abcdef0123456789abcdef'],
+    channelCounts: { card: 57 },
   };
 
   const mockSyncResult: FrontendDropSyncResult = {
@@ -87,6 +100,7 @@ describe('DropManagementModal Component', () => {
     polledDrops: 3,
     decryptedSlots: 5,
     importedCards: 2,
+    importedWotLists: 1,
     errors: [],
   };
 
@@ -97,8 +111,10 @@ describe('DropManagementModal Component', () => {
       dropPub: 'DraftPub12345',
     },
     dataDir: 'd-draft123',
-    adminTokenHash: 'hash123456',
+    adminPubkey: 'DraftAdminPubkey123456789012345678901234567890123456789012345678',
+    generation: 1,
     maxMembers: 300,
+    maxTotalStorageMb: 50,
     policy: {
       directMin: 2,
       hop2Enabled: true,
@@ -113,6 +129,15 @@ describe('DropManagementModal Component', () => {
     message: 'Connection verified successfully (57 active members).',
     writeOk: true,
     readOk: true,
+  };
+
+  const mockPublicDropInfo: FrontendPublicDropInfo = {
+    writeUrl: 'https://publicdrop.example.org/drop.php',
+    readUrl: 'https://publicdrop.example.org/d-pub',
+    dropPub: 'PublicDropPub12345678901234567890123456789012345678901234567890123456',
+    registerUrl: 'https://publicdrop.example.org/register',
+    accessPubkey: 'AccessPubkeyR1234567890123456789012345678901234567890123456789012',
+    authorizedChannels: ['card', 'wot'],
   };
 
   beforeEach(() => {
@@ -145,7 +170,7 @@ describe('DropManagementModal Component', () => {
       if (cmd === 'block_drop_slot') {
         return Promise.resolve({
           ...mockAdminStatus,
-          blockedAccessIds: [...mockAdminStatus.blockedAccessIds, 'newblockedaccessid'],
+          blockedPubkeys: [...mockAdminStatus.blockedPubkeys, 'newblockedpubkey'],
           activeSlotIds: [],
         });
       }
@@ -155,17 +180,34 @@ describe('DropManagementModal Component', () => {
       if (cmd === 'set_selected_upload_drops') {
         return Promise.resolve([]);
       }
+      if (cmd === 'probe_public_drop') {
+        return Promise.resolve(mockPublicDropInfo);
+      }
+      if (cmd === 'save_public_drop') {
+        return Promise.resolve(mockPublicDropInfo);
+      }
+      if (cmd === 'remove_public_drop') {
+        return Promise.resolve(undefined);
+      }
+      if (cmd === 'rotate_drop_admin_key') {
+        return Promise.resolve({
+          ...mockAdminStatus,
+          generation: 2,
+          rotationRetireAt: Math.floor(Date.now() / 1000) + 180 * 86400,
+        });
+      }
       return Promise.resolve(undefined);
     });
   });
 
-  it('renders Tab 1 (Use Drops): lists discovered drops, displays badges, and triggers sync', async () => {
+  it('renders Section 1 (Friends Drops): lists discovered drops, displays badges, and triggers sync', async () => {
     const onSyncMock = vi.fn();
     render(
       <DropManagementModal
         isOpen={true}
         onClose={vi.fn()}
         onSyncComplete={onSyncMock}
+        initialTab="friend_drops"
       />
     );
 
@@ -206,6 +248,7 @@ describe('DropManagementModal Component', () => {
       <DropManagementModal
         isOpen={true}
         onClose={vi.fn()}
+        initialTab="friend_drops"
       />
     );
 
@@ -228,6 +271,7 @@ describe('DropManagementModal Component', () => {
       <DropManagementModal
         isOpen={true}
         onClose={vi.fn()}
+        initialTab="friend_drops"
       />
     );
 
@@ -253,21 +297,56 @@ describe('DropManagementModal Component', () => {
     });
   });
 
-  it('renders Tab 2 Admin View when drop is active: shows counters, updates policy, and blocks slot', async () => {
+  it('renders Section 2 (Public Drop): probes public drop, displays anonymous access key R, and saves', async () => {
     render(
       <DropManagementModal
         isOpen={true}
         onClose={vi.fn()}
+        initialTab="public_drops"
       />
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Alice Honey Farm')).toBeInTheDocument();
+      expect(screen.getByText(/Öffentliche Ablage hinzufügen|Public Drop Provider/i)).toBeInTheDocument();
     });
 
-    // Switch to Tab 2
-    const adminTab = screen.getByRole('tab', { name: /Eigene Ablage|Own Drop/i });
-    fireEvent.click(adminTab);
+    const urlInput = screen.getByPlaceholderText(/z\. B\. ablage\.verein\.de|drop\.example\.com/i);
+    fireEvent.change(urlInput, { target: { value: 'https://publicdrop.example.org' } });
+
+    const probeBtn = screen.getByRole('button', { name: /Ablage prüfen|Probe Drop/i });
+    fireEvent.click(probeBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('probe_public_drop', expect.objectContaining({
+        url: 'https://publicdrop.example.org',
+      }));
+    });
+
+    // Anonymous access key R displayed
+    await waitFor(() => {
+      expect(screen.getByText(/AccessPubkeyR1234567890123456789012345678901234567890123456789012/i)).toBeInTheDocument();
+    });
+
+    // Save public drop
+    const saveBtn = screen.getByRole('button', { name: /Ablage speichern|Save Public Drop/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('save_public_drop', expect.objectContaining({
+        writeUrl: 'https://publicdrop.example.org/drop.php',
+        enabled: true,
+      }));
+    });
+  });
+
+  it('renders Section 3 Admin View when drop is active: shows counters, updates policy, blocks slot, and rotates key', async () => {
+    render(
+      <DropManagementModal
+        isOpen={true}
+        onClose={vi.fn()}
+        initialTab="own_drop"
+      />
+    );
 
     // Verify Admin View information
     await waitFor(() => {
@@ -294,20 +373,23 @@ describe('DropManagementModal Component', () => {
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('block_drop_slot', expect.objectContaining({
-        accessId: '0123456789abcdef0123456789abcdef',
+        pubkeyHex64: '0123456789abcdef0123456789abcdef',
       }));
     });
 
-    // Manual block slot input
-    const manualInput = screen.getByPlaceholderText(/32-stellige hexadezimale Access-ID|32-character hex Access-ID/i);
-    fireEvent.change(manualInput, { target: { value: 'cafebabecafebabecafebabecafebabe' } });
-    const manualBlockBtn = screen.getAllByRole('button', { name: /Sperren|Block/i })[0];
-    fireEvent.click(manualBlockBtn);
+    // Key rotation trigger
+    const rotateBtn = screen.getByRole('button', { name: /Admin-Schlüssel rotieren|Rotate Admin Key/i });
+    fireEvent.click(rotateBtn);
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('block_drop_slot', expect.objectContaining({
-        accessId: 'cafebabecafebabecafebabecafebabe',
-      }));
+      expect(screen.getByRole('heading', { name: /Admin-Schlüssel jetzt rotieren|Rotate Admin Key/i })).toBeInTheDocument();
+    });
+
+    const rotateButtons = screen.getAllByRole('button', { name: /Rotieren|Rotate/i });
+    fireEvent.click(rotateButtons[rotateButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('rotate_drop_admin_key', expect.anything());
     });
   });
 
@@ -327,12 +409,9 @@ describe('DropManagementModal Component', () => {
       <DropManagementModal
         isOpen={true}
         onClose={vi.fn()}
+        initialTab="own_drop"
       />
     );
-
-    // Switch to Tab 2
-    const adminTab = screen.getByRole('tab', { name: /Eigene Ablage|Own Drop/i });
-    fireEvent.click(adminTab);
 
     // Step 1: Configuration & ZIP
     await waitFor(() => {

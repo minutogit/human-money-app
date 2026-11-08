@@ -7,7 +7,18 @@ import {
     RestoreOutcomeDto,
     MnemonicLanguage,
     FrontendAutoBackupStatusDto,
+    FrontendDropBackupSyncResult,
+    FrontendDropBackupFetchDto,
+    FrontendRestoreReconcileResultDto,
 } from "../types";
+
+export interface FetchAndInspectDropBackupArgs {
+    dropInput: string;
+    mnemonic: string;
+    passphrase?: string | null;
+    userPrefix?: string | null;
+    language?: MnemonicLanguage | null;
+}
 
 export interface ExportBackupFileArgs {
     destinationPath: string;
@@ -102,5 +113,27 @@ export const backupService = {
 
     runAutoBackupSync: async (): Promise<FrontendAutoBackupStatusDto> => {
         return await invoke<FrontendAutoBackupStatusDto>("run_auto_backup_sync");
+    },
+
+    syncDropBackup: async (password?: string | null): Promise<FrontendDropBackupSyncResult> => {
+        return await invoke<FrontendDropBackupSyncResult>("sync_drop_backup", {
+            password: password ?? null,
+        });
+    },
+
+    fetchAndInspectDropBackup: async (args: FetchAndInspectDropBackupArgs): Promise<FrontendDropBackupFetchDto> => {
+        return await invoke<FrontendDropBackupFetchDto>("fetch_and_inspect_drop_backup", {
+            dropInput: args.dropInput,
+            mnemonic: args.mnemonic,
+            passphrase: args.passphrase ?? null,
+            userPrefix: args.userPrefix ?? null,
+            language: args.language ?? null,
+        });
+    },
+
+    reconcileRestoredWalletL2: async (password?: string | null): Promise<FrontendRestoreReconcileResultDto> => {
+        return await invoke<FrontendRestoreReconcileResultDto>("reconcile_restored_wallet_l2", {
+            password: password ?? null,
+        });
     },
 };
