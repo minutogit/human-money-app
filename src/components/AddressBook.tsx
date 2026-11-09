@@ -8,12 +8,12 @@ import { wotService } from '../services/wotService';
 import { postService, POST_INBOX_UPDATED_EVENT } from '../services/postService';
 import { settingsService } from '../services/settingsService';
 import { marketService } from '../services/marketService';
-import { notifyDropStatusUpdated } from '../utils/dropEvents';
+import { notifyDropStatusUpdated, DROP_STATUS_UPDATED_EVENT } from '../utils/dropEvents';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeFile, readFile } from '@tauri-apps/plugin-fs';
 import { copyToClipboard } from '../utils/clipboard';
 import { HelpIcon } from './ui/HelpIcon';
-import { Contact, WotSummaryDto, WotProviderDto, FrontendPendingWotHandshake } from '../types';
+import { Contact, WotSummaryDto, WotProviderDto, FrontendPendingWotHandshake, FrontendDropOverviewStatus } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import Avatar from 'boring-avatars';
 import ContactDialog from './ContactDialog';
@@ -21,6 +21,7 @@ import { logger } from '../utils/log';
 import { stringifyError, translateError } from '../utils/errorHelper';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { useSession } from '../context/SessionContext';
+import { useOptionalNavigation } from '../context/NavigationContext';
 import { profileService } from '../services/profileService';
 import { voucherService } from '../services/voucherService';
 import { buildContactCardText } from '../utils/humocoUri';
@@ -45,7 +46,11 @@ import {
     Upload,
     RefreshCw,
     Server,
-    Handshake
+    Handshake,
+    ChevronDown,
+    ChevronUp,
+    CloudOff,
+    Settings
 } from 'lucide-react';
 
 interface AddressBookProps {
@@ -56,9 +61,12 @@ interface AddressBookProps {
 const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery }) => {
     const { t } = useTranslation();
     const { protectAction } = useSession();
+    const navigation = useOptionalNavigation();
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [wotSummary, setWotSummary] = useState<WotSummaryDto | null>(null);
     const [providers, setProviders] = useState<WotProviderDto[]>([]);
+    const [dropOverview, setDropOverview] = useState<FrontendDropOverviewStatus | null>(null);
+    const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
     const [activeTab, setActiveTab] = useState<'contacts' | 'providers'>('contacts');
     const [isUpdatingHops, setIsUpdatingHops] = useState(false);
     const [searchQuery, setSearchQuery] = useState(initialSearchQuery || '');
@@ -81,6 +89,22 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const [isSyncingDrops, setIsSyncingDrops] = useState(false);
     const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+    // Adaptive banner expansion: default to false if >0 rated contacts, true if 0 rated contacts
+    const isNetworkExpanded = userExpanded !== null
+        ? userExpanded
+        : ((wotSummary?.ratedContactsCount ?? 0) === 0);
+    const toggleNetworkExpanded = () => {
+        setUserExpanded(!isNetworkExpanded);
+    };
+
+    const hasSyncService = (dropOverview?.connectedCount ?? 0) > 0;
+
+    const handleNavigateToSyncSettings = () => {
+        if (navigation?.navigateToSettingsSection) {
+            navigation.navigateToSettingsSection('sync');
+        }
+    };
+
     // Async WoT Handshakes (§6.4.2)
     const [pendingHandshakes, setPendingHandshakes] = useState<FrontendPendingWotHandshake[]>([]);
     const [handshakeAcceptedLevels, setHandshakeAcceptedLevels] = useState<{ [msgId: string]: number }>({});
@@ -93,7 +117,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const loadContacts = useCallback(async () => {
         setIsLoading(true);
         try {
-            const [contactsResult, summaryResult, providersResult, postInbox] = await Promise.all([
+            const [contactsResult, summaryResult, providersResult, postInbox, dropStatus] = await Promise.all([
                 contactService.getContacts(),
                 wotService.getSummary().catch(e => {
                     logger.warn("Failed to load WoT summary: " + stringifyError(e));
@@ -103,11 +127,13 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                     logger.warn("Failed to load WoT providers: " + stringifyError(e));
                     return [];
                 }),
-                postService.getPostInboxSummary().catch(() => null)
+                postService.getPostInboxSummary().catch(() => null),
+                marketService.getDropOverviewStatus().catch(() => null)
             ]);
             setContacts(contactsResult);
             setWotSummary(summaryResult ?? null);
             setProviders(providersResult ?? []);
+            setDropOverview(dropStatus ?? null);
             if (postInbox) {
                 setPendingHandshakes(postInbox.pendingWotHandshakes || []);
             }
@@ -122,8 +148,18 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         loadContacts();
         postService.syncPostDrops().catch(() => {});
         window.addEventListener(POST_INBOX_UPDATED_EVENT, loadContacts);
+        const onDropUpdated = (e: Event) => {
+            const custom = e as CustomEvent<FrontendDropOverviewStatus | undefined>;
+            if (custom.detail) {
+                setDropOverview(custom.detail);
+            } else {
+                marketService.getDropOverviewStatus().then(setDropOverview).catch(() => {});
+            }
+        };
+        window.addEventListener(DROP_STATUS_UPDATED_EVENT, onDropUpdated);
         return () => {
             window.removeEventListener(POST_INBOX_UPDATED_EVENT, loadContacts);
+            window.removeEventListener(DROP_STATUS_UPDATED_EVENT, onDropUpdated);
         };
     }, [loadContacts]);
 
@@ -411,9 +447,15 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                 marketService.syncMarketDrops({ forceUpload: true }),
                 postService.syncPostDrops().catch(() => null)
             ]);
-            notifyDropStatusUpdated();
+            const updatedOverview = await marketService.getDropOverviewStatus().catch(() => null);
+            if (updatedOverview) {
+                setDropOverview(updatedOverview);
+                notifyDropStatusUpdated(updatedOverview);
+            } else {
+                notifyDropStatusUpdated();
+            }
             await loadContacts();
-            const msg = t('contacts.syncDropsSuccess', 'Ablagen synchronisiert: {{wot}} Vertrauensliste(n), {{cards}} Angebot(e).', {
+            const msg = t('contacts.syncDropsSuccess', 'Sync-Dienste synchronisiert: {{wot}} Vertrauensliste(n), {{cards}} Angebot(e).', {
                 wot: res.importedWotLists,
                 cards: res.importedCards,
             });
@@ -471,7 +513,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             if (res && res.depositedTo > 0) {
                 setFeedbackMsg({
                     type: 'success',
-                    message: t('contacts.handshakeSentSuccess', '📦 Vertrauensbestätigung (F2F) in Ablage hinterlegt')
+                    message: t('contacts.handshakeSentSuccess', '📦 Vertrauensbestätigung (F2F) über Sync-Dienst hinterlegt')
                 });
                 setSendHandshakeContact(null);
             } else if (res && res.errors && res.errors.length > 0) {
@@ -479,7 +521,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             } else {
                 setFeedbackMsg({
                     type: 'error',
-                    message: t('contacts.handshakeNoDrop', 'Keine gemeinsame Ablage für diesen Kontakt erreichbar.')
+                    message: t('contacts.handshakeNoDrop', 'Kein gemeinsamer Sync-Dienst für diesen Kontakt erreichbar.')
                 });
             }
         } catch (e) {
@@ -573,77 +615,135 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                 onClick={handleSyncDrops}
                                 disabled={isSyncingDrops}
                                 className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
-                                title={t('contacts.syncDropsTooltip', 'Vertrauenslisten und Angebote über konfigurierte Ablagen abgleichen')}
+                                title={t('contacts.syncDropsTooltip', 'Vertrauenseinstufungen und Angebote über konfigurierte Sync-Dienste abgleichen')}
                             >
                                 <RefreshCw size={14} className={isSyncingDrops ? 'animate-spin' : ''} />
-                                {isSyncingDrops ? t('settings.syncing', 'Synchronisiere...') : t('contacts.syncDropsButton', 'Über Ablagen synchronisieren')}
+                                {isSyncingDrops ? t('settings.syncing', 'Synchronisiere...') : t('contacts.syncDropsButton', 'Über Sync-Dienste synchronisieren')}
                             </Button>
                             <Button
                                 type="button"
                                 variant="secondary"
-                                onClick={handleImportWot}
-                                disabled={isImportingWot}
+                                onClick={toggleNetworkExpanded}
                                 className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
+                                title={isNetworkExpanded ? t('contacts.wotCollapseOptions', 'Optionen ausblenden') : t('contacts.wotCustomizeOptions', 'Netzwerk-Optionen anpassen')}
+                                data-testid="toggle-network-options-button"
                             >
-                                <Upload size={14} />
-                                {isImportingWot ? t('common.loading') : t('contacts.importWotButton')}
-                            </Button>
-                            <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={() => {
-                                    setExportMode((wotSummary?.ratedContactsCount ?? 0) > 0 ? 'contacts' : 'password');
-                                    setExportPassword('');
-                                    setIsExportModalOpen(true);
-                                }}
-                                className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
-                            >
-                                <Share2 size={14} />
-                                {t('contacts.exportWotButton')}
+                                <span>{isNetworkExpanded ? t('contacts.wotCollapseOptions', 'Optionen ausblenden') : t('contacts.wotCustomizeOptions', 'Netzwerk-Optionen anpassen')}</span>
+                                {isNetworkExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                             </Button>
                         </div>
                     </div>
 
-                    {/* Global Reach Selector (1..4 Hops) */}
-                    <div className="pt-3 border-t border-theme-subtle/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div className="space-y-0.5">
-                            <div className="flex items-center gap-1.5">
-                                <span className="text-xs font-bold text-theme-secondary">
-                                    {t('contacts.wotReachLabel')}
-                                </span>
-                                <HelpIcon topic="wotReach" size={14} />
+                    {/* Sync Service recommendation */}
+                    {!hasSyncService && (
+                        <div
+                            data-testid="sync-service-recommendation"
+                            className="p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-950"
+                        >
+                            <div className="flex items-start sm:items-center gap-2.5">
+                                <CloudOff size={18} className="text-amber-600 shrink-0 mt-0.5 sm:mt-0" />
+                                <p className="text-xs font-medium text-amber-900 leading-relaxed">
+                                    <span className="font-bold text-amber-950">
+                                        {t('contacts.syncRecommendationTitle', 'Empfohlen')}:
+                                    </span>{' '}
+                                    {t('contacts.syncRecommendationDesc', 'Verbinde einen Sync-Dienst, damit Zahlungen, Bürgschaften und Vertrauenseinstufungen automatisch im Hintergrund fließen und du Dateien nicht manuell austauschen musst.')}
+                                </p>
                             </div>
-                            <p className="text-[11px] text-theme-light">
-                                {t('contacts.wotReachSubtitle')}
-                            </p>
+                            <Button
+                                type="button"
+                                size="xs"
+                                variant="secondary"
+                                onClick={handleNavigateToSyncSettings}
+                                className="self-start sm:self-auto shrink-0 bg-white hover:bg-amber-50 border-amber-200 text-amber-900 font-bold text-xs gap-1.5 shadow-xs"
+                            >
+                                <Settings size={13} />
+                                <span>{t('contacts.connectSyncServiceBtn', 'Sync-Dienst verbinden')}</span>
+                            </Button>
                         </div>
-                        <div className="inline-flex p-1 bg-white/70 rounded-xl border border-theme-subtle/60 gap-1 self-start sm:self-auto">
-                            {[
-                                { hops: 1, labelKey: 'contacts.wotHops1' },
-                                { hops: 2, labelKey: 'contacts.wotHops2' },
-                                { hops: 3, labelKey: 'contacts.wotHops3' },
-                                { hops: 4, labelKey: 'contacts.wotHops4' }
-                            ].map(({ hops, labelKey }) => {
-                                const currentMaxHops = wotSummary?.ownListMaxHops ?? 3;
-                                const isSelected = currentMaxHops === hops;
-                                return (
-                                    <button
-                                        key={hops}
+                    )}
+
+                    {/* Expanded details: Global Reach Selector & File Import/Export */}
+                    {isNetworkExpanded && (
+                        <div className="pt-4 border-t border-theme-subtle/50 space-y-4 animate-in fade-in duration-200" data-testid="expanded-network-options">
+                            {/* Global Reach Selector (1..4 Hops) */}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <div className="space-y-0.5">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="text-xs font-bold text-theme-secondary">
+                                            {t('contacts.wotReachLabel', 'Netzwerk-Reichweite deiner Vertrauenseinstufungen')}
+                                        </span>
+                                        <HelpIcon topic="wotReach" size={14} />
+                                    </div>
+                                    <p className="text-[11px] text-theme-light">
+                                        {t('contacts.wotReachSubtitle')}
+                                    </p>
+                                </div>
+                                <div className="inline-flex p-1 bg-white/70 rounded-xl border border-theme-subtle/60 gap-1 self-start sm:self-auto">
+                                    {[
+                                        { hops: 1, labelKey: 'contacts.wotHops1' },
+                                        { hops: 2, labelKey: 'contacts.wotHops2' },
+                                        { hops: 3, labelKey: 'contacts.wotHops3' },
+                                        { hops: 4, labelKey: 'contacts.wotHops4' }
+                                    ].map(({ hops, labelKey }) => {
+                                        const currentMaxHops = wotSummary?.ownListMaxHops ?? 3;
+                                        const isSelected = currentMaxHops === hops;
+                                        return (
+                                            <button
+                                                key={hops}
+                                                type="button"
+                                                disabled={isUpdatingHops}
+                                                onClick={() => handleSetMaxHops(hops)}
+                                                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer disabled:opacity-50 ${
+                                                    isSelected
+                                                        ? 'bg-theme-secondary text-white shadow-sm'
+                                                        : 'text-theme-light hover:text-theme-secondary hover:bg-white/60'
+                                                }`}
+                                            >
+                                                {t(labelKey)}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* Import / Export .wot files */}
+                            <div className="pt-3 border-t border-theme-subtle/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <div className="space-y-0.5">
+                                    <span className="text-xs font-bold text-theme-secondary">
+                                        {t('contacts.wotManualFileExchange', 'Manuelle Dateiübertragung (.wot)')}
+                                    </span>
+                                    <p className="text-[11px] text-theme-light">
+                                        {t('contacts.wotManualFileExchangeDesc', 'Vertrauenslisten offline via Datei mit Kontakten teilen oder importieren')}
+                                    </p>
+                                </div>
+                                <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+                                    <Button
                                         type="button"
-                                        disabled={isUpdatingHops}
-                                        onClick={() => handleSetMaxHops(hops)}
-                                        className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer disabled:opacity-50 ${
-                                            isSelected
-                                                ? 'bg-theme-secondary text-white shadow-sm'
-                                                : 'text-theme-light hover:text-theme-secondary hover:bg-white/60'
-                                        }`}
+                                        variant="secondary"
+                                        onClick={handleImportWot}
+                                        disabled={isImportingWot}
+                                        className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
                                     >
-                                        {t(labelKey)}
-                                    </button>
-                                );
-                            })}
+                                        <Upload size={14} />
+                                        {isImportingWot ? t('common.loading') : t('contacts.importWotButton')}
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        onClick={() => {
+                                            setExportMode((wotSummary?.ratedContactsCount ?? 0) > 0 ? 'contacts' : 'password');
+                                            setExportPassword('');
+                                            setIsExportModalOpen(true);
+                                        }}
+                                        className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
+                                    >
+                                        <Share2 size={14} />
+                                        {t('contacts.exportWotButton')}
+                                    </Button>
+                                </div>
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
 
                 {/* Incoming Pending WoT Handshakes (§6.4.2) */}
@@ -654,7 +754,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                             <span>{t('contacts.incomingHandshakesTitle', 'Eingehende Vertrauensbestätigungen (WoT Handshake)')}</span>
                         </div>
                         <p className="text-xs text-sky-900/80 leading-relaxed">
-                            {t('contacts.incomingHandshakesDesc', 'Kontakte haben dir nach einem persönlichen Treffen eine Vertrauensbestätigung über eine Ablage gesendet.')}
+                            {t('contacts.incomingHandshakesDesc', 'Kontakte haben dir nach einem persönlichen Treffen eine Vertrauensbestätigung über einen Sync-Dienst gesendet.')}
                         </p>
                         <div className="space-y-3 pt-1">
                             {pendingHandshakes.map(h => {
@@ -947,7 +1047,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                                             setSendHandshakeLevel(lvl >= 1 ? Math.min(lvl, 1) : 1);
                                                         }}
                                                         className="p-2 hover:bg-theme-subtle/20 rounded-xl text-theme-light hover:text-sky-600 transition-all cursor-pointer"
-                                                        title={t('contacts.sendWotHandshakeButton', 'F2F-Bestätigung über Ablage senden')}
+                                                        title={t('contacts.sendWotHandshakeButton', 'F2F-Bestätigung über Sync-Dienst senden')}
                                                         data-testid="send-wot-handshake-button"
                                                     >
                                                         <Handshake size={18} />
@@ -1248,7 +1348,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             {/* Send WoT Handshake Confirmation Modal */}
             <ConfirmationModal
                 isOpen={!!sendHandshakeContact}
-                title={t('contacts.sendHandshakeModalTitle', 'Vertrauensbestätigung (F2F) über Ablage')}
+                title={t('contacts.sendHandshakeModalTitle', 'Vertrauensbestätigung (F2F) über Sync-Dienst')}
                 description={
                     <div className="space-y-4 pt-2">
                         <p className="text-xs text-theme-secondary leading-relaxed">
@@ -1271,7 +1371,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                         </div>
                     </div>
                 }
-                confirmText={t('contacts.sendHandshakeConfirm', 'In Ablage senden')}
+                confirmText={t('contacts.sendHandshakeConfirm', 'Über Sync-Dienst senden')}
                 onConfirm={handleExecuteSendHandshake}
                 onCancel={() => setSendHandshakeContact(null)}
                 isProcessing={isSendingHandshake}

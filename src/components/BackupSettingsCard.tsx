@@ -1,8 +1,8 @@
 // src/components/BackupSettingsCard.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { save, open } from '@tauri-apps/plugin-dialog';
-import { AppSettings, BackupSummaryDto } from '../types';
+import { AppSettings, BackupSummaryDto, FrontendAutoBackupStatusDto } from '../types';
 import { backupService } from '../services/backupService';
 import { settingsService } from '../services/settingsService';
 import { useSession } from '../context/SessionContext';
@@ -22,7 +22,7 @@ import {
     ShieldCheck, 
     Folder,
     RefreshCw,
-    Server,
+    Cloud,
     X
 } from 'lucide-react';
 
@@ -43,6 +43,20 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     const [syncFolder, setSyncFolder] = useState<string>(settings?.backupSyncFolder || '');
     const [autoBackupEnabled, setAutoBackupEnabled] = useState<boolean>(settings?.autoBackupEnabled ?? true);
     const [dropBackupEnabled, setDropBackupEnabled] = useState<boolean>(settings?.dropBackupEnabled ?? true);
+    const [backupFrequency, setBackupFrequency] = useState<'after_mutation' | 'on_close' | 'daily' | 'manual'>(
+        settings?.backupFrequency || 'after_mutation'
+    );
+    const [backupStatus, setBackupStatus] = useState<FrontendAutoBackupStatusDto | null>(null);
+
+    useEffect(() => {
+        backupService.getBackupStatus?.()?.then(setBackupStatus)?.catch(() => {});
+    }, []);
+
+    useEffect(() => {
+        if (settings?.backupFrequency) {
+            setBackupFrequency(settings.backupFrequency);
+        }
+    }, [settings?.backupFrequency]);
 
     const [isExporting, setIsExporting] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -94,6 +108,22 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         }
     };
 
+    const handleFrequencyChange = async (freq: 'after_mutation' | 'on_close' | 'daily' | 'manual') => {
+        setBackupFrequency(freq);
+        if (settings) {
+            const updated: AppSettings = {
+                ...settings,
+                backupFrequency: freq,
+            };
+            try {
+                await settingsService.saveSettings(updated);
+                if (onSettingsUpdated) onSettingsUpdated(updated);
+            } catch {
+                // best-effort
+            }
+        }
+    };
+
     const handleManualDropBackup = async () => {
         setIsDropSyncing(true);
         setFeedback(null);
@@ -102,20 +132,22 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
             if (res.uploadedTo > 0) {
                 setFeedback({
                     type: 'success',
-                    message: t('settings.dropBackupSuccess', `Sicherung erfolgreich in ${res.uploadedTo} Ablage(n) hinterlegt (${Math.round(res.paddedBytes / 1024)} KB).`),
+                    message: t('settings.dropBackupSuccess', `Sicherung erfolgreich in ${res.uploadedTo} Sync-Dienst(en) hinterlegt (${Math.round(res.paddedBytes / 1024)} KB).`),
                 });
                 if (settings && onSettingsUpdated) {
                     onSettingsUpdated({ ...settings, lastDropBackupAt: res.timestamp ?? new Date().toISOString() });
                 }
+                const updatedStatus = await backupService.getBackupStatus().catch(() => null);
+                if (updatedStatus) setBackupStatus(updatedStatus);
             } else if (res.authorizedTargets === 0) {
                 setFeedback({
                     type: 'error',
-                    message: t('settings.noDropAuthorizedBackup', 'Keine verbundene Ablage hat den Backup-Kanal freigegeben. Bitte verbinde eine Freundes-, eigene oder öffentliche Ablage.'),
+                    message: t('settings.noDropAuthorizedBackup', 'Kein verbundener Sync-Dienst hat den Backup-Kanal freigegeben. Bitte aktiviere "Backups erlauben" bei mindestens einem Sync-Dienst.'),
                 });
             } else {
                 setFeedback({
                     type: 'error',
-                    message: t('settings.dropBackupFailed', 'Sicherung in Ablage fehlgeschlagen: ' + res.errors.join(', ')),
+                    message: t('settings.dropBackupFailed', 'Sicherung in Sync-Dienst fehlgeschlagen: ' + res.errors.join(', ')),
                 });
             }
         } catch (err) {
@@ -511,14 +543,14 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                         </Button>
                     </div>
 
-                    {/* Action Panel 3: Drop Off-Site Backup */}
+                    {/* Action Panel 3: Sync Service Online Backup */}
                     <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-theme-subtle flex flex-col justify-between space-y-4 shadow-sm md:col-span-2">
                         <div className="space-y-3">
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
-                                    <Server size={16} className="text-theme-primary" />
+                                    <Cloud size={16} className="text-theme-primary" />
                                     <h4 className="font-bold text-xs text-theme-secondary uppercase tracking-wider">
-                                        {t('settings.dropBackupTitle', 'Verschlüsseltes Off-Site-Backup in Ablagen')}
+                                        {t('settings.dropBackupTitle', 'Online-Backup (Sync-Dienst)')}
                                     </h4>
                                 </div>
                                 {settings?.lastDropBackupAt && (
@@ -529,26 +561,77 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                 )}
                             </div>
                             <p className="text-[11px] text-theme-light leading-relaxed">
-                                {t('settings.dropBackupDesc', 'Sichert die verschlüsselte Wallet (.hmcbackup mit 64-KB-Padding) automatisch in verbundenen Freundes-, eigenen oder öffentlichen Ablagen.')}
+                                {t('settings.dropBackupDesc', 'Sichert die verschlüsselte Wallet (.hmcbackup mit 64-KB-Padding) automatisch bei autorisierten Sync-Diensten.')}
                             </p>
+
+                            {/* Live Status Indicator */}
+                            <div className="p-3 bg-bg-app rounded-xl border border-theme-subtle/70 text-xs flex items-center justify-between">
+                                <span className="text-theme-light font-medium flex items-center gap-1.5">
+                                    <span className={`w-2 h-2 rounded-full ${dropBackupEnabled && backupStatus?.hasAuthorizedSyncBackupTarget ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                                    {t('settings.syncServiceStatusLabel', 'Status:')}
+                                </span>
+                                <span className="font-bold text-theme-primary">
+                                    {!dropBackupEnabled
+                                        ? t('settings.backupDisabled', 'Deaktiviert')
+                                        : !backupStatus?.hasAuthorizedSyncBackupTarget
+                                        ? t('settings.noSyncBackupTargetWarning', 'Kein Sync-Dienst für Backups freigegeben')
+                                        : t('settings.syncBackupActive', 'Aktiv & bereit')}
+                                </span>
+                            </div>
 
                             <label className="flex items-start gap-2.5 cursor-pointer select-none pt-1">
                                 <input
                                     type="checkbox"
-                                    aria-label={t('settings.dropBackupToggleLabel', 'Automatische Sicherung in Ablagen aktivieren')}
+                                    aria-label={t('settings.dropBackupToggleLabel', 'Automatisch im Sync-Dienst sichern')}
                                     checked={dropBackupEnabled}
                                     onChange={(e) => handleToggleDropBackup(e.target.checked)}
                                     className="mt-0.5 rounded text-theme-primary focus:ring-theme-accent"
                                 />
                                 <div className="text-xs">
                                     <span className="font-bold text-theme-secondary block">
-                                        {t('settings.dropBackupToggleLabel', 'Automatisch in Ablage sichern (30s Debounce)')}
+                                        {t('settings.dropBackupToggleLabel', 'Automatisch im Sync-Dienst sichern')}
                                     </span>
                                     <span className="text-[11px] text-theme-light block leading-relaxed">
-                                        {t('settings.dropBackupToggleDesc', 'Lädt bei jeder Zustandsänderung (Zahlungen, Gutscheine, Bürgschaften, Kontakte) nach 30 Sekunden automatisch die Sicherung hoch.')}
+                                        {t('settings.dropBackupToggleDesc', 'Lädt bei jeder Zustandsänderung (Zahlungen, Gutscheine, Bürgschaften, Kontakte) automatisch die Sicherung hoch.')}
                                     </span>
                                 </div>
                             </label>
+
+                            {/* Backup Frequency Selection */}
+                            <div className="pt-2 border-t border-theme-subtle/50 space-y-1.5">
+                                <label className="text-xs font-bold text-theme-secondary flex items-center gap-1.5">
+                                    <Clock size={13} className="text-theme-primary" />
+                                    {t('settings.backupFrequencyTitle', 'Sicherungshäufigkeit')}
+                                </label>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                                    {[
+                                        { id: 'after_mutation', label: t('settings.backupFreqAfterMutation', 'Nach Transaktionen (30s)'), desc: t('settings.backupFreqAfterMutationDesc', 'Automatisch kurz nach Änderungen (empfohlen)') },
+                                        { id: 'on_close', label: t('settings.backupFreqOnClose', 'Beim Schließen / Abmelden'), desc: t('settings.backupFreqOnCloseDesc', 'Nur beim Verlassen der Wallet') },
+                                        { id: 'daily', label: t('settings.backupFreqDaily', 'Einmal täglich'), desc: t('settings.backupFreqDailyDesc', 'Beim ersten Öffnen am Tag') },
+                                        { id: 'manual', label: t('settings.backupFreqManual', 'Nur manuell'), desc: t('settings.backupFreqManualDesc', 'Nur bei Klick auf "Jetzt sichern"') }
+                                    ].map((freq) => (
+                                        <label
+                                            key={freq.id}
+                                            className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col ${backupFrequency === freq.id ? 'bg-theme-primary/5 border-theme-primary' : 'bg-white dark:bg-slate-800 border-theme-subtle/70 hover:border-theme-primary/40'}`}
+                                        >
+                                            <div className="flex items-center justify-between">
+                                                <span className={`text-xs font-bold ${backupFrequency === freq.id ? 'text-theme-primary' : 'text-theme-secondary'}`}>
+                                                    {freq.label}
+                                                </span>
+                                                <input
+                                                    type="radio"
+                                                    name="backupFrequency"
+                                                    value={freq.id}
+                                                    checked={backupFrequency === freq.id}
+                                                    onChange={() => handleFrequencyChange(freq.id as any)}
+                                                    className="text-theme-primary"
+                                                />
+                                            </div>
+                                            <span className="text-[10px] text-theme-light mt-0.5">{freq.desc}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
                         </div>
 
                         <Button
@@ -561,12 +644,12 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                             {isDropSyncing ? (
                                 <>
                                     <RefreshCw size={14} className="animate-spin mr-2" />
-                                    {t('settings.syncing', 'Sichere in Ablage...')}
+                                    {t('settings.syncing', 'Sichere in Sync-Dienst...')}
                                 </>
                             ) : (
                                 <>
-                                    <Server size={14} className="mr-2" />
-                                    {t('settings.syncDropNowButton', 'Jetzt in Ablage sichern')}
+                                    <Cloud size={14} className="mr-2" />
+                                    {t('settings.syncDropNowButton', 'Jetzt in Sync-Dienst sichern')}
                                 </>
                             )}
                         </Button>

@@ -1,12 +1,18 @@
 ---
 project: human-money-app
-version: "0.5.0"
+version: "0.5.1"
 phase: "beta"
 health: "green"
-last_updated: "2026-11-08"
+last_updated: "2026-11-09"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-063"
+    title: "UI/UX Refactoring: Header Badges Z-Index & Opacity, Settings 4-Tabs Reorganization, Sync Service Terminology & Adaptive AddressBook"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-062"]
+    description: "Enhanced app UX: raised Header z-index and made badge popovers 100% opaque (`bg-white dark:bg-gray-900`) preventing overlap behind sticky boxes; unified terminology from legacy 'Ablage' to 'Sync-Dienst'; enabled marketplace sync by default; harmonized backup settings with 'Backups erlauben' and configurable frequency; reorganized SettingsView into 4 intuitive tabs (Profile, Security & Backups, Sync & Network, Standards & General); made AddressBook top banner adaptive/collapsible with trust ratings wording and prominent sync service recommendations."
   - id: "APP-062"
     title: "Channel post Dual-Delivery Payments, SST-V4-Safe Retries, Receipts, Async Co-Signing, Async WoT Handshake & Inquiries"
     status: "completed"

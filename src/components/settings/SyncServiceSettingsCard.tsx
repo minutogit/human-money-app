@@ -220,7 +220,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
 
     // Feature toggles
     const [postAcceptFromContacts, setPostAcceptFromContacts] = useState<boolean>(settings?.postAcceptFromContacts ?? true);
-    const [marketSendCardOnPayment, setMarketSendCardOnPayment] = useState<boolean>(settings?.marketSendCardOnPayment ?? false);
+    const [marketSendCardOnPayment, setMarketSendCardOnPayment] = useState<boolean>(settings?.marketSendCardOnPayment ?? true);
     const [wotShareViaDrop, setWotShareViaDrop] = useState<boolean>(settings?.wotShareViaDrop ?? true);
     const [dropBackupEnabled, setDropBackupEnabled] = useState<boolean>(settings?.dropBackupEnabled ?? true);
 
@@ -247,7 +247,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
     useEffect(() => {
         if (settings) {
             setPostAcceptFromContacts(settings.postAcceptFromContacts ?? true);
-            setMarketSendCardOnPayment(settings.marketSendCardOnPayment ?? false);
+            setMarketSendCardOnPayment(settings.marketSendCardOnPayment ?? true);
             setWotShareViaDrop(settings.wotShareViaDrop ?? true);
             setDropBackupEnabled(settings.dropBackupEnabled ?? true);
             if (Array.isArray(settings.publicDrops)) {
@@ -627,7 +627,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     />
                                     <div>
                                         <span className="text-xs font-bold text-theme-primary group-hover:text-theme-accent">
-                                            {t('settings.syncChannelMarketLabel', 'Marktplatz im Kreis synchronisieren')}
+                                            {t('settings.syncChannelMarketLabel', 'Marktplatz & Angebote synchronisieren')}
                                         </span>
                                         <p className="text-[11px] text-theme-light mt-0.5">
                                             {t('settings.syncChannelMarketDesc', 'Eigene Angebote und Suchanfragen verschlüsselt mit Kontakten abgleichen.')}
@@ -647,10 +647,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     />
                                     <div>
                                         <span className="text-xs font-bold text-theme-primary group-hover:text-theme-accent">
-                                            {t('settings.syncChannelWotLabel', 'Vertrauensliste (WoT) teilen')}
+                                            {t('settings.syncChannelWotLabel', 'Vertrauenseinstufungen teilen')}
                                         </span>
                                         <p className="text-[11px] text-theme-light mt-0.5">
-                                            {t('settings.syncChannelWotDesc', 'Erlaubt Kontakten ab Vertrauensstufe 1 (Bekannt), deine selektiv offengelegte Liste verschlüsselt abzurufen.')}
+                                            {t('settings.syncChannelWotDesc', 'Erlaubt befreundeten Kontakten, deine selektiv offengelegten Einstufungen verschlüsselt abzurufen.')}
                                         </p>
                                     </div>
                                 </label>
@@ -667,10 +667,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     />
                                     <div>
                                         <span className="text-xs font-bold text-theme-primary group-hover:text-theme-accent">
-                                            {t('settings.syncChannelBackupLabel', 'Cloud-Sicherung nutzen')}
+                                            {t('settings.syncChannelBackupLabel', 'Backups erlauben')}
                                         </span>
                                         <p className="text-[11px] text-theme-light mt-0.5">
-                                            {t('settings.syncChannelBackupDesc', 'Sichert dein verschlüsseltes Wallet automatisch bei autorisierten Sync-Diensten.')}
+                                            {t('settings.syncChannelBackupDesc', 'Erlaubt diesem Wallet, verschlüsselte Sicherungen bei freigegebenen Sync-Diensten abzulegen.')}
                                         </p>
                                     </div>
                                 </label>

@@ -15,6 +15,13 @@ vi.mock('../../context/SessionContext', () => ({
   }),
 }));
 
+const mockNavigateToSettingsSection = vi.fn();
+vi.mock('../../context/NavigationContext', () => ({
+  useOptionalNavigation: () => ({
+    navigateToSettingsSection: mockNavigateToSettingsSection,
+  }),
+}));
+
 vi.mock('../../utils/log', () => ({
   logger: {
     info: vi.fn(),
@@ -185,7 +192,7 @@ describe('AddressBook Component', () => {
     });
 
     expect(screen.getByTestId('contact-has-drop-badge')).toBeInTheDocument();
-    expect(screen.getByText(/Hat eine Ablage|Has a Drop/i)).toBeInTheDocument();
+    expect(screen.getByText(/Hat eine Ablage|Has a Drop|Hat Sync-Dienst/i)).toBeInTheDocument();
   });
 
   it('triggers market sync via drops and shows feedback message', async () => {
@@ -213,12 +220,136 @@ describe('AddressBook Component', () => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
     });
 
-    const syncBtn = screen.getByText(/Sync via drops|Über Ablagen synchronisieren/i).closest('button')!;
+    const syncBtn = screen.getByText(/Sync via drops|Über Ablagen synchronisieren|Über Sync-Dienste synchronisieren/i).closest('button')!;
     expect(syncBtn).toBeInTheDocument();
     fireEvent.click(syncBtn);
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('sync_market_drops', { forceUpload: true });
     });
+  });
+
+  it('adaptive trust network banner defaults to collapsed when rated contacts exist, expands on toggle', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_wot_summary') {
+        return Promise.resolve({
+          ratedContactsCount: 3,
+          verifiedHumansCount: 1,
+          closeConfidantsCount: 2,
+          importedPeerListsCount: 1,
+          ownListVersion: 1,
+          ownListMaxHops: 3,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
+    });
+
+    // In compact mode, expanded options should not be visible initially
+    expect(screen.queryByTestId('expanded-network-options')).not.toBeInTheDocument();
+
+    // Toggle button should be present
+    const toggleBtn = screen.getByTestId('toggle-network-options-button');
+    expect(toggleBtn).toBeInTheDocument();
+    expect(toggleBtn).toHaveTextContent(/Netzwerk-Optionen anpassen|Customize Network Options/i);
+
+    // Expand options
+    fireEvent.click(toggleBtn);
+    expect(screen.getByTestId('expanded-network-options')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops/i })).toBeInTheDocument();
+
+    // Collapse options again
+    fireEvent.click(toggleBtn);
+    expect(screen.queryByTestId('expanded-network-options')).not.toBeInTheDocument();
+  });
+
+  it('adaptive trust network banner defaults to expanded when 0 contacts are rated', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_wot_summary') {
+        return Promise.resolve({
+          ratedContactsCount: 0,
+          verifiedHumansCount: 0,
+          closeConfidantsCount: 0,
+          importedPeerListsCount: 0,
+          ownListVersion: 1,
+          ownListMaxHops: 3,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
+    });
+
+    // When 0 contacts rated, options are expanded by default
+    expect(screen.getByTestId('expanded-network-options')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops/i })).toBeInTheDocument();
+  });
+
+  it('displays sync service recommendation card when no sync service is connected and navigates to sync settings on click', async () => {
+    mockNavigateToSettingsSection.mockClear();
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_drop_overview_status') {
+        return Promise.resolve({
+          connectedCount: 0,
+          friendDrops: 0,
+          publicDrops: 0,
+          hasOwnDrop: false,
+          ownDropSoftWarning: false,
+          lastSyncAt: null,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-service-recommendation')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Verbinde einen Sync-Dienst|Connect a sync service/i)).toBeInTheDocument();
+
+    // Click connect button
+    const connectBtn = screen.getByRole('button', { name: /Sync-Dienst verbinden|Connect Sync Service/i });
+    fireEvent.click(connectBtn);
+
+    expect(mockNavigateToSettingsSection).toHaveBeenCalledWith('sync');
+  });
+
+  it('hides sync service recommendation card when a sync service is connected', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_drop_overview_status') {
+        return Promise.resolve({
+          connectedCount: 1,
+          friendDrops: 1,
+          publicDrops: 0,
+          hasOwnDrop: false,
+          ownDropSoftWarning: false,
+          lastSyncAt: 12345678,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId('sync-service-recommendation')).not.toBeInTheDocument();
   });
 });

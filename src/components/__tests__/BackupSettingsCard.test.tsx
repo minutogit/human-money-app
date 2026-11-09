@@ -46,6 +46,16 @@ vi.mock('../../services/backupService', () => ({
     backupService: {
         exportBackupFile: vi.fn(),
         syncBackupFolder: vi.fn(),
+        getBackupStatus: vi.fn().mockResolvedValue({
+            status: 'ok',
+            lastBackupAt: null,
+            backupDirty: false,
+            syncFolder: null,
+            changedBlobs: 0,
+            syncBackupEnabled: true,
+            lastSyncBackupAt: null,
+            hasAuthorizedSyncBackupTarget: true,
+        }),
     },
 }));
 

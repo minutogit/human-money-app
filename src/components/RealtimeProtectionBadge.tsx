@@ -287,7 +287,7 @@ export const RealtimeProtectionBadge: React.FC<RealtimeProtectionBadgeProps> = (
             {/* Lightweight Click Popover */}
             {isOpen && (
                 <div
-                    className="absolute top-full right-0 mt-2 z-50 w-80 sm:w-96 bg-card rounded-2xl p-4 shadow-xl border border-theme-subtle text-theme-secondary space-y-3 animate-in fade-in slide-in-from-top-2 duration-150"
+                    className="absolute top-full right-0 mt-2 z-50 w-80 sm:w-96 max-w-[calc(100vw-1.5rem)] bg-white dark:bg-gray-900 rounded-2xl p-4 shadow-2xl border border-theme-subtle text-theme-secondary space-y-3 animate-in fade-in slide-in-from-top-2 duration-150"
                     role="dialog"
                     aria-modal="false"
                     aria-label={currentConfig.label}
@@ -350,7 +350,7 @@ export const RealtimeProtectionBadge: React.FC<RealtimeProtectionBadgeProps> = (
                             )}
 
                             {reconcileReport && (
-                                <div className="p-2 bg-white dark:bg-card border border-emerald-200 rounded-lg text-emerald-800 dark:text-emerald-300 text-[11px] space-y-0.5">
+                                <div className="p-2 bg-white dark:bg-gray-800 border border-emerald-200 rounded-lg text-emerald-800 dark:text-emerald-300 text-[11px] space-y-0.5">
                                     <div className="flex items-center gap-1 font-bold">
                                         <Check size={12} />
                                         <span>{t("wallet.anchor.reconcileSuccess", "Erfolgreich synchronisiert")}</span>

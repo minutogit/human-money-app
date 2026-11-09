@@ -60,7 +60,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
-    const [activeTab, setActiveTab] = useState<'app' | 'profile'>('profile');
+    const [activeTab, setActiveTab] = useState<'profile' | 'security_backup' | 'sync_network' | 'standards_general'>('profile');
     const [isStandardsOpen, setIsStandardsOpen] = useState(false);
 
     const nav = useOptionalNavigation();
@@ -73,9 +73,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 initialSection?: 'sync' | 'backup' | 'network';
             };
             if (state.initialSection) {
-                setActiveTab('app');
-                if (state.initialSection === 'network') {
-                    setIsAdvancedNetworkOpen(true);
+                if (state.initialSection === 'backup') {
+                    setActiveTab('security_backup');
+                } else if (state.initialSection === 'sync' || state.initialSection === 'network') {
+                    setActiveTab('sync_network');
+                    if (state.initialSection === 'network') {
+                        setIsAdvancedNetworkOpen(true);
+                    }
                 }
                 setTimeout(() => {
                     const el = document.getElementById(`settings-${state.initialSection}-section`);
@@ -163,6 +167,66 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             setIsSaving(false);
         }
     };
+
+    const isDevUnlocked = !!settings?.devModeUnlocked;
+
+    const renderSaveActionFooter = (showDiagnostics = false) => (
+        <div className="pt-6 flex flex-col items-center gap-4">
+            <Button type="submit" disabled={isSaving} className="min-w-[240px] gap-2 rounded-2xl py-4 shadow-lg shadow-theme-primary/20">
+                {isSaving ? <Clock className="animate-spin" size={18} /> : <Save size={18} />}
+                {isSaving ? t('settings.saving') : t('settings.saveButton')}
+            </Button>
+            {error && <AlertBanner variant="error" className="w-full max-w-md">{error}</AlertBanner>}
+            {success && <AlertBanner variant="success" className="w-full max-w-md">{success}</AlertBanner>}
+
+            {showDiagnostics && (
+                <div className="pt-4 border-t border-theme-subtle/40 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-[11px] text-theme-light/70">
+                    <span
+                        onClick={handleDevModeClick}
+                        className="font-mono text-[10px] text-theme-light/60 select-none cursor-pointer hover:text-theme-light/90 transition-colors"
+                        title={isDevUnlocked ? "Entwicklermodus aktiv" : `Klick ${Math.max(0, 7 - devClickCount)} bis Entwicklermodus`}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleDevModeClick(); }}}
+                    >
+                        v{appVersion} • {isDevUnlocked ? 'DEV freigeschaltet' : `${devClickCount}/7`}
+                    </span>
+                    <span>•</span>
+                    <div className="inline-flex items-center gap-1.5">
+                        <span>{t('settings.deviceIdFooterLabel')}:</span>
+                        <code className="font-mono text-[10px] text-theme-light/80 select-all" title={localInstanceId}>
+                            {localInstanceId ? (localInstanceId.length > 16 ? `${localInstanceId.slice(0, 8)}…${localInstanceId.slice(-4)}` : localInstanceId) : t('settings.retrievingId')}
+                        </code>
+                        <button
+                            type="button"
+                            onClick={async () => {
+                                if (localInstanceId) {
+                                    const ok = await copyToClipboard(localInstanceId);
+                                    try {
+                                        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                                            await navigator.clipboard.writeText(localInstanceId);
+                                        }
+                                    } catch {
+                                        // Ignore clipboard write failure
+                                    }
+                                    if (ok) {
+                                        setCopiedDeviceId(true);
+                                        setTimeout(() => setCopiedDeviceId(false), 2000);
+                                    }
+                                }
+                            }}
+                            className="p-1 text-theme-light/70 hover:text-theme-primary transition-colors rounded inline-flex items-center justify-center"
+                            aria-label={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
+                            title={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
+                        >
+                            {copiedDeviceId ? <CheckCircle2 size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                        </button>
+                        <HelpIcon topic="deviceBinding" size={12} />
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 
     const handleAddCustomServer = () => {
         const trimmedUrl = newServerUrl.trim();
@@ -269,7 +333,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         return <div className="py-20 text-center animate-pulse text-theme-light font-black uppercase tracking-[0.2em]">{t('settings.configuringEnvironment')}</div>;
     }
 
-    const isDevUnlocked = !!settings?.devModeUnlocked;
     const hasActiveServers = Boolean(
         (settings?.customServers || []).some(s => s.isActive) ||
         (settings?.regionalMeshSources || []).length > 0 ||
@@ -295,51 +358,29 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         >
             <div className="max-w-4xl mx-auto">
                 {/* Tab Navigation */}
-                <SegmentedTabs<'profile' | 'app'>
+                <SegmentedTabs<'profile' | 'security_backup' | 'sync_network' | 'standards_general'>
                     fullWidth
                     className="mb-10"
                     activeTab={activeTab}
                     onChange={setActiveTab}
                     tabs={[
                         { id: 'profile', label: t('settings.tabIdentityProfile'), icon: <User size={14} /> },
-                        { id: 'app', label: t('settings.tabSecurityOps'), icon: <SettingsIcon size={14} /> }
+                        { id: 'security_backup', label: t('settings.tabSecurityBackup'), icon: <Shield size={14} /> },
+                        { id: 'sync_network', label: t('settings.tabSyncNetwork'), icon: <Network size={14} /> },
+                        { id: 'standards_general', label: t('settings.tabStandardsGeneral'), icon: <SettingsIcon size={14} /> }
                     ]}
                 />
 
-                {activeTab === 'profile' ? (
+                {activeTab === 'profile' && (
                     <ProfileSettings />
-                ) : (
+                )}
+
+                {activeTab === 'security_backup' && (
                     <form onSubmit={handleSave} className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                        {/* Session Control */}
-                        <Card header={
-                            <div className="flex items-center gap-2">
-                                <Clock size={18} className="text-theme-primary" />
-                                <span className="font-black text-xs uppercase tracking-widest">{t('settings.activeSessionTitle')}</span>
-                            </div>
-                        }>
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-theme-secondary">
-                                        {t('settings.timeoutIntervalLabel')}
-                                    </label>
-                                    <p className="text-[11px] text-theme-light/80 font-medium leading-relaxed">
-                                        {t('settings.timeoutIntervalDescription')}
-                                    </p>
-                                </div>
-                                <div className="w-full sm:w-36 shrink-0">
-                                    <Input
-                                        type="number"
-                                        value={settings ? Math.floor((settings.sessionTimeoutSeconds || 0) / 60) : 10}
-                                        onChange={(e) => {
-                                            const minutes = parseInt(e.target.value, 10);
-                                            setSettings(s => s ? { ...s, sessionTimeoutSeconds: isNaN(minutes) ? 0 : minutes * 60 } : null);
-                                        }}
-                                        min="0"
-                                        className="font-bold"
-                                    />
-                                </div>
-                            </div>
-                        </Card>
+                        {/* Encrypted Wallet Backups */}
+                        <div id="settings-backup-section">
+                            <BackupSettingsCard settings={settings} onSettingsUpdated={setSettings} />
+                        </div>
 
                         {/* Privacy Protocols */}
                         <Card header={
@@ -383,11 +424,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                             </div>
                         </Card>
 
-                        {/* Encrypted Wallet Backups */}
-                        <div id="settings-backup-section">
-                            <BackupSettingsCard settings={settings} onSettingsUpdated={setSettings} />
-                        </div>
+                        {renderSaveActionFooter(false)}
+                    </form>
+                )}
 
+                {activeTab === 'sync_network' && (
+                    <form onSubmit={handleSave} className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                         {/* HuMoCo Sync-Dienst */}
                         <div id="settings-sync-section">
                             <SyncServiceSettingsCard settings={settings} onSettingsUpdated={setSettings} />
@@ -846,22 +888,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         </Card>
                         </div>
 
-                        {/* Language Selector */}
-                        <Card 
-                            className="!overflow-visible"
-                            header={
-                                <div className="flex items-center gap-2">
-                                    <Globe size={18} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">{t('settings.languageTitle')}</span>
-                                </div>
-                            }
-                        >
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                                <p className="text-xs text-theme-light font-medium">{t('settings.languageDescription')}</p>
-                                <LanguageSelector variant="compact" />
-                            </div>
-                        </Card>
+                        {renderSaveActionFooter(false)}
+                    </form>
+                )}
 
+                {activeTab === 'standards_general' && (
+                    <form onSubmit={handleSave} className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                         {/* Voucher Standards Manager */}
                         <div className="border border-theme-subtle rounded-2xl overflow-hidden bg-white/50">
                             <button
@@ -890,60 +922,54 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                             )}
                         </div>
 
-                        <div className="pt-6 flex flex-col items-center gap-4">
-                            <Button type="submit" disabled={isSaving} className="min-w-[240px] gap-2 rounded-2xl py-4 shadow-lg shadow-theme-primary/20">
-                                {isSaving ? <Clock className="animate-spin" size={18} /> : <Save size={18} />}
-                                {isSaving ? t('settings.saving') : t('settings.saveButton')}
-                            </Button>
-                            {error && <AlertBanner variant="error" className="w-full max-w-md">{error}</AlertBanner>}
-                            {success && <AlertBanner variant="success" className="w-full max-w-md">{success}</AlertBanner>}
+                        {/* Language Selector */}
+                        <Card 
+                            className="!overflow-visible"
+                            header={
+                                <div className="flex items-center gap-2">
+                                    <Globe size={18} className="text-theme-primary" />
+                                    <span className="font-black text-xs uppercase tracking-widest">{t('settings.languageTitle')}</span>
+                                </div>
+                            }
+                        >
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                <p className="text-xs text-theme-light font-medium">{t('settings.languageDescription')}</p>
+                                <LanguageSelector variant="compact" />
+                            </div>
+                        </Card>
 
-                            {/* Subtle Diagnostics Footer */}
-                            <div className="pt-4 border-t border-theme-subtle/40 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-[11px] text-theme-light/70">
-                                <span
-                                    onClick={handleDevModeClick}
-                                    className="font-mono text-[10px] text-theme-light/60 select-none cursor-pointer hover:text-theme-light/90 transition-colors"
-                                    title={isDevUnlocked ? "Entwicklermodus aktiv" : `Klick ${Math.max(0, 7 - devClickCount)} bis Entwicklermodus`}
-                                    role="button"
-                                    tabIndex={0}
-                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleDevModeClick(); }}}
-                                >
-                                    v{appVersion} • {isDevUnlocked ? 'DEV freigeschaltet' : `${devClickCount}/7`}
-                                </span>
-                                <span>•</span>
-                                <div className="inline-flex items-center gap-1.5">
-                                    <span>{t('settings.deviceIdFooterLabel')}:</span>
-                                    <code className="font-mono text-[10px] text-theme-light/80 select-all" title={localInstanceId}>
-                                        {localInstanceId ? (localInstanceId.length > 16 ? `${localInstanceId.slice(0, 8)}…${localInstanceId.slice(-4)}` : localInstanceId) : t('settings.retrievingId')}
-                                    </code>
-                                    <button
-                                        type="button"
-                                        onClick={async () => {
-                                            if (localInstanceId) {
-                                                const ok = await copyToClipboard(localInstanceId);
-                                                try {
-                                                    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-                                                        await navigator.clipboard.writeText(localInstanceId);
-                                                    }
-                                                } catch {
-                                                    // Ignore clipboard write failure
-                                                }
-                                                if (ok) {
-                                                    setCopiedDeviceId(true);
-                                                    setTimeout(() => setCopiedDeviceId(false), 2000);
-                                                }
-                                            }
+                        {/* Session Control */}
+                        <Card header={
+                            <div className="flex items-center gap-2">
+                                <Clock size={18} className="text-theme-primary" />
+                                <span className="font-black text-xs uppercase tracking-widest">{t('settings.activeSessionTitle')}</span>
+                            </div>
+                        }>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-xs font-bold text-theme-secondary">
+                                        {t('settings.timeoutIntervalLabel')}
+                                    </label>
+                                    <p className="text-[11px] text-theme-light/80 font-medium leading-relaxed">
+                                        {t('settings.timeoutIntervalDescription')}
+                                    </p>
+                                </div>
+                                <div className="w-full sm:w-36 shrink-0">
+                                    <Input
+                                        type="number"
+                                        value={settings ? Math.floor((settings.sessionTimeoutSeconds || 0) / 60) : 10}
+                                        onChange={(e) => {
+                                            const minutes = parseInt(e.target.value, 10);
+                                            setSettings(s => s ? { ...s, sessionTimeoutSeconds: isNaN(minutes) ? 0 : minutes * 60 } : null);
                                         }}
-                                        className="p-1 text-theme-light/70 hover:text-theme-primary transition-colors rounded inline-flex items-center justify-center"
-                                        aria-label={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
-                                        title={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
-                                    >
-                                        {copiedDeviceId ? <CheckCircle2 size={12} className="text-emerald-500" /> : <Copy size={12} />}
-                                    </button>
-                                    <HelpIcon topic="deviceBinding" size={12} />
+                                        min="0"
+                                        className="font-bold"
+                                    />
                                 </div>
                             </div>
-                        </div>
+                        </Card>
+
+                        {renderSaveActionFooter(true)}
                     </form>
                 )}
             </div>

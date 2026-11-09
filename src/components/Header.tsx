@@ -18,7 +18,7 @@ export const Header: React.FC = () => {
     }
 
     return (
-        <header className="shrink-0 z-20 flex h-16 items-center justify-between border-b border-theme-subtle bg-card px-4 md:px-6 shadow-xs">
+        <header className="relative shrink-0 z-30 flex h-16 items-center justify-between border-b border-theme-subtle bg-white dark:bg-gray-900 px-4 md:px-6 shadow-xs">
             <div className="flex items-center gap-3 min-w-0">
                 <button
                     onClick={() => setSidebarOpen(true)}

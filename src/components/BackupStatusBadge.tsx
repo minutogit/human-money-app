@@ -289,7 +289,7 @@ export const BackupStatusBadge: React.FC<BackupStatusBadgeProps> = ({
             {/* Lightweight Click Popover */}
             {isOpen && (
                 <div
-                    className="absolute top-full right-0 mt-2 z-50 w-80 sm:w-96 bg-card rounded-2xl p-4 shadow-xl border border-theme-subtle text-theme-secondary space-y-3 animate-in fade-in slide-in-from-top-2 duration-150"
+                    className="absolute top-full -right-10 sm:right-0 mt-2 z-50 w-80 sm:w-96 max-w-[calc(100vw-1.5rem)] bg-white dark:bg-gray-900 rounded-2xl p-4 shadow-2xl border border-theme-subtle text-theme-secondary space-y-3 animate-in fade-in slide-in-from-top-2 duration-150"
                     role="dialog"
                     aria-modal="false"
                     aria-label={statusConfig.label}
@@ -344,7 +344,7 @@ export const BackupStatusBadge: React.FC<BackupStatusBadgeProps> = ({
                                 </span>
                             </div>
                             {backupStatus.syncFolder && (
-                                <p className="font-mono text-[10px] text-theme-light truncate p-1 bg-card rounded border border-theme-subtle/50">
+                                <p className="font-mono text-[10px] text-theme-light truncate p-1 bg-white dark:bg-gray-800 rounded border border-theme-subtle/50">
                                     {backupStatus.syncFolder}
                                 </p>
                             )}

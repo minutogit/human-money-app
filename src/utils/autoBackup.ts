@@ -1,5 +1,6 @@
 // src/utils/autoBackup.ts
 import { backupService } from '../services/backupService';
+import { settingsService } from '../services/settingsService';
 import { logger } from './log';
 import { isBackendError, stringifyError } from './errorHelper';
 import { FrontendAutoBackupStatusDto, FrontendDropBackupSyncResult } from '../types';
@@ -138,19 +139,49 @@ export function stopAutoBackupLoop() {
  * Call this after successful mutations (creating vouchers, receiving, signing, contacts).
  */
 export function triggerAutoBackup(delayMs = 2000, dropDelayMs = DROP_BACKUP_DEBOUNCE_MS) {
-    if (debounceTimer) {
-        window.clearTimeout(debounceTimer);
-    }
-    debounceTimer = window.setTimeout(async () => {
-        debounceTimer = null;
-        await runAutoBackupPass();
-    }, delayMs);
+    settingsService.getSettings().then((s) => {
+        const freq = s.backupFrequency || 'after_mutation';
+        if (freq === 'manual' || freq === 'on_close') {
+            return;
+        }
+        if (freq === 'daily' && s.lastBackupAt) {
+            const last = new Date(s.lastBackupAt).getTime();
+            if (Date.now() - last < 86400_000) {
+                return;
+            }
+        }
 
-    if (dropDebounceTimer) {
-        window.clearTimeout(dropDebounceTimer);
-    }
-    dropDebounceTimer = window.setTimeout(async () => {
-        dropDebounceTimer = null;
-        await runDropBackupPass();
-    }, dropDelayMs);
+        if (debounceTimer) {
+            window.clearTimeout(debounceTimer);
+        }
+        debounceTimer = window.setTimeout(async () => {
+            debounceTimer = null;
+            await runAutoBackupPass();
+        }, delayMs);
+
+        if (dropDebounceTimer) {
+            window.clearTimeout(dropDebounceTimer);
+        }
+        dropDebounceTimer = window.setTimeout(async () => {
+            dropDebounceTimer = null;
+            await runDropBackupPass();
+        }, dropDelayMs);
+    }).catch(() => {
+        // Fallback default execution if settings fetch fails
+        if (debounceTimer) {
+            window.clearTimeout(debounceTimer);
+        }
+        debounceTimer = window.setTimeout(async () => {
+            debounceTimer = null;
+            await runAutoBackupPass();
+        }, delayMs);
+
+        if (dropDebounceTimer) {
+            window.clearTimeout(dropDebounceTimer);
+        }
+        dropDebounceTimer = window.setTimeout(async () => {
+            dropDebounceTimer = null;
+            await runDropBackupPass();
+        }, dropDelayMs);
+    });
 }

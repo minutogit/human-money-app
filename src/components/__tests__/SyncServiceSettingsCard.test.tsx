@@ -110,8 +110,8 @@ describe('SyncServiceSettingsCard Component', () => {
         // Check channel labels
         expect(screen.getByText(/Postfach aktivieren|mailbox/i)).toBeInTheDocument();
         expect(screen.getByText(/Marktplatz.*synchronisieren|marketplace/i)).toBeInTheDocument();
-        expect(screen.getByText(/Vertrauensliste.*teilen|web of trust/i)).toBeInTheDocument();
-        expect(screen.getByText(/Cloud-Sicherung nutzen|Use Cloud Backup/i)).toBeInTheDocument();
+        expect(screen.getByText(/Vertrauens(liste|einstufungen).*teilen|web of trust|trust ratings/i)).toBeInTheDocument();
+        expect(screen.getByText(/Backups erlauben|Cloud-Sicherung nutzen|Allow Backups|Use Cloud Backup/i)).toBeInTheDocument();
     });
 
     it('toggles channel switch and calls settingsService.saveSettings', async () => {

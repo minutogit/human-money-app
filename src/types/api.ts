@@ -98,6 +98,7 @@ export interface AppSettings {
     pendingRestoreL2Reconciliation?: boolean;
     balanceViewMode?: 'spendable' | 'net';
     autoBackupEnabled?: boolean;
+    backupFrequency?: 'after_mutation' | 'on_close' | 'daily' | 'manual';
     backupDirty?: boolean;
     backupSyncFolder?: string | null;
     backupProtectionMode?: string | null;

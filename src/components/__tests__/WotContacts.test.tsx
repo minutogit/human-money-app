@@ -302,7 +302,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       expect(screen.getByText(/contacts\.trustLevel0|Real Person/i)).toBeInTheDocument();
 
       // Synced peer list badge should display for Alice
-      expect(screen.getByText(/contacts\.peerListSynced|Recommendations synced/i)).toBeInTheDocument();
+      expect(screen.getByText(/contacts\.peerListSynced|Recommendations synced|Trust ratings synced|Vertrauenseinstufungen synchronisiert/i)).toBeInTheDocument();
     });
 
     it('sharing WoT for a specific contact exports package with recipientDid', async () => {
@@ -355,6 +355,12 @@ describe('WoT Contacts & Trust Ratings', () => {
         expect(screen.getByText('Alice')).toBeInTheDocument();
       });
 
+      // Expand network options if collapsed in compact mode
+      const toggleBtn = screen.queryByTestId('toggle-network-options-button');
+      if (toggleBtn) {
+        fireEvent.click(toggleBtn);
+      }
+
       // Find the "2 Hops" button
       const hop2Btn = screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops/i });
       expect(hop2Btn).toBeInTheDocument();
@@ -385,6 +391,12 @@ describe('WoT Contacts & Trust Ratings', () => {
       await waitFor(() => {
         expect(screen.getByText('Alice')).toBeInTheDocument();
       });
+
+      // Expand network options if collapsed in compact mode
+      const toggleBtn = screen.queryByTestId('toggle-network-options-button');
+      if (toggleBtn) {
+        fireEvent.click(toggleBtn);
+      }
 
       // Open export modal
       const exportBtn = screen.getByRole('button', { name: /contacts\.exportWotButton|Share Trust File/i });
