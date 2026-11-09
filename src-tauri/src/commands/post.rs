@@ -18,7 +18,7 @@ use humoco_market::{
 use log::warn;
 use tauri::State;
 
-use crate::drop_client::{self, PutSlotOutcome};
+use crate::sync_client::{self as drop_client, PutSlotOutcome};
 use crate::models::{
     FrontendContact, FrontendDropDescriptor, FrontendError, FrontendMarketInquiryItem,
     FrontendMarketInquiryReplyDto, FrontendPendingSignRequest, FrontendPendingWotHandshake,
@@ -2082,10 +2082,10 @@ pub async fn sync_post_drops(
 mod tests {
     use super::*;
     use human_money_core::test_utils;
-    use crate::commands::drops::tests::{
+    use crate::commands::sync::tests::{
         create_test_state, setup_test_app, temp_test_dir, MockDropServer, ALICE_PHRASE, BOB_PHRASE,
     };
-    use crate::commands::drops::{probe_public_drop_impl, save_public_drop_impl};
+    use crate::commands::sync::{probe_public_drop_impl, save_public_drop_impl};
     use crate::commands::market::save_own_contact_card_impl;
     use crate::models::{
         FrontendCardListingInput, FrontendContact, FrontendListingType,
@@ -2103,7 +2103,7 @@ mod tests {
         password: &str,
         state: &AppState,
     ) -> (String, crate::models::FrontendPublicDropInfo) {
-        let write_url = format!("{}/drop.php", server.base_url);
+        let write_url = format!("{}/sync.php", server.base_url);
         let read_url = format!("{}/{}", server.base_url, server.data_dir);
         let info = probe_public_drop_impl(write_url.clone(), Some(password.to_string()), state).await.unwrap();
         server.members.lock().unwrap().push(info.access_pubkey.clone());

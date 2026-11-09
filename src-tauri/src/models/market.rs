@@ -223,6 +223,10 @@ pub struct FrontendOwnContactCard {
     pub qr_svg: Option<String>,
     pub share_uri: String,
     pub envelope_json: String,
+    #[serde(default)]
+    pub qr_jws: Option<String>,
+    #[serde(default)]
+    pub is_compact_qr: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

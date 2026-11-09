@@ -741,6 +741,56 @@ pub(crate) fn is_older_than_14_days(last_backup_at: &Option<String>) -> bool {
     now.signed_duration_since(ts.with_timezone(&Utc)).num_days() >= 14
 }
 
+pub fn compute_backup_status_dto(
+    settings: &crate::settings::AppSettings,
+    has_own_drop: bool,
+) -> FrontendAutoBackupStatusDto {
+    let sync_backup_enabled = settings.drop_backup_enabled;
+    let last_sync_backup_at = settings.last_drop_backup_at.clone();
+
+    let has_friend_drops = !settings.market_selected_drops.is_empty();
+    let has_public_drops = settings.public_drops.iter().any(|d| d.enabled && !d.write_url.is_empty());
+    let has_authorized_sync_backup_target = has_friend_drops || has_public_drops || has_own_drop || last_sync_backup_at.is_some();
+
+    let folder_str_opt = settings.backup_sync_folder.as_ref().filter(|f| !f.trim().is_empty());
+    let local_configured = folder_str_opt.is_some();
+    let folder_str = folder_str_opt.cloned();
+
+    let local_connected = if let Some(ref path_str) = folder_str {
+        Path::new(path_str).is_dir()
+    } else {
+        false
+    };
+
+    let local_current = local_configured && local_connected && !settings.backup_dirty && !is_older_than_14_days(&settings.last_backup_at);
+    let sync_current = sync_backup_enabled && has_authorized_sync_backup_target && !settings.backup_dirty && last_sync_backup_at.is_some() && !is_older_than_14_days(&last_sync_backup_at);
+
+    let has_sync_target = sync_backup_enabled && has_authorized_sync_backup_target;
+
+    let status = if !local_configured && !has_sync_target {
+        "notConfigured"
+    } else if local_current || sync_current {
+        "ok"
+    } else if local_configured && !local_connected && !sync_current {
+        "disconnected"
+    } else if settings.backup_dirty {
+        "pending"
+    } else {
+        "warning"
+    };
+
+    FrontendAutoBackupStatusDto {
+        status: status.to_string(),
+        last_backup_at: settings.last_backup_at.clone(),
+        backup_dirty: settings.backup_dirty,
+        sync_folder: folder_str,
+        changed_blobs: None,
+        sync_backup_enabled,
+        last_sync_backup_at,
+        has_authorized_sync_backup_target,
+    }
+}
+
 #[tauri::command]
 pub fn get_backup_status(state: tauri::State<AppState>) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
     let settings = match state.get_cached_settings() {
@@ -751,58 +801,26 @@ pub fn get_backup_status(state: tauri::State<AppState>) -> Result<FrontendAutoBa
             backup_dirty: false,
             sync_folder: None,
             changed_blobs: None,
+            sync_backup_enabled: false,
+            last_sync_backup_at: None,
+            has_authorized_sync_backup_target: false,
         }),
     };
 
-    let folder_str = match &settings.backup_sync_folder {
-        Some(f) if !f.trim().is_empty() => f.clone(),
-        _ => {
-            return Ok(FrontendAutoBackupStatusDto {
-                status: "notConfigured".to_string(),
-                last_backup_at: settings.last_backup_at,
-                backup_dirty: settings.backup_dirty,
-                sync_folder: None,
-                changed_blobs: None,
-            });
-        }
-    };
+    let has_own_drop = state
+        .service
+        .lock()
+        .ok()
+        .and_then(|mut service| {
+            service
+                .load_encrypted_data(crate::state::MARKET_DROP_ADMIN_KEY, None)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<crate::state::StoredDropAdmin>(&bytes).ok())
+        })
+        .map(|admin| !admin.descriptor.write_url.is_empty())
+        .unwrap_or(false);
 
-    let is_outdated = settings.backup_dirty || is_older_than_14_days(&settings.last_backup_at);
-
-    if !settings.auto_backup_enabled || settings.backup_protection_mode.as_deref() == Some("custom_password") {
-        return Ok(FrontendAutoBackupStatusDto {
-            status: if is_outdated { "outdated".to_string() } else { "manualOnly".to_string() },
-            last_backup_at: settings.last_backup_at,
-            backup_dirty: settings.backup_dirty,
-            sync_folder: Some(folder_str),
-            changed_blobs: None,
-        });
-    }
-
-    let folder_path = Path::new(&folder_str);
-    if !folder_path.is_dir() {
-        return Ok(FrontendAutoBackupStatusDto {
-            status: "folderDisconnected".to_string(),
-            last_backup_at: settings.last_backup_at,
-            backup_dirty: settings.backup_dirty,
-            sync_folder: Some(folder_str),
-            changed_blobs: None,
-        });
-    }
-
-    let status = if is_outdated {
-        "outdated"
-    } else {
-        "synced"
-    };
-
-    Ok(FrontendAutoBackupStatusDto {
-        status: status.to_string(),
-        last_backup_at: settings.last_backup_at,
-        backup_dirty: settings.backup_dirty,
-        sync_folder: Some(folder_str),
-        changed_blobs: None,
-    })
+    Ok(compute_backup_status_dto(&settings, has_own_drop))
 }
 
 #[tauri::command]
@@ -818,30 +836,34 @@ pub fn run_auto_backup_sync(
             backup_dirty: false,
             sync_folder: None,
             changed_blobs: None,
+            sync_backup_enabled: false,
+            last_sync_backup_at: None,
+            has_authorized_sync_backup_target: false,
         }),
     };
+
+    let has_own_drop = state
+        .service
+        .lock()
+        .ok()
+        .and_then(|mut service| {
+            service
+                .load_encrypted_data(crate::state::MARKET_DROP_ADMIN_KEY, None)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<crate::state::StoredDropAdmin>(&bytes).ok())
+        })
+        .map(|admin| !admin.descriptor.write_url.is_empty())
+        .unwrap_or(false);
 
     let folder_str = match &settings.backup_sync_folder {
         Some(f) if !f.trim().is_empty() => f.clone(),
         _ => {
-            return Ok(FrontendAutoBackupStatusDto {
-                status: "notConfigured".to_string(),
-                last_backup_at: settings.last_backup_at,
-                backup_dirty: settings.backup_dirty,
-                sync_folder: None,
-                changed_blobs: None,
-            });
+            return Ok(compute_backup_status_dto(&settings, has_own_drop));
         }
     };
 
     if !settings.auto_backup_enabled || settings.backup_protection_mode.as_deref() == Some("custom_password") {
-        return Ok(FrontendAutoBackupStatusDto {
-            status: "manualOnly".to_string(),
-            last_backup_at: settings.last_backup_at,
-            backup_dirty: settings.backup_dirty,
-            sync_folder: Some(folder_str),
-            changed_blobs: None,
-        });
+        return Ok(compute_backup_status_dto(&settings, has_own_drop));
     }
 
     let folder_path = Path::new(&folder_str);
@@ -853,13 +875,7 @@ pub fn run_auto_backup_sync(
                 let _ = state.save_settings(&mut service, settings.clone(), None);
             }
         }
-        return Ok(FrontendAutoBackupStatusDto {
-            status: "folderDisconnected".to_string(),
-            last_backup_at: settings.last_backup_at,
-            backup_dirty: settings.backup_dirty,
-            sync_folder: Some(folder_str),
-            changed_blobs: None,
-        });
+        return Ok(compute_backup_status_dto(&settings, has_own_drop));
     }
 
     let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
@@ -878,13 +894,9 @@ pub fn run_auto_backup_sync(
             settings.last_backup_at = Some(summary.timestamp.clone());
             settings.backup_dirty = false;
             let _ = state.save_settings(&mut service, settings.clone(), None);
-            Ok(FrontendAutoBackupStatusDto {
-                status: "synced".to_string(),
-                last_backup_at: settings.last_backup_at,
-                backup_dirty: false,
-                sync_folder: Some(folder_str),
-                changed_blobs: Some(summary.changed_blobs),
-            })
+            let mut dto = compute_backup_status_dto(&settings, has_own_drop);
+            dto.changed_blobs = Some(summary.changed_blobs);
+            Ok(dto)
         }
         Err(e) => {
             let is_locked = e.code == "error.wallet.locked"
@@ -892,13 +904,9 @@ pub fn run_auto_backup_sync(
                 || e.message.to_lowercase().contains("locked")
                 || e.message.to_lowercase().contains("session");
             if is_locked {
-                Ok(FrontendAutoBackupStatusDto {
-                    status: "locked".to_string(),
-                    last_backup_at: settings.last_backup_at,
-                    backup_dirty: settings.backup_dirty,
-                    sync_folder: Some(folder_str),
-                    changed_blobs: None,
-                })
+                let mut dto = compute_backup_status_dto(&settings, has_own_drop);
+                dto.status = "locked".to_string();
+                Ok(dto)
             } else {
                 if !settings.backup_dirty {
                     settings.backup_dirty = true;
@@ -1015,7 +1023,7 @@ pub async fn sync_drop_backup(
     }
 
     // Probe which candidate drops authorize channel "backup"
-    let probe_client = crate::drop_client::create_drop_probe_client();
+    let probe_client = crate::sync_client::create_drop_probe_client();
     let mut authorized_targets = Vec::new();
 
     for drop_desc in candidate_targets {
@@ -1028,7 +1036,7 @@ pub async fn sync_drop_backup(
             }
         };
 
-        match crate::drop_client::head_slot_capability(
+        match crate::sync_client::head_slot_capability(
             &probe_client,
             &drop_desc.write_url,
             &cap_pubkey,
@@ -1090,15 +1098,15 @@ pub async fn sync_drop_backup(
     )
     .map_err(|e| FrontendError::from(e.to_string()))?;
 
-    let client = crate::drop_client::create_drop_http_client();
-    let now_secs = crate::drop_client::current_unix_timestamp();
+    let client = crate::sync_client::create_drop_http_client();
+    let now_secs = crate::sync_client::current_unix_timestamp();
     let mut uploaded_to = 0;
     let mut errors = Vec::new();
     let mut settings_updated = false;
     let mut current_settings = settings;
 
     for (mut drop_desc, _cap_pubkey, is_public) in authorized_targets {
-        let nonce = crate::drop_client::generate_drop_nonce();
+        let nonce = crate::sync_client::generate_drop_nonce();
         let signed_res = if is_public {
             match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
                 Ok((r_sk, _, _)) => Ok(humoco_market::sign_member_request_direct(
@@ -1126,7 +1134,7 @@ pub async fn sync_drop_backup(
 
         match signed_res {
             Ok(signed) => {
-                match crate::drop_client::put_slot(
+                match crate::sync_client::put_slot(
                     &client,
                     &drop_desc.write_url,
                     &signed,
@@ -1136,10 +1144,10 @@ pub async fn sync_drop_backup(
                 )
                 .await
                 {
-                    Ok(crate::drop_client::PutSlotOutcome::Saved { rotation, .. }) => {
+                    Ok(crate::sync_client::PutSlotOutcome::Saved { rotation, .. }) => {
                         uploaded_to += 1;
                         if let Some(ref cert) = rotation {
-                            if crate::drop_client::apply_verified_rotation(&mut drop_desc, cert, now_secs) {
+                            if crate::sync_client::apply_verified_rotation(&mut drop_desc, cert, now_secs) {
                                 for s_drop in &mut current_settings.market_selected_drops {
                                     if s_drop.read_url == drop_desc.read_url {
                                         s_drop.drop_pub = drop_desc.drop_pub.clone();
@@ -1149,7 +1157,7 @@ pub async fn sync_drop_backup(
                             }
                         }
                     }
-                    Ok(crate::drop_client::PutSlotOutcome::PreconditionFailed { .. }) => {
+                    Ok(crate::sync_client::PutSlotOutcome::PreconditionFailed { .. }) => {
                         errors.push(format!("Upload to {} failed: precondition failed", drop_desc.write_url));
                     }
                     Err(e) => {
@@ -1166,6 +1174,7 @@ pub async fn sync_drop_backup(
     let timestamp_str = if uploaded_to > 0 {
         let ts = Utc::now().to_rfc3339();
         current_settings.last_drop_backup_at = Some(ts.clone());
+        current_settings.backup_dirty = false;
         settings_updated = true;
         Some(ts)
     } else {
@@ -1230,8 +1239,8 @@ pub async fn fetch_and_inspect_drop_backup(
     let canonical_write_url = humoco_market::canonicalize_write_url(&raw_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
-    let client = crate::drop_client::create_drop_probe_client();
-    let info_opt = crate::drop_client::fetch_drop_info(&client, &canonical_write_url).await.ok();
+    let client = crate::sync_client::create_drop_probe_client();
+    let info_opt = crate::sync_client::fetch_drop_info(&client, &canonical_write_url).await.ok();
 
     let (current_drop_pub, current_read_url, old_pubkeys) = match info_opt {
         Some(info) => {
@@ -1297,11 +1306,11 @@ pub async fn fetch_and_inspect_drop_backup(
     }
 
     // Download first candidate that matches
-    let fetch_client = crate::drop_client::create_drop_http_client();
+    let fetch_client = crate::sync_client::create_drop_http_client();
     let mut downloaded_bytes: Option<(Vec<u8>, String, String)> = None;
 
     for (read_url, pubkey_hex, kind) in candidates {
-        match crate::drop_client::get_slot(&fetch_client, &read_url, &pubkey_hex, "backup").await {
+        match crate::sync_client::get_slot(&fetch_client, &read_url, &pubkey_hex, "backup").await {
             Ok(Some(bytes)) => {
                 downloaded_bytes = Some((bytes, kind, read_url));
                 break;
@@ -1855,5 +1864,45 @@ mod tests {
             settings.pending_restore_l2_reconciliation = false;
         }
         assert!(!settings.pending_restore_l2_reconciliation);
+    }
+
+    #[test]
+    fn test_compute_backup_status_dto_combined() {
+        let mut settings = crate::settings::AppSettings {
+            backup_sync_folder: None,
+            drop_backup_enabled: false,
+            ..Default::default()
+        };
+
+        // 1. Not configured
+        let dto = super::compute_backup_status_dto(&settings, false);
+        assert_eq!(dto.status, "notConfigured");
+        assert!(!dto.has_authorized_sync_backup_target);
+
+        // 2. Sync backup only, up to date (< 14 days)
+        settings.drop_backup_enabled = true;
+        settings.last_drop_backup_at = Some(chrono::Utc::now().to_rfc3339());
+        settings.backup_dirty = false;
+        let dto = super::compute_backup_status_dto(&settings, false);
+        assert_eq!(dto.status, "ok");
+        assert!(dto.sync_backup_enabled);
+        assert!(dto.has_authorized_sync_backup_target);
+
+        // 3. Pending dirty changes
+        settings.backup_dirty = true;
+        let dto = super::compute_backup_status_dto(&settings, false);
+        assert_eq!(dto.status, "pending");
+
+        // 4. Warning: outdated (> 14 days)
+        settings.backup_dirty = false;
+        settings.last_drop_backup_at = Some("2020-01-01T00:00:00Z".to_string());
+        let dto = super::compute_backup_status_dto(&settings, true);
+        assert_eq!(dto.status, "warning");
+
+        // 5. Local folder disconnected
+        settings.backup_sync_folder = Some("/non/existent/path/for/humoco/test".to_string());
+        settings.drop_backup_enabled = false;
+        let dto = super::compute_backup_status_dto(&settings, false);
+        assert_eq!(dto.status, "disconnected");
     }
 }

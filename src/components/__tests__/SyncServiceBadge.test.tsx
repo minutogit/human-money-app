@@ -1,14 +1,13 @@
 /* eslint-disable @typescript-eslint/no-require-imports, no-undef, @typescript-eslint/no-explicit-any */
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { DropStatusBadge } from '../DropStatusBadge';
+import { SyncServiceBadge } from '../SyncServiceBadge';
 import { marketService } from '../../services/marketService';
-import * as clipboardUtils from '../../utils/clipboard';
 
-const mockNavigate = vi.fn();
+const mockNavigateToSettingsSection = vi.fn();
 vi.mock('../../context/NavigationContext', () => ({
     useNavigation: () => ({
-        navigate: mockNavigate,
+        navigateToSettingsSection: mockNavigateToSettingsSection,
     }),
 }));
 
@@ -61,16 +60,18 @@ vi.mock('../../services/marketService', () => ({
     },
 }));
 
-vi.mock('../../utils/clipboard', () => ({
-    copyToClipboard: vi.fn(() => Promise.resolve(true)),
+vi.mock('../../services/postService', () => ({
+    postService: {
+        syncPostDrops: vi.fn().mockResolvedValue(null),
+    },
 }));
 
-describe('DropStatusBadge Component', () => {
+describe('SyncServiceBadge Component', () => {
     beforeEach(() => {
         vi.clearAllMocks();
     });
 
-    it('renders not connected state (count = 0) and opens info modal with §7.6 text and invite button', async () => {
+    it('renders not connected state (count = 0) and opens popover on click', async () => {
         vi.mocked(marketService.getDropOverviewStatus).mockResolvedValue({
             connectedCount: 0,
             friendDrops: 0,
@@ -80,42 +81,53 @@ describe('DropStatusBadge Component', () => {
             lastSyncAt: null,
         });
 
-        render(<DropStatusBadge />);
+        render(<SyncServiceBadge />);
 
         await waitFor(() => {
-            expect(screen.getByText('No Drop')).toBeInTheDocument();
+            expect(screen.getByText('No sync service')).toBeInTheDocument();
         });
 
         // Click badge to open popover
-        fireEvent.click(screen.getByRole('button', { name: /Ablage Status: No Drop/i }));
+        fireEvent.click(screen.getByRole('button', { name: /Sync-Dienst Status: No sync service/i }));
 
         await waitFor(() => {
             expect(screen.getByRole('dialog')).toBeInTheDocument();
-            expect(screen.getByText(/The Human Money App works completely without the internet/i)).toBeInTheDocument();
-        });
-
-        // Click copy invite button
-        const inviteBtn = screen.getByRole('button', { name: /Ask a Friend/i });
-        fireEvent.click(inviteBtn);
-
-        await waitFor(() => {
-            expect(clipboardUtils.copyToClipboard).toHaveBeenCalledWith(
-                expect.stringContaining('Human Money App')
-            );
+            expect(screen.getByText(/Automated background exchange for payments/i)).toBeInTheDocument();
         });
 
         // Click settings button
-        const settingsBtn = screen.getByRole('button', { name: /Drop Settings/i });
+        const settingsBtn = screen.getByRole('button', { name: /Manage sync service/i });
         fireEvent.click(settingsBtn);
 
-        expect(mockNavigate).toHaveBeenCalledWith({
-            view: 'settings',
-            openDropsModal: true,
-            openDropsTab: undefined,
+        expect(mockNavigateToSettingsSection).toHaveBeenCalledWith('sync');
+    });
+
+    it('closes popover on Escape key', async () => {
+        vi.mocked(marketService.getDropOverviewStatus).mockResolvedValue({
+            connectedCount: 0,
+            friendDrops: 0,
+            publicDrops: 0,
+            hasOwnDrop: false,
+            ownDropSoftWarning: false,
+            lastSyncAt: null,
+        });
+
+        render(<SyncServiceBadge />);
+
+        await waitFor(() => {
+            expect(screen.getByText('No sync service')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByRole('button', { name: /Sync-Dienst Status: No sync service/i }));
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+        fireEvent.keyDown(document, { key: 'Escape' });
+        await waitFor(() => {
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
         });
     });
 
-    it('renders connected state (count = 2) and displays breakdown in modal', async () => {
+    it('renders connected state (count = 2) and displays breakdown in popover', async () => {
         vi.mocked(marketService.getDropOverviewStatus).mockResolvedValue({
             connectedCount: 2,
             friendDrops: 1,
@@ -125,25 +137,23 @@ describe('DropStatusBadge Component', () => {
             lastSyncAt: 1730000000,
         });
 
-        render(<DropStatusBadge />);
+        render(<SyncServiceBadge />);
 
         await waitFor(() => {
-            expect(screen.getByText('2 Drops Connected')).toBeInTheDocument();
+            expect(screen.getByText('2 sync services connected')).toBeInTheDocument();
         });
 
-        // Click badge to open connected modal
-        fireEvent.click(screen.getByRole('button', { name: /Ablage Status: 2 Drops Connected/i }));
+        // Click badge to open connected popover
+        fireEvent.click(screen.getByRole('button', { name: /Sync-Dienst Status: 2 sync services connected/i }));
 
         await waitFor(() => {
             expect(screen.getByRole('dialog')).toBeInTheDocument();
-            expect(screen.getByText('Drop Status')).toBeInTheDocument();
-            expect(screen.getByText('Friends')).toBeInTheDocument();
-            expect(screen.getByText('Public')).toBeInTheDocument();
-            expect(screen.getByText('Own')).toBeInTheDocument();
+            expect(screen.getByText('1 Freunde')).toBeInTheDocument();
+            expect(screen.getByText('1 Öffentlich')).toBeInTheDocument();
         });
 
         // Click quick sync
-        const syncBtn = screen.getByRole('button', { name: /Sync Now|Jetzt synchronisieren/i });
+        const syncBtn = screen.getByRole('button', { name: /Sync now|Jetzt synchronisieren/i });
         fireEvent.click(syncBtn);
 
         await waitFor(() => {
@@ -151,7 +161,7 @@ describe('DropStatusBadge Component', () => {
         });
     });
 
-    it('renders soft warning state when own drop storage is >= 80% full', async () => {
+    it('renders soft warning state when own sync service storage is >= 80% full', async () => {
         vi.mocked(marketService.getDropOverviewStatus).mockResolvedValue({
             connectedCount: 1,
             friendDrops: 0,
@@ -161,19 +171,18 @@ describe('DropStatusBadge Component', () => {
             lastSyncAt: 1730000000,
         });
 
-        render(<DropStatusBadge />);
+        render(<SyncServiceBadge />);
 
         await waitFor(() => {
-            expect(screen.getByText('1 Drop Connected')).toBeInTheDocument();
+            expect(screen.getByText('1 sync service connected')).toBeInTheDocument();
         });
 
-        // Click badge to open modal
-        fireEvent.click(screen.getByRole('button', { name: /Ablage Status: 1 Drop Connected/i }));
+        // Click badge to open popover
+        fireEvent.click(screen.getByRole('button', { name: /Sync-Dienst Status: 1 sync service connected/i }));
 
         await waitFor(() => {
             expect(screen.getByRole('dialog')).toBeInTheDocument();
-            expect(screen.getByText(/Storage Limit Nearly Reached/i)).toBeInTheDocument();
-            expect(screen.getByText(/Your own drop is 80% or more full/i)).toBeInTheDocument();
+            expect(screen.getByText(/Your own .* is 80% or more full|Dein eigener/i)).toBeInTheDocument();
         });
     });
 });

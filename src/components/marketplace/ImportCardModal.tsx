@@ -1,16 +1,19 @@
 // src/components/marketplace/ImportCardModal.tsx
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, FileText, CheckCircle2, AlertCircle, Info, Upload } from 'lucide-react';
+import { Download, FileText, CheckCircle2, AlertCircle, Info, Upload, Check } from 'lucide-react';
 import { ModalShell } from '../ui/ModalShell';
 import { Button } from '../ui/Button';
 import { Textarea } from '../ui/Textarea';
 import { marketService } from '../../services/marketService';
+import { contactService } from '../../services/contactService';
 import { useSession } from '../../context/SessionContext';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../../utils/log';
 import { stringifyError } from '../../utils/errorHelper';
+import { truncateUserId } from '../../utils/userIdHelper';
+import { Contact, FrontendOwnContactCard } from '../../types';
 
 export interface ImportCardModalProps {
     isOpen: boolean;
@@ -31,17 +34,77 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
         did?: string | null;
     } | null>(null);
 
+    const [ownCard, setOwnCard] = useState<FrontendOwnContactCard | null>(null);
+    const [partnerName, setPartnerName] = useState<string | null>(null);
+    const [selectedTrustLevel, setSelectedTrustLevel] = useState<number | null>(null);
+    const [isSavingTrust, setIsSavingTrust] = useState(false);
+
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        if (isOpen) {
+            marketService.getOwnContactCard().then(setOwnCard).catch(() => {});
+        }
+    }, [isOpen]);
 
     const resetState = () => {
         setPayloadText('');
         setIsImporting(false);
         setResultFeedback(null);
+        setSelectedTrustLevel(null);
+        setIsSavingTrust(false);
+        setPartnerName(null);
     };
 
     const handleClose = () => {
         resetState();
         onClose();
+    };
+
+    const handleSetTrustLevel = async (level: number) => {
+        if (!resultFeedback?.did) return;
+        setIsSavingTrust(true);
+        try {
+            if (level > 0) {
+                const did = resultFeedback.did;
+                const existingContacts = await contactService.getContacts().catch(() => []);
+                const existing = existingContacts.find(c => c.did === did);
+
+                let profile = existing?.profile;
+                let drops = existing?.drops;
+                if (!profile) {
+                    const list = await marketService.getMarketView().catch(() => []);
+                    const p = (list || []).find(x => x.did === did);
+                    profile = p?.profile;
+                    drops = p?.cardDrops;
+                }
+
+                const defaultProfile = {
+                    id: did,
+                    firstName: partnerName || 'Kontakt',
+                };
+
+                const contactToSave: Contact = {
+                    did,
+                    profile: profile || defaultProfile,
+                    tags: existing?.tags || [],
+                    addedAt: existing?.addedAt || new Date().toISOString(),
+                    trustLevel: level,
+                    drops: drops || [],
+                };
+
+                await protectAction(async (pwd) => {
+                    await contactService.saveContact(contactToSave, pwd || undefined);
+                });
+
+                marketService.syncMarketDrops().catch(() => {});
+            }
+            setSelectedTrustLevel(level);
+        } catch (err) {
+            logger.error(`Failed to set contact trust level: ${stringifyError(err)}`);
+        } finally {
+            setIsSavingTrust(false);
+        }
     };
 
     const processImportPayload = async (rawPayload: string) => {
@@ -72,6 +135,16 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                     did: res.did,
                 });
                 onImportSuccess(res.did);
+
+                if (res.did) {
+                    marketService.getMarketView().then(list => {
+                        const p = (list || []).find(x => x.did === res.did);
+                        if (p) {
+                            const name = [p.profile.firstName, p.profile.lastName].filter(Boolean).join(' ') || p.profile.organization || p.profile.community;
+                            if (name) setPartnerName(name);
+                        }
+                    }).catch(() => {});
+                }
             } else if (res.status === 'ignored_stale') {
                 setResultFeedback({
                     type: 'warning',
@@ -174,95 +247,176 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 </div>
             }
             footer={
-                <div className="flex items-center justify-between w-full">
-                    <Button variant="secondary" size="sm" onClick={handleClose}>
-                        {t('common.close')}
-                    </Button>
+                resultFeedback?.type === 'success' ? (
+                    <div className="flex justify-end w-full">
+                        <Button variant="primary" size="sm" onClick={handleClose}>
+                            {t('common.done', 'Fertig')}
+                        </Button>
+                    </div>
+                ) : (
+                    <div className="flex items-center justify-between w-full">
+                        <Button variant="secondary" size="sm" onClick={handleClose}>
+                            {t('common.close')}
+                        </Button>
 
-                    <Button
-                        variant="primary"
-                        size="sm"
-                        onClick={() => processImportPayload(payloadText)}
-                        disabled={isImporting || !payloadText.trim()}
-                        className="gap-1.5 shadow-sm"
-                    >
-                        <Download size={14} />
-                        <span>{isImporting ? t('common.processing') : t('marketplace.importActionBtn')}</span>
-                    </Button>
-                </div>
+                        <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() => processImportPayload(payloadText)}
+                            disabled={isImporting || !payloadText.trim()}
+                            className="gap-1.5 shadow-sm"
+                        >
+                            <Download size={14} />
+                            <span>{isImporting ? t('common.processing') : t('marketplace.importActionBtn')}</span>
+                        </Button>
+                    </div>
+                )
             }
         >
             <div className="space-y-4 pt-2">
-                {/* Result Feedback Banner */}
-                {resultFeedback && (
-                    <div
-                        className={`p-3 rounded-2xl border flex items-start gap-3 text-xs ${
-                            resultFeedback.type === 'success'
-                                ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
-                                : resultFeedback.type === 'warning'
-                                ? 'bg-amber-50 text-amber-900 border-amber-200'
-                                : 'bg-rose-50 text-rose-900 border-rose-200'
-                        }`}
-                    >
-                        {resultFeedback.type === 'success' ? (
-                            <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
-                        ) : resultFeedback.type === 'warning' ? (
-                            <Info size={16} className="text-amber-600 shrink-0 mt-0.5" />
-                        ) : (
-                            <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+                {resultFeedback?.type === 'success' ? (
+                    /* Step 2: Confirmation, 1-Click Trust Level & Counter-Scan QR */
+                    <div className="space-y-4 animate-in fade-in duration-200">
+                        <div className="p-3.5 rounded-2xl border flex items-start gap-3 text-xs bg-emerald-50 text-emerald-900 border-emerald-200">
+                            <CheckCircle2 size={18} className="text-emerald-600 shrink-0 mt-0.5" />
+                            <div className="space-y-1">
+                                <h4 className="font-bold">{resultFeedback.title}</h4>
+                                <p className="leading-relaxed opacity-90">{resultFeedback.message}</p>
+                            </div>
+                        </div>
+
+                        {/* 1-Click Trust Level Selection */}
+                        <div className="p-4 bg-bg-app rounded-2xl border border-theme-subtle space-y-2.5">
+                            <span className="text-xs font-bold text-theme-secondary block">
+                                {t('marketplace.trustLevelSelectTitle', 'In mein Adressbuch aufnehmen als:')}
+                            </span>
+                            <div className="flex flex-wrap gap-2">
+                                <Button
+                                    type="button"
+                                    variant={selectedTrustLevel === 2 ? 'primary' : 'outline'}
+                                    size="sm"
+                                    onClick={() => handleSetTrustLevel(2)}
+                                    disabled={isSavingTrust}
+                                    className="text-xs gap-1.5"
+                                >
+                                    {selectedTrustLevel === 2 && <Check size={13} />}
+                                    <span>{t('marketplace.trustLevel2Btn', 'Vertraut (Stufe 2 – Empfohlen)')}</span>
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant={selectedTrustLevel === 1 ? 'primary' : 'outline'}
+                                    size="sm"
+                                    onClick={() => handleSetTrustLevel(1)}
+                                    disabled={isSavingTrust}
+                                    className="text-xs gap-1.5"
+                                >
+                                    {selectedTrustLevel === 1 && <Check size={13} />}
+                                    <span>{t('marketplace.trustLevel1Btn', 'Bekannt (Stufe 1)')}</span>
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant={selectedTrustLevel === 0 ? 'secondary' : 'outline'}
+                                    size="sm"
+                                    onClick={() => handleSetTrustLevel(0)}
+                                    disabled={isSavingTrust}
+                                    className="text-xs text-theme-light"
+                                >
+                                    <span>{t('marketplace.trustLevelNoneBtn', 'Nur im Marktplatz merken')}</span>
+                                </Button>
+                            </div>
+                        </div>
+
+                        {/* Counter-Scan QR Section */}
+                        {ownCard?.qrSvg && (
+                            <div className="p-4 bg-bg-app rounded-2xl border border-theme-subtle text-center space-y-2">
+                                <span className="text-xs font-bold text-theme-secondary block">
+                                    {t('marketplace.counterScanTitle', {
+                                        name: partnerName || (resultFeedback.did ? truncateUserId(resultFeedback.did) : 'deinem Gegenüber'),
+                                        defaultValue: `Zeige ${partnerName || 'deinem Gegenüber'} kurz diesen Code für den beidseitigen Abschluss`,
+                                    })}
+                                </span>
+                                <p className="text-[11px] text-theme-light">
+                                    {t('marketplace.counterScanHint', 'Sobald dein Gegenüber deinen Code scannt, ist die Verbindung vollständig.')}
+                                </p>
+                                <img
+                                    src={`data:image/svg+xml;utf8,${encodeURIComponent(ownCard.qrSvg)}`}
+                                    alt="HuMoCo Counter QR Code"
+                                    className="w-48 h-48 mx-auto rounded-xl p-2 bg-white shadow-xs border border-theme-subtle object-contain"
+                                />
+                            </div>
                         )}
-                        <div className="space-y-1">
-                            <h4 className="font-bold">{resultFeedback.title}</h4>
-                            <p className="leading-relaxed opacity-90">{resultFeedback.message}</p>
+                    </div>
+                ) : (
+                    /* Step 1: Input / File selection */
+                    <div className="space-y-4">
+                        {/* Error or Warning Banner */}
+                        {resultFeedback && (
+                            <div
+                                className={`p-3 rounded-2xl border flex items-start gap-3 text-xs ${
+                                    resultFeedback.type === 'warning'
+                                        ? 'bg-amber-50 text-amber-900 border-amber-200'
+                                        : 'bg-rose-50 text-rose-900 border-rose-200'
+                                }`}
+                            >
+                                {resultFeedback.type === 'warning' ? (
+                                    <Info size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                                ) : (
+                                    <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+                                )}
+                                <div className="space-y-1">
+                                    <h4 className="font-bold">{resultFeedback.title}</h4>
+                                    <p className="leading-relaxed opacity-90">{resultFeedback.message}</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* File Upload Option */}
+                        <div>
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept=".hmcard,application/json"
+                                onChange={handleFileInputChange}
+                                className="hidden"
+                            />
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={handleFilePicker}
+                                disabled={isImporting}
+                                className="w-full h-auto py-3 px-4 flex items-center justify-center gap-2 border-dashed border-2 border-theme-subtle hover:border-theme-primary/40 bg-bg-app rounded-2xl text-xs font-bold text-theme-secondary cursor-pointer"
+                            >
+                                <Upload size={16} className="text-theme-primary" />
+                                <span>{t('marketplace.chooseCardFileBtn')}</span>
+                            </Button>
+                        </div>
+
+                        <div className="relative flex items-center justify-center">
+                            <div className="border-t border-theme-subtle w-full"></div>
+                            <span className="bg-white px-3 text-[10px] font-bold text-theme-light uppercase tracking-wider absolute">
+                                {t('common.or')}
+                            </span>
+                        </div>
+
+                        {/* Paste Link or JSON */}
+                        <div className="space-y-1.5">
+                            <label className="block text-[11px] font-bold text-theme-secondary flex items-center gap-1.5">
+                                <FileText size={13} className="text-theme-primary" />
+                                <span>{t('marketplace.pasteCardPayloadLabel')}</span>
+                            </label>
+                            <Textarea
+                                value={payloadText}
+                                onChange={(e) => setPayloadText(e.target.value)}
+                                placeholder={t('marketplace.pasteCardPayloadPlaceholder')}
+                                rows={4}
+                                className="text-xs font-mono bg-bg-app"
+                            />
+                            <p className="text-[10px] text-theme-light">
+                                {t('marketplace.pasteCardPayloadHint')}
+                            </p>
                         </div>
                     </div>
                 )}
-
-                {/* File Upload Option */}
-                <div>
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".hmcard,application/json"
-                        onChange={handleFileInputChange}
-                        className="hidden"
-                    />
-                    <Button
-                        type="button"
-                        variant="outline"
-                        onClick={handleFilePicker}
-                        disabled={isImporting}
-                        className="w-full h-auto py-3 px-4 flex items-center justify-center gap-2 border-dashed border-2 border-theme-subtle hover:border-theme-primary/40 bg-bg-app rounded-2xl text-xs font-bold text-theme-secondary cursor-pointer"
-                    >
-                        <Upload size={16} className="text-theme-primary" />
-                        <span>{t('marketplace.chooseCardFileBtn')}</span>
-                    </Button>
-                </div>
-
-                <div className="relative flex items-center justify-center">
-                    <div className="border-t border-theme-subtle w-full"></div>
-                    <span className="bg-white px-3 text-[10px] font-bold text-theme-light uppercase tracking-wider absolute">
-                        {t('common.or')}
-                    </span>
-                </div>
-
-                {/* Paste Link or JSON */}
-                <div className="space-y-1.5">
-                    <label className="block text-[11px] font-bold text-theme-secondary flex items-center gap-1.5">
-                        <FileText size={13} className="text-theme-primary" />
-                        <span>{t('marketplace.pasteCardPayloadLabel')}</span>
-                    </label>
-                    <Textarea
-                        value={payloadText}
-                        onChange={(e) => setPayloadText(e.target.value)}
-                        placeholder={t('marketplace.pasteCardPayloadPlaceholder')}
-                        rows={4}
-                        className="text-xs font-mono bg-bg-app"
-                    />
-                    <p className="text-[10px] text-theme-light">
-                        {t('marketplace.pasteCardPayloadHint')}
-                    </p>
-                </div>
             </div>
         </ModalShell>
     );

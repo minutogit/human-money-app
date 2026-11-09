@@ -1,6 +1,6 @@
 <?php
 /**
- * HuMoCo Drop Server – Hardened Privacy-Preserving HTTP Drop (Multi-Channel V1)
+ * HuMoCo Sync-Dienst – Hardened Privacy-Preserving HTTP Sync (Multi-Channel V1)
  *
  * Requirements: PHP >= 7.4 with ext-sodium, zero database, zero Composer.
  * Strictly enforces 64-hex lowercase Ed25519 signatures, 1-inode rate limiting,
@@ -10,7 +10,7 @@
 // Load configuration
 $configFile = __DIR__ . '/config.php';
 if (PHP_SAPI === 'cli-server') {
-    $envConfig = getenv('HUMOCO_DROP_CONFIG');
+    $envConfig = getenv('HUMOCO_SYNC_CONFIG');
     if ($envConfig !== false && $envConfig !== '') {
         $configFile = $envConfig;
     }
@@ -351,7 +351,7 @@ function lazy_prune_slots($dataDir, array $channels, array &$state, $now) {
 $commonHeaders = [];
 if ($state['rotation'] !== null && $now < $state['rotation']['retire_at']) {
     $rot = $state['rotation'];
-    $commonHeaders['X-Humoco-Drop-Rotation'] = "{$rot['old_pubkey']}:{$rot['new_pubkey']}:{$rot['retire_at']}:{$rot['cert_sig']}";
+    $commonHeaders['X-Humoco-Sync-Rotation'] = "{$rot['old_pubkey']}:{$rot['new_pubkey']}:{$rot['retire_at']}:{$rot['cert_sig']}";
 }
 
 // Load members for a channel
@@ -375,7 +375,7 @@ function load_channel_members($configFile, $channel) {
 $method = isset($_SERVER['REQUEST_METHOD']) ? strtoupper($_SERVER['REQUEST_METHOD']) : '';
 
 // =========================================================================
-// ROUTE 1: GET drop.php?info
+// ROUTE 1: GET sync.php?info
 // =========================================================================
 if ($method === 'GET' && isset($_GET['info'])) {
     if (ip_is_locked($bucket, $now)) {
@@ -414,7 +414,7 @@ if ($method === 'GET' && isset($_GET['info'])) {
 }
 
 // =========================================================================
-// ROUTE 2: HEAD drop.php
+// ROUTE 2: HEAD sync.php
 // =========================================================================
 if ($method === 'HEAD') {
     if (ip_is_locked($bucket, $now)) {
@@ -461,7 +461,7 @@ if ($method === 'HEAD') {
 }
 
 // =========================================================================
-// ROUTE 3: PUT drop.php?members&channel=<name> (Admin Update Member Pubkeys)
+// ROUTE 3: PUT sync.php?members&channel=<name> (Admin Update Member Pubkeys)
 // =========================================================================
 if ($method === 'PUT' && isset($_GET['members'])) {
     $channel = isset($_GET['channel']) && $_GET['channel'] !== '' ? (string)$_GET['channel'] : (isset($_SERVER['HTTP_X_CHANNEL']) ? (string)$_SERVER['HTTP_X_CHANNEL'] : '');
@@ -560,7 +560,7 @@ if ($method === 'PUT' && isset($_GET['members'])) {
 }
 
 // =========================================================================
-// ROUTE 4: POST drop.php?rotate (Admin 180-Day Key Rotation)
+// ROUTE 4: POST sync.php?rotate (Admin 180-Day Key Rotation)
 // =========================================================================
 if ($method === 'POST' && isset($_GET['rotate'])) {
     $outerPubkey = isset($_SERVER['HTTP_X_DROP_PUBKEY']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_PUBKEY'])) : '';
@@ -628,12 +628,12 @@ if ($method === 'POST' && isset($_GET['rotate'])) {
     $rotHeaderVal = "{$certOld}:{$certNew}:{$certRetire}:{$certSig}";
     drop_respond(200, $lockFp, json_encode(['ok' => true]), [
         'Content-Type'           => 'application/json; charset=utf-8',
-        'X-Humoco-Drop-Rotation' => $rotHeaderVal,
+        'X-Humoco-Sync-Rotation' => $rotHeaderVal,
     ]);
 }
 
 // =========================================================================
-// ROUTE 5: GET drop.php?status (Admin Storage Dashboard Info)
+// ROUTE 5: GET sync.php?status (Admin Storage Dashboard Info)
 // =========================================================================
 if ($method === 'GET' && isset($_GET['status'])) {
     $adminPub = isset($_SERVER['HTTP_X_DROP_PUBKEY']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_PUBKEY'])) : '';
@@ -697,7 +697,7 @@ if ($method === 'GET' && isset($_GET['status'])) {
 }
 
 // =========================================================================
-// ROUTE 6: PUT drop.php (Member Raw Binary Upload)
+// ROUTE 6: PUT sync.php (Member Raw Binary Upload)
 // =========================================================================
 if ($method === 'PUT') {
     $channel = isset($_SERVER['HTTP_X_CHANNEL']) ? trim((string)$_SERVER['HTTP_X_CHANNEL']) : '';
@@ -841,7 +841,7 @@ if ($method === 'PUT') {
 }
 
 // =========================================================================
-// ROUTE 7: DELETE drop.php (Member Slot Delete)
+// ROUTE 7: DELETE sync.php (Member Slot Delete)
 // =========================================================================
 if ($method === 'DELETE') {
     $channel = isset($_SERVER['HTTP_X_CHANNEL']) ? trim((string)$_SERVER['HTTP_X_CHANNEL']) : '';

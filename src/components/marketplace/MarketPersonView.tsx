@@ -23,7 +23,8 @@ import {
     Store,
     Calendar,
     ArrowLeft,
-    Share2
+    Share2,
+    RefreshCw
 } from 'lucide-react';
 import { FrontendMarketPerson, Contact, FrontendMarketListing, FrontendForwardCardExport } from '../../types';
 import { useNavigation } from '../../context/NavigationContext';
@@ -49,6 +50,8 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
     const { navigate } = useNavigation();
     const { protectAction } = useSession();
 
+    const [currentPerson, setCurrentPerson] = useState<FrontendMarketPerson>(person);
+    const [isManualSyncing, setIsManualSyncing] = useState(false);
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [isContactDialogOpen, setIsContactDialogOpen] = useState(false);
     const [copiedDid, setCopiedDid] = useState(false);
@@ -56,6 +59,26 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
     const [forwardCardData, setForwardCardData] = useState<FrontendForwardCardExport | null>(null);
     const [isShareModalOpen, setIsShareModalOpen] = useState(false);
     const [forwardError, setForwardError] = useState<string | null>(null);
+
+    useEffect(() => {
+        setCurrentPerson(person);
+    }, [person]);
+
+    const handleManualSync = async () => {
+        setIsManualSyncing(true);
+        try {
+            await marketService.syncMarketDrops();
+            const list = await marketService.getMarketView();
+            const updated = (list || []).find(p => p.did === currentPerson.did);
+            if (updated) {
+                setCurrentPerson(updated);
+            }
+        } catch {
+            // Silently retain current data
+        } finally {
+            setIsManualSyncing(false);
+        }
+    };
 
     const loadContacts = useCallback(async () => {
         try {
@@ -70,10 +93,10 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
         loadContacts();
     }, [loadContacts]);
 
-    const existingContact = contacts.find(c => c.did === person.did);
+    const existingContact = contacts.find(c => c.did === currentPerson.did);
 
     const handleCopyDid = async () => {
-        const success = await copyToClipboard(person.did);
+        const success = await copyToClipboard(currentPerson.did);
         if (success) {
             setCopiedDid(true);
             setTimeout(() => setCopiedDid(false), 2000);
@@ -88,17 +111,17 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
     };
 
     const handlePay = () => {
-        navigate({ view: 'send_vouchers', initialRecipientId: person.did });
+        navigate({ view: 'send_vouchers', initialRecipientId: currentPerson.did });
     };
 
-    const hasCardSource = person.sources.some(s => s.kind === 'card');
+    const hasCardSource = currentPerson.sources.some(s => s.kind === 'card');
 
     const handleForwardCard = async () => {
         setIsForwarding(true);
         setForwardError(null);
         try {
             const exportData = await protectAction(async (pwd) => {
-                return await marketService.exportForwardCard(person.did, pwd || undefined);
+                return await marketService.exportForwardCard(currentPerson.did, pwd || undefined);
             });
             if (exportData) {
                 setForwardCardData(exportData);
@@ -120,11 +143,11 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
         }
     };
 
-    const fullName = [person.profile.firstName, person.profile.lastName].filter(Boolean).join(' ');
-    const displayName = fullName || person.profile.organization || person.profile.community || truncateUserId(person.did);
+    const fullName = [currentPerson.profile.firstName, currentPerson.profile.lastName].filter(Boolean).join(' ');
+    const displayName = fullName || currentPerson.profile.organization || currentPerson.profile.community || truncateUserId(currentPerson.did);
 
-    const hasCardListings = person.listings.some(l => l.origin === 'card');
-    const hasVoucherListings = person.listings.some(l => l.origin === 'voucher');
+    const hasCardListings = currentPerson.listings.some(l => l.origin === 'card');
+    const hasVoucherListings = currentPerson.listings.some(l => l.origin === 'voucher');
     const hasBothOrigins = hasCardListings && hasVoucherListings;
 
     const sortListings = (list: FrontendMarketListing[]) => {
@@ -135,12 +158,12 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
         });
     };
 
-    const offers = sortListings(person.listings.filter(l => l.listingType === 'offer'));
-    const requests = sortListings(person.listings.filter(l => l.listingType === 'request'));
+    const offers = sortListings(currentPerson.listings.filter(l => l.listingType === 'offer'));
+    const requests = sortListings(currentPerson.listings.filter(l => l.listingType === 'request'));
 
-    const formattedDate = person.asOf ? new Date(person.asOf * 1000).toLocaleDateString() : '';
+    const formattedDate = currentPerson.asOf ? new Date(currentPerson.asOf * 1000).toLocaleDateString() : '';
 
-    const address = person.profile.address;
+    const address = currentPerson.profile.address;
     const addressLine1 = [address?.street, address?.houseNumber].filter(Boolean).join(' ');
     const addressLine2 = [address?.zipCode, address?.city].filter(Boolean).join(' ');
     const hasAddress = !!(address?.fullAddress || addressLine1 || addressLine2 || address?.country);
@@ -191,13 +214,13 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                     </Button>
 
                     {/* Recommend / Forward Action */}
-                    {(person.canForward || hasCardSource) && (
+                    {(currentPerson.canForward || hasCardSource) && (
                         <Button 
                             variant="outline" 
                             size="sm" 
-                            disabled={!person.canForward || isForwarding}
+                            disabled={!currentPerson.canForward || isForwarding}
                             onClick={handleForwardCard}
-                            title={!person.canForward ? t('marketplace.forwardMaxHopsReached') : t('marketplace.forwardCardBtn')}
+                            title={!currentPerson.canForward ? t('marketplace.forwardMaxHopsReached') : t('marketplace.forwardCardBtn')}
                             className="gap-2 shadow-sm"
                         >
                             <Share2 size={15} />
@@ -233,7 +256,7 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                             </h2>
 
                             {/* Trust Badge */}
-                            {person.trust === 'trusted' ? (
+                            {currentPerson.trust === 'trusted' ? (
                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-xs">
                                     <CheckCircle2 size={13} className="text-emerald-600" />
                                     {t('marketplace.trustTrusted')}
@@ -247,18 +270,18 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                         </div>
 
                         {/* Org / Community */}
-                        {(person.profile.organization || person.profile.community) && (
+                        {(currentPerson.profile.organization || currentPerson.profile.community) && (
                             <div className="flex flex-wrap items-center gap-4 text-xs font-medium text-theme-light">
-                                {person.profile.organization && (
+                                {currentPerson.profile.organization && (
                                     <span className="flex items-center gap-1.5">
                                         <Building2 size={13} />
-                                        {person.profile.organization}
+                                        {currentPerson.profile.organization}
                                     </span>
                                 )}
-                                {person.profile.community && (
+                                {currentPerson.profile.community && (
                                     <span className="flex items-center gap-1.5">
                                         <Users size={13} />
-                                        {person.profile.community}
+                                        {currentPerson.profile.community}
                                     </span>
                                 )}
                             </div>
@@ -269,10 +292,10 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                             <button
                                 type="button"
                                 onClick={handleCopyDid}
-                                title={person.did}
+                                title={currentPerson.did}
                                 className="inline-flex items-center gap-1.5 font-mono bg-bg-app hover:bg-theme-subtle/30 px-2.5 py-1 rounded-lg border border-theme-subtle/50 transition-colors cursor-pointer"
                             >
-                                <span>{truncateUserId(person.did)}</span>
+                                <span>{truncateUserId(currentPerson.did)}</span>
                                 {copiedDid ? <Check size={12} className="text-theme-success" /> : <Copy size={12} />}
                             </button>
 
@@ -285,7 +308,7 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
 
                             {/* Source indicators */}
                             <div className="flex items-center gap-1.5">
-                                {person.sources.map((src, i) => {
+                                {currentPerson.sources.map((src, i) => {
                                     if (src.kind === 'voucher') {
                                         return (
                                             <span 
@@ -328,14 +351,14 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                 </div>
 
                 {/* Issued / Accepted Voucher Standards */}
-                {person.standards.length > 0 && (
+                {currentPerson.standards.length > 0 && (
                     <div className="mt-6 pt-5 border-t border-theme-subtle/50">
                         <h4 className="text-[11px] font-black text-theme-light uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
                             <Ticket size={12} />
                             {t('marketplace.standardsIssued')}
                         </h4>
                         <div className="flex flex-wrap gap-2">
-                            {person.standards.map((std) => (
+                            {currentPerson.standards.map((std) => (
                                 <span
                                     key={std.uuid}
                                     className="inline-flex items-center gap-1.5 px-3 py-1 bg-theme-primary/5 text-theme-primary border border-theme-primary/15 rounded-xl text-xs font-semibold"
@@ -351,19 +374,46 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
 
             {/* Inserate / Listings Section */}
             <div className="space-y-4">
-                {person.listings.length === 0 ? (
+                {currentPerson.listings.length === 0 ? (
                     <Card className="p-8 text-center bg-white border border-theme-subtle rounded-3xl">
-                        <div className="max-w-md mx-auto space-y-3">
-                            <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center mx-auto">
-                                <Store size={24} />
+                        {Array.isArray(currentPerson.cardDrops) && currentPerson.cardDrops.length > 0 ? (
+                            <div className="max-w-md mx-auto space-y-3">
+                                <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center mx-auto">
+                                    <RefreshCw size={24} className={isManualSyncing ? 'animate-spin' : ''} />
+                                </div>
+                                <h3 className="text-base font-bold text-theme-secondary">
+                                    {t('marketplace.waitingForMutualHandshakeTitle', 'Kontakt gespeichert – Freischaltung ausstehend')}
+                                </h3>
+                                <p className="text-xs text-theme-light leading-relaxed">
+                                    {t('marketplace.waitingForMutualHandshakeDesc', 'Inserate werden geladen, sobald euch eure Adressbücher gegenseitig freigeschaltet haben.')}
+                                </p>
+                                <div className="pt-2">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={handleManualSync}
+                                        disabled={isManualSyncing}
+                                        className="gap-1.5 text-xs mx-auto"
+                                    >
+                                        <RefreshCw size={13} className={isManualSyncing ? 'animate-spin' : ''} />
+                                        <span>{isManualSyncing ? t('common.syncing', 'Synchronisiere...') : t('marketplace.fetchNowBtn', 'Jetzt abrufen')}</span>
+                                    </Button>
+                                </div>
                             </div>
-                            <h3 className="text-base font-bold text-theme-secondary">
-                                {t('marketplace.acceptsOwnVouchers')}
-                            </h3>
-                            <p className="text-xs text-theme-light leading-relaxed">
-                                {t('marketplace.noListings')}
-                            </p>
-                        </div>
+                        ) : (
+                            <div className="max-w-md mx-auto space-y-3">
+                                <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center mx-auto">
+                                    <Store size={24} />
+                                </div>
+                                <h3 className="text-base font-bold text-theme-secondary">
+                                    {t('marketplace.acceptsOwnVouchers')}
+                                </h3>
+                                <p className="text-xs text-theme-light leading-relaxed">
+                                    {t('marketplace.noListings')}
+                                </p>
+                            </div>
+                        )}
                     </Card>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -459,40 +509,40 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
             </div>
 
             {/* Contact Details Card */}
-            {(person.profile.email || person.profile.phone || person.profile.url || hasAddress || person.profile.coordinates) && (
+            {(currentPerson.profile.email || currentPerson.profile.phone || currentPerson.profile.url || hasAddress || currentPerson.profile.coordinates) && (
                 <Card className="p-6 bg-white border border-theme-subtle rounded-3xl shadow-soft space-y-4">
                     <h3 className="text-xs font-black text-theme-light uppercase tracking-widest flex items-center gap-2">
                         {t('marketplace.contactDetails')}
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                        {person.profile.email && (
+                        {currentPerson.profile.email && (
                             <a 
-                                href={`mailto:${person.profile.email}`} 
+                                href={`mailto:${currentPerson.profile.email}`} 
                                 className="flex items-center gap-2.5 p-3 rounded-2xl bg-bg-app border border-theme-subtle/40 text-theme-secondary hover:text-theme-primary transition-colors"
                             >
                                 <Mail size={15} className="text-theme-light shrink-0" />
-                                <span className="truncate">{person.profile.email}</span>
+                                <span className="truncate">{currentPerson.profile.email}</span>
                             </a>
                         )}
 
-                        {person.profile.phone && (
+                        {currentPerson.profile.phone && (
                             <a 
-                                href={`tel:${person.profile.phone}`} 
+                                href={`tel:${currentPerson.profile.phone}`} 
                                 className="flex items-center gap-2.5 p-3 rounded-2xl bg-bg-app border border-theme-subtle/40 text-theme-secondary hover:text-theme-primary transition-colors"
                             >
                                 <Phone size={15} className="text-theme-light shrink-0" />
-                                <span className="truncate">{person.profile.phone}</span>
+                                <span className="truncate">{currentPerson.profile.phone}</span>
                             </a>
                         )}
 
-                        {person.profile.url && (
+                        {currentPerson.profile.url && (
                             <button 
                                 type="button"
-                                onClick={() => handleOpenWebsite(person.profile.url || '')}
+                                onClick={() => handleOpenWebsite(currentPerson.profile.url || '')}
                                 className="flex items-center gap-2.5 p-3 rounded-2xl bg-bg-app border border-theme-subtle/40 text-theme-secondary hover:text-theme-primary transition-colors text-left cursor-pointer"
                             >
                                 <Globe size={15} className="text-theme-light shrink-0" />
-                                <span className="truncate">{person.profile.url}</span>
+                                <span className="truncate">{currentPerson.profile.url}</span>
                             </button>
                         )}
 
@@ -513,10 +563,10 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                             </div>
                         )}
 
-                        {person.profile.coordinates && (
+                        {currentPerson.profile.coordinates && (
                             <div className="flex items-center gap-2.5 p-3 rounded-2xl bg-bg-app border border-theme-subtle/40 text-theme-secondary font-mono text-[11px]">
                                 <MapPin size={15} className="text-theme-light shrink-0" />
-                                <span className="truncate">{person.profile.coordinates}</span>
+                                <span className="truncate">{currentPerson.profile.coordinates}</span>
                             </div>
                         )}
                     </div>
@@ -529,8 +579,8 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                 onClose={() => setIsContactDialogOpen(false)}
                 onSave={handleSaveContact}
                 existingContact={existingContact}
-                initialDid={person.did}
-                initialProfile={person.profile}
+                initialDid={currentPerson.did}
+                initialProfile={currentPerson.profile}
             />
 
             {/* Share / Forward Modal */}

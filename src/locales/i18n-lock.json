@@ -7691,7 +7691,7 @@
     }
   },
   "marketplace.saveZipBtn": {
-    "source_text": "Save ZIP Package (humoco-drop.zip)",
+    "source_text": "Download humoco-sync-setup.zip",
     "status": {
       "en": "manual-verified",
       "de": "manual-verified",

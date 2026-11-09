@@ -111,7 +111,7 @@ fn test_drop_access_deterministic_vectors() {
 
     // Public drop registration key derivation
     let public_drop_inputs = [
-        "https://drop.humoco.org/drop.php",
+        "https://drop.humoco.org/sync.php",
         "drop.verein.de/",
         "http://127.0.0.1:8080/humoco/",
     ];
@@ -162,7 +162,7 @@ fn test_drop_access_deterministic_vectors() {
         sample_admin_request_message,
     };
 
-    let vector_path = "tests/vectors/drop_access.json";
+    let vector_path = "tests/vectors/sync_access.json";
     if !std::path::Path::new(vector_path).exists() {
         let json = serde_json::to_string_pretty(&vectors).unwrap();
         std::fs::write(vector_path, json).unwrap();
@@ -177,51 +177,51 @@ fn test_drop_access_deterministic_vectors() {
 fn test_canonicalize_write_url_edge_cases() {
     // Normal https
     assert_eq!(
-        canonicalize_write_url("https://example.com/drop.php").unwrap(),
-        "https://example.com/drop.php"
+        canonicalize_write_url("https://example.com/sync.php").unwrap(),
+        "https://example.com/sync.php"
     );
-    // Bare domain prepends https:// and /drop.php
+    // Bare domain prepends https:// and /sync.php
     assert_eq!(
         canonicalize_write_url("example.com").unwrap(),
-        "https://example.com/drop.php"
+        "https://example.com/sync.php"
     );
-    // Trailing slash appends drop.php
+    // Trailing slash appends sync.php
     assert_eq!(
-        canonicalize_write_url("https://example.com/my-drop/").unwrap(),
-        "https://example.com/my-drop/drop.php"
+        canonicalize_write_url("https://example.com/my-sync/").unwrap(),
+        "https://example.com/my-sync/sync.php"
     );
     // Port 443 stripped on https
     assert_eq!(
-        canonicalize_write_url("https://EXAMPLE.COM:443/drop.php?query=1#frag").unwrap(),
-        "https://example.com/drop.php"
+        canonicalize_write_url("https://EXAMPLE.COM:443/sync.php?query=1#frag").unwrap(),
+        "https://example.com/sync.php"
     );
     // Custom https port preserved
     assert_eq!(
-        canonicalize_write_url("https://example.com:8443/drop.php").unwrap(),
-        "https://example.com:8443/drop.php"
+        canonicalize_write_url("https://example.com:8443/sync.php").unwrap(),
+        "https://example.com:8443/sync.php"
     );
     // Loopback IPv4 http
     assert_eq!(
-        canonicalize_write_url("http://127.0.0.1:8080/drop.php").unwrap(),
-        "http://127.0.0.1:8080/drop.php"
+        canonicalize_write_url("http://127.0.0.1:8080/sync.php").unwrap(),
+        "http://127.0.0.1:8080/sync.php"
     );
     // Loopback localhost port 80 stripped
     assert_eq!(
         canonicalize_write_url("http://localhost:80/").unwrap(),
-        "http://localhost/drop.php"
+        "http://localhost/sync.php"
     );
     // Loopback IPv6 http
     assert_eq!(
         canonicalize_write_url("http://[::1]:9000/").unwrap(),
-        "http://[::1]:9000/drop.php"
+        "http://[::1]:9000/sync.php"
     );
 
     // Non-loopback http rejected
-    assert!(canonicalize_write_url("http://example.com/drop.php").is_err());
-    assert!(canonicalize_write_url("http://192.168.1.1/drop.php").is_err());
+    assert!(canonicalize_write_url("http://example.com/sync.php").is_err());
+    assert!(canonicalize_write_url("http://192.168.1.1/sync.php").is_err());
 
     // Unsupported scheme rejected
-    assert!(canonicalize_write_url("ftp://example.com/drop.php").is_err());
+    assert!(canonicalize_write_url("ftp://example.com/sync.php").is_err());
 
     // Empty URL rejected
     assert!(canonicalize_write_url("   ").is_err());
@@ -427,8 +427,8 @@ proptest! {
         host_suffix_2 in "[a-z0-9]{3,8}",
     ) {
         prop_assume!(host_suffix_1 != host_suffix_2);
-        let url_1 = format!("https://drop-{}.org/drop.php", host_suffix_1);
-        let url_2 = format!("https://drop-{}.org/drop.php", host_suffix_2);
+        let url_1 = format!("https://drop-{}.org/sync.php", host_suffix_1);
+        let url_2 = format!("https://drop-{}.org/sync.php", host_suffix_2);
 
         let (_r1, _r1_pk, r1_hex) = derive_public_drop_keypair(&master_seed, &url_1).unwrap();
         let (_r2, _r2_pk, r2_hex) = derive_public_drop_keypair(&master_seed, &url_2).unwrap();

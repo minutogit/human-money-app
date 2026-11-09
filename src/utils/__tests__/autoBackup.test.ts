@@ -45,11 +45,14 @@ describe('autoBackup utils', () => {
 
     it('runs single auto backup pass and dispatches update event', async () => {
         const mockResult = {
-            status: 'synced' as const,
+            status: 'ok' as const,
             syncFolder: '/media/my-drive',
             lastBackupAt: '2026-11-08T10:00:00Z',
             backupDirty: false,
             changedBlobs: 2,
+            syncBackupEnabled: false,
+            lastSyncBackupAt: null,
+            hasAuthorizedSyncBackupTarget: false,
         };
         vi.mocked(backupService.runAutoBackupSync).mockResolvedValue(mockResult);
 
@@ -85,11 +88,14 @@ describe('autoBackup utils', () => {
 
     it('debounces local pass with 2s and drop pass with 30s', async () => {
         vi.mocked(backupService.runAutoBackupSync).mockResolvedValue({
-            status: 'synced',
+            status: 'ok',
             syncFolder: '/media/my-folder',
             lastBackupAt: '2026-11-08T10:00:00Z',
             backupDirty: false,
             changedBlobs: 1,
+            syncBackupEnabled: false,
+            lastSyncBackupAt: null,
+            hasAuthorizedSyncBackupTarget: false,
         });
         vi.mocked(backupService.syncDropBackup).mockResolvedValue({
             uploadedTo: 1,
@@ -125,6 +131,8 @@ describe('autoBackup utils', () => {
             lastBackupAt: '2026-11-08T10:00:00Z',
             backupDirty: false,
             changedBlobs: 0,
+            syncBackupEnabled: true,
+            hasAuthorizedSyncBackupTarget: true,
         });
         vi.mocked(backupService.syncDropBackup).mockResolvedValue({
             uploadedTo: 1,

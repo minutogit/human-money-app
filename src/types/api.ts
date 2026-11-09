@@ -106,6 +106,10 @@ export interface AppSettings {
 }
 
 export type AutoBackupStatus =
+    | 'ok'
+    | 'pending'
+    | 'warning'
+    | 'disconnected'
     | 'notConfigured'
     | 'synced'
     | 'folderDisconnected'
@@ -119,6 +123,9 @@ export interface FrontendAutoBackupStatusDto {
     backupDirty: boolean;
     syncFolder?: string | null;
     changedBlobs?: number | null;
+    syncBackupEnabled: boolean;
+    lastSyncBackupAt?: string | null;
+    hasAuthorizedSyncBackupTarget: boolean;
 }
 
 export type IntegrityReport =
@@ -138,7 +145,7 @@ export type AppState =
     | { view: "recreate_profile" }
     | { view: "restore_backup"; previousView?: AppState }
     | { view: "needs_recovery" }
-    | { view: "settings"; openDropsModal?: boolean; openDropsTab?: 'friend_drops' | 'public_drops' | 'own_drop' }
+    | { view: "settings"; openDropsModal?: boolean; openDropsTab?: 'friend_drops' | 'public_drops' | 'own_drop'; initialSection?: 'sync' | 'backup' | 'network' }
     | { view: "support" }
     | { view: "bug_report" }
     | { view: "create_voucher"; previousView?: AppState }

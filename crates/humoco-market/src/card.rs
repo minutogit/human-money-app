@@ -108,11 +108,11 @@ fn validate_card_fields(
                 i, drop.read_url
             )));
         }
-        crate::drop_access::parse_ed25519_pubkey_hex64(&drop.drop_pub)
+        crate::sync_access::parse_ed25519_pubkey_hex64(&drop.drop_pub)
             .map_err(|e| MarketError::Validation(format!("drop[{}] drop_pub error: {}", i, e)))?;
 
         if let Some(ref slot_id) = drop.slot_id {
-            crate::drop_access::parse_ed25519_pubkey_hex64(slot_id)
+            crate::sync_access::parse_ed25519_pubkey_hex64(slot_id)
                 .map_err(|e| MarketError::Validation(format!("drop[{}] slot_id error: {}", i, e)))?;
         }
     }

@@ -225,7 +225,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
             return;
         }
         if (!dropInput.trim()) {
-            setFeedback({ type: 'error', message: t('profile.backupRestoreDropAddressRequired', 'Bitte gib eine Ablage-Adresse oder einen Deskriptor ein.') });
+            setFeedback({ type: 'error', message: t('profile.backupRestoreDropAddressRequired', 'Bitte gib eine Sync-Dienst-Adresse oder einen Deskriptor ein.') });
             return;
         }
 
@@ -467,14 +467,14 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                             </div>
                             <div className="space-y-1">
                                 <h3 className="text-sm font-black text-theme-secondary group-hover:text-theme-primary">
-                                    {t('profile.backupRestoreSelectDrop', 'Von Ablage wiederherstellen')}
+                                    {t('profile.backupRestoreSelectDrop', 'Von Sync-Dienst wiederherstellen')}
                                 </h3>
                                 <p className="text-xs text-theme-light font-medium leading-relaxed">
-                                    {t('profile.backupRestoreSelectDropDesc', 'Freundes-, eigene oder öffentliche Ablage mit Mnemonic abrufen')}
+                                    {t('profile.backupRestoreSelectDropDesc', 'Freundes-, eigenen oder öffentlichen Sync-Dienst mit Mnemonic abrufen')}
                                 </p>
                             </div>
                             <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
-                                <span>{t('profile.backupRestoreSelectDropAction', 'Ablage abrufen')}</span>
+                                <span>{t('profile.backupRestoreSelectDropAction', 'Sync-Dienst abrufen')}</span>
                                 <ArrowRight size={14} />
                             </div>
                         </button>
@@ -482,7 +482,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                 </div>
             )}
 
-            {/* STEP 1b: Drop Source (Von Ablage wiederherstellen) */}
+            {/* STEP 1b: Drop Source (Von Sync-Dienst wiederherstellen) */}
             {step === 'drop_source' && (
                 <div className="space-y-6">
                     <div className="p-4 bg-theme-primary/5 border border-theme-primary/20 rounded-2xl flex items-center justify-between gap-4">
@@ -490,10 +490,10 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                             <Server size={20} className="text-theme-primary shrink-0" />
                             <div className="min-w-0">
                                 <p className="text-[10px] font-black uppercase tracking-wider text-theme-primary">
-                                    {t('profile.backupRestoreDropHeader', 'Von Ablage wiederherstellen')}
+                                    {t('profile.backupRestoreDropHeader', 'Von Sync-Dienst wiederherstellen')}
                                 </p>
                                 <p className="text-xs text-theme-secondary font-medium">
-                                    {t('profile.backupRestoreDropSubtitle', 'Gib deine Mnemonic-Wörter und die Adresse der Ablage ein.')}
+                                    {t('profile.backupRestoreDropSubtitle', 'Gib deine Mnemonic-Wörter und die Adresse des Sync-Dienstes ein.')}
                                 </p>
                             </div>
                         </div>
@@ -570,18 +570,18 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                         {/* Drop Address Input */}
                         <div className="space-y-1.5 pt-3 border-t border-theme-subtle">
                             <label className="text-xs font-bold text-theme-secondary flex items-center justify-between">
-                                <span>{t('profile.backupRestoreDropAddressLabel', 'Ablage-Adresse oder Deskriptor')}</span>
+                                <span>{t('profile.backupRestoreDropAddressLabel', 'Sync-Dienst-Adresse oder Deskriptor')}</span>
                             </label>
                             <Input
                                 data-testid="restore-drop-input"
                                 type="text"
-                                placeholder={t('profile.backupRestoreDropAddressPlaceholder', 'z. B. ablage.verein.de, https://freund.de/drop.php oder JSON-Deskriptor')}
+                                placeholder={t('profile.backupRestoreDropAddressPlaceholder', 'z. B. sync.verein.de, https://freund.de/sync.php oder JSON-Deskriptor')}
                                 value={dropInput}
                                 onChange={(e) => setDropInput(e.target.value)}
                                 disabled={isFetchingDrop}
                             />
                             <p className="text-[11px] text-theme-light">
-                                {t('profile.backupRestoreDropAddressHint', 'Webspace-Adresse einer eigenen, Freundes- oder öffentlichen Ablage.')}
+                                {t('profile.backupRestoreDropAddressHint', 'Webspace-Adresse eines eigenen, Freundes- oder öffentlichen Sync-Dienstes.')}
                             </p>
                         </div>
 
@@ -595,7 +595,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                             {isFetchingDrop ? (
                                 <>
                                     <RefreshCw size={14} className="animate-spin mr-2" />
-                                    {t('profile.backupRestoreFetchingDrop', 'Ablage wird durchsucht...')}
+                                    {t('profile.backupRestoreFetchingDrop', 'Sync-Dienst wird durchsucht...')}
                                 </>
                             ) : (
                                 <>
@@ -621,13 +621,13 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                             )}
                             <div className="min-w-0">
                                 <p className="text-[10px] font-black uppercase tracking-wider text-theme-light flex items-center gap-2">
-                                    <span>{matchedDropKeyKind ? 'Ablage-Sicherung' : (probe?.sourceKind === 'folder' ? 'Backup Folder' : 'Backup Archive')}</span>
+                                    <span>{matchedDropKeyKind ? 'Sync-Dienst-Sicherung' : (probe?.sourceKind === 'folder' ? 'Backup Folder' : 'Backup Archive')}</span>
                                     {matchedDropKeyKind && (
                                         <span className="px-2 py-0.5 rounded-full bg-theme-primary/10 text-theme-primary font-bold">
                                             {matchedDropKeyKind === 'stealth' && 'Stealth-Schlüssel'}
-                                            {matchedDropKeyKind === 'public' && 'Öffentliche Ablage (R)'}
+                                            {matchedDropKeyKind === 'public' && 'Öffentlicher Sync-Dienst'}
                                             {matchedDropKeyKind === 'grace' && 'Grace-Schlüssel'}
-                                            {matchedDropKeyKind === 'own' && 'Eigene Ablage'}
+                                            {matchedDropKeyKind === 'own' && 'Eigener Sync-Dienst'}
                                         </span>
                                     )}
                                 </p>

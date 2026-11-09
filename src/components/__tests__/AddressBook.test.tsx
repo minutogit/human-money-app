@@ -164,7 +164,7 @@ describe('AddressBook Component', () => {
         drops: [
           {
             readUrl: 'https://drop.example.com/d-test',
-            writeUrl: 'https://drop.example.com/drop.php',
+            writeUrl: 'https://drop.example.com/sync.php',
             dropPub: 'DropPubTestKey12345',
           },
         ],

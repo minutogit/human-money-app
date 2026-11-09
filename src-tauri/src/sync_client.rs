@@ -113,7 +113,7 @@ pub fn current_unix_timestamp() -> u64 {
 pub fn extract_rotation_header(
     headers: &reqwest::header::HeaderMap,
 ) -> Option<DropRotationCertificate> {
-    let val = headers.get("x-humoco-drop-rotation")?.to_str().ok()?;
+    let val = headers.get("x-humoco-sync-rotation")?.to_str().ok()?;
     DropRotationCertificate::from_header_value(val).ok()
 }
 

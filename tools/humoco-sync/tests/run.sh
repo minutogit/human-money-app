@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Integration and unit tests for HuMoCo Drop Server (drop.php)
+# Integration and unit tests for HuMoCo Sync Server (sync.php)
 # Usage: ./tests/run.sh [--allow-missing-php]
 #
 
@@ -45,7 +45,7 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 
 echo "=========================================================="
-echo " HuMoCo Drop Server Test Suite (PHP $(php -r 'echo PHP_VERSION;'))"
+echo " HuMoCo Sync Server Test Suite (PHP $(php -r 'echo PHP_VERSION;'))"
 echo "=========================================================="
 
 # Check minimum PHP version (>= 7.4) and sodium extension
@@ -61,7 +61,7 @@ if (!function_exists("sodium_crypto_sign_detached")) {
 '
 
 # Create isolated scratch workspace for tests
-TEST_DIR="$(mktemp -d /tmp/humoco-drop-test.XXXXXX)"
+TEST_DIR="$(mktemp -d /tmp/humoco-sync-test.XXXXXX)"
 DATA_DIR="$TEST_DIR/data"
 
 PHP_PID=""
@@ -76,8 +76,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Copy drop.php and support files into isolated test environment
-cp "$TOOL_DIR/drop.php" "$TEST_DIR/drop.php"
+# Copy sync.php and support files into isolated test environment
+cp "$TOOL_DIR/sync.php" "$TEST_DIR/sync.php"
 if [ -f "$TOOL_DIR/index.html" ]; then
     cp "$TOOL_DIR/index.html" "$TEST_DIR/index.html"
 else
@@ -208,20 +208,20 @@ php_sign() {
 echo ""
 echo "=== Test Group 1: Routing & Method Invariants ==="
 
-# 1.1 GET drop.php without ?info -> 405 Method Not Allowed
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X GET "$BASE_URL/drop.php")
-assert_status "GET drop.php is rejected with 405" "405" "$CODE"
+# 1.1 GET sync.php without ?info -> 405 Method Not Allowed
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X GET "$BASE_URL/sync.php")
+assert_status "GET sync.php is rejected with 405" "405" "$CODE"
 
-# 1.2 POST drop.php without ?rotate -> 405 Method Not Allowed
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/drop.php" -d "foo=bar")
-assert_status "POST drop.php without rotate is rejected with 405" "405" "$CODE"
+# 1.2 POST sync.php without ?rotate -> 405 Method Not Allowed
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/sync.php" -d "foo=bar")
+assert_status "POST sync.php without rotate is rejected with 405" "405" "$CODE"
 
-# 1.3 GET drop.php?info -> 200 OK
-INFO_JSON=$(curl -s "$BASE_URL/drop.php?info")
+# 1.3 GET sync.php?info -> 200 OK
+INFO_JSON=$(curl -s "$BASE_URL/sync.php?info")
 if echo "$INFO_JSON" | grep -q "$ADMIN_PK" && echo "$INFO_JSON" | grep -q '"channels":\["card"\]'; then
-    echo "  [PASS] GET drop.php?info returned correct admin_pubkey and channel list"
+    echo "  [PASS] GET sync.php?info returned correct admin_pubkey and channel list"
 else
-    echo "  [FAIL] GET drop.php?info response invalid: $INFO_JSON" >&2
+    echo "  [FAIL] GET sync.php?info response invalid: $INFO_JSON" >&2
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
@@ -248,13 +248,13 @@ echo ""
 echo "=== Test Group 2: HEAD Capability Check ==="
 
 # 2.1 HEAD for unlisted member -> 403 Forbidden
-HEAD_CODE=$(curl -s -o /dev/null -w "%{http_code}" -I "$BASE_URL/drop.php" \
+HEAD_CODE=$(curl -s -o /dev/null -w "%{http_code}" -I "$BASE_URL/sync.php" \
     -H "X-Drop-Pubkey: $MEMBER1_PK" \
     -H "X-Channel: card")
 assert_status "HEAD with unlisted pubkey returns 403" "403" "$HEAD_CODE"
 
 echo ""
-echo "=== Test Group 3: Admin Member List Update (PUT drop.php?members) ==="
+echo "=== Test Group 3: Admin Member List Update (PUT sync.php?members) ==="
 
 TS=$(date +%s)
 NONCE1="0123456789abcdef0123456789abcdef"
@@ -264,7 +264,7 @@ CANON_MSG=$(printf "HUMOCO-DROP-ADMIN-V1\nPUT_MEMBERS\ncard\n%s\n%s\n%s" "$TS" "
 SIG=$(php_sign "$CANON_MSG" "$ADMIN_SK")
 
 # 3.1 PUT with wrong signature -> 403
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members&channel=card" \
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php?members&channel=card" \
     -H "X-Drop-Pubkey: $ADMIN_PK" \
     -H "X-Drop-Timestamp: $TS" \
     -H "X-Drop-Nonce: $NONCE1" \
@@ -273,7 +273,7 @@ CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members
 assert_status "Admin PUT with forged signature returns 403" "403" "$CODE"
 
 # 3.2 Valid Admin PUT -> 204
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members&channel=card" \
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php?members&channel=card" \
     -H "X-Drop-Pubkey: $ADMIN_PK" \
     -H "X-Drop-Timestamp: $TS" \
     -H "X-Drop-Nonce: $NONCE1" \
@@ -282,7 +282,7 @@ CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php?members
 assert_status "Valid Admin PUT returns 204" "204" "$CODE"
 
 # 3.3 HEAD now succeeds for MEMBER1 -> 200
-HEAD_RESP=$(curl -s -I "$BASE_URL/drop.php" \
+HEAD_RESP=$(curl -s -I "$BASE_URL/sync.php" \
     -H "X-Drop-Pubkey: $MEMBER1_PK" \
     -H "X-Channel: card")
 if echo "$HEAD_RESP" | grep -q "200 OK" && echo "$HEAD_RESP" | grep -q "X-Drop-Max-Bytes: 128"; then
@@ -303,7 +303,7 @@ CANON_PUT=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\n%s\n%s\n%s" "$TS" "$NONCE2" "
 SIG_PUT=$(php_sign "$CANON_PUT" "$MEMBER1_SK")
 
 # 4.1 Valid Member Slot Upload -> 204
-PUT_RESP=$(curl -s -i -X PUT "$BASE_URL/drop.php" \
+PUT_RESP=$(curl -s -i -X PUT "$BASE_URL/sync.php" \
     -H "X-Drop-Pubkey: $MEMBER1_PK" \
     -H "X-Channel: card" \
     -H "X-Drop-Timestamp: $TS" \
@@ -328,7 +328,7 @@ NONCE3="11111111222222223333333344444444"
 CANON_IFM=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\n%s\n%s\n%s" "$TS" "$NONCE3" "$SLOT_HASH")
 SIG_IFM=$(php_sign "$CANON_IFM" "$MEMBER1_SK")
 
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/drop.php" \
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
     -H "X-Drop-Pubkey: $MEMBER1_PK" \
     -H "X-Channel: card" \
     -H "X-Drop-Timestamp: $TS" \
@@ -348,7 +348,7 @@ else
 fi
 
 echo ""
-echo "=== Test Group 5: 180-Day Key Rotation (POST drop.php?rotate) ==="
+echo "=== Test Group 5: 180-Day Key Rotation (POST sync.php?rotate) ==="
 
 RETIRE_AT=$((TS + 180 * 86400))
 CERT_CANON=$(printf "HUMOCO-DROP-ROTATE-V1\n%s\n%s\n%d" "$ADMIN_PK" "$ADMIN2_PK" "$RETIRE_AT")
@@ -361,7 +361,7 @@ NONCE_ROT="55555555666666667777777788888888"
 CANON_ROT=$(printf "HUMOCO-DROP-ADMIN-V1\nROTATE\n\n%s\n%s\n%s" "$TS" "$NONCE_ROT" "$ROT_HASH")
 SIG_ROT=$(php_sign "$CANON_ROT" "$ADMIN2_SK")
 
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/drop.php?rotate" \
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/sync.php?rotate" \
     -H "X-Drop-Pubkey: $ADMIN2_PK" \
     -H "X-Drop-Timestamp: $TS" \
     -H "X-Drop-Nonce: $NONCE_ROT" \
@@ -370,8 +370,8 @@ CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/drop.php?rotate
 assert_status "Admin key rotation returns 200" "200" "$CODE"
 
 # Verify GET ?info now returns ADMIN2_PK and rotation header
-INFO_AFTER=$(curl -s -i "$BASE_URL/drop.php?info")
-if echo "$INFO_AFTER" | grep -q "$ADMIN2_PK" && echo "$INFO_AFTER" | grep -qi "X-Humoco-Drop-Rotation:"; then
+INFO_AFTER=$(curl -s -i "$BASE_URL/sync.php?info")
+if echo "$INFO_AFTER" | grep -q "$ADMIN2_PK" && echo "$INFO_AFTER" | grep -qi "X-Humoco-Sync-Rotation:"; then
     echo "  [PASS] Rotation header present and new admin_pubkey active"
 else
     echo "  [FAIL] Rotation header or admin_pubkey invalid: $INFO_AFTER" >&2
@@ -379,7 +379,7 @@ else
 fi
 
 echo ""
-echo "=== Test Group 6: Member Slot Delete (DELETE drop.php) ==="
+echo "=== Test Group 6: Member Slot Delete (DELETE sync.php) ==="
 
 TS=$(date +%s)
 NONCE_DEL="99999999aaaaaaaa99999999aaaaaaaa"
@@ -387,7 +387,7 @@ EMPTY_HASH="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 CANON_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\ncard\n%s\n%s\n%s" "$TS" "$NONCE_DEL" "$EMPTY_HASH")
 SIG_DEL=$(php_sign "$CANON_DEL" "$MEMBER1_SK")
 
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/drop.php" \
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/sync.php" \
     -H "X-Drop-Pubkey: $MEMBER1_PK" \
     -H "X-Channel: card" \
     -H "X-Drop-Timestamp: $TS" \

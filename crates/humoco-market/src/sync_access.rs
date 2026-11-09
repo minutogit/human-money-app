@@ -435,9 +435,9 @@ pub fn canonicalize_write_url(raw_url: &str) -> Result<String, MarketError> {
 
     // Normalize path
     let canonical_path = if raw_path.is_empty() || raw_path == "/" {
-        "/drop.php".to_string()
+        "/sync.php".to_string()
     } else if raw_path.ends_with('/') {
-        format!("{}drop.php", raw_path)
+        format!("{}sync.php", raw_path)
     } else {
         raw_path
     };

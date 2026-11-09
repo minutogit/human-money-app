@@ -3,9 +3,9 @@ import React from "react";
 import logo from "../assets/logo.png";
 import { useNavigation } from "../context/NavigationContext";
 import { useSession } from "../context/SessionContext";
-import { WalletSyncBadge } from "./WalletSyncBadge";
+import { RealtimeProtectionBadge } from "./RealtimeProtectionBadge";
 import { BackupStatusBadge } from "./BackupStatusBadge";
-import { DropStatusBadge } from "./DropStatusBadge";
+import { SyncServiceBadge } from "./SyncServiceBadge";
 import { INTERNAL_VIEWS } from "./Sidebar";
 
 export const Header: React.FC = () => {
@@ -38,9 +38,9 @@ export const Header: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                <DropStatusBadge />
+                <SyncServiceBadge />
                 <BackupStatusBadge />
-                <WalletSyncBadge />
+                <RealtimeProtectionBadge />
             </div>
         </header>
     );

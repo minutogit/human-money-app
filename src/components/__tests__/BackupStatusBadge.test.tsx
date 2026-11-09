@@ -5,10 +5,10 @@ import { BackupStatusBadge } from '../BackupStatusBadge';
 import { backupService } from '../../services/backupService';
 import * as autoBackupUtils from '../../utils/autoBackup';
 
-const mockNavigate = vi.fn();
+const mockNavigateToSettingsSection = vi.fn();
 vi.mock('../../context/NavigationContext', () => ({
     useNavigation: () => ({
-        navigate: mockNavigate,
+        navigateToSettingsSection: mockNavigateToSettingsSection,
     }),
 }));
 
@@ -29,8 +29,14 @@ vi.mock('react-i18next', () => {
         console.error(err);
     }
 
-    const stableT = (key: string, options?: any) => {
+    const stableT = (key: string, defaultValueOrOptions?: any, maybeOptions?: any) => {
         let val = (enTranslations as Record<string, string>)[key] || key;
+        const options = (typeof defaultValueOrOptions === 'object' && defaultValueOrOptions !== null)
+            ? defaultValueOrOptions
+            : (typeof maybeOptions === 'object' && maybeOptions !== null)
+                ? maybeOptions
+                : undefined;
+
         if (options && typeof options === 'object') {
             for (const [k, v] of Object.entries(options)) {
                 val = val.replace(new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`, 'g'), String(v));
@@ -51,7 +57,7 @@ vi.mock('react-i18next', () => {
 vi.mock('../../services/backupService', () => ({
     backupService: {
         getBackupStatus: vi.fn(),
-        runAutoBackupSync: vi.fn(),
+        syncDropBackup: vi.fn().mockResolvedValue({ uploadedTo: 1, authorizedTargets: 1 }),
     },
 }));
 
@@ -60,13 +66,16 @@ describe('BackupStatusBadge', () => {
         vi.clearAllMocks();
     });
 
-    it('renders notConfigured status and navigates to settings on click', async () => {
+    it('renders notConfigured status and opens popover on click', async () => {
         vi.mocked(backupService.getBackupStatus).mockResolvedValue({
             status: 'notConfigured',
             lastBackupAt: null,
             backupDirty: false,
             syncFolder: null,
             changedBlobs: null,
+            syncBackupEnabled: false,
+            lastSyncBackupAt: null,
+            hasAuthorizedSyncBackupTarget: false,
         });
 
         render(<BackupStatusBadge />);
@@ -76,16 +85,50 @@ describe('BackupStatusBadge', () => {
         });
 
         fireEvent.click(screen.getByRole('button', { name: /Backup Status: No backup/i }));
-        expect(mockNavigate).toHaveBeenCalledWith({ view: 'settings' });
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+        const settingsBtn = screen.getByRole('button', { name: /Backup settings/i });
+        fireEvent.click(settingsBtn);
+        expect(mockNavigateToSettingsSection).toHaveBeenCalledWith('backup');
     });
 
-    it('renders synced status and opens details modal on click', async () => {
+    it('closes popover on Escape key', async () => {
         vi.mocked(backupService.getBackupStatus).mockResolvedValue({
-            status: 'synced',
+            status: 'notConfigured',
+            lastBackupAt: null,
+            backupDirty: false,
+            syncFolder: null,
+            changedBlobs: null,
+            syncBackupEnabled: false,
+            lastSyncBackupAt: null,
+            hasAuthorizedSyncBackupTarget: false,
+        });
+
+        render(<BackupStatusBadge />);
+
+        await waitFor(() => {
+            expect(screen.getByText('No backup')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByRole('button', { name: /Backup Status: No backup/i }));
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+        fireEvent.keyDown(document, { key: 'Escape' });
+        await waitFor(() => {
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        });
+    });
+
+    it('renders ok / synced status and shows cloud and local details in popover', async () => {
+        vi.mocked(backupService.getBackupStatus).mockResolvedValue({
+            status: 'ok',
             lastBackupAt: '2026-10-31T12:00:00Z',
             backupDirty: false,
             syncFolder: '/media/usb/backups',
             changedBlobs: 2,
+            syncBackupEnabled: true,
+            lastSyncBackupAt: '2026-10-31T12:05:00Z',
+            hasAuthorizedSyncBackupTarget: true,
         });
 
         render(<BackupStatusBadge />);
@@ -99,17 +142,20 @@ describe('BackupStatusBadge', () => {
         await waitFor(() => {
             expect(screen.getByRole('dialog')).toBeInTheDocument();
             expect(screen.getByText('/media/usb/backups')).toBeInTheDocument();
-            expect(screen.getByRole('button', { name: /Sync Now/i })).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /Back up now/i })).toBeInTheDocument();
         });
     });
 
-    it('renders folderDisconnected status with warning description in modal', async () => {
+    it('renders folderDisconnected status with warning description in popover', async () => {
         vi.mocked(backupService.getBackupStatus).mockResolvedValue({
-            status: 'folderDisconnected',
+            status: 'disconnected',
             lastBackupAt: '2026-10-30T10:00:00Z',
             backupDirty: true,
             syncFolder: '/media/usb/backups',
             changedBlobs: null,
+            syncBackupEnabled: false,
+            lastSyncBackupAt: null,
+            hasAuthorizedSyncBackupTarget: false,
         });
 
         render(<BackupStatusBadge />);
@@ -122,25 +168,31 @@ describe('BackupStatusBadge', () => {
 
         await waitFor(() => {
             expect(screen.getByRole('dialog')).toBeInTheDocument();
-            expect(screen.getByText(/target backup folder is currently disconnected/i)).toBeInTheDocument();
+            expect(screen.getByText(/Backup folder \(e\.g\. USB drive\) not connected/i)).toBeInTheDocument();
         });
     });
 
-    it('invokes runAutoBackupPass when Sync Now button is clicked in modal', async () => {
+    it('invokes runAutoBackupPass and syncDropBackup when Back up now button is clicked', async () => {
         const spyRunPass = vi.spyOn(autoBackupUtils, 'runAutoBackupPass').mockResolvedValue({
-            status: 'synced',
+            status: 'ok',
             lastBackupAt: '2026-10-31T16:00:00Z',
             backupDirty: false,
             syncFolder: '/media/usb/backups',
             changedBlobs: 0,
+            syncBackupEnabled: true,
+            lastSyncBackupAt: null,
+            hasAuthorizedSyncBackupTarget: true,
         });
 
         vi.mocked(backupService.getBackupStatus).mockResolvedValue({
-            status: 'outdated',
+            status: 'pending',
             lastBackupAt: '2026-10-01T10:00:00Z',
             backupDirty: true,
             syncFolder: '/media/usb/backups',
             changedBlobs: null,
+            syncBackupEnabled: true,
+            lastSyncBackupAt: null,
+            hasAuthorizedSyncBackupTarget: true,
         });
 
         render(<BackupStatusBadge />);
@@ -151,9 +203,16 @@ describe('BackupStatusBadge', () => {
 
         fireEvent.click(screen.getByRole('button', { name: /Backup Status: Backup pending/i }));
 
-        const syncNowBtn = await screen.findByRole('button', { name: /Sync Now/i });
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        const syncNowBtn = screen.getByRole('button', { name: /Back up now/i });
         fireEvent.click(syncNowBtn);
 
-        expect(spyRunPass).toHaveBeenCalled();
+        await waitFor(() => {
+            expect(spyRunPass).toHaveBeenCalled();
+            expect(backupService.syncDropBackup).toHaveBeenCalled();
+        });
     });
 });

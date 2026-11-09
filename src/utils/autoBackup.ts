@@ -39,7 +39,7 @@ export async function runAutoBackupPass(): Promise<FrontendAutoBackupStatusDto |
     try {
         const result = await backupService.runAutoBackupSync();
         dispatchBackupUpdated(result);
-        if (result.status === 'synced' && (result.changedBlobs ?? 0) > 0) {
+        if ((result.status === 'ok' || result.status === 'synced') && (result.changedBlobs ?? 0) > 0) {
             logger.info(`Auto-backup synced successfully: ${result.changedBlobs} blobs updated.`);
         }
         return result;

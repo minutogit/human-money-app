@@ -12,6 +12,7 @@ import { stringifyError } from '../utils/errorHelper';
 export interface NavigationContextType {
     appState: AppState;
     navigate: (newState: AppState) => void;
+    navigateToSettingsSection: (section: 'sync' | 'backup' | 'network') => void;
     goBack: () => void;
     isSidebarOpen: boolean;
     setSidebarOpen: (open: boolean) => void;
@@ -60,6 +61,10 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
         appStateRef.current = newState;
         setAppState(newState);
     }, []);
+
+    const navigateToSettingsSection = useCallback((section: 'sync' | 'backup' | 'network') => {
+        navigate({ view: 'settings', initialSection: section });
+    }, [navigate]);
 
     const goBack = useCallback(() => {
         const current = appStateRef.current;
@@ -114,6 +119,7 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
         <NavigationContext.Provider value={{ 
             appState, 
             navigate, 
+            navigateToSettingsSection,
             goBack, 
             isSidebarOpen, 
             setSidebarOpen, 

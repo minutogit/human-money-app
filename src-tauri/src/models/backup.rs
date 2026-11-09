@@ -68,11 +68,14 @@ pub struct FrontendRestoreOutcomeDto {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendAutoBackupStatusDto {
-    pub status: String, // "notConfigured" | "synced" | "folderDisconnected" | "outdated" | "manualOnly" | "locked"
+    pub status: String, // "ok" | "pending" | "warning" | "disconnected" | "notConfigured"
     pub last_backup_at: Option<String>,
     pub backup_dirty: bool,
     pub sync_folder: Option<String>,
     pub changed_blobs: Option<usize>,
+    pub sync_backup_enabled: bool,
+    pub last_sync_backup_at: Option<String>,
+    pub has_authorized_sync_backup_target: bool,
 }
 
 /// Result of an event-driven or manual drop backup sync run.

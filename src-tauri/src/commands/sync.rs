@@ -1,9 +1,9 @@
-// src-tauri/src/commands/drops.rs
+// src-tauri/src/commands/sync.rs
 use std::collections::{BTreeMap, HashSet};
 use base64::Engine;
 use tauri::State;
 
-use crate::drop_client::{self, IndexFetchResult, PutSlotOutcome};
+use crate::sync_client::{self as drop_client, IndexFetchResult, PutSlotOutcome};
 use crate::models::{
     FrontendDiscoveredDrop, FrontendDropAdminStatus, FrontendDropAdminUpdateRequest,
     FrontendDropConnectionTestResult, FrontendDropDescriptor, FrontendDropOverviewStatus,
@@ -264,7 +264,7 @@ pub fn prepare_drop_setup_impl(
         .save_encrypted_data(MARKET_DROP_ADMIN_KEY, &bytes, password.as_deref())
         .map_err(FrontendError::from)?;
 
-    let zip_bytes = crate::drop_zip::build_drop_zip_bytes(
+    let zip_bytes = crate::sync_zip::build_sync_zip_bytes(
         &admin_pubkey,
         &data_dir,
         max_mem,
@@ -311,7 +311,7 @@ pub fn save_drop_setup_zip_impl(
             })
         })?;
 
-    let zip_bytes = crate::drop_zip::build_drop_zip_bytes(
+    let zip_bytes = crate::sync_zip::build_sync_zip_bytes(
         &admin.descriptor.drop_pub,
         &admin.data_dir,
         admin.max_members,
@@ -357,12 +357,12 @@ pub async fn finalize_drop_setup_impl(
     };
 
     let trimmed = base_url.trim_end_matches('/');
-    let write_url = if trimmed.ends_with("/drop.php") {
+    let write_url = if trimmed.ends_with("/sync.php") {
         trimmed.to_string()
     } else {
-        format!("{}/drop.php", trimmed)
+        format!("{}/sync.php", trimmed)
     };
-    let read_base = write_url.strip_suffix("/drop.php").unwrap_or(trimmed);
+    let read_base = write_url.strip_suffix("/sync.php").unwrap_or(trimmed);
     let read_url = format!("{}/{}", read_base, admin.data_dir);
     admin.descriptor.write_url = write_url.clone();
     admin.descriptor.read_url = read_url.clone();
@@ -505,10 +505,10 @@ pub async fn test_drop_connection_impl(
     };
 
     let client = drop_client::create_drop_http_client();
-    let write_url = if base_url.ends_with("/drop.php") {
+    let write_url = if base_url.ends_with("/sync.php") {
         base_url.clone()
     } else {
-        format!("{}/drop.php", base_url)
+        format!("{}/sync.php", base_url)
     };
 
     // Test write via push_members
@@ -2632,7 +2632,7 @@ pub(crate) mod tests {
 
                                 let rot_header_opt = rotation.lock().unwrap().clone();
                                 let rot_hdr_line = if let Some(ref r) = rot_header_opt {
-                                    format!("X-Humoco-Drop-Rotation: {}\r\n", r)
+                                    format!("X-Humoco-Sync-Rotation: {}\r\n", r)
                                 } else {
                                     String::new()
                                 };
@@ -2650,7 +2650,7 @@ pub(crate) mod tests {
                                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\r\n{}",
                                         rot_hdr_line, body_str.len(), body_str
                                     ).into_bytes()
-                                } else if method == "HEAD" && path.starts_with("/drop.php") {
+                                } else if method == "HEAD" && path.starts_with("/sync.php") {
                                     let req_pub = headers.get("x-drop-pubkey").cloned().unwrap_or_default();
                                     let m = members.lock().unwrap();
                                     if m.contains(&req_pub) {
@@ -2661,7 +2661,7 @@ pub(crate) mod tests {
                                     } else {
                                         format!("HTTP/1.1 403 Forbidden\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
                                     }
-                                } else if method == "PUT" && path.starts_with("/drop.php") && path.contains("members") {
+                                } else if method == "PUT" && path.starts_with("/sync.php") && path.contains("members") {
                                     #[derive(serde::Deserialize)]
                                     struct MembersJson {
                                         pubkeys: Vec<String>,
@@ -2693,18 +2693,18 @@ pub(crate) mod tests {
                                     } else {
                                         b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n".to_vec()
                                     }
-                                } else if method == "POST" && path.starts_with("/drop.php") && path.contains("rotate") {
+                                } else if method == "POST" && path.starts_with("/sync.php") && path.contains("rotate") {
                                     if let Ok(cert) = serde_json::from_slice::<humoco_market::DropRotationCertificate>(&body) {
                                         *admin_pub.lock().unwrap() = cert.new_pubkey.clone();
                                         *rotation.lock().unwrap() = Some(cert.to_header_value());
                                         format!(
-                                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Humoco-Drop-Rotation: {}\r\nContent-Length: 11\r\n\r\n{{\"ok\":true}}",
+                                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Humoco-Sync-Rotation: {}\r\nContent-Length: 11\r\n\r\n{{\"ok\":true}}",
                                             cert.to_header_value()
                                         ).into_bytes()
                                     } else {
                                         b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n".to_vec()
                                     }
-                                } else if method == "GET" && path.starts_with("/drop.php") && path.contains("status") {
+                                } else if method == "GET" && path.starts_with("/sync.php") && path.contains("status") {
                                     let cur_admin = admin_pub.lock().unwrap().clone();
                                     let s_map = slots.lock().unwrap();
                                     let status_json = serde_json::json!({
@@ -2722,7 +2722,7 @@ pub(crate) mod tests {
                                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\r\n{}",
                                         rot_hdr_line, body_str.len(), body_str
                                     ).into_bytes()
-                                } else if method == "PUT" && path.starts_with("/drop.php") {
+                                } else if method == "PUT" && path.starts_with("/sync.php") {
                                     let pubkey = headers.get("x-drop-pubkey").cloned().unwrap_or_default();
                                     let channel = headers.get("x-channel").cloned().unwrap_or_else(|| "card".to_string());
                                     let is_member = members.lock().unwrap().contains(&pubkey);
@@ -2753,7 +2753,7 @@ pub(crate) mod tests {
                                     } else {
                                         format!("HTTP/1.1 403 Forbidden\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
                                     }
-                                } else if method == "DELETE" && path.starts_with("/drop.php") {
+                                } else if method == "DELETE" && path.starts_with("/sync.php") {
                                     let pubkey = headers.get("x-drop-pubkey").cloned().unwrap_or_default();
                                     let channel = headers.get("x-channel").cloned().unwrap_or_else(|| "card".to_string());
                                     let key = format!("{}.{}", pubkey, channel);
@@ -2998,7 +2998,7 @@ pub(crate) mod tests {
 
         // 5. Start Server E for redundant public drop upload
         let server_e = MockDropServer::start("d-server-e".to_string(), "2222222222222222222222222222222222222222222222222222222222222222".to_string()).await;
-        let server_e_url = format!("{}/drop.php", server_e.base_url);
+        let server_e_url = format!("{}/sync.php", server_e.base_url);
 
         // Bob probes Server E
         let e_info = probe_public_drop_impl(server_e_url.clone(), Some(password.to_string()), &bob_state)

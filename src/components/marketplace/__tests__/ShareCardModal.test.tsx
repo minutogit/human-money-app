@@ -104,4 +104,16 @@ describe('ShareCardModal Component', () => {
     expect(writtenBytes.length).toBeGreaterThan(0);
     expect(screen.getByText(/File saved successfully|Datei erfolgreich gespeichert/i)).toBeInTheDocument();
   });
+
+  it('renders compact QR hint when isCompactQr is true', () => {
+    render(
+      <ShareCardModal
+        {...defaultProps}
+        qrSvg='<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="#fff"/></svg>'
+        isCompactQr={true}
+      />
+    );
+
+    expect(screen.getByText(/Kompakt-Code für schnellen Scan|Compact code for quick scanning/i)).toBeInTheDocument();
+  });
 });

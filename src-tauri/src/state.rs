@@ -255,10 +255,62 @@ impl AppState {
             .cloned()
             .collect();
 
+        let mut old_drops = Vec::new();
+        if let Some(old) = address_book.contacts.get(&contact.did) {
+            old_drops.extend(old.drops.clone());
+        }
+
         for k in keys_to_remove {
             if let Some(old) = address_book.contacts.remove(&k) {
                 if contact.added_at.is_empty() {
                     contact.added_at = old.added_at;
+                }
+                old_drops.extend(old.drops);
+            }
+        }
+
+        // Also merge drops from CardStore if present
+        let card_drops: Vec<crate::models::FrontendDropDescriptor> = service
+            .load_encrypted_data(MARKET_CARD_STORE_KEY, password)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<humoco_market::CardStore>(&bytes).ok())
+            .and_then(|store| {
+                store.cards.values()
+                    .find(|sc| canonicalize_did(&sc.card.did).ok().as_deref() == Some(&can_did))
+                    .map(|sc| sc.card.drops.iter().cloned().map(Into::into).collect())
+            })
+            .unwrap_or_default();
+
+        let mut all_drops = Vec::new();
+        all_drops.extend(contact.drops.clone());
+        all_drops.extend(old_drops);
+        all_drops.extend(card_drops);
+        contact.drops = merge_contact_drops(&[], &all_drops);
+        contact.drops.truncate(3);
+
+        // Zero-Config comfort: if user has no friend sync service enabled yet, auto-activate the first candidate
+        if !contact.drops.is_empty() {
+            if let Ok(mut settings) = self.load_settings(service, password) {
+                let own_drop_url = service
+                    .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<StoredDropAdmin>(&bytes).ok())
+                    .map(|admin| admin.descriptor.read_url);
+
+                let has_friend_drop = settings.market_selected_drops.iter()
+                    .any(|d| Some(&d.read_url) != own_drop_url.as_ref());
+
+                if !has_friend_drop {
+                    if let Some(candidate) = contact.drops.iter().find(|d| {
+                        !d.read_url.is_empty()
+                            && Some(&d.read_url) != own_drop_url.as_ref()
+                            && !settings.market_selected_drops.iter().any(|sd| sd.read_url == d.read_url)
+                    }) {
+                        if settings.market_selected_drops.len() < 3 {
+                            settings.market_selected_drops.push(candidate.clone());
+                            let _ = self.save_settings(service, settings, password);
+                        }
+                    }
                 }
             }
         }
@@ -857,6 +909,30 @@ impl AppState {
                 let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password);
             }
             *self.contacts.lock().unwrap() = Some(address_book);
+
+            if let Ok(mut settings) = self.load_settings(service, password) {
+                let own_drop_url = service
+                    .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<StoredDropAdmin>(&bytes).ok())
+                    .map(|admin| admin.descriptor.read_url);
+
+                let has_friend_drop = settings.market_selected_drops.iter()
+                    .any(|d| Some(&d.read_url) != own_drop_url.as_ref());
+
+                if !has_friend_drop {
+                    if let Some(candidate) = card_drops.iter().find(|d| {
+                        !d.read_url.is_empty()
+                            && Some(&d.read_url) != own_drop_url.as_ref()
+                            && !settings.market_selected_drops.iter().any(|sd| sd.read_url == d.read_url)
+                    }) {
+                        if settings.market_selected_drops.len() < 3 {
+                            settings.market_selected_drops.push(candidate.clone());
+                            let _ = self.save_settings(service, settings, password);
+                        }
+                    }
+                }
+            }
         }
     }
 }

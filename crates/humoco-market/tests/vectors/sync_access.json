@@ -30,19 +30,19 @@
   ],
   "public_drops": [
     {
-      "input_url": "https://drop.humoco.org/drop.php",
-      "canonical_url": "https://drop.humoco.org/drop.php",
-      "public_user_pubkey_hex": "2d30010241a465fb7319d5da2b16f9f9a40232672eef28a0b67257361f76a720"
+      "input_url": "https://drop.humoco.org/sync.php",
+      "canonical_url": "https://drop.humoco.org/sync.php",
+      "public_user_pubkey_hex": "16acf80fcebef0d21c0cc2ffafa81baf25901e453afbdb8e8bcfef1ac141ccb0"
     },
     {
       "input_url": "drop.verein.de/",
-      "canonical_url": "https://drop.verein.de/drop.php",
-      "public_user_pubkey_hex": "151a030230b03a542a41593ed4620e052332c9b1b389c69afb63567d8eb49fb6"
+      "canonical_url": "https://drop.verein.de/sync.php",
+      "public_user_pubkey_hex": "acee1011eec0b9bfc167e542b408e06d7d3d289e7581107f19fe823d346c280a"
     },
     {
       "input_url": "http://127.0.0.1:8080/humoco/",
-      "canonical_url": "http://127.0.0.1:8080/humoco/drop.php",
-      "public_user_pubkey_hex": "4d095ac47ad4754a3322a7b4a3231b65282b2d202abd64c4362033e8bdc2fdef"
+      "canonical_url": "http://127.0.0.1:8080/humoco/sync.php",
+      "public_user_pubkey_hex": "3a209b0059d53c4b12aeaa4ea5eb3053fae2e55456c1d6ea95b463142ef0f243"
     }
   ],
   "rotation_certificate": {

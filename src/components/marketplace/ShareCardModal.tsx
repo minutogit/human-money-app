@@ -20,6 +20,7 @@ export interface ShareCardModalProps {
     shareUri: string;
     qrSvg?: string | null;
     did?: string;
+    isCompactQr?: boolean;
 }
 
 export function ShareCardModal({
@@ -31,6 +32,7 @@ export function ShareCardModal({
     shareUri,
     qrSvg,
     did,
+    isCompactQr,
 }: ShareCardModalProps) {
     const { t } = useTranslation();
     const [copied, setCopied] = useState(false);
@@ -115,36 +117,7 @@ export function ShareCardModal({
             }
         >
             <div className="space-y-5 pt-2">
-                {/* QR Code Section */}
-                <div className="flex flex-col items-center justify-center p-4 bg-bg-app rounded-2xl border border-theme-subtle">
-                    {qrSvg ? (
-                        <div className="space-y-2 text-center">
-                            <img
-                                src={`data:image/svg+xml;utf8,${encodeURIComponent(qrSvg)}`}
-                                alt="HuMoCo Contact Card QR Code"
-                                className="w-56 h-56 mx-auto rounded-xl p-2 bg-white shadow-sm border border-theme-subtle object-contain"
-                            />
-                            <p className="text-[11px] text-theme-light flex items-center justify-center gap-1.5 pt-1">
-                                <QrCode size={13} />
-                                <span>{t('marketplace.qrScanHint')}</span>
-                            </p>
-                        </div>
-                    ) : (
-                        <div className="p-4 text-center space-y-2">
-                            <div className="w-10 h-10 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200">
-                                <AlertCircle size={20} />
-                            </div>
-                            <h4 className="text-xs font-bold text-theme-secondary">
-                                {t('marketplace.qrTooLargeTitle')}
-                            </h4>
-                            <p className="text-[11px] text-theme-light max-w-xs mx-auto leading-relaxed">
-                                {t('marketplace.qrTooLargeDesc')}
-                            </p>
-                        </div>
-                    )}
-                </div>
-
-                {/* Actions: File and Link */}
+                {/* Actions: File and Link at top */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {/* Save .hmcard file */}
                     <Button
@@ -198,6 +171,39 @@ export function ShareCardModal({
                         {saveStatus.message}
                     </div>
                 )}
+
+                {/* QR Code Section below */}
+                <div className="flex flex-col items-center justify-center p-4 bg-bg-app rounded-2xl border border-theme-subtle">
+                    {qrSvg ? (
+                        <div className="space-y-2 text-center">
+                            <img
+                                src={`data:image/svg+xml;utf8,${encodeURIComponent(qrSvg)}`}
+                                alt="HuMoCo Contact Card QR Code"
+                                className="w-56 h-56 mx-auto rounded-xl p-2 bg-white shadow-sm border border-theme-subtle object-contain"
+                            />
+                            <p className="text-[11px] text-theme-light flex items-center justify-center gap-1.5 pt-1">
+                                <QrCode size={13} />
+                                <span>
+                                    {isCompactQr
+                                        ? t('marketplace.compactQrHint', 'Kompakt-Code für schnellen Scan – Inserate werden nach Bestätigung über den Sync-Dienst geladen')
+                                        : t('marketplace.qrScanHint')}
+                                </span>
+                            </p>
+                        </div>
+                    ) : (
+                        <div className="p-4 text-center space-y-2">
+                            <div className="w-10 h-10 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200">
+                                <AlertCircle size={20} />
+                            </div>
+                            <h4 className="text-xs font-bold text-theme-secondary">
+                                {t('marketplace.qrTooLargeTitle')}
+                            </h4>
+                            <p className="text-[11px] text-theme-light max-w-xs mx-auto leading-relaxed">
+                                {t('marketplace.qrTooLargeDesc')}
+                            </p>
+                        </div>
+                    )}
+                </div>
             </div>
         </ModalShell>
     );

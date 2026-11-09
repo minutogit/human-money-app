@@ -139,10 +139,41 @@ pub fn get_own_contact_card_impl(
         human_money_core::crypto::encode_base64(envelope_json.as_bytes())
     );
 
-    let qr_svg = if share_uri.len() <= humoco_market::MAX_QR_SHARE_BYTES {
-        humoco_market::encode_qr_svg(share_uri.as_bytes()).ok()
+    let (qr_svg, is_compact_qr, qr_jws) = if stored.card_jws.len() <= 800 {
+        let svg = if share_uri.len() <= humoco_market::MAX_QR_SHARE_BYTES {
+            humoco_market::encode_qr_svg(share_uri.as_bytes()).ok()
+        } else {
+            None
+        };
+        (svg, false, Some(stored.card_jws.clone()))
     } else {
-        None
+        let compact_res = service.with_wallet_and_identity(|_wallet, identity| -> Result<_, human_money_core::app_service::AppFacadeError> {
+            let mut compact_card = stored.card.clone();
+            compact_card.listings.clear();
+            let compact_jws = humoco_market::sign_card(compact_card, &identity.signing_key)
+                .map_err(|e| human_money_core::app_service::AppFacadeError::Generic(e.to_string()))?;
+            let compact_env = humoco_market::own_envelope(compact_jws.clone());
+            let compact_env_json = serde_json::to_string(&compact_env)
+                .map_err(|e| human_money_core::app_service::AppFacadeError::Generic(e.to_string()))?;
+            let compact_share_uri = format!(
+                "humoco://card?env={}",
+                human_money_core::crypto::encode_base64(compact_env_json.as_bytes())
+            );
+            let svg = humoco_market::encode_qr_svg(compact_share_uri.as_bytes()).ok();
+            Ok((svg, compact_jws))
+        });
+
+        match compact_res {
+            Ok(Ok((svg, c_jws))) => (svg, true, Some(c_jws)),
+            _ => {
+                let svg = if share_uri.len() <= humoco_market::MAX_QR_SHARE_BYTES {
+                    humoco_market::encode_qr_svg(share_uri.as_bytes()).ok()
+                } else {
+                    None
+                };
+                (svg, false, Some(stored.card_jws.clone()))
+            }
+        }
     };
 
     Ok(Some(FrontendOwnContactCard {
@@ -151,6 +182,8 @@ pub fn get_own_contact_card_impl(
         qr_svg,
         share_uri,
         envelope_json,
+        qr_jws,
+        is_compact_qr,
     }))
 }
 
@@ -230,10 +263,41 @@ pub fn save_own_contact_card_impl(
         human_money_core::crypto::encode_base64(envelope_json.as_bytes())
     );
 
-    let qr_svg = if share_uri.len() <= humoco_market::MAX_QR_SHARE_BYTES {
-        humoco_market::encode_qr_svg(share_uri.as_bytes()).ok()
+    let (qr_svg, is_compact_qr, qr_jws) = if card_jws.len() <= 800 {
+        let svg = if share_uri.len() <= humoco_market::MAX_QR_SHARE_BYTES {
+            humoco_market::encode_qr_svg(share_uri.as_bytes()).ok()
+        } else {
+            None
+        };
+        (svg, false, Some(card_jws.clone()))
     } else {
-        None
+        let compact_res = service.with_wallet_and_identity(|_wallet, identity| -> Result<_, human_money_core::app_service::AppFacadeError> {
+            let mut compact_card = verified_card.clone();
+            compact_card.listings.clear();
+            let compact_jws = humoco_market::sign_card(compact_card, &identity.signing_key)
+                .map_err(|e| human_money_core::app_service::AppFacadeError::Generic(e.to_string()))?;
+            let compact_env = humoco_market::own_envelope(compact_jws.clone());
+            let compact_env_json = serde_json::to_string(&compact_env)
+                .map_err(|e| human_money_core::app_service::AppFacadeError::Generic(e.to_string()))?;
+            let compact_share_uri = format!(
+                "humoco://card?env={}",
+                human_money_core::crypto::encode_base64(compact_env_json.as_bytes())
+            );
+            let svg = humoco_market::encode_qr_svg(compact_share_uri.as_bytes()).ok();
+            Ok((svg, compact_jws))
+        });
+
+        match compact_res {
+            Ok(Ok((svg, c_jws))) => (svg, true, Some(c_jws)),
+            _ => {
+                let svg = if share_uri.len() <= humoco_market::MAX_QR_SHARE_BYTES {
+                    humoco_market::encode_qr_svg(share_uri.as_bytes()).ok()
+                } else {
+                    None
+                };
+                (svg, false, Some(card_jws.clone()))
+            }
+        }
     };
 
     Ok(FrontendOwnContactCard {
@@ -242,6 +306,8 @@ pub fn save_own_contact_card_impl(
         qr_svg,
         share_uri,
         envelope_json,
+        qr_jws,
+        is_compact_qr,
     })
 }
 

@@ -5,8 +5,8 @@
 pub mod commands;
 pub mod models;
 pub mod settings;
-pub mod drop_client;
-pub mod drop_zip;
+pub mod sync_client;
+pub mod sync_zip;
 mod gateway_resolver;
 pub(crate) mod intent_reconciliation;
 pub mod state;
@@ -26,7 +26,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*, market::*, drops::*, post::*};
+use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*, market::*, sync::*, post::*};
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
 

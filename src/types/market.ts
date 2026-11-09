@@ -69,6 +69,8 @@ export interface FrontendOwnContactCard {
     qrSvg?: string | null;
     shareUri: string;
     envelopeJson: string;
+    qrJws?: string | null;
+    isCompactQr?: boolean;
 }
 
 export interface FrontendSaveOwnCardRequest {

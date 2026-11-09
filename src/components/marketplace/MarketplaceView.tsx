@@ -14,13 +14,12 @@ import {
     SlidersHorizontal,
     X,
     Download,
-    Server,
     MessageSquare,
     Check,
     Clock,
     User
 } from 'lucide-react';
-import { FrontendMarketPerson, FrontendMarketListing, FrontendMarketInquiryItem } from '../../types';
+import { FrontendMarketPerson, FrontendMarketListing, FrontendMarketInquiryItem, FrontendOwnContactCard } from '../../types';
 import { useNavigation } from '../../context/NavigationContext';
 import { useSession } from '../../context/SessionContext';
 import { marketService } from '../../services/marketService';
@@ -38,9 +37,10 @@ import { PageLoadingState, PageEmptyState } from '../ui/PageState';
 import { MarketPersonView } from './MarketPersonView';
 import { MyOfferModal } from './MyOfferModal';
 import { ImportCardModal } from './ImportCardModal';
-import { DropManagementModal } from './DropManagementModal';
+import { ShareCardModal } from './ShareCardModal';
 import { truncateUserId } from '../../utils/userIdHelper';
 import { translateError } from '../../utils/errorHelper';
+import { DROP_STATUS_UPDATED_EVENT } from '../../utils/dropEvents';
 
 export interface MarketplaceViewProps {
     initialSelectedDid?: string;
@@ -48,7 +48,7 @@ export interface MarketplaceViewProps {
 
 export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
     const { t } = useTranslation();
-    const { navigate, goBack, appState } = useNavigation();
+    const { navigate, goBack, appState, navigateToSettingsSection } = useNavigation();
     const { protectAction } = useSession();
 
     const [people, setPeople] = useState<FrontendMarketPerson[]>([]);
@@ -82,10 +82,49 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
         }
     }, [appState]);
 
-    // Modals
+    // Modals & Share
     const [isMyOfferModalOpen, setIsMyOfferModalOpen] = useState<boolean>(false);
     const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
-    const [isDropModalOpen, setIsDropModalOpen] = useState<boolean>(false);
+    const [isShareModalOpen, setIsShareModalOpen] = useState<boolean>(false);
+    const [ownCardForShare, setOwnCardForShare] = useState<FrontendOwnContactCard | null>(null);
+
+    // Sync status for hint banner
+    const [connectedSyncCount, setConnectedSyncCount] = useState<number | null>(null);
+
+    const refreshSyncStatus = useCallback(() => {
+        marketService.getDropOverviewStatus()
+            .then(status => {
+                setConnectedSyncCount(status.connectedCount);
+            })
+            .catch(() => {
+                setConnectedSyncCount(0);
+            });
+    }, []);
+
+    useEffect(() => {
+        refreshSyncStatus();
+        const handleDropStatus = () => {
+            refreshSyncStatus();
+        };
+        window.addEventListener(DROP_STATUS_UPDATED_EVENT, handleDropStatus);
+        return () => {
+            window.removeEventListener(DROP_STATUS_UPDATED_EVENT, handleDropStatus);
+        };
+    }, [refreshSyncStatus]);
+
+    const handleOpenCardShare = async () => {
+        try {
+            const card = await marketService.getOwnContactCard();
+            if (card) {
+                setOwnCardForShare(card);
+                setIsShareModalOpen(true);
+            } else {
+                setIsMyOfferModalOpen(true);
+            }
+        } catch {
+            setIsMyOfferModalOpen(true);
+        }
+    };
 
     // Filters and tabs
     const [activeTab, setActiveTab] = useState<'offer' | 'request' | 'people'>('offer');
@@ -400,17 +439,6 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
                     <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => setIsDropModalOpen(true)}
-                        className="gap-2 shadow-xs"
-                        title={t('marketplace.dropsBtnTitle')}
-                    >
-                        <Server size={14} />
-                        <span>{t('marketplace.dropsBtn')}</span>
-                    </Button>
-
-                    <Button
-                        variant="outline"
-                        size="sm"
                         onClick={() => {
                             loadMarketView();
                             triggerDropSync();
@@ -425,6 +453,36 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
             }
         >
             <div className="max-w-5xl mx-auto space-y-6">
+                {/* Subtle Sync Service Hint Banner when connectedSyncCount === 0 */}
+                {connectedSyncCount === 0 && (
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-xs text-amber-950">
+                        <div className="flex items-start gap-2.5">
+                            <span className="text-base select-none leading-none mt-0.5">💡</span>
+                            <p className="leading-relaxed">
+                                {t('marketplace.syncHintText', 'Deine Angebote sind aktuell nur auf diesem Gerät sichtbar. Verbinde einen Sync-Dienst für den automatischen Austausch im Freundeskreis oder teile Angebote als Datei.')}
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => navigateToSettingsSection('sync')}
+                                className="text-xs bg-white text-amber-900 border-amber-300 hover:bg-amber-50 font-semibold"
+                            >
+                                {t('marketplace.connectSyncBtn', 'Sync-Dienst verbinden')}
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleOpenCardShare}
+                                className="text-xs bg-white text-amber-900 border-amber-300 hover:bg-amber-50"
+                            >
+                                {t('marketplace.exportCardBtn', 'Eigene Karte als .hmcard exportieren')}
+                            </Button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Search & Filter Bar */}
                 <div className="p-4 bg-white border border-theme-subtle rounded-3xl shadow-soft space-y-3">
                     <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3">
@@ -1215,16 +1273,20 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
                 }}
             />
 
-            {/* Drop Management Modal */}
-            <DropManagementModal
-                isOpen={isDropModalOpen}
-                onClose={() => setIsDropModalOpen(false)}
-                onSyncComplete={(importedCards) => {
-                    if (importedCards > 0) {
-                        loadMarketView();
-                    }
-                }}
-            />
+            {/* Share Card Modal */}
+            {ownCardForShare && (
+                <ShareCardModal
+                    isOpen={isShareModalOpen}
+                    onClose={() => setIsShareModalOpen(false)}
+                    title={t('marketplace.shareOwnCardTitle', 'Eigene Visitenkarte teilen')}
+                    subtitle={t('marketplace.shareOwnCardSubtitle', 'Sichere Datei oder QR-Code zum Austausch')}
+                    envelopeJson={ownCardForShare.envelopeJson}
+                    shareUri={ownCardForShare.shareUri}
+                    qrSvg={ownCardForShare.qrSvg}
+                    did={ownCardForShare.card.did}
+                    isCompactQr={ownCardForShare.isCompactQr}
+                />
+            )}
 
             {/* 1-Step Inquiry Modal (§6.4.3 - NO Chat! max 280 chars) */}
             {inquiryTarget && (

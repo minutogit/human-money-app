@@ -1,8 +1,15 @@
 /* eslint-disable @typescript-eslint/no-require-imports, no-undef, @typescript-eslint/no-explicit-any */
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { WalletSyncBadge } from '../WalletSyncBadge';
+import { RealtimeProtectionBadge } from '../RealtimeProtectionBadge';
 import { settingsService } from '../../services/settingsService';
+
+const mockNavigateToSettingsSection = vi.fn();
+vi.mock('../../context/NavigationContext', () => ({
+    useNavigation: () => ({
+        navigateToSettingsSection: mockNavigateToSettingsSection,
+    }),
+}));
 
 vi.mock('react-i18next', () => {
     const fs = require('fs');
@@ -63,7 +70,7 @@ vi.mock('../../utils/log', () => ({
     },
 }));
 
-describe('WalletSyncBadge Component', () => {
+describe('RealtimeProtectionBadge Component', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         (settingsService.getSettings as any).mockResolvedValue({
@@ -71,46 +78,56 @@ describe('WalletSyncBadge Component', () => {
         });
     });
 
-    it('renders "Offline Mode" neutral badge with online sync tooltip when status is NoServers', async () => {
+    it('renders "Offline protection" neutral badge when status is NoServers and opens popover', async () => {
         (settingsService.checkAnchorSync as any).mockResolvedValue('NoServers');
 
-        render(<WalletSyncBadge />);
+        render(<RealtimeProtectionBadge />);
 
         await waitFor(() => {
-            expect(screen.getByText('Offline Mode')).toBeInTheDocument();
+            expect(screen.getByText('Offline protection')).toBeInTheDocument();
         });
 
-        const badgeButton = screen.getByRole('button', { name: /L2 Status: Offline Mode/i });
+        const badgeButton = screen.getByRole('button', { name: /Echtzeitschutz Status: Offline protection/i });
         expect(badgeButton).toBeInTheDocument();
-        expect(badgeButton.getAttribute('title')).toContain('No online sync configured');
+
+        fireEvent.click(badgeButton);
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        expect(screen.getByText(/Payments are securely protected by mathematical Shared-Signature Traps/i)).toBeInTheDocument();
+
+        const netBtn = screen.getByRole('button', { name: /Open network settings/i });
+        fireEvent.click(netBtn);
+        expect(mockNavigateToSettingsSection).toHaveBeenCalledWith('network');
     });
 
-    it('renders "Online Sync Unreachable" amber badge when status is Offline', async () => {
-        (settingsService.checkAnchorSync as any).mockResolvedValue('Offline');
+    it('closes popover on Escape key', async () => {
+        (settingsService.checkAnchorSync as any).mockResolvedValue('NoServers');
 
-        render(<WalletSyncBadge />);
+        render(<RealtimeProtectionBadge />);
 
         await waitFor(() => {
-            expect(screen.getByText('Online Sync Unreachable')).toBeInTheDocument();
+            expect(screen.getByText('Offline protection')).toBeInTheDocument();
         });
 
-        const badgeButton = screen.getByRole('button', { name: /L2 Status: Online Sync Unreachable/i });
-        expect(badgeButton).toBeInTheDocument();
-        expect(badgeButton.getAttribute('title')).toContain('Online sync servers are currently unreachable');
+        fireEvent.click(screen.getByRole('button', { name: /Echtzeitschutz Status: Offline protection/i }));
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+        fireEvent.keyDown(document, { key: 'Escape' });
+        await waitFor(() => {
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        });
     });
 
-    it('renders "Online Sync Active" emerald badge when status is Synchronized', async () => {
+    it('renders "Real-time protection active" emerald badge when status is Synchronized', async () => {
         (settingsService.checkAnchorSync as any).mockResolvedValue('Synchronized');
 
-        render(<WalletSyncBadge />);
+        render(<RealtimeProtectionBadge />);
 
         await waitFor(() => {
-            expect(screen.getByText(/Online Sync Active/i)).toBeInTheDocument();
+            expect(screen.getByText(/Real-time protection active/i)).toBeInTheDocument();
         });
 
-        const badgeButton = screen.getByRole('button', { name: /L2 Status: Online Sync Active/i });
+        const badgeButton = screen.getByRole('button', { name: /Echtzeitschutz Status: Real-time protection active/i });
         expect(badgeButton).toBeInTheDocument();
-        expect(badgeButton.getAttribute('title')).toContain('Your wallet is verified with online protection.');
     });
 
     it('displays Testnet pill when active network is testnet', async () => {
@@ -119,38 +136,38 @@ describe('WalletSyncBadge Component', () => {
         });
         (settingsService.checkAnchorSync as any).mockResolvedValue('NoServers');
 
-        render(<WalletSyncBadge />);
+        render(<RealtimeProtectionBadge />);
 
         await waitFor(() => {
             expect(screen.getByText(/Testnet/i)).toBeInTheDocument();
         });
     });
 
-    it('renders "Local Backup Behind" amber badge for SameDeviceRollback and opens modal on click', async () => {
+    it('renders "Security warning" rose badge for SameDeviceRollback and opens popover on click', async () => {
         (settingsService.checkAnchorSync as any).mockResolvedValue('SameDeviceRollback');
 
-        render(<WalletSyncBadge />);
+        render(<RealtimeProtectionBadge />);
 
         await waitFor(() => {
-            expect(screen.getByText('Local Backup Behind')).toBeInTheDocument();
+            expect(screen.getByText('Security warning')).toBeInTheDocument();
         });
 
-        const badgeButton = screen.getByRole('button', { name: /L2 Status: Local Backup Behind/i });
+        const badgeButton = screen.getByRole('button', { name: /Echtzeitschutz Status: Security warning/i });
         fireEvent.click(badgeButton);
 
         await waitFor(() => {
-            expect(screen.getByText('Update Local Backup')).toBeInTheDocument();
-            expect(screen.getByText(/This device loaded an older backup/i)).toBeInTheDocument();
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /Verify & synchronize vouchers|Gutscheine prüfen/i })).toBeInTheDocument();
         });
     });
 
     it('triggers security lockdown on SupersededByHandover', async () => {
         (settingsService.checkAnchorSync as any).mockResolvedValue('SupersededByHandover');
 
-        render(<WalletSyncBadge />);
+        render(<RealtimeProtectionBadge />);
 
         await waitFor(() => {
-            expect(screen.getByText('Transferred to Other Device')).toBeInTheDocument();
+            expect(screen.getByText('Security warning')).toBeInTheDocument();
             expect(mockTriggerSecurityLockdown).toHaveBeenCalledWith('handover');
         });
     });
@@ -158,10 +175,10 @@ describe('WalletSyncBadge Component', () => {
     it('triggers security lockdown on ConcurrentCloneDetected', async () => {
         (settingsService.checkAnchorSync as any).mockResolvedValue('ConcurrentCloneDetected');
 
-        render(<WalletSyncBadge />);
+        render(<RealtimeProtectionBadge />);
 
         await waitFor(() => {
-            expect(screen.getByText('Clone Conflict')).toBeInTheDocument();
+            expect(screen.getByText('Security warning')).toBeInTheDocument();
             expect(mockTriggerSecurityLockdown).toHaveBeenCalledWith('clone');
         });
     });

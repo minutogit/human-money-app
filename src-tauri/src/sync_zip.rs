@@ -1,13 +1,13 @@
-// src-tauri/src/drop_zip.rs
+// src-tauri/src/sync_zip.rs
 use crc32fast::Hasher;
 
-const DROP_PHP: &[u8] = include_bytes!("../../tools/humoco-drop/drop.php");
-const HTACCESS: &[u8] = include_bytes!("../../tools/humoco-drop/.htaccess");
-const ROBOTS_TXT: &[u8] = include_bytes!("../../tools/humoco-drop/robots.txt");
-const INDEX_HTML: &[u8] = include_bytes!("../../tools/humoco-drop/index.html");
-const README_MD: &[u8] = include_bytes!("../../tools/humoco-drop/README.md");
+const SYNC_PHP: &[u8] = include_bytes!("../../tools/humoco-sync/sync.php");
+const HTACCESS: &[u8] = include_bytes!("../../tools/humoco-sync/.htaccess");
+const ROBOTS_TXT: &[u8] = include_bytes!("../../tools/humoco-sync/robots.txt");
+const INDEX_HTML: &[u8] = include_bytes!("../../tools/humoco-sync/index.html");
+const README_MD: &[u8] = include_bytes!("../../tools/humoco-sync/README.md");
 
-pub fn generate_drop_config_php(
+pub fn generate_sync_config_php(
     admin_pubkey: &str,
     data_dir: &str,
     max_members: usize,
@@ -21,13 +21,13 @@ pub fn generate_drop_config_php(
     format!(
 r#"<?php // config.php – adjust to your needs
 return [
-    // 64-hex lowercase Ed25519 VerifyingKey of the drop admin
+    // 64-hex lowercase Ed25519 VerifyingKey of the sync admin
     'admin_pubkey'         => '{}',
 
     // Deterministic directory name, part of read_url
     'data_dir'             => '{}',
 
-    // Optional URL where new users can register on public drops
+    // Optional URL where new users can register on public sync services
     'register_url'         => {},
 
     // Maximum number of member public keys per channel
@@ -54,14 +54,14 @@ struct ZipEntry<'a> {
     data: &'a [u8],
 }
 
-pub fn build_drop_zip_bytes(
+pub fn build_sync_zip_bytes(
     admin_pubkey: &str,
     data_dir: &str,
     max_members: usize,
     max_total_storage_mb: usize,
     register_url: Option<&str>,
 ) -> Vec<u8> {
-    let config_php = generate_drop_config_php(
+    let config_php = generate_sync_config_php(
         admin_pubkey,
         data_dir,
         max_members,
@@ -72,8 +72,8 @@ pub fn build_drop_zip_bytes(
 
     let entries = [
         ZipEntry {
-            name: "drop.php",
-            data: DROP_PHP,
+            name: "sync.php",
+            data: SYNC_PHP,
         },
         ZipEntry {
             name: "config.php",
@@ -183,7 +183,7 @@ mod tests {
         let max_total_storage_mb = 256;
         let register_url = Some("https://example.com/register");
 
-        let zip_bytes = build_drop_zip_bytes(
+        let zip_bytes = build_sync_zip_bytes(
             admin_pubkey,
             data_dir,
             max_members,
@@ -229,7 +229,7 @@ mod tests {
 
         // Verify all 6 files are present
         assert_eq!(extracted_files.len(), 6);
-        assert!(extracted_files.contains_key("drop.php"));
+        assert!(extracted_files.contains_key("sync.php"));
         assert!(extracted_files.contains_key("config.php"));
         assert!(extracted_files.contains_key(".htaccess"));
         assert!(extracted_files.contains_key("robots.txt"));
@@ -237,7 +237,7 @@ mod tests {
         assert!(extracted_files.contains_key("README.md"));
 
         // Verify embedded files equality
-        assert_eq!(extracted_files["drop.php"], DROP_PHP);
+        assert_eq!(extracted_files["sync.php"], SYNC_PHP);
         assert_eq!(extracted_files[".htaccess"], HTACCESS);
         assert_eq!(extracted_files["robots.txt"], ROBOTS_TXT);
         assert_eq!(extracted_files["index.html"], INDEX_HTML);

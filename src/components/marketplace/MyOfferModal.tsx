@@ -845,6 +845,7 @@ export function MyOfferModal({ isOpen, onClose, onCardUpdated }: MyOfferModalPro
                     shareUri={ownCard.shareUri}
                     qrSvg={ownCard.qrSvg}
                     did={ownCard.card.did}
+                    isCompactQr={ownCard.isCompactQr}
                 />
             )}
 
