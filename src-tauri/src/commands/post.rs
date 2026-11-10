@@ -18,9 +18,9 @@ use humoco_market::{
 use log::warn;
 use tauri::State;
 
-use crate::sync_client::{self as drop_client, PutSlotOutcome};
+use crate::sync_client::{self as sync_client, PutSlotOutcome};
 use crate::models::{
-    FrontendContact, FrontendDropDescriptor, FrontendError, FrontendMarketInquiryItem,
+    FrontendContact, FrontendSyncDescriptor, FrontendError, FrontendMarketInquiryItem,
     FrontendMarketInquiryReplyDto, FrontendPendingSignRequest, FrontendPendingWotHandshake,
     FrontendPostDepositResult, FrontendPostInboxSummary, FrontendPostSyncResult,
     FrontendUserProfile, TransactionRecord,
@@ -77,27 +77,30 @@ pub(crate) fn save_post_state(
         .map_err(FrontendError::from)
 }
 
-pub(crate) fn collect_own_reply_drops(
+pub(crate) fn collect_own_reply_syncs(
     settings: &AppSettings,
     _master_seed: &[u8; 32],
-) -> Vec<FrontendDropDescriptor> {
-    let mut reply_drops = Vec::new();
-    for d in &settings.market_selected_drops {
+) -> Vec<FrontendSyncDescriptor> {
+    let mut reply_syncs = Vec::new();
+    for d in &settings.market_selected_syncs {
         if !d.read_url.is_empty() {
-            reply_drops.push(d.clone());
+            reply_syncs.push(d.clone());
         }
     }
-    for pd in &settings.public_drops {
+    for pd in &settings.public_syncs {
         if pd.enabled && !pd.read_url.is_empty() {
-            reply_drops.push(FrontendDropDescriptor {
+            reply_syncs.push(FrontendSyncDescriptor {
                 write_url: pd.write_url.clone(),
                 read_url: pd.read_url.clone(),
                 slot_id: Some(pd.access_pubkey.clone()),
                 drop_pub: pd.drop_pub.clone(),
+                last_seen_at: None,
+                last_error_at: None,
+                fail_count: 0,
             });
         }
     }
-    reply_drops
+    reply_syncs
 }
 
 pub(crate) fn collect_post_upload_targets(
@@ -105,12 +108,12 @@ pub(crate) fn collect_post_upload_targets(
     _master_seed: &[u8; 32],
 ) -> Vec<humoco_market::DropDescriptor> {
     let mut targets = Vec::new();
-    for d in &settings.market_selected_drops {
+    for d in &settings.market_selected_syncs {
         if !d.write_url.is_empty() {
             targets.push(d.clone().into());
         }
     }
-    for pd in &settings.public_drops {
+    for pd in &settings.public_syncs {
         if pd.enabled
             && !pd.write_url.is_empty()
             && (pd.authorized_channels.is_empty()
@@ -222,7 +225,7 @@ pub(crate) fn queue_receipt(
     msg_id: &str,
     tag16: &[u8; 16],
     bundle_id: Option<&str>,
-    own_reply_drops: &[FrontendDropDescriptor],
+    own_reply_syncs: &[FrontendSyncDescriptor],
     now_secs: u64,
 ) {
     let receipt = PostDeliveryReceipt {
@@ -260,7 +263,7 @@ pub(crate) fn queue_receipt(
     let envelope = PostEnvelope::new(
         uuid::Uuid::new_v4().to_string(),
         now_secs,
-        own_reply_drops.iter().cloned().map(Into::into).collect(),
+        own_reply_syncs.iter().cloned().map(Into::into).collect(),
         container_bytes,
     );
     let recipient_pk = match get_pubkey_from_user_id(sender_did) {
@@ -304,10 +307,41 @@ pub(crate) async fn flush_post_slots_impl(
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password))
             .unwrap_or_default();
-        let targets = collect_post_upload_targets(&settings, &master_seed);
-        let client = drop_client::create_drop_http_client();
-        let now_secs = drop_client::current_unix_timestamp();
-        (my_ed_sk, master_seed, targets, client, now_secs)
+        let mut targets = collect_post_upload_targets(&settings, &master_seed);
+
+        // Include recipient Sync-Ablagen from address book
+        if let Ok(contacts) = state.load_contacts(&mut service, password) {
+            let recipient_dids: std::collections::HashSet<String> = post_state
+                .outbox_entries
+                .iter()
+                .map(|e| crate::state::canonicalize_did(&e.recipient_did).unwrap_or_else(|_| e.recipient_did.clone()))
+                .collect();
+
+            for c in contacts {
+                let can_c_did = crate::state::canonicalize_did(&c.did).unwrap_or_else(|_| c.did.clone());
+                if recipient_dids.contains(&can_c_did) {
+                    for d in c.syncs {
+                        if !d.write_url.is_empty() {
+                            targets.push(d.into());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Deduplicate targets by normalized write_url
+        let mut deduped_targets: Vec<humoco_market::DropDescriptor> = Vec::new();
+        let mut seen_urls = std::collections::HashSet::new();
+        for t in targets {
+            let norm = t.write_url.trim().trim_end_matches('/').to_lowercase();
+            if !norm.is_empty() && seen_urls.insert(norm) {
+                deduped_targets.push(t);
+            }
+        }
+
+        let client = sync_client::create_sync_http_client();
+        let now_secs = sync_client::current_unix_timestamp();
+        (my_ed_sk, master_seed, deduped_targets, client, now_secs)
     };
 
     if upload_targets.is_empty() {
@@ -331,12 +365,13 @@ pub(crate) async fn flush_post_slots_impl(
 
     let mut deposited_to = 0;
     let mut errors = Vec::new();
+    let mut health_updates: Vec<(String, bool)> = Vec::new();
 
-    for drop_desc in &upload_targets {
-        let (id, signed_res) = if drop_desc.slot_id.is_some() {
-            match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
+    for sync_desc in &upload_targets {
+        let (id, signed_res) = if sync_desc.slot_id.is_some() {
+            match humoco_market::derive_public_drop_keypair(&master_seed, &sync_desc.write_url) {
                 Ok((r_sk, r_vk, _)) => {
-                    let nonce = drop_client::generate_drop_nonce();
+                    let nonce = sync_client::generate_sync_nonce();
                     let signed = humoco_market::sign_member_request_direct(
                         &r_sk,
                         "PUT",
@@ -347,15 +382,15 @@ pub(crate) async fn flush_post_slots_impl(
                     );
                     (hex::encode(r_vk.as_bytes()), Ok(signed))
                 }
-                Err(e) => (String::new(), Err(format!("Public drop key derivation error: {}", e))),
+                Err(e) => (String::new(), Err(format!("Public sync key derivation error: {}", e))),
             }
         } else {
-            match humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &drop_desc.drop_pub) {
+            match humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &sync_desc.drop_pub) {
                 Ok(p_hex) => {
-                    let nonce = drop_client::generate_drop_nonce();
+                    let nonce = sync_client::generate_sync_nonce();
                     let signed = humoco_market::sign_member_request_stealth(
                         &my_ed_sk,
-                        &drop_desc.drop_pub,
+                        &sync_desc.drop_pub,
                         "PUT",
                         "post",
                         now_secs,
@@ -371,6 +406,7 @@ pub(crate) async fn flush_post_slots_impl(
         let signed = match signed_res {
             Ok(s) => s,
             Err(e) => {
+                health_updates.push((sync_desc.write_url.clone(), false));
                 errors.push(e);
                 continue;
             }
@@ -378,12 +414,12 @@ pub(crate) async fn flush_post_slots_impl(
 
         let if_match = post_state
             .slot_etags_by_write_url
-            .get(&drop_desc.write_url)
+            .get(&sync_desc.write_url)
             .cloned();
 
-        match drop_client::put_slot(
+        match sync_client::put_slot(
             &client,
-            &drop_desc.write_url,
+            &sync_desc.write_url,
             &signed,
             "post",
             &initial_blob,
@@ -393,20 +429,22 @@ pub(crate) async fn flush_post_slots_impl(
         {
             Ok(PutSlotOutcome::Saved { etag, .. }) => {
                 deposited_to += 1;
+                health_updates.push((sync_desc.write_url.clone(), true));
                 if let Some(et) = etag {
                     post_state
                         .slot_etags_by_write_url
-                        .insert(drop_desc.write_url.clone(), et);
+                        .insert(sync_desc.write_url.clone(), et);
                 }
             }
             Ok(PutSlotOutcome::PreconditionFailed { current_etag }) => {
                 // Multi-device conflict! Fetch current remote slot, merge local additions, and retry.
-                let remote_bytes = match drop_client::get_slot(&client, &drop_desc.read_url, &id, "post").await {
+                let remote_bytes = match sync_client::get_slot(&client, &sync_desc.read_url, &id, "post").await {
                     Ok(b) => b,
                     Err(e) => {
+                        health_updates.push((sync_desc.write_url.clone(), false));
                         errors.push(format!(
                             "Failed to fetch remote slot for 412 merge from {}: {}",
-                            drop_desc.read_url, e
+                            sync_desc.read_url, e
                         ));
                         continue;
                     }
@@ -421,15 +459,16 @@ pub(crate) async fn flush_post_slots_impl(
                 ) {
                     Ok(b) => b,
                     Err(e) => {
+                        health_updates.push((sync_desc.write_url.clone(), false));
                         errors.push(format!("Failed to merge post slot on 412: {}", e));
                         continue;
                     }
                 };
 
-                let retry_signed_res = if drop_desc.slot_id.is_some() {
-                    match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
+                let retry_signed_res = if sync_desc.slot_id.is_some() {
+                    match humoco_market::derive_public_drop_keypair(&master_seed, &sync_desc.write_url) {
                         Ok((r_sk, _, _)) => {
-                            let nonce = drop_client::generate_drop_nonce();
+                            let nonce = sync_client::generate_sync_nonce();
                             Ok(humoco_market::sign_member_request_direct(
                                 &r_sk,
                                 "PUT",
@@ -439,13 +478,13 @@ pub(crate) async fn flush_post_slots_impl(
                                 &merged_blob,
                             ))
                         }
-                        Err(e) => Err(format!("Public drop key derivation error: {}", e)),
+                        Err(e) => Err(format!("Public sync key derivation error: {}", e)),
                     }
                 } else {
-                    let nonce = drop_client::generate_drop_nonce();
+                    let nonce = sync_client::generate_sync_nonce();
                     humoco_market::sign_member_request_stealth(
                         &my_ed_sk,
-                        &drop_desc.drop_pub,
+                        &sync_desc.drop_pub,
                         "PUT",
                         "post",
                         now_secs,
@@ -457,9 +496,9 @@ pub(crate) async fn flush_post_slots_impl(
 
                 match retry_signed_res {
                     Ok(retry_signed) => {
-                        match drop_client::put_slot(
+                        match sync_client::put_slot(
                             &client,
-                            &drop_desc.write_url,
+                            &sync_desc.write_url,
                             &retry_signed,
                             "post",
                             &merged_blob,
@@ -469,33 +508,45 @@ pub(crate) async fn flush_post_slots_impl(
                         {
                             Ok(PutSlotOutcome::Saved { etag, .. }) => {
                                 deposited_to += 1;
+                                health_updates.push((sync_desc.write_url.clone(), true));
                                 if let Some(et) = etag {
                                     post_state
                                         .slot_etags_by_write_url
-                                        .insert(drop_desc.write_url.clone(), et);
+                                        .insert(sync_desc.write_url.clone(), et);
                                 }
                             }
                             Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
+                                health_updates.push((sync_desc.write_url.clone(), false));
                                 errors.push(format!(
                                     "Upload to {} failed 412 Precondition Failed twice",
-                                    drop_desc.write_url
+                                    sync_desc.write_url
                                 ));
                             }
                             Err(e) => {
+                                health_updates.push((sync_desc.write_url.clone(), false));
                                 errors.push(format!(
                                     "Upload retry to {} failed: {}",
-                                    drop_desc.write_url, e
+                                    sync_desc.write_url, e
                                 ));
                             }
                         }
                     }
-                    Err(e) => errors.push(e),
+                    Err(e) => {
+                        health_updates.push((sync_desc.write_url.clone(), false));
+                        errors.push(e);
+                    }
                 }
             }
             Err(e) => {
-                errors.push(format!("Upload to {} failed: {}", drop_desc.write_url, e));
+                health_updates.push((sync_desc.write_url.clone(), false));
+                errors.push(format!("Upload to {} failed: {}", sync_desc.write_url, e));
             }
         }
+    }
+
+    if !health_updates.is_empty() {
+        let mut service = state.service.lock().unwrap();
+        state.record_contact_sync_health_batch(&mut service, &health_updates, now_secs, password);
     }
 
     (deposited_to, errors)
@@ -541,7 +592,7 @@ pub async fn deposit_transfer_to_post_impl(
     {
         existing.msg_id.clone()
     } else {
-        let (my_ed_sk, recipient_ed_pk, own_reply_drops, now_secs) = {
+        let (my_ed_sk, recipient_ed_pk, own_reply_syncs, now_secs) = {
             let mut service = state.service.lock().unwrap();
             let my_ed_sk = service
                 .with_wallet_and_identity(|_w, id| id.signing_key.clone())
@@ -552,17 +603,17 @@ pub async fn deposit_transfer_to_post_impl(
                 .get_cached_settings()
                 .or_else(|_| state.load_settings(&mut service, password.as_deref()))
                 .unwrap_or_default();
-            let now_secs = drop_client::current_unix_timestamp();
+            let now_secs = sync_client::current_unix_timestamp();
             let master_seed = my_ed_sk.to_bytes();
-            let drops = collect_own_reply_drops(&settings, &master_seed);
-            (my_ed_sk, recipient_ed_pk, drops, now_secs)
+            let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+            (my_ed_sk, recipient_ed_pk, reply_syncs, now_secs)
         };
 
         let fresh_msg_id = uuid::Uuid::new_v4().to_string();
         let envelope = PostEnvelope::new(
             fresh_msg_id.clone(),
             now_secs,
-            own_reply_drops.into_iter().map(Into::into).collect(),
+            own_reply_syncs.into_iter().map(Into::into).collect(),
             record.bundle_data.clone(), // EXACT bytes! Never call create_transfer_bundle!
         );
 
@@ -609,7 +660,7 @@ pub async fn send_signing_request_via_post_impl(
 ) -> Result<FrontendPostDepositResult, FrontendError> {
     let recipient_ed_pk = get_pubkey_from_user_id(&recipient_did).map_err(FrontendError::from)?;
 
-    let (my_ed_sk, own_reply_drops, now_secs) = {
+    let (my_ed_sk, own_reply_syncs, now_secs) = {
         let mut service = state.service.lock().unwrap();
         let my_ed_sk = service
             .with_wallet_and_identity(|_w, id| id.signing_key.clone())
@@ -619,16 +670,16 @@ pub async fn send_signing_request_via_post_impl(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
         let master_seed = my_ed_sk.to_bytes();
-        let drops = collect_own_reply_drops(&settings, &master_seed);
-        let now_secs = drop_client::current_unix_timestamp();
-        (my_ed_sk, drops, now_secs)
+        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        let now_secs = sync_client::current_unix_timestamp();
+        (my_ed_sk, reply_syncs, now_secs)
     };
 
     let msg_id = uuid::Uuid::new_v4().to_string();
     let envelope = PostEnvelope::new(
         msg_id.clone(),
         now_secs,
-        own_reply_drops.into_iter().map(Into::into).collect(),
+        own_reply_syncs.into_iter().map(Into::into).collect(),
         container_bytes,
     );
 
@@ -675,7 +726,7 @@ pub async fn reply_detached_signature_via_post_impl(
 ) -> Result<FrontendPostDepositResult, FrontendError> {
     let recipient_ed_pk = get_pubkey_from_user_id(&recipient_did).map_err(FrontendError::from)?;
 
-    let (my_ed_sk, own_reply_drops, now_secs) = {
+    let (my_ed_sk, own_reply_syncs, now_secs) = {
         let mut service = state.service.lock().unwrap();
         let my_ed_sk = service
             .with_wallet_and_identity(|_w, id| id.signing_key.clone())
@@ -685,16 +736,16 @@ pub async fn reply_detached_signature_via_post_impl(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
         let master_seed = my_ed_sk.to_bytes();
-        let drops = collect_own_reply_drops(&settings, &master_seed);
-        let now_secs = drop_client::current_unix_timestamp();
-        (my_ed_sk, drops, now_secs)
+        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        let now_secs = sync_client::current_unix_timestamp();
+        (my_ed_sk, reply_syncs, now_secs)
     };
 
     let msg_id = uuid::Uuid::new_v4().to_string();
     let envelope = PostEnvelope::new(
         msg_id.clone(),
         now_secs,
-        own_reply_drops.into_iter().map(Into::into).collect(),
+        own_reply_syncs.into_iter().map(Into::into).collect(),
         container_bytes,
     );
 
@@ -722,12 +773,12 @@ pub async fn reply_detached_signature_via_post_impl(
                 .position(|r| &r.msg_id == req_id)
             {
                 let req = post_state.pending_sign_requests.remove(idx);
-                if !req.reply_drops.is_empty() {
+                if !req.reply_syncs.is_empty() {
                     let mut service = state.service.lock().unwrap();
-                    state.update_contact_drops_from_card(
+                    state.update_contact_syncs_from_card(
                         &mut service,
                         &recipient_did,
-                        &req.reply_drops,
+                        &req.reply_syncs,
                         password.as_deref(),
                     );
                 }
@@ -771,7 +822,7 @@ pub async fn send_wot_handshake_via_post_impl(
 
     let recipient_ed_pk = get_pubkey_from_user_id(&recipient_did).map_err(FrontendError::from)?;
 
-    let (my_identity, my_ed_sk, own_reply_drops, assertion, now_secs) = {
+    let (my_identity, my_ed_sk, own_reply_syncs, assertion, now_secs) = {
         let mut service = state.service.lock().unwrap();
         let my_identity = service
             .with_wallet_and_identity(|_w, id| id.clone())
@@ -809,8 +860,8 @@ pub async fn send_wot_handshake_via_post_impl(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
         let master_seed = my_ed_sk.to_bytes();
-        let drops = collect_own_reply_drops(&settings, &master_seed);
-        let now_secs = drop_client::current_unix_timestamp();
+        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        let now_secs = sync_client::current_unix_timestamp();
 
         let assertion = WotHandshakeAssertion {
             sender_did: my_did,
@@ -822,7 +873,7 @@ pub async fn send_wot_handshake_via_post_impl(
         };
         validate_wot_handshake_assertion(&assertion).map_err(FrontendError::from)?;
 
-        (my_identity, my_ed_sk, drops, assertion, now_secs)
+        (my_identity, my_ed_sk, reply_syncs, assertion, now_secs)
     };
 
     let assertion_bytes = serde_json::to_vec(&assertion)
@@ -843,7 +894,7 @@ pub async fn send_wot_handshake_via_post_impl(
     let envelope = PostEnvelope::new(
         msg_id.clone(),
         now_secs,
-        own_reply_drops.into_iter().map(Into::into).collect(),
+        own_reply_syncs.into_iter().map(Into::into).collect(),
         container_bytes,
     );
 
@@ -907,7 +958,7 @@ pub async fn accept_wot_handshake_impl(
     let handshake = post_state.pending_wot_handshakes.remove(idx);
     let sender_did = handshake.sender_did.clone();
 
-    let now_secs = drop_client::current_unix_timestamp();
+    let now_secs = sync_client::current_unix_timestamp();
 
     // Update / insert contact with trust level
     {
@@ -929,7 +980,7 @@ pub async fn accept_wot_handshake_impl(
                     desired_hops: Some(3),
                     has_peer_list: false,
                     peer_list_updated_at: None,
-                    drops: vec![],
+                    syncs: vec![],
                 }),
             Err(_) => FrontendContact {
                 did: sender_did.clone(),
@@ -944,7 +995,7 @@ pub async fn accept_wot_handshake_impl(
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![],
+                syncs: vec![],
             },
         };
         contact.trust_level = Some(trust_level);
@@ -1002,11 +1053,11 @@ pub async fn send_market_inquiry_via_post_impl(
     listing_id: String,
     listing_title: String,
     message: String,
-    recipient_drops: Vec<FrontendDropDescriptor>,
+    recipient_syncs: Vec<FrontendSyncDescriptor>,
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
-    let now_secs = drop_client::current_unix_timestamp();
+    let now_secs = sync_client::current_unix_timestamp();
     let inquiry_id = uuid::Uuid::new_v4().to_string();
 
     let inquiry = MarketInquiry {
@@ -1018,19 +1069,19 @@ pub async fn send_market_inquiry_via_post_impl(
     };
     validate_market_inquiry(&inquiry).map_err(FrontendError::from)?;
 
-    if !recipient_drops.is_empty() {
+    if !recipient_syncs.is_empty() {
         let mut service = state.service.lock().unwrap();
-        state.update_contact_drops_from_card(
+        state.update_contact_syncs_from_card(
             &mut service,
             &recipient_did,
-            &recipient_drops,
+            &recipient_syncs,
             password.as_deref(),
         );
     }
 
     let recipient_ed_pk = get_pubkey_from_user_id(&recipient_did).map_err(FrontendError::from)?;
 
-    let (my_identity, my_ed_sk, own_reply_drops) = {
+    let (my_identity, my_ed_sk, own_reply_syncs) = {
         let mut service = state.service.lock().unwrap();
         let my_identity = service
             .with_wallet_and_identity(|_w, id| id.clone())
@@ -1041,8 +1092,8 @@ pub async fn send_market_inquiry_via_post_impl(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
         let master_seed = my_ed_sk.to_bytes();
-        let drops = collect_own_reply_drops(&settings, &master_seed);
-        (my_identity, my_ed_sk, drops)
+        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        (my_identity, my_ed_sk, reply_syncs)
     };
 
     let inquiry_bytes = serde_json::to_vec(&inquiry)
@@ -1063,7 +1114,7 @@ pub async fn send_market_inquiry_via_post_impl(
     let envelope = PostEnvelope::new(
         msg_id.clone(),
         now_secs,
-        own_reply_drops.into_iter().map(Into::into).collect(),
+        own_reply_syncs.into_iter().map(Into::into).collect(),
         container_bytes,
     );
 
@@ -1084,7 +1135,7 @@ pub async fn send_market_inquiry_via_post_impl(
     let (deposited_to, errors) = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
     if deposited_to == 0 {
         return Err(FrontendError::from(format!(
-            "An active connected drop is required to deposit marketplace inquiries. Errors: {:?}",
+            "An active connected sync service is required to deposit marketplace inquiries. Errors: {:?}",
             errors
         )));
     }
@@ -1097,7 +1148,7 @@ pub async fn send_market_inquiry_via_post_impl(
         counterparty_name: None,
         message,
         created_at: now_secs,
-        reply_drops: recipient_drops,
+        reply_syncs: recipient_syncs,
         reply: None,
     };
     post_state.buyer_inquiries.push(item.clone());
@@ -1112,11 +1163,11 @@ pub async fn send_market_inquiry_via_post(
     listing_id: String,
     listing_title: String,
     message: String,
-    recipient_drops: Vec<FrontendDropDescriptor>,
+    recipient_syncs: Vec<FrontendSyncDescriptor>,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
-    send_market_inquiry_via_post_impl(recipient_did, listing_id, listing_title, message, recipient_drops, password, &state).await
+    send_market_inquiry_via_post_impl(recipient_did, listing_id, listing_title, message, recipient_syncs, password, &state).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1136,7 +1187,7 @@ pub async fn reply_market_inquiry_via_post_impl(
         other => return Err(FrontendError::from(format!("Invalid decision: {}", other))),
     };
 
-    let now_secs = drop_client::current_unix_timestamp();
+    let now_secs = sync_client::current_unix_timestamp();
     let mut post_state = load_post_state(state, password.as_deref())?;
 
     let (item_idx, counterparty_did, listing_id) = {
@@ -1177,7 +1228,7 @@ pub async fn reply_market_inquiry_via_post_impl(
 
     let recipient_ed_pk = get_pubkey_from_user_id(&counterparty_did).map_err(FrontendError::from)?;
 
-    let (my_identity, my_ed_sk, own_reply_drops) = {
+    let (my_identity, my_ed_sk, own_reply_syncs) = {
         let mut service = state.service.lock().unwrap();
         let my_identity = service
             .with_wallet_and_identity(|_w, id| id.clone())
@@ -1188,8 +1239,8 @@ pub async fn reply_market_inquiry_via_post_impl(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
         let master_seed = my_ed_sk.to_bytes();
-        let drops = collect_own_reply_drops(&settings, &master_seed);
-        (my_identity, my_ed_sk, drops)
+        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        (my_identity, my_ed_sk, reply_syncs)
     };
 
     let reply_bytes = serde_json::to_vec(&reply_payload)
@@ -1210,7 +1261,7 @@ pub async fn reply_market_inquiry_via_post_impl(
     let envelope = PostEnvelope::new(
         msg_id.clone(),
         now_secs,
-        own_reply_drops.into_iter().map(Into::into).collect(),
+        own_reply_syncs.into_iter().map(Into::into).collect(),
         container_bytes,
     );
 
@@ -1331,7 +1382,7 @@ pub fn get_post_inbox_summary(
     get_post_inbox_summary_impl(password, &state)
 }
 
-pub async fn sync_post_drops_impl(
+pub async fn sync_post_channels_impl(
     app: Option<&tauri::AppHandle>,
     is_wifi: Option<bool>,
     extra_standards: Option<&HashMap<String, String>>,
@@ -1349,7 +1400,7 @@ pub async fn sync_post_drops_impl(
     if settings.market_poll_wifi_only && is_wifi == Some(false) {
         return Ok(FrontendPostSyncResult {
             uploaded_to: 0,
-            polled_drops: 0,
+            polled_syncs: 0,
             imported_payments: 0,
             imported_receipts: 0,
             imported_signatures: 0,
@@ -1359,15 +1410,16 @@ pub async fn sync_post_drops_impl(
             new_inquiry_replies: 0,
             pruned_boxes: 0,
             errors: Vec::new(),
+            retry_after_secs: None,
         });
     }
 
-    let client = drop_client::create_drop_http_client();
+    let client = sync_client::create_sync_http_client();
     let mut post_state = load_post_state(state, password.as_deref())?;
-    let now_secs = drop_client::current_unix_timestamp();
+    let now_secs = sync_client::current_unix_timestamp();
 
     let mut errors = Vec::new();
-    let mut polled_drops = 0;
+    let mut polled_syncs = 0;
     let mut imported_payments = 0;
     let mut imported_receipts = 0;
     let mut imported_signatures = 0;
@@ -1377,15 +1429,15 @@ pub async fn sync_post_drops_impl(
     let mut new_inquiry_replies = 0;
     let mut pruned_boxes = 0;
 
-    let (my_identity, my_ed_sk, master_seed, own_reply_drops) = {
+    let (my_identity, my_ed_sk, master_seed, own_reply_syncs) = {
         let service = state.service.lock().unwrap();
         let my_identity = service
             .with_wallet_and_identity(|_w, id| id.clone())
             .map_err(FrontendError::from)?;
         let my_ed_sk = my_identity.signing_key.clone();
         let master_seed = my_ed_sk.to_bytes();
-        let drops = collect_own_reply_drops(&settings, &master_seed);
-        (my_identity, my_ed_sk, master_seed, drops)
+        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        (my_identity, my_ed_sk, master_seed, reply_syncs)
     };
 
     // 1. Pruning pass (§6.2)
@@ -1407,7 +1459,7 @@ pub async fn sync_post_drops_impl(
         let mut index_urls = Vec::new();
 
         // Selected drops
-        for d in &settings.market_selected_drops {
+        for d in &settings.market_selected_syncs {
             if !d.read_url.is_empty() {
                 if let Some(ref sid) = d.slot_id {
                     direct.push((d.read_url.clone(), sid.clone()));
@@ -1418,7 +1470,7 @@ pub async fn sync_post_drops_impl(
         }
 
         // Public drops
-        for pd in &settings.public_drops {
+        for pd in &settings.public_syncs {
             if pd.enabled && !pd.read_url.is_empty() {
                 direct.push((pd.read_url.clone(), pd.access_pubkey.clone()));
             }
@@ -1427,7 +1479,7 @@ pub async fn sync_post_drops_impl(
         // Contacts drops
         if let Ok(contacts) = state.load_contacts(&mut service, password.as_deref()) {
             for c in contacts {
-                for d in c.drops {
+                for d in c.syncs {
                     if !d.read_url.is_empty() {
                         if let Some(ref sid) = d.slot_id {
                             direct.push((d.read_url, sid.clone()));
@@ -1458,7 +1510,7 @@ pub async fn sync_post_drops_impl(
 
         // Reply drops of pending items
         for req in &post_state.pending_sign_requests {
-            for d in &req.reply_drops {
+            for d in &req.reply_syncs {
                 if !d.read_url.is_empty() {
                     if let Some(ref sid) = d.slot_id {
                         direct.push((d.read_url.clone(), sid.clone()));
@@ -1470,7 +1522,7 @@ pub async fn sync_post_drops_impl(
         }
 
         for inq in &post_state.seller_inquiries {
-            for d in &inq.reply_drops {
+            for d in &inq.reply_syncs {
                 if !d.read_url.is_empty() {
                     if let Some(ref sid) = d.slot_id {
                         direct.push((d.read_url.clone(), sid.clone()));
@@ -1482,7 +1534,7 @@ pub async fn sync_post_drops_impl(
         }
 
         for inq in &post_state.buyer_inquiries {
-            for d in &inq.reply_drops {
+            for d in &inq.reply_syncs {
                 if !d.read_url.is_empty() {
                     if let Some(ref sid) = d.slot_id {
                         direct.push((d.read_url.clone(), sid.clone()));
@@ -1572,31 +1624,55 @@ pub async fn sync_post_drops_impl(
 
     // 4. Download slots
     let mut fetched_slots: Vec<Vec<u8>> = Vec::new();
+    let mut post_sync_health_updates: Vec<(String, bool)> = Vec::new();
 
     for (read_url, slot_id) in direct_slot_fetches {
-        polled_drops += 1;
-        match drop_client::get_slot(&client, &read_url, &slot_id, "post").await {
-            Ok(Some(bytes)) => fetched_slots.push(bytes),
-            Ok(None) => {}
-            Err(e) => errors.push(format!("Failed to fetch direct post slot from {}: {}", read_url, e)),
+        polled_syncs += 1;
+        match sync_client::get_slot(&client, &read_url, &slot_id, "post").await {
+            Ok(Some(bytes)) => {
+                post_sync_health_updates.push((read_url.clone(), true));
+                fetched_slots.push(bytes);
+            }
+            Ok(None) => {
+                post_sync_health_updates.push((read_url.clone(), true));
+            }
+            Err(e) => {
+                post_sync_health_updates.push((read_url.clone(), false));
+                errors.push(format!("Failed to fetch direct post slot from {}: {}", read_url, e));
+            }
         }
     }
 
     for read_url in candidate_read_urls {
-        polled_drops += 1;
-        let index_res = drop_client::list_index(&client, &read_url, None, None).await;
-        if let Ok(drop_client::IndexFetchResult::Modified { entries, .. }) = index_res {
-            for entry in entries {
-                if entry.channel != "post" {
-                    continue;
-                }
-                match drop_client::get_slot(&client, &read_url, &entry.id, "post").await {
-                    Ok(Some(bytes)) => fetched_slots.push(bytes),
-                    Ok(None) => {}
-                    Err(e) => errors.push(format!("Failed to fetch post slot {} from {}: {}", entry.id, read_url, e)),
+        polled_syncs += 1;
+        let index_res = sync_client::list_index(&client, &read_url, None, None).await;
+        match index_res {
+            Ok(sync_client::IndexFetchResult::Modified { entries, .. }) => {
+                post_sync_health_updates.push((read_url.clone(), true));
+                for entry in entries {
+                    if entry.channel != "post" {
+                        continue;
+                    }
+                    match sync_client::get_slot(&client, &read_url, &entry.id, "post").await {
+                        Ok(Some(bytes)) => fetched_slots.push(bytes),
+                        Ok(None) => {}
+                        Err(e) => errors.push(format!("Failed to fetch post slot {} from {}: {}", entry.id, read_url, e)),
+                    }
                 }
             }
+            Ok(sync_client::IndexFetchResult::NotModified) => {
+                post_sync_health_updates.push((read_url.clone(), true));
+            }
+            Err(e) => {
+                post_sync_health_updates.push((read_url.clone(), false));
+                errors.push(format!("Failed to fetch post slot index from {}: {}", read_url, e));
+            }
         }
+    }
+
+    if !post_sync_health_updates.is_empty() {
+        let mut service = state.service.lock().unwrap();
+        state.record_contact_sync_health_batch(&mut service, &post_sync_health_updates, now_secs, password.as_deref());
     }
 
     // 5. Decrypt and process entries
@@ -1694,10 +1770,10 @@ pub async fn sync_post_drops_impl(
             }
 
             if !envelope.reply_drops.is_empty() {
-                let reply_dtos: Vec<FrontendDropDescriptor> =
+                let reply_dtos: Vec<FrontendSyncDescriptor> =
                     envelope.reply_drops.iter().cloned().map(Into::into).collect();
                 let mut service = state.service.lock().unwrap();
-                state.update_contact_drops_from_card(
+                state.update_contact_syncs_from_card(
                     &mut service,
                     &sender_did,
                     &reply_dtos,
@@ -1793,7 +1869,7 @@ pub async fn sync_post_drops_impl(
                             &envelope.msg_id,
                             &box_entry.tag16,
                             Some(bid),
-                            &own_reply_drops,
+                            &own_reply_syncs,
                             now_secs,
                         );
                     }
@@ -1805,7 +1881,7 @@ pub async fn sync_post_drops_impl(
                         sender_did: sender_did.clone(),
                         sender_name,
                         created_at: envelope.created_at,
-                        reply_drops: envelope.reply_drops.iter().cloned().map(Into::into).collect(),
+                        reply_syncs: envelope.reply_drops.iter().cloned().map(Into::into).collect(),
                         container_bytes: envelope.container_bytes.clone(),
                     });
                     new_sign_requests += 1;
@@ -1817,7 +1893,7 @@ pub async fn sync_post_drops_impl(
                         &envelope.msg_id,
                         &box_entry.tag16,
                         None,
-                        &own_reply_drops,
+                        &own_reply_syncs,
                         now_secs,
                     );
                 }
@@ -1853,7 +1929,7 @@ pub async fn sync_post_drops_impl(
                             &envelope.msg_id,
                             &box_entry.tag16,
                             None,
-                            &own_reply_drops,
+                            &own_reply_syncs,
                             now_secs,
                         );
                     }
@@ -1885,7 +1961,7 @@ pub async fn sync_post_drops_impl(
                                     &envelope.msg_id,
                                     &box_entry.tag16,
                                     None,
-                                    &own_reply_drops,
+                                    &own_reply_syncs,
                                     now_secs,
                                 );
                             }
@@ -1955,7 +2031,7 @@ pub async fn sync_post_drops_impl(
                                                 counterparty_name: sender_name,
                                                 message: inquiry.message.clone(),
                                                 created_at: inquiry.created_at,
-                                                reply_drops: envelope
+                                                reply_syncs: envelope
                                                     .reply_drops
                                                     .iter()
                                                     .cloned()
@@ -1972,7 +2048,7 @@ pub async fn sync_post_drops_impl(
                                                 &envelope.msg_id,
                                                 &box_entry.tag16,
                                                 None,
-                                                &own_reply_drops,
+                                                &own_reply_syncs,
                                                 now_secs,
                                             );
                                         }
@@ -2024,7 +2100,7 @@ pub async fn sync_post_drops_impl(
                                     &envelope.msg_id,
                                     &box_entry.tag16,
                                     None,
-                                    &own_reply_drops,
+                                    &own_reply_syncs,
                                     now_secs,
                                 );
                             }
@@ -2049,9 +2125,16 @@ pub async fn sync_post_drops_impl(
 
     save_post_state(state, &post_state, password.as_deref())?;
 
+    let mut retry_after_secs: Option<u64> = None;
+    for e in &errors {
+        if let Some(secs) = sync_client::extract_retry_after_from_error_str(e) {
+            retry_after_secs = Some(retry_after_secs.map_or(secs, |prev| prev.max(secs)));
+        }
+    }
+
     Ok(FrontendPostSyncResult {
         uploaded_to,
-        polled_drops,
+        polled_syncs,
         imported_payments,
         imported_receipts,
         imported_signatures,
@@ -2061,17 +2144,18 @@ pub async fn sync_post_drops_impl(
         new_inquiry_replies,
         pruned_boxes,
         errors,
+        retry_after_secs,
     })
 }
 
 #[tauri::command]
-pub async fn sync_post_drops(
+pub async fn sync_post_channels(
     app: tauri::AppHandle,
     is_wifi: Option<bool>,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendPostSyncResult, FrontendError> {
-    sync_post_drops_impl(Some(&app), is_wifi, None, password, &state).await
+    sync_post_channels_impl(Some(&app), is_wifi, None, password, &state).await
 }
 
 // =========================================================================
@@ -2083,9 +2167,9 @@ mod tests {
     use super::*;
     use human_money_core::test_utils;
     use crate::commands::sync::tests::{
-        create_test_state, setup_test_app, temp_test_dir, MockDropServer, ALICE_PHRASE, BOB_PHRASE,
+        create_test_state, setup_test_app, temp_test_dir, MockSyncServer, ALICE_PHRASE, BOB_PHRASE,
     };
-    use crate::commands::sync::{probe_public_drop_impl, save_public_drop_impl};
+    use crate::commands::sync::{probe_public_sync_impl, save_public_sync_impl};
     use crate::commands::market::save_own_contact_card_impl;
     use crate::models::{
         FrontendCardListingInput, FrontendContact, FrontendListingType,
@@ -2097,17 +2181,17 @@ mod tests {
     const ADMIN_A: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
     const ADMIN_B: &str = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1";
 
-    async fn setup_test_drop(
-        server: &MockDropServer,
+    async fn setup_test_sync(
+        server: &MockSyncServer,
         drop_pub: &str,
         password: &str,
         state: &AppState,
-    ) -> (String, crate::models::FrontendPublicDropInfo) {
+    ) -> (String, crate::models::FrontendPublicSyncInfo) {
         let write_url = format!("{}/sync.php", server.base_url);
         let read_url = format!("{}/{}", server.base_url, server.data_dir);
-        let info = probe_public_drop_impl(write_url.clone(), Some(password.to_string()), state).await.unwrap();
+        let info = probe_public_sync_impl(write_url.clone(), Some(password.to_string()), state).await.unwrap();
         server.members.lock().unwrap().push(info.access_pubkey.clone());
-        let saved = save_public_drop_impl(
+        let saved = save_public_sync_impl(
             write_url.clone(),
             read_url,
             drop_pub.to_string(),
@@ -2140,11 +2224,11 @@ mod tests {
         };
 
         // Start Drop Server A for Alice & Drop Server B for Bob
-        let server_a = MockDropServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
-        let server_b = MockDropServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
+        let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
+        let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
 
-        let (server_a_url, alice_drop) = setup_test_drop(&server_a, DROP_PUB_A, password, &alice_state).await;
-        let (server_b_url, bob_drop) = setup_test_drop(&server_b, DROP_PUB_B, password, &bob_state).await;
+        let (server_a_url, alice_drop) = setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
+        let (server_b_url, bob_drop) = setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
 
         // Alice and Bob add each other to address book with Level 2 and their respective drop
         {
@@ -2162,11 +2246,14 @@ mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![FrontendDropDescriptor {
+                syncs: vec![FrontendSyncDescriptor {
                     write_url: server_b_url.clone(),
                     read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
                     slot_id: Some(bob_drop.access_pubkey.clone()),
                     drop_pub: DROP_PUB_B.to_string(),
+                    last_seen_at: None,
+                    last_error_at: None,
+                    fail_count: 0,
                 }],
             };
             alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
@@ -2187,11 +2274,14 @@ mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![FrontendDropDescriptor {
+                syncs: vec![FrontendSyncDescriptor {
                     write_url: server_a_url.clone(),
                     read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
                     slot_id: Some(alice_drop.access_pubkey.clone()),
                     drop_pub: DROP_PUB_A.to_string(),
+                    last_seen_at: None,
+                    last_error_at: None,
+                    fail_count: 0,
                 }],
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
@@ -2285,7 +2375,7 @@ mod tests {
         assert_eq!(post_state_alice.outbox_entries[0].bundle_id.as_deref(), Some(bundle_id.as_str()));
 
         // 4. Bob syncs post drops: receives payment & queues receipt
-        let bob_sync = sync_post_drops_impl(None, None, Some(&std_map), Some(password.to_string()), &bob_state).await.unwrap();
+        let bob_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &bob_state).await.unwrap();
         assert_eq!(bob_sync.imported_payments, 1);
 
         // 5. Bob tries to import the same bundle offline/manually: strictly idempotent!
@@ -2296,7 +2386,7 @@ mod tests {
         assert!(offline_import_attempt.is_err(), "Duplicate import must return BundleAlreadyProcessed");
 
         // 6. Alice syncs post drops: downloads receipt from Bob, prunes acknowledged outbox entry!
-        let alice_sync = sync_post_drops_impl(None, None, None, Some(password.to_string()), &alice_state).await.unwrap();
+        let alice_sync = sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state).await.unwrap();
         assert_eq!(alice_sync.imported_receipts, 1);
         assert_eq!(alice_sync.pruned_boxes, 1);
 
@@ -2305,7 +2395,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_asymmetry_alice_has_drop_bob_has_none() {
+    async fn test_asymmetry_alice_has_sync_bob_has_none() {
         let base_dir = temp_test_dir("asymmetry_test");
         let password = "TestPassword123!";
 
@@ -2325,8 +2415,8 @@ mod tests {
         };
 
         // Server for Alice only; Bob has NO drop server
-        let server_a = MockDropServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
-        let (server_a_url, alice_drop) = setup_test_drop(&server_a, DROP_PUB_A, password, &alice_state).await;
+        let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
+        let (server_a_url, alice_drop) = setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
 
         // Bob has Alice in his address book with Alice's drop
         {
@@ -2344,11 +2434,14 @@ mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![FrontendDropDescriptor {
+                syncs: vec![FrontendSyncDescriptor {
                     write_url: server_a_url.clone(),
                     read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
                     slot_id: Some(alice_drop.access_pubkey.clone()),
                     drop_pub: DROP_PUB_A.to_string(),
+                    last_seen_at: None,
+                    last_error_at: None,
+                    fail_count: 0,
                 }],
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
@@ -2429,9 +2522,184 @@ mod tests {
         deposit_transfer_to_post_impl(bundle_res.bundle_id, Some(password.to_string()), &alice_state).await.unwrap();
 
         // Bob syncs: Bob has 0 write drops, but can read Alice statically and import payment!
-        let bob_sync = sync_post_drops_impl(None, None, Some(&std_map), Some(password.to_string()), &bob_state).await.unwrap();
+        let bob_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &bob_state).await.unwrap();
         assert_eq!(bob_sync.imported_payments, 1);
         assert_eq!(bob_sync.uploaded_to, 0, "Bob has no write drops, 0 uploads");
+    }
+
+    #[tokio::test]
+    async fn test_asymmetry_bob_has_sync_alice_has_none() {
+        let base_dir = temp_test_dir("asymmetry_bob_has_drop");
+        let password = "TestPassword123!";
+
+        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+
+        let alice_state = create_test_state(alice_service);
+        let bob_state = create_test_state(bob_service);
+
+        let alice_did = {
+            let s = alice_state.service.lock().unwrap();
+            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+        };
+        let bob_did = {
+            let s = bob_state.service.lock().unwrap();
+            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+        };
+
+        // Server for Bob only; Alice has NO drop server configured in settings
+        let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
+        let (server_b_url, bob_drop) = setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
+
+        // Alice registers as a member on the drop server, but does NOT save it to her settings
+        let alice_drop_probe = probe_public_sync_impl(server_b_url.clone(), Some(password.to_string()), &alice_state).await.unwrap();
+        server_b.members.lock().unwrap().push(alice_drop_probe.access_pubkey.clone());
+
+        // Verify Alice has 0 drops in settings
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            let s_settings = alice_state.load_settings(&mut s, Some(password)).unwrap();
+            assert_eq!(s_settings.market_selected_syncs.len(), 0);
+            assert_eq!(s_settings.public_syncs.len(), 0);
+        }
+
+        // Alice has Bob in her address book with Bob's drop
+        {
+            let mut s_alice = alice_state.service.lock().unwrap();
+            let contact_bob = FrontendContact {
+                did: bob_did.clone(),
+                profile: FrontendUserProfile {
+                    first_name: Some("Bob".to_string()),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level: Some(2),
+                desired_hops: Some(3),
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![FrontendSyncDescriptor {
+                    write_url: server_b_url.clone(),
+                    read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
+                    slot_id: Some(bob_drop.access_pubkey.clone()),
+                    drop_pub: DROP_PUB_B.to_string(),
+                    last_seen_at: None,
+                    last_error_at: None,
+                    fail_count: 0,
+                }],
+            };
+            alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
+        }
+
+        // Bob has Alice in his address book with level 2
+        {
+            let mut s_bob = bob_state.service.lock().unwrap();
+            let contact_alice = FrontendContact {
+                did: alice_did.clone(),
+                profile: FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level: Some(2),
+                desired_hops: Some(3),
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![FrontendSyncDescriptor {
+                    write_url: server_b_url.clone(),
+                    read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
+                    slot_id: Some(alice_drop_probe.access_pubkey.clone()),
+                    drop_pub: DROP_PUB_B.to_string(),
+                    last_seen_at: None,
+                    last_error_at: None,
+                    fail_count: 0,
+                }],
+            };
+            bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
+        }
+
+        // Alice creates standard and voucher
+        let standard_toml = test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let mut std_map = HashMap::new();
+        std_map.insert("a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(), standard_toml.clone());
+
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            s.create_new_voucher(
+                &standard_toml,
+                human_money_core::NewVoucherData {
+                    creator_profile: human_money_core::models::profile::PublicProfile {
+                        id: Some(alice_did.clone()),
+                        ..Default::default()
+                    },
+                    nominal_value: human_money_core::models::voucher::ValueDefinition {
+                        amount: "50".to_string(),
+                        unit: "Taler".to_string(),
+                        ..Default::default()
+                    },
+                    validity_duration: Some("P1Y".to_string()),
+                    non_redeemable_test_voucher: false,
+                    collateral: None,
+                },
+                Some(password),
+            ).unwrap();
+        }
+
+        let local_id = {
+            let s = alice_state.service.lock().unwrap();
+            s.with_wallet_and_identity(|w, id| {
+                w.list_vouchers(Some(id), None, None, None)
+            }).unwrap()[0].local_instance_id.clone()
+        };
+
+        let transfer_req = human_money_core::wallet::types::MultiTransferRequest {
+            recipient_id: bob_did.clone(),
+            sources: vec![human_money_core::wallet::types::SourceTransfer {
+                local_instance_id: local_id.clone(),
+                amount_to_send: "10".to_string(),
+            }],
+            notes: Some("Alice uploads to Bob's drop".to_string()),
+            sender_profile_name: Some("Alice".to_string()),
+            use_privacy_mode: Some(true),
+            wot_sync_json: None,
+            contact_card_json: None,
+        };
+
+        let bundle_res = {
+            let mut s = alice_state.service.lock().unwrap();
+            s.create_transfer_bundle_with_l2_intents(transfer_req, &std_map, None, Some(password), 0).unwrap()
+        };
+
+        let record = TransactionRecord {
+            id: bundle_res.bundle_id.clone(),
+            direction: "sent".to_string(),
+            recipient_id: bob_did.clone(),
+            sender_id: alice_did.clone(),
+            timestamp: Utc::now().to_rfc3339(),
+            summable_amounts: HashMap::new(),
+            countable_items: HashMap::new(),
+            involved_vouchers: vec![local_id.clone()],
+            involved_sources_details: None,
+            bundle_data: bundle_res.bundle_bytes,
+            bundle_id: bundle_res.bundle_id.clone(),
+            notes: None,
+            sender_profile_name: Some("Alice".to_string()),
+        };
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state.append_to_history(&mut s, record, Some(password)).unwrap();
+        }
+
+        // Alice has no drops in settings, but deposit_transfer_to_post_impl successfully uploads to Bob's drop!
+        let deposit_res = deposit_transfer_to_post_impl(bundle_res.bundle_id, Some(password.to_string()), &alice_state).await.unwrap();
+        assert_eq!(deposit_res.deposited_to, 1, "Must upload to recipient's drop even when sender has no drops");
+
+        // Bob syncs from his own drop and imports payment!
+        let bob_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &bob_state).await.unwrap();
+        assert_eq!(bob_sync.imported_payments, 1);
     }
 
     #[tokio::test]
@@ -2447,8 +2715,8 @@ mod tests {
             s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
         };
 
-        let server_a = MockDropServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
-        let (server_a_url, alice_drop) = setup_test_drop(&server_a, DROP_PUB_A, password, &alice_state).await;
+        let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
+        let (server_a_url, alice_drop) = setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
 
         // Pre-populate server with a slot containing dummy/remote entries and a higher ETag
         let (_my_ed_sk, master_seed) = {
@@ -2493,11 +2761,11 @@ mod tests {
             s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
         };
 
-        let server_a = MockDropServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
-        let server_b = MockDropServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
+        let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
+        let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
 
-        let (server_a_url, alice_drop) = setup_test_drop(&server_a, DROP_PUB_A, password, &alice_state).await;
-        let (server_b_url, bob_drop) = setup_test_drop(&server_b, DROP_PUB_B, password, &bob_state).await;
+        let (server_a_url, alice_drop) = setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
+        let (server_b_url, bob_drop) = setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
 
         {
             let mut s_alice = alice_state.service.lock().unwrap();
@@ -2514,11 +2782,14 @@ mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![FrontendDropDescriptor {
+                syncs: vec![FrontendSyncDescriptor {
                     write_url: server_b_url.clone(),
                     read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
                     slot_id: Some(bob_drop.access_pubkey.clone()),
                     drop_pub: DROP_PUB_B.to_string(),
+                    last_seen_at: None,
+                    last_error_at: None,
+                    fail_count: 0,
                 }],
             };
             alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
@@ -2539,11 +2810,14 @@ mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![FrontendDropDescriptor {
+                syncs: vec![FrontendSyncDescriptor {
                     write_url: server_a_url.clone(),
                     read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
                     slot_id: Some(alice_drop.access_pubkey.clone()),
                     drop_pub: DROP_PUB_A.to_string(),
+                    last_seen_at: None,
+                    last_error_at: None,
+                    fail_count: 0,
                 }],
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
@@ -2593,7 +2867,7 @@ mod tests {
         send_signing_request_via_post_impl(bob_did.clone(), signing_req_bytes, Some(password.to_string()), &alice_state).await.unwrap();
 
         // Bob syncs post drops: receives sign request
-        let bob_sync = sync_post_drops_impl(None, None, None, Some(password.to_string()), &bob_state).await.unwrap();
+        let bob_sync = sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state).await.unwrap();
         assert_eq!(bob_sync.new_sign_requests, 1);
 
         let bob_post = load_post_state(&bob_state, Some(password)).unwrap();
@@ -2625,7 +2899,7 @@ mod tests {
         .unwrap();
 
         // Alice syncs post drops: detached signature is automatically attached!
-        let alice_sync = sync_post_drops_impl(None, None, Some(&std_map), Some(password.to_string()), &alice_state).await.unwrap();
+        let alice_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &alice_state).await.unwrap();
         assert_eq!(alice_sync.imported_signatures, 1);
 
         let updated_voucher = {
@@ -2657,24 +2931,30 @@ mod tests {
             s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
         };
 
-        let server_a = MockDropServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
-        let server_b = MockDropServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
+        let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
+        let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
 
-        let (server_a_url, alice_drop) = setup_test_drop(&server_a, DROP_PUB_A, password, &alice_state).await;
-        let (server_b_url, bob_drop) = setup_test_drop(&server_b, DROP_PUB_B, password, &bob_state).await;
+        let (server_a_url, alice_drop) = setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
+        let (server_b_url, bob_drop) = setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
 
-        let alice_drops = vec![FrontendDropDescriptor {
+        let alice_syncs = vec![FrontendSyncDescriptor {
             write_url: server_a_url.clone(),
             read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
             slot_id: Some(alice_drop.access_pubkey.clone()),
             drop_pub: DROP_PUB_A.to_string(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
         }];
 
-        let bob_drops = vec![FrontendDropDescriptor {
+        let bob_syncs = vec![FrontendSyncDescriptor {
             write_url: server_b_url.clone(),
             read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
             slot_id: Some(bob_drop.access_pubkey.clone()),
             drop_pub: DROP_PUB_B.to_string(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
         }];
 
         {
@@ -2692,7 +2972,7 @@ mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: bob_drops.clone(),
+                syncs: bob_syncs.clone(),
             };
             alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
         }
@@ -2712,7 +2992,7 @@ mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: alice_drops.clone(),
+                syncs: alice_syncs.clone(),
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
         }
@@ -2720,7 +3000,7 @@ mod tests {
         // Part A: WoT Handshake
         send_wot_handshake_via_post_impl(bob_did.clone(), 1, true, Some(password.to_string()), &alice_state).await.unwrap();
 
-        let bob_sync_1 = sync_post_drops_impl(None, None, None, Some(password.to_string()), &bob_state).await.unwrap();
+        let bob_sync_1 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state).await.unwrap();
         assert_eq!(bob_sync_1.new_wot_handshakes, 1);
 
         let bob_post = load_post_state(&bob_state, Some(password)).unwrap();
@@ -2728,7 +3008,7 @@ mod tests {
 
         accept_wot_handshake_impl(handshake.msg_id.clone(), 1, true, Some(password.to_string()), &bob_state).await.unwrap();
 
-        let alice_sync_1 = sync_post_drops_impl(None, None, None, Some(password.to_string()), &alice_state).await.unwrap();
+        let alice_sync_1 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state).await.unwrap();
         assert_eq!(alice_sync_1.new_wot_handshakes, 1);
 
         // Part B: 1-Step Marketplace Inquiry
@@ -2758,7 +3038,7 @@ mod tests {
             listing_id.clone(),
             "Forest Honey".to_string(),
             "Do you have 2 jars available?".to_string(),
-            bob_drops.clone(),
+            bob_syncs.clone(),
             Some(password.to_string()),
             &alice_state,
         )
@@ -2766,7 +3046,7 @@ mod tests {
         .unwrap();
 
         // Bob syncs: receives inquiry
-        let bob_sync_2 = sync_post_drops_impl(None, None, None, Some(password.to_string()), &bob_state).await.unwrap();
+        let bob_sync_2 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state).await.unwrap();
         assert_eq!(bob_sync_2.new_inquiries, 1);
 
         let bob_post_2 = load_post_state(&bob_state, Some(password)).unwrap();
@@ -2802,7 +3082,7 @@ mod tests {
         assert!(second_reply.is_err(), "Second reply must be rejected");
 
         // Alice syncs: receives reply
-        let alice_sync_2 = sync_post_drops_impl(None, None, None, Some(password.to_string()), &alice_state).await.unwrap();
+        let alice_sync_2 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state).await.unwrap();
         assert_eq!(alice_sync_2.new_inquiry_replies, 1);
 
         let alice_post_2 = load_post_state(&alice_state, Some(password)).unwrap();

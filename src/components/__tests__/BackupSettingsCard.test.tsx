@@ -144,23 +144,23 @@ describe('BackupSettingsCard', () => {
         });
     });
 
-    it('toggles drop-backup checkbox and saves updated settings', async () => {
+    it('toggles sync-backup checkbox and saves updated settings', async () => {
         const onSettingsUpdated = vi.fn();
         render(<BackupSettingsCard settings={defaultSettings} onSettingsUpdated={onSettingsUpdated} />);
 
         const checkboxes = screen.getAllByRole('checkbox');
-        const dropAutoBackupCheckbox = checkboxes[1];
-        expect(dropAutoBackupCheckbox).toBeChecked();
+        const syncAutoBackupCheckbox = checkboxes[1];
+        expect(syncAutoBackupCheckbox).toBeChecked();
 
-        fireEvent.click(dropAutoBackupCheckbox);
-        expect(dropAutoBackupCheckbox).not.toBeChecked();
+        fireEvent.click(syncAutoBackupCheckbox);
+        expect(syncAutoBackupCheckbox).not.toBeChecked();
 
         await waitFor(() => {
             expect(settingsService.saveSettings).toHaveBeenCalledWith(
-                expect.objectContaining({ dropBackupEnabled: false })
+                expect.objectContaining({ syncBackupEnabled: false })
             );
             expect(onSettingsUpdated).toHaveBeenCalledWith(
-                expect.objectContaining({ dropBackupEnabled: false })
+                expect.objectContaining({ syncBackupEnabled: false })
             );
         });
     });

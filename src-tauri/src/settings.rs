@@ -2,10 +2,10 @@
 use serde::{Deserialize, Serialize};
 
 pub const SETTINGS_KEY: &str = "app_settings";
-pub const MAX_POLLED_DROPS: usize = 10;
-pub const DROP_HEARTBEAT_SECS: u64 = 7 * 86_400;
-pub const DROP_CARD_MAX_BYTES: usize = 65_536;
-pub const DROP_WOT_MAX_BYTES: usize = 131_072;
+pub const MAX_POLLED_SYNCS: usize = 10;
+pub const SYNC_HEARTBEAT_SECS: u64 = 7 * 86_400;
+pub const SYNC_CARD_MAX_BYTES: usize = 65_536;
+pub const SYNC_WOT_MAX_BYTES: usize = 131_072;
 
 fn default_active_network() -> String {
     "mainnet".to_string()
@@ -99,15 +99,15 @@ pub struct AppSettings {
     #[serde(default)]
     pub market_poll_wifi_only: bool,
     #[serde(default)]
-    pub market_selected_drops: Vec<crate::models::FrontendDropDescriptor>,
+    pub market_selected_syncs: Vec<crate::models::FrontendSyncDescriptor>,
     #[serde(default)]
-    pub public_drops: Vec<StoredPublicDrop>,
+    pub public_syncs: Vec<StoredPublicSync>,
     #[serde(default = "default_true")]
-    pub wot_share_via_drop: bool,
+    pub wot_share_via_sync: bool,
     #[serde(default = "default_true")]
-    pub drop_backup_enabled: bool,
+    pub sync_backup_enabled: bool,
     #[serde(default)]
-    pub last_drop_backup_at: Option<String>,
+    pub last_sync_backup_at: Option<String>,
     #[serde(default)]
     pub pending_restore_l2_reconciliation: bool,
     #[serde(default = "default_true")]
@@ -116,7 +116,7 @@ pub struct AppSettings {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct StoredPublicDrop {
+pub struct StoredPublicSync {
     pub write_url: String,
     pub read_url: String,
     pub drop_pub: String,
@@ -183,11 +183,11 @@ impl Default for AppSettings {
             market_send_card_on_payment: false,
             share_min_level: default_share_min_level(),
             market_poll_wifi_only: false,
-            market_selected_drops: Vec::new(),
-            public_drops: Vec::new(),
-            wot_share_via_drop: true,
-            drop_backup_enabled: true,
-            last_drop_backup_at: None,
+            market_selected_syncs: Vec::new(),
+            public_syncs: Vec::new(),
+            wot_share_via_sync: true,
+            sync_backup_enabled: true,
+            last_sync_backup_at: None,
             pending_restore_l2_reconciliation: false,
             post_accept_from_contacts: true,
         }

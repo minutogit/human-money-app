@@ -19,18 +19,21 @@ export interface FrontendMarketListing {
 export type FrontendEntrySource =
     | { kind: 'voucher' }
     | { kind: 'card'; hops: number }
-    | { kind: 'drop'; readUrl: string };
+    | { kind: 'sync'; readUrl: string };
 
 export interface FrontendStandardRef {
     name: string;
     uuid: string;
 }
 
-export interface FrontendDropDescriptor {
+export interface FrontendSyncDescriptor {
     writeUrl: string;
     readUrl: string;
     slotId?: string | null;
     dropPub: string;
+    lastSeenAt?: number | null;
+    lastErrorAt?: number | null;
+    failCount?: number;
 }
 
 export interface FrontendMarketPerson {
@@ -42,7 +45,7 @@ export interface FrontendMarketPerson {
     standards: FrontendStandardRef[];
     trust: FrontendTrustTier;
     canForward: boolean;
-    cardDrops: FrontendDropDescriptor[];
+    cardSyncs: FrontendSyncDescriptor[];
 }
 
 export interface FrontendCardListingInput {
@@ -60,7 +63,7 @@ export interface FrontendContactCardDto {
     maxHops: number;
     profile: FrontendUserProfile;
     listings: FrontendCardListingInput[];
-    drops: FrontendDropDescriptor[];
+    syncs: FrontendSyncDescriptor[];
 }
 
 export interface FrontendOwnContactCard {
@@ -100,8 +103,8 @@ export interface FrontendMemberPolicyDto {
     hop2Min: number;
 }
 
-export interface FrontendDropSetupDraft {
-    descriptor: FrontendDropDescriptor;
+export interface FrontendSyncSetupDraft {
+    descriptor: FrontendSyncDescriptor;
     dataDir: string;
     adminPubkey: string;
     generation: number;
@@ -111,8 +114,8 @@ export interface FrontendDropSetupDraft {
     zipBase64: string;
 }
 
-export interface FrontendDropAdminStatus {
-    descriptor: FrontendDropDescriptor;
+export interface FrontendSyncAdminStatus {
+    descriptor: FrontendSyncDescriptor;
     adminPubkey: string;
     generation: number;
     rotationRetireAt?: number | null;
@@ -133,7 +136,7 @@ export interface FrontendDropAdminStatus {
     channelCounts?: Record<string, number>;
 }
 
-export interface FrontendDropAdminUpdateRequest {
+export interface FrontendSyncAdminUpdateRequest {
     cardPolicy?: FrontendMemberPolicyDto | null;
     allow?: string[] | null;
     deny?: string[] | null;
@@ -142,7 +145,7 @@ export interface FrontendDropAdminUpdateRequest {
     maxTotalStorageMb?: number | null;
 }
 
-export interface FrontendPublicDropInfo {
+export interface FrontendPublicSyncInfo {
     writeUrl: string;
     readUrl: string;
     dropPub: string;
@@ -151,16 +154,17 @@ export interface FrontendPublicDropInfo {
     authorizedChannels: string[];
 }
 
-export interface FrontendDropOverviewStatus {
+export interface FrontendSyncOverviewStatus {
     connectedCount: number;
-    friendDrops: number;
-    publicDrops: number;
-    hasOwnDrop: boolean;
-    ownDropSoftWarning: boolean;
+    pendingCount: number;
+    friendSyncs: number;
+    publicSyncs: number;
+    hasOwnSync: boolean;
+    ownSyncSoftWarning: boolean;
     lastSyncAt?: number | null;
 }
 
-export interface StoredPublicDrop {
+export interface StoredPublicSync {
     writeUrl: string;
     readUrl: string;
     dropPub: string;
@@ -170,28 +174,29 @@ export interface StoredPublicDrop {
     authorizedChannels: string[];
 }
 
-export interface FrontendDropConnectionTestResult {
+export interface FrontendSyncConnectionTestResult {
     success: boolean;
     message: string;
     writeOk: boolean;
     readOk: boolean;
 }
 
-export interface FrontendDiscoveredDrop {
-    descriptor: FrontendDropDescriptor;
+export interface FrontendDiscoveredSync {
+    descriptor: FrontendSyncDescriptor;
     isAuthorized: boolean;
     isSelected: boolean;
     sourceLabel: string;
 }
 
-export interface FrontendDropSyncResult {
+export interface FrontendMarketSyncResult {
     skippedWifiOnly: boolean;
     uploadedTo: number;
-    polledDrops: number;
+    polledSyncs: number;
     decryptedSlots: number;
     importedCards: number;
     importedWotLists: number;
     errors: string[];
+    retryAfterSecs?: number | null;
 }
 
 export interface FrontendTrustChangeImpact {
@@ -199,8 +204,8 @@ export interface FrontendTrustChangeImpact {
     canReadMyMarketAfter: boolean;
     canReadMyWotBefore: boolean;
     canReadMyWotAfter: boolean;
-    canWriteMyDropBefore: boolean;
-    canWriteMyDropAfter: boolean;
+    canWriteMySyncBefore: boolean;
+    canWriteMySyncAfter: boolean;
     canSendMePostBefore: boolean;
     canSendMePostAfter: boolean;
 }
@@ -216,7 +221,7 @@ export interface FrontendPendingSignRequest {
     senderDid: string;
     senderName?: string | null;
     createdAt: number;
-    replyDrops: FrontendDropDescriptor[];
+    replySyncs: FrontendSyncDescriptor[];
     containerBytes: number[];
 }
 
@@ -248,7 +253,7 @@ export interface FrontendMarketInquiryItem {
     counterpartyName?: string | null;
     message: string;
     createdAt: number;
-    replyDrops: FrontendDropDescriptor[];
+    replySyncs: FrontendSyncDescriptor[];
     reply?: FrontendMarketInquiryReplyDto | null;
 }
 
@@ -262,7 +267,7 @@ export interface FrontendPostInboxSummary {
 
 export interface FrontendPostSyncResult {
     uploadedTo: number;
-    polledDrops: number;
+    polledSyncs: number;
     importedPayments: number;
     importedReceipts: number;
     importedSignatures: number;
@@ -272,5 +277,5 @@ export interface FrontendPostSyncResult {
     newInquiryReplies: number;
     prunedBoxes: number;
     errors: string[];
+    retryAfterSecs?: number | null;
 }
-

@@ -85,7 +85,7 @@ describe('MarketplaceView Component', () => {
       standards: [{ name: 'FreeTaler', uuid: 'std-freetaler-uuid' }],
       trust: 'trusted',
       canForward: true,
-      cardDrops: [
+      cardSyncs: [
         {
           writeUrl: 'https://drop.alice.org/write',
           readUrl: 'https://drop.alice.org/read',
@@ -107,7 +107,7 @@ describe('MarketplaceView Component', () => {
       standards: [{ name: 'Minuto', uuid: 'std-minuto-uuid' }],
       trust: 'unknown',
       canForward: false,
-      cardDrops: [],
+      cardSyncs: [],
     },
     {
       did: 'did:key:z6MkuCharlie',
@@ -133,7 +133,7 @@ describe('MarketplaceView Component', () => {
       standards: [],
       trust: 'unknown',
       canForward: false, // Max hops reached!
-      cardDrops: [],
+      cardSyncs: [],
     },
   ];
 
@@ -175,7 +175,7 @@ describe('MarketplaceView Component', () => {
                 pricing: '20 Minuto',
               },
             ],
-            drops: [],
+            syncs: [],
           },
           cardJws: 'signed.card.jws',
           qrSvg: '<svg id="qr-test"></svg>',
@@ -199,7 +199,7 @@ describe('MarketplaceView Component', () => {
             maxHops: 2,
             profile: { id: 'did:key:z6MkuSelf', firstName: 'Owner', lastName: 'User' },
             listings: [],
-            drops: [],
+            syncs: [],
           },
           cardJws: 'signed.card.jws.v2',
           qrSvg: '<svg id="qr-test-v2"></svg>',

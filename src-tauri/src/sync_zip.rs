@@ -36,6 +36,10 @@ return [
     // Total storage quota in megabytes across all channels
     'max_total_storage_mb' => {},
 
+    // Set to true (or export HUMOCO_DISABLE_RATE_LIMIT=1 in env) to disable the IP rate limiter
+    // for local multi-wallet development and testing. Keep false in production.
+    'disable_rate_limit'   => false,
+
     // Configured channels: max byte sizes and retention TTL
     'channels' => [
         'card'   => ['max_bytes' => 65536,   'ttl_days' => 30],
@@ -249,6 +253,7 @@ mod tests {
         assert!(cfg_str.contains(data_dir));
         assert!(cfg_str.contains("250"));
         assert!(cfg_str.contains("256"));
+        assert!(cfg_str.contains("'disable_rate_limit'"));
         assert!(cfg_str.contains("https://example.com/register"));
         assert!(cfg_str.contains("'card'"));
         assert!(cfg_str.contains("'wot'"));

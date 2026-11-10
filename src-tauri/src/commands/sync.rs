@@ -3,17 +3,17 @@ use std::collections::{BTreeMap, HashSet};
 use base64::Engine;
 use tauri::State;
 
-use crate::sync_client::{self as drop_client, IndexFetchResult, PutSlotOutcome};
+use crate::sync_client::{self as sync_client, IndexFetchResult, PutSlotOutcome};
 use crate::models::{
-    FrontendDiscoveredDrop, FrontendDropAdminStatus, FrontendDropAdminUpdateRequest,
-    FrontendDropConnectionTestResult, FrontendDropDescriptor, FrontendDropOverviewStatus,
-    FrontendDropSetupDraft, FrontendDropSyncResult, FrontendError, FrontendMemberPolicyDto,
-    FrontendPublicDropInfo, FrontendTrustChangeImpact,
+    FrontendDiscoveredSync, FrontendSyncAdminStatus, FrontendSyncAdminUpdateRequest,
+    FrontendSyncConnectionTestResult, FrontendSyncDescriptor, FrontendSyncOverviewStatus,
+    FrontendSyncSetupDraft, FrontendMarketSyncResult, FrontendError, FrontendMemberPolicyDto,
+    FrontendPublicSyncInfo, FrontendTrustChangeImpact,
 };
-use crate::settings::{StoredPublicDrop, DROP_CARD_MAX_BYTES, DROP_HEARTBEAT_SECS, MAX_POLLED_DROPS};
+use crate::settings::{StoredPublicSync, SYNC_CARD_MAX_BYTES, SYNC_HEARTBEAT_SECS, MAX_POLLED_SYNCS};
 use crate::state::{
-    canonicalize_did, AppState, StoredDropAdmin, StoredDropSync, StoredOwnCard,
-    MARKET_CARD_STORE_KEY, MARKET_DROP_ADMIN_KEY, MARKET_DROP_SYNC_KEY, MARKET_OWN_CARD_KEY,
+    canonicalize_did, AppState, StoredSyncAdmin, StoredSyncState, StoredOwnCard,
+    MARKET_CARD_STORE_KEY, MARKET_SYNC_ADMIN_KEY, MARKET_SYNC_KEY, MARKET_OWN_CARD_KEY,
 };
 use human_money_core::app_service::AppService;
 use sha2::Digest;
@@ -26,10 +26,10 @@ fn get_wallet_master_seed(service: &mut AppService) -> Result<[u8; 32], Frontend
 }
 
 /// Computes the members for the admin's drop for a specific channel along with stats and 64-hex stealth pubkeys.
-pub fn compute_admin_drop_members_with_stats(
+pub fn compute_admin_sync_members_with_stats(
     state: &AppState,
     service: &mut AppService,
-    admin: &StoredDropAdmin,
+    admin: &StoredSyncAdmin,
     channel: &str,
     password: Option<&str>,
 ) -> Result<(humoco_market::DropMembersStats, Vec<String>), FrontendError> {
@@ -113,15 +113,15 @@ pub fn compute_admin_drop_members_with_stats(
     // Derive admin keys
     let master_seed = get_wallet_master_seed(service)?;
     let (admin_sk, _admin_vk, _admin_pub) =
-        humoco_market::derive_drop_admin_keypair(&master_seed, admin.drop_index, admin.generation);
+        humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
 
-    let now = drop_client::current_unix_timestamp();
+    let now = sync_client::current_unix_timestamp();
     let is_grace_active = admin.previous_generation.is_some()
         && admin.rotation_retire_at.is_some_and(|retire| now < retire);
     let prev_admin_sk = if is_grace_active {
         admin.previous_generation.map(|prev_gen| {
             let (prev_sk, _, _) =
-                humoco_market::derive_drop_admin_keypair(&master_seed, admin.drop_index, prev_gen);
+                humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, prev_gen);
             prev_sk
         })
     } else {
@@ -159,41 +159,115 @@ pub fn compute_admin_drop_members_with_stats(
     Ok((stats, member_pubkeys))
 }
 
-async fn push_all_channel_members(
+pub fn compute_channel_members_hash(pubkeys: &[String]) -> String {
+    let mut hasher = sha2::Sha256::new();
+    for pk in pubkeys {
+        hasher.update(pk.as_bytes());
+        hasher.update(b"\n");
+    }
+    hex::encode(hasher.finalize())
+}
+
+pub(crate) async fn push_all_channel_members(
     client: &reqwest::Client,
     state: &AppState,
-    admin: &StoredDropAdmin,
+    admin: &mut StoredSyncAdmin,
     admin_sk: &ed25519_dalek::SigningKey,
     password: Option<&str>,
-) -> Result<(), FrontendError> {
+) -> Result<usize, FrontendError> {
     if admin.descriptor.write_url.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     let pks_by_channel = {
         let mut service = state.service.lock().unwrap();
         let mut list = Vec::new();
         for ch in ["card", "wot", "backup", "post"] {
             let (_stats, pks) =
-                compute_admin_drop_members_with_stats(state, &mut service, admin, ch, password)?;
+                compute_admin_sync_members_with_stats(state, &mut service, admin, ch, password)?;
             list.push((ch, pks));
         }
         list
     };
+
+    let mut pushed_count = 0;
     for (ch, pks) in pks_by_channel {
-        drop_client::push_members(client, &admin.descriptor.write_url, admin_sk, ch, &pks)
+        let key = format!("{}::{}", &admin.descriptor.write_url, ch);
+        let hash = compute_channel_members_hash(&pks);
+        if admin.last_members_hash.get(&key) == Some(&hash) {
+            log::debug!("Channel {} members unchanged, skipping upload", ch);
+            continue;
+        }
+
+        sync_client::push_members(client, &admin.descriptor.write_url, admin_sk, ch, &pks)
             .await
             .map_err(FrontendError::from)?;
+
+        admin.last_members_hash.insert(key, hash);
+        pushed_count += 1;
     }
-    Ok(())
+
+    if pushed_count > 0 {
+        let mut service = state.service.lock().unwrap();
+        let admin_bytes = serde_json::to_vec(admin).map_err(|e| {
+            FrontendError::from(format!("Failed to serialize StoredSyncAdmin: {}", e))
+        })?;
+        service
+            .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, &admin_bytes, password)
+            .map_err(FrontendError::from)?;
+    }
+
+    Ok(pushed_count)
 }
 
-pub fn prepare_drop_setup_impl(
+#[tauri::command]
+pub async fn sync_channel_members(
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<usize, FrontendError> {
+    sync_channel_members_impl(password.as_deref(), &state).await
+}
+
+pub async fn sync_channel_members_impl(
+    password: Option<&str>,
+    state: &AppState,
+) -> Result<usize, FrontendError> {
+    let (mut admin, admin_sk) = {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let bytes = match service.load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password) {
+            Ok(b) => b,
+            Err(_) => return Ok(0),
+        };
+        let admin: StoredSyncAdmin = match serde_json::from_slice(&bytes) {
+            Ok(a) => a,
+            Err(_) => return Ok(0),
+        };
+        let master_seed = get_wallet_master_seed(&mut service)?;
+        let (admin_sk, _, _) = humoco_market::derive_drop_admin_keypair(
+            &master_seed,
+            admin.sync_index,
+            admin.generation,
+        );
+        (admin, admin_sk)
+    };
+
+    if admin.descriptor.write_url.is_empty() {
+        return Ok(0);
+    }
+
+    let client = sync_client::create_sync_http_client();
+    push_all_channel_members(&client, state, &mut admin, &admin_sk, password).await
+}
+
+pub fn prepare_sync_setup_impl(
     policy: Option<FrontendMemberPolicyDto>,
     max_members: Option<usize>,
     max_total_storage_mb: Option<usize>,
     password: Option<String>,
     state: &AppState,
-) -> Result<FrontendDropSetupDraft, FrontendError> {
+) -> Result<FrontendSyncSetupDraft, FrontendError> {
     let mut service = state.service.lock().unwrap();
     let master_seed = get_wallet_master_seed(&mut service)?;
 
@@ -237,14 +311,14 @@ pub fn prepare_drop_setup_impl(
         },
     );
 
-    let stored_admin = StoredDropAdmin {
+    let stored_admin = StoredSyncAdmin {
         descriptor: humoco_market::DropDescriptor {
             write_url: String::new(),
             read_url: String::new(),
             slot_id: None,
             drop_pub: admin_pubkey.clone(),
         },
-        drop_index,
+        sync_index: drop_index,
         generation,
         previous_generation: None,
         rotation_retire_at: None,
@@ -256,12 +330,13 @@ pub fn prepare_drop_setup_impl(
         allow: Vec::new(),
         deny: Vec::new(),
         blocked_pubkeys: Vec::new(),
+        last_members_hash: BTreeMap::new(),
     };
 
     let bytes = serde_json::to_vec(&stored_admin)
-        .map_err(|e| FrontendError::from(format!("Failed to serialize StoredDropAdmin: {}", e)))?;
+        .map_err(|e| FrontendError::from(format!("Failed to serialize StoredSyncAdmin: {}", e)))?;
     service
-        .save_encrypted_data(MARKET_DROP_ADMIN_KEY, &bytes, password.as_deref())
+        .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, &bytes, password.as_deref())
         .map_err(FrontendError::from)?;
 
     let zip_bytes = crate::sync_zip::build_sync_zip_bytes(
@@ -273,7 +348,7 @@ pub fn prepare_drop_setup_impl(
     );
     let zip_base64 = base64::engine::general_purpose::STANDARD.encode(&zip_bytes);
 
-    Ok(FrontendDropSetupDraft {
+    Ok(FrontendSyncSetupDraft {
         descriptor: stored_admin.descriptor.into(),
         data_dir,
         admin_pubkey,
@@ -286,28 +361,28 @@ pub fn prepare_drop_setup_impl(
 }
 
 #[tauri::command]
-pub fn prepare_drop_setup(
+pub fn prepare_sync_setup(
     policy: Option<FrontendMemberPolicyDto>,
     max_members: Option<usize>,
     max_total_storage_mb: Option<usize>,
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<FrontendDropSetupDraft, FrontendError> {
-    prepare_drop_setup_impl(policy, max_members, max_total_storage_mb, password, &state)
+) -> Result<FrontendSyncSetupDraft, FrontendError> {
+    prepare_sync_setup_impl(policy, max_members, max_total_storage_mb, password, &state)
 }
 
-pub fn save_drop_setup_zip_impl(
+pub fn save_sync_setup_zip_impl(
     file_path: String,
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
     let mut service = state.service.lock().unwrap();
-    let admin: StoredDropAdmin = service
-        .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref())
+    let admin: StoredSyncAdmin = service
+        .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
         .map_err(FrontendError::from)
         .and_then(|bytes| {
             serde_json::from_slice(&bytes).map_err(|e| {
-                FrontendError::from(format!("Failed to parse StoredDropAdmin: {}", e))
+                FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e))
             })
         })?;
 
@@ -326,33 +401,33 @@ pub fn save_drop_setup_zip_impl(
 }
 
 #[tauri::command]
-pub fn save_drop_setup_zip(
+pub fn save_sync_setup_zip(
     file_path: String,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), FrontendError> {
-    save_drop_setup_zip_impl(file_path, password, &state)
+    save_sync_setup_zip_impl(file_path, password, &state)
 }
 
-pub async fn finalize_drop_setup_impl(
+pub async fn finalize_sync_setup_impl(
     base_url: String,
     password: Option<String>,
     state: &AppState,
-) -> Result<FrontendDropAdminStatus, FrontendError> {
+) -> Result<FrontendSyncAdminStatus, FrontendError> {
     let base_url = humoco_market::canonicalize_write_url(&base_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
-    drop_client::validate_drop_url(&base_url).map_err(FrontendError::from)?;
+    sync_client::validate_sync_url(&base_url).map_err(FrontendError::from)?;
 
     let (mut admin, admin_sk) = {
         let mut service = state.service.lock().unwrap();
         let bytes = service
-            .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref())
+            .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
             .map_err(FrontendError::from)?;
-        let admin = serde_json::from_slice::<StoredDropAdmin>(&bytes)
-            .map_err(|e| FrontendError::from(format!("Failed to parse StoredDropAdmin: {}", e)))?;
+        let admin = serde_json::from_slice::<StoredSyncAdmin>(&bytes)
+            .map_err(|e| FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e)))?;
         let master_seed = get_wallet_master_seed(&mut service)?;
         let (admin_sk, _, _) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.drop_index, admin.generation);
+            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
         (admin, admin_sk)
     };
 
@@ -367,19 +442,19 @@ pub async fn finalize_drop_setup_impl(
     admin.descriptor.write_url = write_url.clone();
     admin.descriptor.read_url = read_url.clone();
 
-    let client = drop_client::create_drop_http_client();
+    let client = sync_client::create_sync_http_client();
 
     // Push members to all 4 channels
     push_all_channel_members(
         &client,
         state,
-        &admin,
+        &mut admin,
         &admin_sk,
         password.as_deref(),
     )
     .await?;
 
-    // Add own drop to settings.market_selected_drops if < 3
+    // Add own drop to settings.market_selected_syncs if < 3
     {
         let mut service = state.service.lock().unwrap();
         let mut settings = state
@@ -387,28 +462,28 @@ pub async fn finalize_drop_setup_impl(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
 
-        let desc_dto: FrontendDropDescriptor = admin.descriptor.clone().into();
-        if settings.market_selected_drops.len() < 3
+        let desc_dto: FrontendSyncDescriptor = admin.descriptor.clone().into();
+        if settings.market_selected_syncs.len() < 3
             && !settings
-                .market_selected_drops
+                .market_selected_syncs
                 .iter()
                 .any(|d| d.read_url == desc_dto.read_url)
         {
-            settings.market_selected_drops.push(desc_dto);
+            settings.market_selected_syncs.push(desc_dto);
             let _ = state.save_settings(&mut service, settings, password.as_deref());
         }
 
         let admin_bytes = serde_json::to_vec(&admin).map_err(|e| {
-            FrontendError::from(format!("Failed to serialize StoredDropAdmin: {}", e))
+            FrontendError::from(format!("Failed to serialize StoredSyncAdmin: {}", e))
         })?;
         service
-            .save_encrypted_data(MARKET_DROP_ADMIN_KEY, &admin_bytes, password.as_deref())
+            .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, &admin_bytes, password.as_deref())
             .map_err(FrontendError::from)?;
     }
 
     let (stats, active_slot_ids) = {
         let mut service = state.service.lock().unwrap();
-        compute_admin_drop_members_with_stats(state, &mut service, &admin, "card", password.as_deref())?
+        compute_admin_sync_members_with_stats(state, &mut service, &admin, "card", password.as_deref())?
     };
 
     let card_policy = admin
@@ -417,7 +492,7 @@ pub async fn finalize_drop_setup_impl(
         .cloned()
         .unwrap_or_default();
 
-    Ok(FrontendDropAdminStatus {
+    Ok(FrontendSyncAdminStatus {
         descriptor: admin.descriptor.clone().into(),
         admin_pubkey: admin.descriptor.drop_pub.clone(),
         generation: admin.generation,
@@ -441,22 +516,22 @@ pub async fn finalize_drop_setup_impl(
 }
 
 #[tauri::command]
-pub async fn finalize_drop_setup(
+pub async fn finalize_sync_setup(
     base_url: String,
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<FrontendDropAdminStatus, FrontendError> {
-    finalize_drop_setup_impl(base_url, password, &state).await
+) -> Result<FrontendSyncAdminStatus, FrontendError> {
+    finalize_sync_setup_impl(base_url, password, &state).await
 }
 
-pub async fn test_drop_connection_impl(
+pub async fn test_sync_connection_impl(
     base_url: String,
     password: Option<String>,
     state: &AppState,
-) -> Result<FrontendDropConnectionTestResult, FrontendError> {
+) -> Result<FrontendSyncConnectionTestResult, FrontendError> {
     let base_url = base_url.trim().trim_end_matches('/').to_string();
-    if let Err(e) = drop_client::validate_drop_url(&base_url) {
-        return Ok(FrontendDropConnectionTestResult {
+    if let Err(e) = sync_client::validate_sync_url(&base_url) {
+        return Ok(FrontendSyncConnectionTestResult {
             success: false,
             message: e,
             write_ok: false,
@@ -467,18 +542,18 @@ pub async fn test_drop_connection_impl(
     let (admin, admin_sk) = {
         let mut service = state.service.lock().unwrap();
         let admin_res = service
-            .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref())
+            .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
             .map_err(FrontendError::from)
             .and_then(|bytes| {
-                serde_json::from_slice::<StoredDropAdmin>(&bytes).map_err(|e| {
-                    FrontendError::from(format!("Failed to parse StoredDropAdmin: {}", e))
+                serde_json::from_slice::<StoredSyncAdmin>(&bytes).map_err(|e| {
+                    FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e))
                 })
             });
 
         let admin = match admin_res {
             Ok(a) => a,
             Err(e) => {
-                return Ok(FrontendDropConnectionTestResult {
+                return Ok(FrontendSyncConnectionTestResult {
                     success: false,
                     message: format!("Drop admin not configured: {}", e.message),
                     write_ok: false,
@@ -490,7 +565,7 @@ pub async fn test_drop_connection_impl(
         let master_seed = match get_wallet_master_seed(&mut service) {
             Ok(s) => s,
             Err(e) => {
-                return Ok(FrontendDropConnectionTestResult {
+                return Ok(FrontendSyncConnectionTestResult {
                     success: false,
                     message: format!("Failed to obtain wallet seed: {}", e.message),
                     write_ok: false,
@@ -500,11 +575,11 @@ pub async fn test_drop_connection_impl(
         };
 
         let (admin_sk, _, _) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.drop_index, admin.generation);
+            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
         (admin, admin_sk)
     };
 
-    let client = drop_client::create_drop_http_client();
+    let client = sync_client::create_sync_http_client();
     let write_url = if base_url.ends_with("/sync.php") {
         base_url.clone()
     } else {
@@ -514,10 +589,10 @@ pub async fn test_drop_connection_impl(
     // Test write via push_members
     let (stats, member_pubkeys) = {
         let mut service = state.service.lock().unwrap();
-        match compute_admin_drop_members_with_stats(state, &mut service, &admin, "card", password.as_deref()) {
+        match compute_admin_sync_members_with_stats(state, &mut service, &admin, "card", password.as_deref()) {
             Ok(res) => res,
             Err(e) => {
-                return Ok(FrontendDropConnectionTestResult {
+                return Ok(FrontendSyncConnectionTestResult {
                     success: false,
                     message: format!("Failed to compute drop members: {}", e.message),
                     write_ok: false,
@@ -527,8 +602,8 @@ pub async fn test_drop_connection_impl(
         }
     };
 
-    if let Err(e) = drop_client::push_members(&client, &write_url, &admin_sk, "card", &member_pubkeys).await {
-        return Ok(FrontendDropConnectionTestResult {
+    if let Err(e) = sync_client::push_members(&client, &write_url, &admin_sk, "card", &member_pubkeys).await {
+        return Ok(FrontendSyncConnectionTestResult {
             success: false,
             message: format!("Write test failed: {}", e),
             write_ok: false,
@@ -537,9 +612,9 @@ pub async fn test_drop_connection_impl(
     }
 
     // Test read via fetch_drop_info
-    match drop_client::fetch_drop_info(&client, &write_url).await {
+    match sync_client::fetch_sync_info(&client, &write_url).await {
         Ok(info) => {
-            Ok(FrontendDropConnectionTestResult {
+            Ok(FrontendSyncConnectionTestResult {
                 success: true,
                 message: format!(
                     "Connection verified successfully ({} active members, channels: {:?}).",
@@ -550,7 +625,7 @@ pub async fn test_drop_connection_impl(
             })
         }
         Err(e) => {
-            Ok(FrontendDropConnectionTestResult {
+            Ok(FrontendSyncConnectionTestResult {
                 success: false,
                 message: format!("Read test failed: {}", e),
                 write_ok: true,
@@ -561,25 +636,25 @@ pub async fn test_drop_connection_impl(
 }
 
 #[tauri::command]
-pub async fn test_drop_connection(
+pub async fn test_sync_connection(
     base_url: String,
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<FrontendDropConnectionTestResult, FrontendError> {
-    test_drop_connection_impl(base_url, password, &state).await
+) -> Result<FrontendSyncConnectionTestResult, FrontendError> {
+    test_sync_connection_impl(base_url, password, &state).await
 }
 
-pub async fn get_drop_admin_status_impl(
+pub async fn get_sync_admin_status_impl(
     password: Option<String>,
     state: &AppState,
-) -> Result<Option<FrontendDropAdminStatus>, FrontendError> {
+) -> Result<Option<FrontendSyncAdminStatus>, FrontendError> {
     let (admin, admin_sk) = {
         let mut service = state.service.lock().unwrap();
-        let bytes = match service.load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref()) {
+        let bytes = match service.load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref()) {
             Ok(b) => b,
             Err(_) => return Ok(None),
         };
-        let admin: StoredDropAdmin = match serde_json::from_slice(&bytes) {
+        let admin: StoredSyncAdmin = match serde_json::from_slice(&bytes) {
             Ok(a) => a,
             Err(_) => return Ok(None),
         };
@@ -588,13 +663,13 @@ pub async fn get_drop_admin_status_impl(
             Err(_) => return Ok(None),
         };
         let (admin_sk, _, _) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.drop_index, admin.generation);
+            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
         (admin, admin_sk)
     };
 
     let (stats, active_slot_ids) = {
         let mut service = state.service.lock().unwrap();
-        compute_admin_drop_members_with_stats(state, &mut service, &admin, "card", password.as_deref())?
+        compute_admin_sync_members_with_stats(state, &mut service, &admin, "card", password.as_deref())?
     };
 
     let card_policy = admin
@@ -603,9 +678,9 @@ pub async fn get_drop_admin_status_impl(
         .cloned()
         .unwrap_or_default();
 
-    let client = drop_client::create_drop_http_client();
+    let client = sync_client::create_sync_http_client();
     let remote_status = if !admin.descriptor.write_url.is_empty() {
-        drop_client::fetch_admin_status(&client, &admin.descriptor.write_url, &admin_sk)
+        sync_client::fetch_admin_status(&client, &admin.descriptor.write_url, &admin_sk)
             .await
             .ok()
     } else {
@@ -627,7 +702,7 @@ pub async fn get_drop_admin_status_impl(
         ),
     };
 
-    Ok(Some(FrontendDropAdminStatus {
+    Ok(Some(FrontendSyncAdminStatus {
         descriptor: admin.descriptor.clone().into(),
         admin_pubkey: admin.descriptor.drop_pub.clone(),
         generation: admin.generation,
@@ -651,29 +726,29 @@ pub async fn get_drop_admin_status_impl(
 }
 
 #[tauri::command]
-pub async fn get_drop_admin_status(
+pub async fn get_sync_admin_status(
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Option<FrontendDropAdminStatus>, FrontendError> {
-    get_drop_admin_status_impl(password, &state).await
+) -> Result<Option<FrontendSyncAdminStatus>, FrontendError> {
+    get_sync_admin_status_impl(password, &state).await
 }
 
-pub async fn update_drop_admin_config_impl(
-    update: FrontendDropAdminUpdateRequest,
+pub async fn update_sync_admin_config_impl(
+    update: FrontendSyncAdminUpdateRequest,
     push_now: bool,
     password: Option<String>,
     state: &AppState,
-) -> Result<FrontendDropAdminStatus, FrontendError> {
+) -> Result<FrontendSyncAdminStatus, FrontendError> {
     let (mut admin, admin_sk) = {
         let mut service = state.service.lock().unwrap();
         let bytes = service
-            .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref())
+            .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
             .map_err(FrontendError::from)?;
-        let admin = serde_json::from_slice::<StoredDropAdmin>(&bytes)
-            .map_err(|e| FrontendError::from(format!("Failed to parse StoredDropAdmin: {}", e)))?;
+        let admin = serde_json::from_slice::<StoredSyncAdmin>(&bytes)
+            .map_err(|e| FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e)))?;
         let master_seed = get_wallet_master_seed(&mut service)?;
         let (admin_sk, _, _) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.drop_index, admin.generation);
+            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
         (admin, admin_sk)
     };
 
@@ -697,11 +772,11 @@ pub async fn update_drop_admin_config_impl(
     }
 
     if push_now && !admin.descriptor.write_url.is_empty() {
-        let client = drop_client::create_drop_http_client();
+        let client = sync_client::create_sync_http_client();
         push_all_channel_members(
             &client,
             state,
-            &admin,
+            &mut admin,
             &admin_sk,
             password.as_deref(),
         )
@@ -711,16 +786,16 @@ pub async fn update_drop_admin_config_impl(
     {
         let mut service = state.service.lock().unwrap();
         let bytes = serde_json::to_vec(&admin).map_err(|e| {
-            FrontendError::from(format!("Failed to serialize StoredDropAdmin: {}", e))
+            FrontendError::from(format!("Failed to serialize StoredSyncAdmin: {}", e))
         })?;
         service
-            .save_encrypted_data(MARKET_DROP_ADMIN_KEY, &bytes, password.as_deref())
+            .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, &bytes, password.as_deref())
             .map_err(FrontendError::from)?;
     }
 
     let (stats, active_slot_ids) = {
         let mut service = state.service.lock().unwrap();
-        compute_admin_drop_members_with_stats(state, &mut service, &admin, "card", password.as_deref())?
+        compute_admin_sync_members_with_stats(state, &mut service, &admin, "card", password.as_deref())?
     };
 
     let card_policy = admin
@@ -729,7 +804,7 @@ pub async fn update_drop_admin_config_impl(
         .cloned()
         .unwrap_or_default();
 
-    Ok(FrontendDropAdminStatus {
+    Ok(FrontendSyncAdminStatus {
         descriptor: admin.descriptor.clone().into(),
         admin_pubkey: admin.descriptor.drop_pub.clone(),
         generation: admin.generation,
@@ -753,29 +828,29 @@ pub async fn update_drop_admin_config_impl(
 }
 
 #[tauri::command]
-pub async fn update_drop_admin_config(
-    update: FrontendDropAdminUpdateRequest,
+pub async fn update_sync_admin_config(
+    update: FrontendSyncAdminUpdateRequest,
     push_now: bool,
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<FrontendDropAdminStatus, FrontendError> {
-    update_drop_admin_config_impl(update, push_now, password, &state).await
+) -> Result<FrontendSyncAdminStatus, FrontendError> {
+    update_sync_admin_config_impl(update, push_now, password, &state).await
 }
 
-pub async fn block_drop_slot_impl(
+pub async fn block_sync_slot_impl(
     pubkey_hex64: String,
     password: Option<String>,
     state: &AppState,
-) -> Result<FrontendDropAdminStatus, FrontendError> {
-    let update = FrontendDropAdminUpdateRequest {
+) -> Result<FrontendSyncAdminStatus, FrontendError> {
+    let update = FrontendSyncAdminUpdateRequest {
         blocked_pubkeys: Some({
             let mut service = state.service.lock().unwrap();
-            let admin: StoredDropAdmin = service
-                .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref())
+            let admin: StoredSyncAdmin = service
+                .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
                 .map_err(FrontendError::from)
                 .and_then(|bytes| {
                     serde_json::from_slice(&bytes).map_err(|e| {
-                        FrontendError::from(format!("Failed to parse StoredDropAdmin: {}", e))
+                        FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e))
                     })
                 })?;
             let mut blocked = admin.blocked_pubkeys;
@@ -787,31 +862,31 @@ pub async fn block_drop_slot_impl(
         ..Default::default()
     };
 
-    update_drop_admin_config_impl(update, true, password, state).await
+    update_sync_admin_config_impl(update, true, password, state).await
 }
 
 #[tauri::command]
-pub async fn block_drop_slot(
+pub async fn block_sync_slot(
     pubkey_hex64: String,
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<FrontendDropAdminStatus, FrontendError> {
-    block_drop_slot_impl(pubkey_hex64, password, &state).await
+) -> Result<FrontendSyncAdminStatus, FrontendError> {
+    block_sync_slot_impl(pubkey_hex64, password, &state).await
 }
 
-pub fn delete_drop_admin_impl(
+pub fn delete_sync_admin_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
     let mut service = state.service.lock().unwrap();
 
-    let admin_opt: Option<StoredDropAdmin> = service
-        .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref())
+    let admin_opt: Option<StoredSyncAdmin> = service
+        .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
     service
-        .save_encrypted_data(MARKET_DROP_ADMIN_KEY, b"null", password.as_deref())
+        .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, b"null", password.as_deref())
         .map_err(FrontendError::from)?;
 
     if let Some(admin) = admin_opt {
@@ -820,11 +895,11 @@ pub fn delete_drop_admin_impl(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
 
-        let initial_len = settings.market_selected_drops.len();
+        let initial_len = settings.market_selected_syncs.len();
         settings
-            .market_selected_drops
+            .market_selected_syncs
             .retain(|d| d.read_url != admin.descriptor.read_url);
-        if settings.market_selected_drops.len() != initial_len {
+        if settings.market_selected_syncs.len() != initial_len {
             let _ = state.save_settings(&mut service, settings, password.as_deref());
         }
     }
@@ -833,17 +908,17 @@ pub fn delete_drop_admin_impl(
 }
 
 #[tauri::command]
-pub fn delete_drop_admin(
+pub fn delete_sync_admin(
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), FrontendError> {
-    delete_drop_admin_impl(password, &state)
+    delete_sync_admin_impl(password, &state)
 }
 
-pub async fn discover_available_drops_impl(
+pub async fn discover_available_syncs_impl(
     password: Option<String>,
     state: &AppState,
-) -> Result<Vec<FrontendDiscoveredDrop>, FrontendError> {
+) -> Result<Vec<FrontendDiscoveredSync>, FrontendError> {
     let (my_ed_sk, known_descriptors) = {
         let mut service = state.service.lock().unwrap();
 
@@ -851,13 +926,13 @@ pub async fn discover_available_drops_impl(
             .with_wallet_and_identity(|_w, id| id.signing_key.clone())
             .map_err(FrontendError::from)?;
 
-        let mut descriptors: Vec<(FrontendDropDescriptor, String)> = Vec::new();
+        let mut descriptors: Vec<(FrontendSyncDescriptor, String)> = Vec::new();
 
         // 1. From own drop admin
         if let Ok(admin_bytes) =
-            service.load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref())
+            service.load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
         {
-            if let Ok(admin) = serde_json::from_slice::<StoredDropAdmin>(&admin_bytes) {
+            if let Ok(admin) = serde_json::from_slice::<StoredSyncAdmin>(&admin_bytes) {
                 if !admin.descriptor.read_url.is_empty() && !admin.descriptor.write_url.is_empty() {
                     descriptors.push((admin.descriptor.into(), "Eigene Ablage".to_string()));
                 }
@@ -878,7 +953,7 @@ pub async fn discover_available_drops_impl(
                         .organization
                         .unwrap_or_else(|| c.did.clone()),
                 };
-                for d in c.drops {
+                for d in c.syncs {
                     descriptors.push((d, name.clone()));
                 }
             }
@@ -909,8 +984,8 @@ pub async fn discover_available_drops_impl(
         })
         .unwrap_or_default();
 
-    let client = drop_client::create_drop_probe_client();
-    let mut deduped: BTreeMap<String, (FrontendDropDescriptor, String)> = BTreeMap::new();
+    let client = sync_client::create_sync_probe_client();
+    let mut deduped: BTreeMap<String, (FrontendSyncDescriptor, String)> = BTreeMap::new();
     for (d, label) in known_descriptors {
         if !d.read_url.is_empty() && !d.drop_pub.is_empty() {
             deduped.entry(d.read_url.clone()).or_insert((d, label));
@@ -920,19 +995,19 @@ pub async fn discover_available_drops_impl(
     let mut results = Vec::new();
     for (_, (desc, label)) in deduped {
         let is_selected = settings
-            .market_selected_drops
+            .market_selected_syncs
             .iter()
             .any(|d| d.read_url == desc.read_url);
 
         let is_authorized = if let Some(ref slot_id) = desc.slot_id {
-            match drop_client::head_slot_capability(&client, &desc.write_url, slot_id, "card").await {
+            match sync_client::head_slot_capability(&client, &desc.write_url, slot_id, "card").await {
                 Ok(cap) => cap.authorized,
                 Err(_) => false,
             }
         } else {
             match humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &desc.drop_pub) {
                 Ok(stealth_pk) => {
-                    match drop_client::head_slot_capability(&client, &desc.write_url, &stealth_pk, "card").await {
+                    match sync_client::head_slot_capability(&client, &desc.write_url, &stealth_pk, "card").await {
                         Ok(cap) => cap.authorized,
                         Err(_) => false,
                     }
@@ -941,7 +1016,7 @@ pub async fn discover_available_drops_impl(
             }
         };
 
-        results.push(FrontendDiscoveredDrop {
+        results.push(FrontendDiscoveredSync {
             descriptor: desc,
             is_authorized,
             is_selected,
@@ -953,25 +1028,25 @@ pub async fn discover_available_drops_impl(
 }
 
 #[tauri::command]
-pub async fn discover_available_drops(
+pub async fn discover_available_syncs(
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Vec<FrontendDiscoveredDrop>, FrontendError> {
-    discover_available_drops_impl(password, &state).await
+) -> Result<Vec<FrontendDiscoveredSync>, FrontendError> {
+    discover_available_syncs_impl(password, &state).await
 }
 
-pub async fn set_selected_upload_drops_impl(
-    drops: Vec<FrontendDropDescriptor>,
+pub async fn set_selected_upload_syncs_impl(
+    syncs: Vec<FrontendSyncDescriptor>,
     password: Option<String>,
     state: &AppState,
-) -> Result<Vec<FrontendDropDescriptor>, FrontendError> {
-    if drops.len() > 3 {
+) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
+    if syncs.len() > 3 {
         return Err(FrontendError::from("Maximum 3 upload drops allowed".to_string()));
     }
 
-    for d in &drops {
-        drop_client::validate_drop_url(&d.write_url).map_err(FrontendError::from)?;
-        drop_client::validate_drop_url(&d.read_url).map_err(FrontendError::from)?;
+    for d in &syncs {
+        sync_client::validate_sync_url(&d.write_url).map_err(FrontendError::from)?;
+        sync_client::validate_sync_url(&d.read_url).map_err(FrontendError::from)?;
         humoco_market::parse_ed25519_pubkey_hex64(&d.drop_pub)
             .map_err(|e| FrontendError::from(format!("Invalid drop_pub: {}", e)))?;
         if let Some(ref sid) = d.slot_id {
@@ -986,7 +1061,7 @@ pub async fn set_selected_upload_drops_impl(
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
-        settings.market_selected_drops = drops.clone();
+        settings.market_selected_syncs = syncs.clone();
         state
             .save_settings(&mut service, settings, password.as_deref())
             .map_err(FrontendError::from)?;
@@ -1001,7 +1076,7 @@ pub async fn set_selected_upload_drops_impl(
             let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
             let v = humoco_market::next_card_version(Some(existing.card.v), now_unix);
             existing.card.v = v;
-            existing.card.drops = drops.iter().cloned().map(Into::into).collect();
+            existing.card.drops = syncs.iter().cloned().map(Into::into).collect();
 
             let card_jws = service
                 .with_wallet_and_identity(|_wallet, identity| {
@@ -1021,26 +1096,26 @@ pub async fn set_selected_upload_drops_impl(
     }
 
     // Trigger upload to selected drops
-    let _ = sync_market_drops_impl(None, Some(true), password, state).await;
+    let _ = sync_market_channels_impl(None, Some(true), password, state).await;
 
-    Ok(drops)
+    Ok(syncs)
 }
 
 #[tauri::command]
-pub async fn set_selected_upload_drops(
-    drops: Vec<FrontendDropDescriptor>,
+pub async fn set_selected_upload_syncs(
+    syncs: Vec<FrontendSyncDescriptor>,
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Vec<FrontendDropDescriptor>, FrontendError> {
-    set_selected_upload_drops_impl(drops, password, &state).await
+) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
+    set_selected_upload_syncs_impl(syncs, password, &state).await
 }
 
-pub async fn sync_market_drops_impl(
+pub async fn sync_market_channels_impl(
     is_wifi: Option<bool>,
     force_upload: Option<bool>,
     password: Option<String>,
     state: &AppState,
-) -> Result<FrontendDropSyncResult, FrontendError> {
+) -> Result<FrontendMarketSyncResult, FrontendError> {
     let mut settings = {
         let mut service = state.service.lock().unwrap();
         state
@@ -1050,39 +1125,40 @@ pub async fn sync_market_drops_impl(
     };
 
     if settings.market_poll_wifi_only && is_wifi == Some(false) {
-        return Ok(FrontendDropSyncResult {
+        return Ok(FrontendMarketSyncResult {
             skipped_wifi_only: true,
             uploaded_to: 0,
-            polled_drops: 0,
+            polled_syncs: 0,
             decrypted_slots: 0,
             imported_cards: 0,
             imported_wot_lists: 0,
             errors: Vec::new(),
+            retry_after_secs: None,
         });
     }
 
-    let client = drop_client::create_drop_http_client();
+    let client = sync_client::create_sync_http_client();
     let mut errors = Vec::new();
     let mut uploaded_to = 0;
-    let mut polled_drops = 0;
+    let mut polled_syncs = 0;
     let mut decrypted_slots = 0;
     let mut imported_cards = 0;
     let mut imported_wot_lists = 0;
 
-    let now_secs = drop_client::current_unix_timestamp();
+    let now_secs = sync_client::current_unix_timestamp();
 
     // 1. Ensure own DropAdmin members are up-to-date on server
     {
-        let admin_opt: Option<(StoredDropAdmin, ed25519_dalek::SigningKey)> = {
+        let admin_opt: Option<(StoredSyncAdmin, ed25519_dalek::SigningKey)> = {
             let mut service = state.service.lock().unwrap();
             let admin_opt = service
-                .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref())
+                .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
                 .ok()
-                .and_then(|bytes| serde_json::from_slice::<StoredDropAdmin>(&bytes).ok());
+                .and_then(|bytes| serde_json::from_slice::<StoredSyncAdmin>(&bytes).ok());
             if let Some(admin) = admin_opt {
                 if let Ok(seed) = get_wallet_master_seed(&mut service) {
                     let (admin_sk, _, _) =
-                        humoco_market::derive_drop_admin_keypair(&seed, admin.drop_index, admin.generation);
+                        humoco_market::derive_drop_admin_keypair(&seed, admin.sync_index, admin.generation);
                     Some((admin, admin_sk))
                 } else {
                     None
@@ -1092,11 +1168,11 @@ pub async fn sync_market_drops_impl(
             }
         };
 
-        if let Some((admin, admin_sk)) = admin_opt {
+        if let Some((mut admin, admin_sk)) = admin_opt {
             let _ = push_all_channel_members(
                 &client,
                 state,
-                &admin,
+                &mut admin,
                 &admin_sk,
                 password.as_deref(),
             )
@@ -1141,10 +1217,10 @@ pub async fn sync_market_drops_impl(
         (my_ed_sk, master_seed, own_card, reader_keys, readers_hash)
     };
 
-    let mut sync_state: StoredDropSync = {
+    let mut sync_state: StoredSyncState = {
         let mut service = state.service.lock().unwrap();
         service
-            .load_encrypted_data(MARKET_DROP_SYNC_KEY, password.as_deref())
+            .load_encrypted_data(MARKET_SYNC_KEY, password.as_deref())
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default()
@@ -1152,13 +1228,13 @@ pub async fn sync_market_drops_impl(
 
     // Gather upload targets: selected drops + enabled public drops
     let mut upload_targets: Vec<humoco_market::DropDescriptor> = settings
-        .market_selected_drops
+        .market_selected_syncs
         .iter()
         .cloned()
         .map(Into::into)
         .collect();
 
-    for pd in &settings.public_drops {
+    for pd in &settings.public_syncs {
         if pd.enabled && !pd.write_url.is_empty() {
             upload_targets.push(humoco_market::DropDescriptor {
                 write_url: pd.write_url.clone(),
@@ -1174,7 +1250,7 @@ pub async fn sync_market_drops_impl(
             let needs_upload = force_upload == Some(true)
                 || sync_state.last_uploaded_card_v != Some(own_card.card.v)
                 || sync_state.last_readers_hash.as_deref() != Some(&readers_hash)
-                || now_secs.saturating_sub(sync_state.last_upload_at.unwrap_or(0)) >= DROP_HEARTBEAT_SECS;
+                || now_secs.saturating_sub(sync_state.last_upload_at.unwrap_or(0)) >= SYNC_HEARTBEAT_SECS;
 
             if needs_upload {
                 let bundle = {
@@ -1197,15 +1273,15 @@ pub async fn sync_market_drops_impl(
                         Some(&own_card.card_jws),
                         &store,
                         &trust_level_of,
-                        DROP_CARD_MAX_BYTES,
+                        SYNC_CARD_MAX_BYTES,
                     )
                 };
 
-                match humoco_market::seal_slot_blob(&bundle, &readers, DROP_CARD_MAX_BYTES) {
+                match humoco_market::seal_slot_blob(&bundle, &readers, SYNC_CARD_MAX_BYTES) {
                     Ok(blob) => {
                         let mut settings_changed = false;
                         for drop_desc in &mut upload_targets {
-                            let nonce = drop_client::generate_drop_nonce();
+                            let nonce = sync_client::generate_sync_nonce();
                             let signed_res = if drop_desc.slot_id.is_some() {
                                 // Public drop upload signed with derived r
                                 match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
@@ -1237,7 +1313,7 @@ pub async fn sync_market_drops_impl(
 
                             match signed_res {
                                 Ok(signed) => {
-                                    match drop_client::put_slot(
+                                    match sync_client::put_slot(
                                         &client,
                                         &drop_desc.write_url,
                                         &signed,
@@ -1250,11 +1326,11 @@ pub async fn sync_market_drops_impl(
                                         Ok(PutSlotOutcome::Saved { rotation, .. }) => {
                                             uploaded_to += 1;
                                             if let Some(ref cert) = rotation {
-                                                if drop_client::apply_verified_rotation(drop_desc, cert, now_secs) {
+                                                if sync_client::apply_verified_rotation(drop_desc, cert, now_secs) {
                                                     // Update in settings
-                                                    for s_drop in &mut settings.market_selected_drops {
-                                                        if s_drop.read_url == drop_desc.read_url {
-                                                            s_drop.drop_pub = drop_desc.drop_pub.clone();
+                                                    for s_sync in &mut settings.market_selected_syncs {
+                                                        if s_sync.read_url == drop_desc.read_url {
+                                                            s_sync.drop_pub = drop_desc.drop_pub.clone();
                                                             settings_changed = true;
                                                         }
                                                     }
@@ -1295,7 +1371,7 @@ pub async fn sync_market_drops_impl(
     }
 
     // 2b. Upload Channel "wot"
-    if settings.wot_share_via_drop {
+    if settings.wot_share_via_sync {
         let (reg_opt, is_offender_set) = {
             let mut service = state.service.lock().unwrap();
             let reg = state.get_or_load_wot_register(&mut service, password.as_deref()).ok();
@@ -1337,13 +1413,13 @@ pub async fn sync_market_drops_impl(
                     .collect();
 
                 let mut wot_upload_targets: Vec<humoco_market::DropDescriptor> = settings
-                    .market_selected_drops
+                    .market_selected_syncs
                     .iter()
                     .cloned()
                     .map(Into::into)
                     .collect();
 
-                for pd in &settings.public_drops {
+                for pd in &settings.public_syncs {
                     if pd.enabled
                         && !pd.write_url.is_empty()
                         && (pd.authorized_channels.is_empty() || pd.authorized_channels.iter().any(|c| c == "wot"))
@@ -1357,7 +1433,7 @@ pub async fn sync_market_drops_impl(
                     }
                 }
 
-                let class_budget = crate::settings::DROP_WOT_MAX_BYTES / 3;
+                let class_budget = crate::settings::SYNC_WOT_MAX_BYTES / 3;
                 let mut reg_modified = false;
                 let mut settings_changed = false;
 
@@ -1405,9 +1481,9 @@ pub async fn sync_market_drops_impl(
                                 continue;
                             }
 
-                            match humoco_market::seal_multi_class_slot_blob(&class_slices, crate::settings::DROP_WOT_MAX_BYTES) {
+                            match humoco_market::seal_multi_class_slot_blob(&class_slices, crate::settings::SYNC_WOT_MAX_BYTES) {
                                 Ok(blob) => {
-                                    let nonce = drop_client::generate_drop_nonce();
+                                    let nonce = sync_client::generate_sync_nonce();
                                     let signed_res = if drop_desc.slot_id.is_some() {
                                         match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
                                             Ok((r_sk, _, _)) => {
@@ -1437,7 +1513,7 @@ pub async fn sync_market_drops_impl(
 
                                     match signed_res {
                                         Ok(signed) => {
-                                            match drop_client::put_slot(
+                                            match sync_client::put_slot(
                                                 &client,
                                                 &drop_desc.write_url,
                                                 &signed,
@@ -1453,10 +1529,10 @@ pub async fn sync_market_drops_impl(
                                                     reg_modified = true;
 
                                                     if let Some(ref cert) = rotation {
-                                                        if drop_client::apply_verified_rotation(drop_desc, cert, now_secs) {
-                                                            for s_drop in &mut settings.market_selected_drops {
-                                                                if s_drop.read_url == drop_desc.read_url {
-                                                                    s_drop.drop_pub = drop_desc.drop_pub.clone();
+                                                        if sync_client::apply_verified_rotation(drop_desc, cert, now_secs) {
+                                                            for s_sync in &mut settings.market_selected_syncs {
+                                                                if s_sync.read_url == drop_desc.read_url {
+                                                                    s_sync.drop_pub = drop_desc.drop_pub.clone();
                                                                     settings_changed = true;
                                                                 }
                                                             }
@@ -1511,7 +1587,7 @@ pub async fn sync_market_drops_impl(
         let mut index_urls = Vec::new();
 
         // Own selected drops
-        for d in &settings.market_selected_drops {
+        for d in &settings.market_selected_syncs {
             if !d.read_url.is_empty() {
                 if let Some(ref sid) = d.slot_id {
                     direct_fetches.push((d.read_url.clone(), sid.clone()));
@@ -1539,7 +1615,7 @@ pub async fn sync_market_drops_impl(
                     }
                 });
                 if lvl >= settings.share_min_level {
-                    for d in c.drops {
+                    for d in c.syncs {
                         if !d.read_url.is_empty() {
                             if let Some(ref sid) = d.slot_id {
                                 direct_fetches.push((d.read_url, sid.clone()));
@@ -1580,7 +1656,7 @@ pub async fn sync_market_drops_impl(
         for u in index_urls {
             if seen_urls.insert(u.clone()) {
                 deduped_urls.push(u);
-                if deduped_urls.len() >= MAX_POLLED_DROPS {
+                if deduped_urls.len() >= MAX_POLLED_SYNCS {
                     break;
                 }
             }
@@ -1608,14 +1684,16 @@ pub async fn sync_market_drops_impl(
 
     let max_store_hops = settings.max_store_hops.clamp(1, 3);
     let my_x25519_sk = human_money_core::crypto::ed25519_sk_to_x25519_sk(&my_ed_sk);
+    let mut sync_health_updates: Vec<(String, bool)> = Vec::new();
 
     // 3a. Direct O(1) fetches
     for (read_url, slot_id) in direct_slot_fetches {
-        polled_drops += 1;
+        polled_syncs += 1;
 
         // Fetch card slot
-        match drop_client::get_slot(&client, &read_url, &slot_id, "card").await {
+        match sync_client::get_slot(&client, &read_url, &slot_id, "card").await {
             Ok(Some(blob)) => {
+                sync_health_updates.push((read_url.clone(), true));
                 match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
                     Ok(Some(bundle)) => {
                         decrypted_slots += 1;
@@ -1638,20 +1716,20 @@ pub async fn sync_market_drops_impl(
                             if let Ok(humoco_market::AcceptOutcome::Accepted { did, .. }) = outcome {
                                 imported_cards += 1;
                                 let can_did = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
-                                sync_state.drop_sources_by_did.insert(can_did, read_url.clone());
+                                sync_state.sync_sources_by_did.insert(can_did, read_url.clone());
 
                                 if let Some(stored) = store.cards.values().find(|sc| sc.card.did == did) {
-                                    let card_drops: Vec<FrontendDropDescriptor> = stored
+                                    let card_syncs: Vec<FrontendSyncDescriptor> = stored
                                         .card
                                         .drops
                                         .iter()
                                         .cloned()
                                         .map(Into::into)
                                         .collect();
-                                    state.update_contact_drops_from_card(
+                                    state.update_contact_syncs_from_card(
                                         &mut service,
                                         &did,
-                                        &card_drops,
+                                        &card_syncs,
                                         password.as_deref(),
                                     );
                                 }
@@ -1665,16 +1743,19 @@ pub async fn sync_market_drops_impl(
                 }
             }
             Ok(None) => {
+                sync_health_updates.push((read_url.clone(), true));
                 // Graceful 404: slot not uploaded yet
             }
             Err(e) => {
+                sync_health_updates.push((read_url.clone(), false));
                 errors.push(format!("Failed to get direct card slot {} from {}: {}", slot_id, read_url, e));
             }
         }
 
         // Fetch wot slot
-        match drop_client::get_slot(&client, &read_url, &slot_id, "wot").await {
+        match sync_client::get_slot(&client, &read_url, &slot_id, "wot").await {
             Ok(Some(blob)) => {
+                sync_health_updates.push((read_url.clone(), true));
                 match humoco_market::open_multi_class_slot_blob(&blob, &my_x25519_sk) {
                     Ok(Some(bytes)) => {
                         decrypted_slots += 1;
@@ -1711,9 +1792,11 @@ pub async fn sync_market_drops_impl(
                 }
             }
             Ok(None) => {
+                sync_health_updates.push((read_url.clone(), true));
                 // Graceful 404: slot not uploaded yet
             }
             Err(e) => {
+                sync_health_updates.push((read_url.clone(), false));
                 errors.push(format!("Failed to get direct wot slot {} from {}: {}", slot_id, read_url, e));
             }
         }
@@ -1721,17 +1804,20 @@ pub async fn sync_market_drops_impl(
 
     // 3b. Index-based fetches
     for read_url in candidate_read_urls {
-        polled_drops += 1;
+        polled_syncs += 1;
         let cached_etag = sync_state.etags_by_read_url.get(&read_url).map(|s| s.as_str());
         let cached_lm = sync_state.last_modified_by_read_url.get(&read_url).map(|s| s.as_str());
 
-        match drop_client::list_index(&client, &read_url, cached_etag, cached_lm).await {
-            Ok(IndexFetchResult::NotModified) => {}
+        match sync_client::list_index(&client, &read_url, cached_etag, cached_lm).await {
+            Ok(IndexFetchResult::NotModified) => {
+                sync_health_updates.push((read_url.clone(), true));
+            }
             Ok(IndexFetchResult::Modified {
                 entries,
                 etag,
                 last_modified,
             }) => {
+                sync_health_updates.push((read_url.clone(), true));
                 if let Some(et) = etag {
                     sync_state.etags_by_read_url.insert(read_url.clone(), et);
                 }
@@ -1749,7 +1835,7 @@ pub async fn sync_market_drops_impl(
                     }
 
                     if entry.channel == "card" {
-                        match drop_client::get_slot(&client, &read_url, &entry.id, "card").await {
+                        match sync_client::get_slot(&client, &read_url, &entry.id, "card").await {
                             Ok(Some(blob)) => {
                                 sync_state.slot_mtimes.insert(mtime_key, entry.mtime);
                                 match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
@@ -1774,20 +1860,20 @@ pub async fn sync_market_drops_impl(
                                             if let Ok(humoco_market::AcceptOutcome::Accepted { did, .. }) = outcome {
                                                 imported_cards += 1;
                                                 let can_did = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
-                                                sync_state.drop_sources_by_did.insert(can_did, read_url.clone());
+                                                sync_state.sync_sources_by_did.insert(can_did, read_url.clone());
 
                                                 if let Some(stored) = store.cards.values().find(|sc| sc.card.did == did) {
-                                                    let card_drops: Vec<FrontendDropDescriptor> = stored
+                                                    let card_syncs: Vec<FrontendSyncDescriptor> = stored
                                                         .card
                                                         .drops
                                                         .iter()
                                                         .cloned()
                                                         .map(Into::into)
                                                         .collect();
-                                                    state.update_contact_drops_from_card(
+                                                    state.update_contact_syncs_from_card(
                                                         &mut service,
                                                         &did,
-                                                        &card_drops,
+                                                        &card_syncs,
                                                         password.as_deref(),
                                                     );
                                                 }
@@ -1806,7 +1892,7 @@ pub async fn sync_market_drops_impl(
                             }
                         }
                     } else if entry.channel == "wot" {
-                        match drop_client::get_slot(&client, &read_url, &entry.id, "wot").await {
+                        match sync_client::get_slot(&client, &read_url, &entry.id, "wot").await {
                             Ok(Some(blob)) => {
                                 sync_state.slot_mtimes.insert(mtime_key, entry.mtime);
                                 match humoco_market::open_multi_class_slot_blob(&blob, &my_x25519_sk) {
@@ -1853,44 +1939,56 @@ pub async fn sync_market_drops_impl(
                 }
             }
             Err(e) => {
+                sync_health_updates.push((read_url.clone(), false));
                 errors.push(format!("Failed to list index from {}: {}", read_url, e));
             }
         }
     }
 
-    // Save updated CardStore and StoredDropSync
+    // Save updated CardStore, StoredSyncState, and contact health updates
     {
         let mut service = state.service.lock().unwrap();
         if let Ok(bytes) = serde_json::to_vec(&store) {
             let _ = service.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password.as_deref());
         }
         if let Ok(bytes) = serde_json::to_vec(&sync_state) {
-            let _ = service.save_encrypted_data(MARKET_DROP_SYNC_KEY, &bytes, password.as_deref());
+            let _ = service.save_encrypted_data(MARKET_SYNC_KEY, &bytes, password.as_deref());
+        }
+        if !sync_health_updates.is_empty() {
+            state.record_contact_sync_health_batch(&mut service, &sync_health_updates, now_secs, password.as_deref());
         }
     }
 
-    Ok(FrontendDropSyncResult {
+    let mut retry_after_secs: Option<u64> = None;
+    for e in &errors {
+        if let Some(secs) = sync_client::extract_retry_after_from_error_str(e) {
+            retry_after_secs = Some(retry_after_secs.map_or(secs, |prev| prev.max(secs)));
+        }
+    }
+
+    Ok(FrontendMarketSyncResult {
         skipped_wifi_only: false,
         uploaded_to,
-        polled_drops,
+        polled_syncs,
         decrypted_slots,
         imported_cards,
         imported_wot_lists,
         errors,
+        retry_after_secs,
     })
 }
 
 #[tauri::command]
-pub async fn sync_market_drops(
+pub async fn sync_market_channels(
     is_wifi: Option<bool>,
     force_upload: Option<bool>,
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<FrontendDropSyncResult, FrontendError> {
-    sync_market_drops_impl(is_wifi, force_upload, password, &state).await
+) -> Result<FrontendMarketSyncResult, FrontendError> {
+    sync_market_channels_impl(is_wifi, force_upload, password, &state).await
 }
 
-pub async fn delete_own_drop_slots_impl(
+pub async fn delete_own_sync_slots_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<usize, FrontendError> {
@@ -1904,16 +2002,16 @@ pub async fn delete_own_drop_slots_impl(
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
-        (my_ed_sk, master_seed, settings.market_selected_drops)
+        (my_ed_sk, master_seed, settings.market_selected_syncs)
     };
 
-    let client = drop_client::create_drop_http_client();
+    let client = sync_client::create_sync_http_client();
     let mut deleted_count = 0;
-    let now = drop_client::current_unix_timestamp();
+    let now = sync_client::current_unix_timestamp();
 
     for drop_desc in &drops {
         for ch in ["card", "wot", "backup", "post"] {
-            let nonce = drop_client::generate_drop_nonce();
+            let nonce = sync_client::generate_sync_nonce();
             let signed_res = if drop_desc.slot_id.is_some() {
                 match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
                     Ok((r_sk, _, _)) => {
@@ -1935,7 +2033,7 @@ pub async fn delete_own_drop_slots_impl(
             };
 
             if let Ok(signed) = signed_res {
-                if drop_client::delete_slot(&client, &drop_desc.write_url, &signed, ch)
+                if sync_client::delete_slot(&client, &drop_desc.write_url, &signed, ch)
                     .await
                     .is_ok()
                 {
@@ -1945,7 +2043,7 @@ pub async fn delete_own_drop_slots_impl(
         }
     }
 
-    // Clear drop_sent_log in TrustRegister
+    // Clear sync_sent_log in TrustRegister
     {
         let mut service = state.service.lock().unwrap();
         if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
@@ -1958,10 +2056,10 @@ pub async fn delete_own_drop_slots_impl(
     {
         let mut service = state.service.lock().unwrap();
         if let Ok(mut sync_state) = service
-            .load_encrypted_data(MARKET_DROP_SYNC_KEY, password.as_deref())
+            .load_encrypted_data(MARKET_SYNC_KEY, password.as_deref())
             .map_err(FrontendError::from)
             .and_then(|bytes| {
-                serde_json::from_slice::<StoredDropSync>(&bytes)
+                serde_json::from_slice::<StoredSyncState>(&bytes)
                     .map_err(|e| FrontendError::from(format!("Parse error: {}", e)))
             })
         {
@@ -1969,7 +2067,7 @@ pub async fn delete_own_drop_slots_impl(
             sync_state.last_readers_hash = None;
             sync_state.last_uploaded_card_v = None;
             if let Ok(bytes) = serde_json::to_vec(&sync_state) {
-                let _ = service.save_encrypted_data(MARKET_DROP_SYNC_KEY, &bytes, password.as_deref());
+                let _ = service.save_encrypted_data(MARKET_SYNC_KEY, &bytes, password.as_deref());
             }
         }
     }
@@ -1996,11 +2094,11 @@ pub async fn delete_own_drop_slots_impl(
 }
 
 #[tauri::command]
-pub async fn delete_own_drop_slots(
+pub async fn delete_own_sync_slots(
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<usize, FrontendError> {
-    delete_own_drop_slots_impl(password, &state).await
+    delete_own_sync_slots_impl(password, &state).await
 }
 
 pub fn preview_contact_trust_change_impl(
@@ -2032,19 +2130,19 @@ pub fn preview_contact_trust_change_impl(
             .unwrap_or(false)
     };
 
-    let can_read_my_wot_before = settings.wot_share_via_drop
+    let can_read_my_wot_before = settings.wot_share_via_sync
         && current_level.unwrap_or(0) >= 1
         && !is_offender;
-    let can_read_my_wot_after = settings.wot_share_via_drop
+    let can_read_my_wot_after = settings.wot_share_via_sync
         && new_level >= 1
         && !is_offender;
 
-    let admin_opt: Option<StoredDropAdmin> = service
-        .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref())
+    let admin_opt: Option<StoredSyncAdmin> = service
+        .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
-    let (can_write_my_drop_before, can_write_my_drop_after) = if let Some(admin) = admin_opt {
+    let (can_write_my_sync_before, can_write_my_sync_after) = if let Some(admin) = admin_opt {
         if admin.deny.iter().any(|d| canonicalize_did(d).ok().as_deref() == Some(&can_target)) {
             (false, false)
         } else if admin.allow.iter().any(|d| canonicalize_did(d).ok().as_deref() == Some(&can_target)) {
@@ -2069,8 +2167,8 @@ pub fn preview_contact_trust_change_impl(
         can_read_my_market_after,
         can_read_my_wot_before,
         can_read_my_wot_after,
-        can_write_my_drop_before,
-        can_write_my_drop_after,
+        can_write_my_sync_before,
+        can_write_my_sync_after,
         can_send_me_post_before,
         can_send_me_post_after,
     })
@@ -2090,17 +2188,17 @@ pub fn preview_contact_trust_change(
 //  STAGE 1B: PUBLIC DROPS & ROTATION & BADGE COMMANDS
 // =========================================================================
 
-pub async fn probe_public_drop_impl(
+pub async fn probe_public_sync_impl(
     url: String,
     password: Option<String>,
     state: &AppState,
-) -> Result<FrontendPublicDropInfo, FrontendError> {
+) -> Result<FrontendPublicSyncInfo, FrontendError> {
     let canonical_url = humoco_market::canonicalize_write_url(&url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
-    drop_client::validate_drop_url(&canonical_url).map_err(FrontendError::from)?;
+    sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
 
-    let probe_client = drop_client::create_drop_probe_client();
-    let info = drop_client::fetch_drop_info(&probe_client, &canonical_url)
+    let probe_client = sync_client::create_sync_probe_client();
+    let info = sync_client::fetch_sync_info(&probe_client, &canonical_url)
         .await
         .map_err(FrontendError::from)?;
 
@@ -2117,7 +2215,7 @@ pub async fn probe_public_drop_impl(
     let mut authorized_channels = Vec::new();
     for ch in ["card", "wot", "backup", "post"] {
         if let Ok(cap) =
-            drop_client::head_slot_capability(&probe_client, &canonical_url, &access_pubkey, ch).await
+            sync_client::head_slot_capability(&probe_client, &canonical_url, &access_pubkey, ch).await
         {
             if cap.authorized {
                 authorized_channels.push(ch.to_string());
@@ -2125,7 +2223,7 @@ pub async fn probe_public_drop_impl(
         }
     }
 
-    Ok(FrontendPublicDropInfo {
+    Ok(FrontendPublicSyncInfo {
         write_url: canonical_url,
         read_url: info.read_url,
         drop_pub: info.drop_pub,
@@ -2136,15 +2234,15 @@ pub async fn probe_public_drop_impl(
 }
 
 #[tauri::command]
-pub async fn probe_public_drop(
+pub async fn probe_public_sync(
     url: String,
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<FrontendPublicDropInfo, FrontendError> {
-    probe_public_drop_impl(url, password, &state).await
+) -> Result<FrontendPublicSyncInfo, FrontendError> {
+    probe_public_sync_impl(url, password, &state).await
 }
 
-pub async fn save_public_drop_impl(
+pub async fn save_public_sync_impl(
     write_url: String,
     read_url: String,
     drop_pub: String,
@@ -2152,11 +2250,11 @@ pub async fn save_public_drop_impl(
     enabled: bool,
     password: Option<String>,
     state: &AppState,
-) -> Result<FrontendPublicDropInfo, FrontendError> {
+) -> Result<FrontendPublicSyncInfo, FrontendError> {
     let canonical_url = humoco_market::canonicalize_write_url(&write_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
-    drop_client::validate_drop_url(&canonical_url).map_err(FrontendError::from)?;
-    drop_client::validate_drop_url(&read_url).map_err(FrontendError::from)?;
+    sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
+    sync_client::validate_sync_url(&read_url).map_err(FrontendError::from)?;
     humoco_market::parse_ed25519_pubkey_hex64(&drop_pub)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
@@ -2169,11 +2267,11 @@ pub async fn save_public_drop_impl(
         humoco_market::derive_public_drop_keypair(&master_seed, &canonical_url)
             .map_err(|e| FrontendError::from(e.to_string()))?;
 
-    let probe_client = drop_client::create_drop_probe_client();
+    let probe_client = sync_client::create_sync_probe_client();
     let mut authorized_channels = Vec::new();
     for ch in ["card", "wot", "backup", "post"] {
         if let Ok(cap) =
-            drop_client::head_slot_capability(&probe_client, &canonical_url, &access_pubkey, ch).await
+            sync_client::head_slot_capability(&probe_client, &canonical_url, &access_pubkey, ch).await
         {
             if cap.authorized {
                 authorized_channels.push(ch.to_string());
@@ -2188,7 +2286,7 @@ pub async fn save_public_drop_impl(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
 
-        let stored = StoredPublicDrop {
+        let stored = StoredPublicSync {
             write_url: canonical_url.clone(),
             read_url: read_url.clone(),
             drop_pub: drop_pub.clone(),
@@ -2198,10 +2296,10 @@ pub async fn save_public_drop_impl(
             authorized_channels: authorized_channels.clone(),
         };
 
-        if let Some(pos) = settings.public_drops.iter().position(|d| d.write_url == canonical_url) {
-            settings.public_drops[pos] = stored;
+        if let Some(pos) = settings.public_syncs.iter().position(|d| d.write_url == canonical_url) {
+            settings.public_syncs[pos] = stored;
         } else {
-            settings.public_drops.push(stored);
+            settings.public_syncs.push(stored);
         }
 
         state
@@ -2209,7 +2307,7 @@ pub async fn save_public_drop_impl(
             .map_err(FrontendError::from)?;
     }
 
-    Ok(FrontendPublicDropInfo {
+    Ok(FrontendPublicSyncInfo {
         write_url: canonical_url,
         read_url,
         drop_pub,
@@ -2220,7 +2318,7 @@ pub async fn save_public_drop_impl(
 }
 
 #[tauri::command]
-pub async fn save_public_drop(
+pub async fn save_public_sync(
     write_url: String,
     read_url: String,
     drop_pub: String,
@@ -2228,11 +2326,11 @@ pub async fn save_public_drop(
     enabled: bool,
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<FrontendPublicDropInfo, FrontendError> {
-    save_public_drop_impl(write_url, read_url, drop_pub, register_url, enabled, password, &state).await
+) -> Result<FrontendPublicSyncInfo, FrontendError> {
+    save_public_sync_impl(write_url, read_url, drop_pub, register_url, enabled, password, &state).await
 }
 
-pub async fn remove_public_drop_impl(
+pub async fn remove_public_sync_impl(
     write_url: String,
     delete_remote_slots: bool,
     password: Option<String>,
@@ -2247,12 +2345,12 @@ pub async fn remove_public_drop_impl(
             get_wallet_master_seed(&mut service)?
         };
         if let Ok((r_sk, _, _)) = humoco_market::derive_public_drop_keypair(&master_seed, &canonical_url) {
-            let client = drop_client::create_drop_http_client();
-            let now = drop_client::current_unix_timestamp();
+            let client = sync_client::create_sync_http_client();
+            let now = sync_client::current_unix_timestamp();
             for ch in ["card", "wot", "backup", "post"] {
-                let nonce = drop_client::generate_drop_nonce();
+                let nonce = sync_client::generate_sync_nonce();
                 let signed = humoco_market::sign_member_request_direct(&r_sk, "DELETE", ch, now, &nonce, b"");
-                let _ = drop_client::delete_slot(&client, &canonical_url, &signed, ch).await;
+                let _ = sync_client::delete_slot(&client, &canonical_url, &signed, ch).await;
             }
         }
     }
@@ -2264,7 +2362,7 @@ pub async fn remove_public_drop_impl(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
 
-        settings.public_drops.retain(|d| d.write_url != canonical_url);
+        settings.public_syncs.retain(|d| d.write_url != canonical_url);
         state
             .save_settings(&mut service, settings, password.as_deref())
             .map_err(FrontendError::from)?;
@@ -2294,43 +2392,43 @@ pub async fn remove_public_drop_impl(
 }
 
 #[tauri::command]
-pub async fn remove_public_drop(
+pub async fn remove_public_sync(
     write_url: String,
     delete_remote_slots: bool,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), FrontendError> {
-    remove_public_drop_impl(write_url, delete_remote_slots, password, &state).await
+    remove_public_sync_impl(write_url, delete_remote_slots, password, &state).await
 }
 
-pub async fn rotate_drop_admin_key_impl(
+pub async fn rotate_sync_admin_key_impl(
     password: Option<String>,
     state: &AppState,
-) -> Result<FrontendDropAdminStatus, FrontendError> {
+) -> Result<FrontendSyncAdminStatus, FrontendError> {
     let (mut admin, _old_admin_sk, new_admin_sk, _new_admin_vk, new_admin_pubkey, retire_at, cert) = {
         let mut service = state.service.lock().unwrap();
         let bytes = service
-            .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref())
+            .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
             .map_err(FrontendError::from)?;
-        let admin: StoredDropAdmin = serde_json::from_slice(&bytes)
-            .map_err(|e| FrontendError::from(format!("Failed to parse StoredDropAdmin: {}", e)))?;
+        let admin: StoredSyncAdmin = serde_json::from_slice(&bytes)
+            .map_err(|e| FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e)))?;
 
         let master_seed = get_wallet_master_seed(&mut service)?;
         let (old_sk, _, _) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.drop_index, admin.generation);
+            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
         let next_gen = admin.generation + 1;
         let (new_sk, new_vk, new_pub) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.drop_index, next_gen);
+            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, next_gen);
 
-        let now = drop_client::current_unix_timestamp();
+        let now = sync_client::current_unix_timestamp();
         let retire_at = now + humoco_market::DROP_ROTATION_GRACE_SECS;
         let cert = humoco_market::create_drop_rotation_certificate(&old_sk, &new_vk, retire_at);
 
         (admin, old_sk, new_sk, new_vk, new_pub, retire_at, cert)
     };
 
-    let client = drop_client::create_drop_http_client();
-    drop_client::rotate_admin_key(&client, &admin.descriptor.write_url, &new_admin_sk, &cert)
+    let client = sync_client::create_sync_http_client();
+    sync_client::rotate_admin_key(&client, &admin.descriptor.write_url, &new_admin_sk, &cert)
         .await
         .map_err(FrontendError::from)?;
 
@@ -2343,7 +2441,7 @@ pub async fn rotate_drop_admin_key_impl(
     push_all_channel_members(
         &client,
         state,
-        &admin,
+        &mut admin,
         &new_admin_sk,
         password.as_deref(),
     )
@@ -2352,10 +2450,10 @@ pub async fn rotate_drop_admin_key_impl(
     {
         let mut service = state.service.lock().unwrap();
         let admin_bytes = serde_json::to_vec(&admin).map_err(|e| {
-            FrontendError::from(format!("Failed to serialize StoredDropAdmin: {}", e))
+            FrontendError::from(format!("Failed to serialize StoredSyncAdmin: {}", e))
         })?;
         service
-            .save_encrypted_data(MARKET_DROP_ADMIN_KEY, &admin_bytes, password.as_deref())
+            .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, &admin_bytes, password.as_deref())
             .map_err(FrontendError::from)?;
 
         // Update own drop in settings if present
@@ -2363,7 +2461,7 @@ pub async fn rotate_drop_admin_key_impl(
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
-        for d in &mut settings.market_selected_drops {
+        for d in &mut settings.market_selected_syncs {
             if d.read_url == admin.descriptor.read_url {
                 d.drop_pub = new_admin_pubkey.clone();
             }
@@ -2373,7 +2471,7 @@ pub async fn rotate_drop_admin_key_impl(
 
     let (stats, active_slot_ids) = {
         let mut service = state.service.lock().unwrap();
-        compute_admin_drop_members_with_stats(state, &mut service, &admin, "card", password.as_deref())?
+        compute_admin_sync_members_with_stats(state, &mut service, &admin, "card", password.as_deref())?
     };
 
     let card_policy = admin
@@ -2382,7 +2480,7 @@ pub async fn rotate_drop_admin_key_impl(
         .cloned()
         .unwrap_or_default();
 
-    Ok(FrontendDropAdminStatus {
+    Ok(FrontendSyncAdminStatus {
         descriptor: admin.descriptor.clone().into(),
         admin_pubkey: new_admin_pubkey,
         generation: admin.generation,
@@ -2406,64 +2504,77 @@ pub async fn rotate_drop_admin_key_impl(
 }
 
 #[tauri::command]
-pub async fn rotate_drop_admin_key(
+pub async fn rotate_sync_admin_key(
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<FrontendDropAdminStatus, FrontendError> {
-    rotate_drop_admin_key_impl(password, &state).await
+) -> Result<FrontendSyncAdminStatus, FrontendError> {
+    rotate_sync_admin_key_impl(password, &state).await
 }
 
-pub fn get_drop_overview_status_impl(
+pub fn get_sync_overview_status_impl(
     password: Option<String>,
     state: &AppState,
-) -> Result<FrontendDropOverviewStatus, FrontendError> {
+) -> Result<FrontendSyncOverviewStatus, FrontendError> {
     let mut service = state.service.lock().unwrap();
     let settings = state
         .get_cached_settings()
         .or_else(|_| state.load_settings(&mut service, password.as_deref()))
         .unwrap_or_default();
 
-    let admin_opt: Option<StoredDropAdmin> = service
-        .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password.as_deref())
+    let admin_opt: Option<StoredSyncAdmin> = service
+        .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
-    let has_own_drop = admin_opt.as_ref().is_some_and(|a| !a.descriptor.write_url.is_empty());
+    let has_own_sync = admin_opt.as_ref().is_some_and(|a| !a.descriptor.write_url.is_empty());
+    let pending_own_sync = admin_opt.as_ref().is_some_and(|a| a.descriptor.write_url.is_empty());
     let own_read_url = admin_opt.as_ref().map(|a| a.descriptor.read_url.as_str()).unwrap_or("");
 
-    let friend_drops = settings
-        .market_selected_drops
+    let friend_syncs = settings
+        .market_selected_syncs
         .iter()
         .filter(|d| d.read_url != own_read_url)
         .count();
 
-    let public_drops = settings.public_drops.iter().filter(|d| d.enabled).count();
+    let public_syncs = settings
+        .public_syncs
+        .iter()
+        .filter(|d| d.enabled && !d.authorized_channels.is_empty())
+        .count();
 
-    let connected_count = (if has_own_drop { 1 } else { 0 }) + friend_drops + public_drops;
+    let pending_public_syncs = settings
+        .public_syncs
+        .iter()
+        .filter(|d| d.authorized_channels.is_empty())
+        .count();
 
-    let sync_state: Option<StoredDropSync> = service
-        .load_encrypted_data(MARKET_DROP_SYNC_KEY, password.as_deref())
+    let connected_count = (if has_own_sync { 1 } else { 0 }) + friend_syncs + public_syncs;
+    let pending_count = (if pending_own_sync { 1 } else { 0 }) + pending_public_syncs;
+
+    let sync_state: Option<StoredSyncState> = service
+        .load_encrypted_data(MARKET_SYNC_KEY, password.as_deref())
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
     let last_sync_at = sync_state.and_then(|s| s.last_upload_at);
 
-    Ok(FrontendDropOverviewStatus {
+    Ok(FrontendSyncOverviewStatus {
         connected_count,
-        friend_drops,
-        public_drops,
-        has_own_drop,
-        own_drop_soft_warning: false,
+        pending_count,
+        friend_syncs,
+        public_syncs,
+        has_own_sync,
+        own_sync_soft_warning: false,
         last_sync_at,
     })
 }
 
 #[tauri::command]
-pub fn get_drop_overview_status(
+pub fn get_sync_overview_status(
     password: Option<String>,
     state: State<'_, AppState>,
-) -> Result<FrontendDropOverviewStatus, FrontendError> {
-    get_drop_overview_status_impl(password, &state)
+) -> Result<FrontendSyncOverviewStatus, FrontendError> {
+    get_sync_overview_status_impl(password, &state)
 }
 
 #[cfg(test)]
@@ -2490,7 +2601,7 @@ pub(crate) mod tests {
         "vessel ladder alter error federal sibling chat ability sun glass valve picture";
 
     pub(crate) fn temp_test_dir(name: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("humoco_drops_test_{}_{}", name, uuid::Uuid::new_v4()));
+        let p = std::env::temp_dir().join(format!("humoco_sync_test_{}_{}", name, uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&p).unwrap();
         p
     }
@@ -2524,7 +2635,7 @@ pub(crate) mod tests {
     }
 
     #[allow(dead_code)]
-    pub(crate) struct MockDropServer {
+    pub(crate) struct MockSyncServer {
         pub base_url: String,
         pub data_dir: String,
         pub admin_pubkey: Arc<Mutex<String>>,
@@ -2533,10 +2644,11 @@ pub(crate) mod tests {
         pub slots: Arc<Mutex<HashMap<String, Vec<u8>>>>,
         pub etags: Arc<Mutex<HashMap<String, String>>>,
         pub rotation_cert: Arc<Mutex<Option<String>>>,
+        pub put_members_count: Arc<Mutex<usize>>,
         pub _shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     }
 
-    impl MockDropServer {
+    impl MockSyncServer {
         pub async fn start(data_dir: String, admin_pubkey: String) -> Self {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
@@ -2548,6 +2660,7 @@ pub(crate) mod tests {
             let slots = Arc::new(Mutex::new(HashMap::<String, Vec<u8>>::new()));
             let etags = Arc::new(Mutex::new(HashMap::<String, String>::new()));
             let rotation_cert = Arc::new(Mutex::new(None));
+            let put_members_count = Arc::new(Mutex::new(0));
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
             let s_data_dir = data_dir.clone();
@@ -2557,6 +2670,7 @@ pub(crate) mod tests {
             let s_slots = Arc::clone(&slots);
             let s_etags = Arc::clone(&etags);
             let s_rotation = Arc::clone(&rotation_cert);
+            let s_put_members = Arc::clone(&put_members_count);
 
             tokio::spawn(async move {
                 loop {
@@ -2572,6 +2686,7 @@ pub(crate) mod tests {
                             let slots = Arc::clone(&s_slots);
                             let etags = Arc::clone(&s_etags);
                             let rotation = Arc::clone(&s_rotation);
+                            let put_members = Arc::clone(&s_put_members);
 
                             tokio::spawn(async move {
                                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2662,6 +2777,7 @@ pub(crate) mod tests {
                                         format!("HTTP/1.1 403 Forbidden\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
                                     }
                                 } else if method == "PUT" && path.starts_with("/sync.php") && path.contains("members") {
+                                    *put_members.lock().unwrap() += 1;
                                     #[derive(serde::Deserialize)]
                                     struct MembersJson {
                                         pubkeys: Vec<String>,
@@ -2812,6 +2928,7 @@ pub(crate) mod tests {
                 slots,
                 etags,
                 rotation_cert,
+                put_members_count,
                 _shutdown_tx: Some(shutdown_tx),
             }
         }
@@ -2852,8 +2969,8 @@ pub(crate) mod tests {
             s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
         };
 
-        // 2. Alice prepares drop setup and finalize on MockDropServer A
-        let draft = prepare_drop_setup_impl(
+        // 2. Alice prepares drop setup and finalize on MockSyncServer A
+        let draft = prepare_sync_setup_impl(
             Some(FrontendMemberPolicyDto {
                 direct_min: 2,
                 hop2_enabled: true,
@@ -2867,9 +2984,9 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let server_a = MockDropServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+        let server_a = MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
 
-        let finalize_status = finalize_drop_setup_impl(
+        let finalize_status = finalize_sync_setup_impl(
             server_a.base_url.clone(),
             Some(password.to_string()),
             &alice_state,
@@ -2881,7 +2998,7 @@ pub(crate) mod tests {
         assert_eq!(finalize_status.total_member_count, 1); // Alice is in allow list automatically
 
         // Test connection
-        let conn_test = test_drop_connection_impl(
+        let conn_test = test_sync_connection_impl(
             server_a.base_url.clone(),
             Some(password.to_string()),
             &alice_state,
@@ -2908,7 +3025,7 @@ pub(crate) mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![],
+                syncs: vec![],
             };
             alice_state.save_contact(&mut s, bob_contact, Some(password)).unwrap();
         }
@@ -2928,7 +3045,7 @@ pub(crate) mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![],
+                syncs: vec![],
             };
             bob_state.save_contact(&mut s, charlie_contact, Some(password)).unwrap();
         }
@@ -2950,8 +3067,8 @@ pub(crate) mod tests {
         }
 
         // Alice updates drop admin config and pushes to Server A
-        let updated_status = update_drop_admin_config_impl(
-            FrontendDropAdminUpdateRequest::default(),
+        let updated_status = update_sync_admin_config_impl(
+            FrontendSyncAdminUpdateRequest::default(),
             true,
             Some(password.to_string()),
             &alice_state,
@@ -2965,7 +3082,7 @@ pub(crate) mod tests {
         assert_eq!(updated_status.total_member_count, 3);
         assert_eq!(server_a.members.lock().unwrap().len(), 3);
 
-        // 4. Charlie discovers its own authorization via discover_available_drops
+        // 4. Charlie discovers its own authorization via discover_available_syncs
         {
             let mut s = charlie_state.service.lock().unwrap();
             let alice_contact = FrontendContact {
@@ -2981,12 +3098,12 @@ pub(crate) mod tests {
                 desired_hops: Some(2),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![finalize_status.descriptor.clone()],
+                syncs: vec![finalize_status.descriptor.clone()],
             };
             charlie_state.save_contact(&mut s, alice_contact, Some(password)).unwrap();
         }
 
-        let charlie_discovered = discover_available_drops_impl(
+        let charlie_discovered = discover_available_syncs_impl(
             Some(password.to_string()),
             &charlie_state,
         )
@@ -2997,11 +3114,11 @@ pub(crate) mod tests {
         assert!(charlie_discovered[0].is_authorized, "Charlie should discover authorization on Server A!");
 
         // 5. Start Server E for redundant public drop upload
-        let server_e = MockDropServer::start("d-server-e".to_string(), "2222222222222222222222222222222222222222222222222222222222222222".to_string()).await;
+        let server_e = MockSyncServer::start("d-server-e".to_string(), "2222222222222222222222222222222222222222222222222222222222222222".to_string()).await;
         let server_e_url = format!("{}/sync.php", server_e.base_url);
 
         // Bob probes Server E
-        let e_info = probe_public_drop_impl(server_e_url.clone(), Some(password.to_string()), &bob_state)
+        let e_info = probe_public_sync_impl(server_e_url.clone(), Some(password.to_string()), &bob_state)
             .await
             .unwrap();
         assert_eq!(e_info.access_pubkey.len(), 64);
@@ -3010,7 +3127,7 @@ pub(crate) mod tests {
         server_e.members.lock().unwrap().push(e_info.access_pubkey.clone());
 
         // Bob saves Server E as a public drop
-        save_public_drop_impl(
+        save_public_sync_impl(
             server_e_url.clone(),
             format!("{}/d-server-e", server_e.base_url),
             e_info.drop_pub.clone(),
@@ -3023,7 +3140,7 @@ pub(crate) mod tests {
         .unwrap();
 
         // Bob configures selected upload targets: Drop A
-        let selected = set_selected_upload_drops_impl(
+        let selected = set_selected_upload_syncs_impl(
             vec![finalize_status.descriptor.clone()],
             Some(password.to_string()),
             &bob_state,
@@ -3048,7 +3165,7 @@ pub(crate) mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![],
+                syncs: vec![],
             };
             bob_state.save_contact(&mut s, l1_contact, Some(password)).unwrap();
         }
@@ -3074,7 +3191,7 @@ pub(crate) mod tests {
         save_own_contact_card_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
 
         // Bob uploads redundantly to Drop A (selected) and Drop E (active public drop)
-        let bob_sync = sync_market_drops_impl(
+        let bob_sync = sync_market_channels_impl(
             None,
             Some(true),
             Some(password.to_string()),
@@ -3102,12 +3219,12 @@ pub(crate) mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![finalize_status.descriptor.clone()],
+                syncs: vec![finalize_status.descriptor.clone()],
             };
             l1_state.save_contact(&mut s, bob_contact, Some(password)).unwrap();
         }
 
-        let l1_sync = sync_market_drops_impl(
+        let l1_sync = sync_market_channels_impl(
             None,
             None,
             Some(password.to_string()),
@@ -3124,20 +3241,20 @@ pub(crate) mod tests {
         let can_bob_did = canonicalize_did(&bob_did).unwrap();
         let bob_person = l1_market.iter().find(|p| p.did == can_bob_did);
         assert!(bob_person.is_some(), "Bob should be in L1 market view");
-        let has_drop_source = bob_person.unwrap().sources.iter().any(|s| {
-            matches!(s, crate::models::FrontendEntrySource::Drop { read_url } if read_url == &finalize_status.descriptor.read_url)
+        let has_sync_source = bob_person.unwrap().sources.iter().any(|s| {
+            matches!(s, crate::models::FrontendEntrySource::Sync { read_url } if read_url == &finalize_status.descriptor.read_url)
         });
-        assert!(has_drop_source, "Bob's market person should have Drop entry source!");
+        assert!(has_sync_source, "Bob's market person should have Drop entry source!");
 
         // 7. Unauthorized reader L2 gets 0 decrypted slots
         {
             let mut s = l2_state.service.lock().unwrap();
             let mut settings = l2_state.get_cached_settings().unwrap_or_default();
-            settings.market_selected_drops = vec![finalize_status.descriptor.clone()];
+            settings.market_selected_syncs = vec![finalize_status.descriptor.clone()];
             l2_state.save_settings(&mut s, settings, Some(password)).unwrap();
         }
 
-        let l2_sync = sync_market_drops_impl(
+        let l2_sync = sync_market_channels_impl(
             None,
             None,
             Some(password.to_string()),
@@ -3157,7 +3274,7 @@ pub(crate) mod tests {
             humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &bob_vk).unwrap()
         };
 
-        let block_status = block_drop_slot_impl(
+        let block_status = block_sync_slot_impl(
             bob_stealth_pk_a.clone(),
             Some(password.to_string()),
             &alice_state,
@@ -3172,7 +3289,7 @@ pub(crate) mod tests {
         assert!(!server_a.slots.lock().unwrap().contains_key(&format!("{}.wot", bob_stealth_pk_a)), "WoT slot file should be purged on Server A");
 
         // 9. Admin rotates key to generation 1
-        let rot_status = rotate_drop_admin_key_impl(
+        let rot_status = rotate_sync_admin_key_impl(
             Some(password.to_string()),
             &alice_state,
         )
@@ -3183,13 +3300,63 @@ pub(crate) mod tests {
         assert!(rot_status.rotation_retire_at.is_some());
 
         // 10. Check overview status
-        let overview = get_drop_overview_status_impl(
+        let overview = get_sync_overview_status_impl(
             Some(password.to_string()),
             &alice_state,
         )
         .unwrap();
-        assert!(overview.has_own_drop);
+        assert!(overview.has_own_sync);
         assert_eq!(overview.connected_count, 1);
+        assert_eq!(overview.pending_count, 0);
+    }
+
+    #[test]
+    fn test_get_sync_overview_status_pending_vs_connected() {
+        let base_dir = temp_test_dir("overview_status");
+        let password = "TestPassword123!";
+        let service = setup_test_app(&base_dir.join("user"), "User", ALICE_PHRASE, password);
+        let state = create_test_state(service);
+
+        // 1. Initial state: Disconnected
+        let initial = get_sync_overview_status_impl(Some(password.to_string()), &state).unwrap();
+        assert_eq!(initial.connected_count, 0);
+        assert_eq!(initial.pending_count, 0);
+        assert_eq!(initial.public_syncs, 0);
+
+        // 2. Add public drop with empty authorized_channels (pending / unauthorized)
+        {
+            let mut s = state.service.lock().unwrap();
+            let mut settings = state.load_settings(&mut s, Some(password)).unwrap();
+            settings.public_syncs.push(crate::settings::StoredPublicSync {
+                write_url: "https://sync.example.com/sync.php".to_string(),
+                read_url: "https://sync.example.com/data".to_string(),
+                drop_pub: "a".repeat(64),
+                register_url: None,
+                access_pubkey: "b".repeat(64),
+                enabled: false,
+                authorized_channels: vec![],
+            });
+            state.save_settings(&mut s, settings, Some(password)).unwrap();
+        }
+
+        let pending_overview = get_sync_overview_status_impl(Some(password.to_string()), &state).unwrap();
+        assert_eq!(pending_overview.connected_count, 0);
+        assert_eq!(pending_overview.pending_count, 1);
+        assert_eq!(pending_overview.public_syncs, 0);
+
+        // 3. Mark public drop as authorized and enabled
+        {
+            let mut s = state.service.lock().unwrap();
+            let mut settings = state.load_settings(&mut s, Some(password)).unwrap();
+            settings.public_syncs[0].enabled = true;
+            settings.public_syncs[0].authorized_channels = vec!["card".to_string(), "wot".to_string()];
+            state.save_settings(&mut s, settings, Some(password)).unwrap();
+        }
+
+        let connected_overview = get_sync_overview_status_impl(Some(password.to_string()), &state).unwrap();
+        assert_eq!(connected_overview.connected_count, 1);
+        assert_eq!(connected_overview.pending_count, 0);
+        assert_eq!(connected_overview.public_syncs, 1);
     }
 
     #[test]
@@ -3203,7 +3370,7 @@ pub(crate) mod tests {
         let bob_did = bob_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
 
         // Prepare drop setup on Alice with direct_min 2
-        let _draft = prepare_drop_setup_impl(
+        let _draft = prepare_sync_setup_impl(
             Some(FrontendMemberPolicyDto {
                 direct_min: 2,
                 hop2_enabled: true,
@@ -3227,8 +3394,8 @@ pub(crate) mod tests {
         .unwrap();
         assert!(!preview_upgrade.can_read_my_market_before);
         assert!(preview_upgrade.can_read_my_market_after);
-        assert!(!preview_upgrade.can_write_my_drop_before);
-        assert!(preview_upgrade.can_write_my_drop_after);
+        assert!(!preview_upgrade.can_write_my_sync_before);
+        assert!(preview_upgrade.can_write_my_sync_after);
         assert!(!preview_upgrade.can_send_me_post_before);
         assert!(preview_upgrade.can_send_me_post_after);
 
@@ -3248,7 +3415,7 @@ pub(crate) mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![],
+                syncs: vec![],
             };
             alice_state.save_contact(&mut s, bob_contact, Some(password)).unwrap();
         }
@@ -3265,8 +3432,8 @@ pub(crate) mod tests {
         assert!(!preview_downgrade.can_read_my_market_after);
         assert!(preview_downgrade.can_read_my_wot_before);
         assert!(!preview_downgrade.can_read_my_wot_after);
-        assert!(preview_downgrade.can_write_my_drop_before);
-        assert!(!preview_downgrade.can_write_my_drop_after);
+        assert!(preview_downgrade.can_write_my_sync_before);
+        assert!(!preview_downgrade.can_write_my_sync_after);
         assert!(preview_downgrade.can_send_me_post_before);
         assert!(!preview_downgrade.can_send_me_post_after);
     }
@@ -3301,7 +3468,7 @@ pub(crate) mod tests {
         };
 
         // 2. Alice sets up her drop
-        let draft = prepare_drop_setup_impl(
+        let draft = prepare_sync_setup_impl(
             Some(FrontendMemberPolicyDto {
                 direct_min: 2,
                 hop2_enabled: true,
@@ -3315,9 +3482,9 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let server = MockDropServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+        let server = MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
 
-        let finalize_status = finalize_drop_setup_impl(
+        let finalize_status = finalize_sync_setup_impl(
             server.base_url.clone(),
             Some(password.to_string()),
             &alice_state,
@@ -3329,19 +3496,19 @@ pub(crate) mod tests {
         {
             let mut s = alice_state.service.lock().unwrap();
             let mut set = alice_state.load_settings(&mut s, Some(password)).unwrap();
-            set.market_selected_drops = vec![finalize_status.descriptor.clone()];
+            set.market_selected_syncs = vec![finalize_status.descriptor.clone()];
             alice_state.save_settings(&mut s, set, Some(password)).unwrap();
         }
         {
             let mut s = bob_state.service.lock().unwrap();
             let mut set = bob_state.load_settings(&mut s, Some(password)).unwrap();
-            set.market_selected_drops = vec![finalize_status.descriptor.clone()];
+            set.market_selected_syncs = vec![finalize_status.descriptor.clone()];
             bob_state.save_settings(&mut s, set, Some(password)).unwrap();
         }
         {
             let mut s = carol_state.service.lock().unwrap();
             let mut set = carol_state.load_settings(&mut s, Some(password)).unwrap();
-            set.market_selected_drops = vec![finalize_status.descriptor.clone()];
+            set.market_selected_syncs = vec![finalize_status.descriptor.clone()];
             carol_state.save_settings(&mut s, set, Some(password)).unwrap();
         }
 
@@ -3362,7 +3529,7 @@ pub(crate) mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![],
+                syncs: vec![],
             };
             alice_state.save_contact(&mut s, bob_contact, Some(password)).unwrap();
         }
@@ -3383,7 +3550,7 @@ pub(crate) mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![],
+                syncs: vec![],
             };
             bob_state.save_contact(&mut s, alice_contact, Some(password)).unwrap();
 
@@ -3400,7 +3567,7 @@ pub(crate) mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![],
+                syncs: vec![],
             };
             bob_state.save_contact(&mut s, carol_contact, Some(password)).unwrap();
         }
@@ -3421,7 +3588,7 @@ pub(crate) mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![],
+                syncs: vec![],
             };
             carol_state.save_contact(&mut s, bob_contact, Some(password)).unwrap();
 
@@ -3438,7 +3605,7 @@ pub(crate) mod tests {
                 desired_hops: Some(3),
                 has_peer_list: false,
                 peer_list_updated_at: None,
-                drops: vec![],
+                syncs: vec![],
             };
             carol_state.save_contact(&mut s, alice_contact, Some(password)).unwrap();
         }
@@ -3455,7 +3622,7 @@ pub(crate) mod tests {
 
             let mut alice_s = alice_state.service.lock().unwrap();
             let mut alice_reg = alice_state.get_or_load_wot_register(&mut alice_s, Some(password)).unwrap();
-            let now = drop_client::current_unix_timestamp();
+            let now = sync_client::current_unix_timestamp();
             let stats = alice_reg.import_sync_package(&bob_sync_pkg, Some(&can_bob), now).unwrap();
             assert!(stats.accepted_total() >= 1);
             alice_state.save_wot_register(&mut alice_s, &alice_reg, Some(password)).unwrap();
@@ -3473,7 +3640,7 @@ pub(crate) mod tests {
         }
 
         // 4. Alice Syncs (Uploads "wot" channel to drop server)
-        let alice_sync_res = sync_market_drops_impl(
+        let alice_sync_res = sync_market_channels_impl(
             None,
             Some(true),
             Some(password.to_string()),
@@ -3491,7 +3658,7 @@ pub(crate) mod tests {
         assert_eq!(&wot_slot_bytes[0..8], humoco_market::SLOT_MULTI_MAGIC);
 
         // 5. Bob (Class 1) Syncs (Downloads Alice's list)
-        let bob_sync_res = sync_market_drops_impl(
+        let bob_sync_res = sync_market_channels_impl(
             None,
             None,
             Some(password.to_string()),
@@ -3511,7 +3678,7 @@ pub(crate) mod tests {
         }
 
         // Bob second sync before any new uploads -> strict idempotency (0 new imports)
-        let bob_idempotent_sync = sync_market_drops_impl(
+        let bob_idempotent_sync = sync_market_channels_impl(
             None,
             None,
             Some(password.to_string()),
@@ -3522,7 +3689,7 @@ pub(crate) mod tests {
         assert_eq!(bob_idempotent_sync.imported_wot_lists, 0, "Bob second sync before new uploads must be 0 imports");
 
         // 6. Carol (Class 2) Syncs (Downloads Alice's list with Selective Disclosure)
-        let carol_sync_res = sync_market_drops_impl(
+        let carol_sync_res = sync_market_channels_impl(
             None,
             None,
             Some(password.to_string()),
@@ -3542,7 +3709,7 @@ pub(crate) mod tests {
         }
 
         // Carol second sync -> strict idempotency (0 new imports)
-        let carol_idempotent_sync = sync_market_drops_impl(
+        let carol_idempotent_sync = sync_market_channels_impl(
             None,
             None,
             Some(password.to_string()),
@@ -3553,7 +3720,7 @@ pub(crate) mod tests {
         assert_eq!(carol_idempotent_sync.imported_wot_lists, 0, "Carol second sync must be 0 imports");
 
         // 7. Alice second sync -> no new upload needed
-        let alice_second_sync = sync_market_drops_impl(
+        let alice_second_sync = sync_market_channels_impl(
             None,
             None,
             Some(password.to_string()),
@@ -3564,7 +3731,7 @@ pub(crate) mod tests {
         assert_eq!(alice_second_sync.uploaded_to, 0, "Alice second sync without changes must be no-op upload");
 
         // Bob now syncs to pick up Carol's newly uploaded list
-        let bob_third_sync = sync_market_drops_impl(
+        let bob_third_sync = sync_market_channels_impl(
             None,
             None,
             Some(password.to_string()),
@@ -3575,7 +3742,7 @@ pub(crate) mod tests {
         assert_eq!(bob_third_sync.imported_wot_lists, 1, "Bob should import Carol's list");
 
         // Bob fourth sync -> again fully idempotent
-        let bob_fourth_sync = sync_market_drops_impl(
+        let bob_fourth_sync = sync_market_channels_impl(
             None,
             None,
             Some(password.to_string()),
@@ -3595,7 +3762,7 @@ pub(crate) mod tests {
         }
 
         // 9. Slot Deletion
-        let deleted = delete_own_drop_slots_impl(Some(password.to_string()), &alice_state)
+        let deleted = delete_own_sync_slots_impl(Some(password.to_string()), &alice_state)
             .await
             .unwrap();
         assert!(deleted >= 1, "Must delete slots");
@@ -3620,11 +3787,110 @@ pub(crate) mod tests {
             "Alice's card slot must be deleted from server"
         );
 
-        // Verify drop_sent_log is cleared in Alice's register
+        // Verify sync_sent_log is cleared in Alice's register
         {
             let mut alice_s = alice_state.service.lock().unwrap();
             let alice_reg = alice_state.get_or_load_wot_register(&mut alice_s, Some(password)).unwrap();
-            assert!(alice_reg.drop_sent_log.is_empty(), "Alice drop_sent_log must be cleared");
+            assert!(alice_reg.drop_sent_log.is_empty(), "Alice sync_sent_log must be cleared");
         }
+    }
+
+    #[tokio::test]
+    async fn test_push_channel_members_hash_check_and_trust_change() {
+        let base_dir = temp_test_dir("members_hash_check");
+        let password = "TestPassword123!";
+
+        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+
+        let alice_state = create_test_state(alice_service);
+        let bob_state = create_test_state(bob_service);
+
+        let bob_did = {
+            let s = bob_state.service.lock().unwrap();
+            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+        };
+
+        // 1. Prepare drop setup and finalize
+        let draft = prepare_sync_setup_impl(
+            Some(FrontendMemberPolicyDto {
+                direct_min: 2,
+                hop2_enabled: true,
+                bridge_min: 2,
+                hop2_min: 2,
+            }),
+            Some(300),
+            Some(256),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+
+        let server = MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+
+        let finalize_status = finalize_sync_setup_impl(
+            server.base_url.clone(),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(finalize_status.data_dir, draft.data_dir);
+
+        // Finalize pushes the 4 channels
+        let initial_puts = *server.put_members_count.lock().unwrap();
+        assert_eq!(initial_puts, 4, "Initial finalize should push all 4 channels");
+
+        // 2. Call sync_channel_members_impl immediately without any changes
+        let pushed_again = sync_channel_members_impl(Some(password), &alice_state).await.unwrap();
+        assert_eq!(pushed_again, 0, "No channels should be pushed when members hash has not changed");
+        assert_eq!(*server.put_members_count.lock().unwrap(), initial_puts, "Server should receive zero new PUT requests");
+
+        // 3. Add Bob as a trusted contact (Level 2)
+        let bob_contact = FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile {
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: "2026-01-01T00:00:00Z".into(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: None,
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![],
+        };
+
+        {
+            let mut service = alice_state.service.lock().unwrap();
+            alice_state.save_contact(&mut service, bob_contact.clone(), Some(password)).unwrap();
+        }
+
+        // 4. Call sync_channel_members_impl after trust level update
+        let pushed_after_add = sync_channel_members_impl(Some(password), &alice_state).await.unwrap();
+        assert!(pushed_after_add > 0, "Channels with modified members should be pushed");
+        let puts_after_add = *server.put_members_count.lock().unwrap();
+        assert!(puts_after_add > initial_puts, "Server should have received new PUT requests");
+
+        // 5. Calling again immediately should skip
+        let pushed_noop = sync_channel_members_impl(Some(password), &alice_state).await.unwrap();
+        assert_eq!(pushed_noop, 0, "Subsequent call without changes must be skipped");
+        assert_eq!(*server.put_members_count.lock().unwrap(), puts_after_add);
+
+        // 6. Change Bob's trust level from 2 to 1 (below direct_min=2 for drop access)
+        let mut bob_untrusted = bob_contact.clone();
+        bob_untrusted.trust_level = Some(1);
+        {
+            let mut service = alice_state.service.lock().unwrap();
+            alice_state.save_contact(&mut service, bob_untrusted, Some(password)).unwrap();
+        }
+
+        let pushed_after_downgrade = sync_channel_members_impl(Some(password), &alice_state).await.unwrap();
+        assert!(pushed_after_downgrade > 0, "Trust change must trigger channel member re-upload");
+        let puts_after_downgrade = *server.put_members_count.lock().unwrap();
+        assert!(puts_after_downgrade > puts_after_add, "Server must receive updated members PUT");
     }
 }

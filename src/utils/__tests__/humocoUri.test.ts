@@ -14,30 +14,37 @@ describe('humocoUri Utilities', () => {
   const sampleSai = 'alice:work@did:key:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v';
 
   describe('buildContactCardText', () => {
-    it('builds a contact card with name and did', () => {
-      const text = buildContactCardText({ did: sampleDid, name: 'Alice Müller' });
-      expect(text).toContain('Human Money Kontaktkarte:');
-      expect(text).toContain('Name: Alice Müller');
-      expect(text).toContain(`DID: ${sampleDid}`);
-      expect(text).toContain(`humoco://contact?did=${encodeURIComponent(sampleDid)}&name=${encodeURIComponent('Alice Müller')}`);
+    it('builds a compact contact card with name, did, and syncUrls in 2 lines', () => {
+      const text = buildContactCardText({
+        did: sampleDid,
+        name: 'Alice Müller',
+        syncUrls: ['https://sync1.example.org/sync.php', 'https://sync2.example.org/sync.php'],
+      });
+      expect(text).toContain('Human Money Kontakt: Alice Müller');
+      expect(text).not.toContain(`DID: ${sampleDid}`);
+      const lines = text.split('\n');
+      expect(lines).toHaveLength(2);
+      expect(lines[1]).toContain(`humoco://contact?did=${encodeURIComponent(sampleDid)}&name=${encodeURIComponent('Alice Müller')}&sync=${encodeURIComponent('https://sync1.example.org/sync.php')}&sync=${encodeURIComponent('https://sync2.example.org/sync.php')}`);
     });
 
-    it('builds a contact card without name', () => {
+    it('builds a compact contact card without name in 2 lines', () => {
       const text = buildContactCardText({ did: sampleDid });
-      expect(text).toContain('Human Money Kontaktkarte:');
+      expect(text).toContain('Human Money Kontakt:');
       expect(text).not.toContain('Name:');
-      expect(text).toContain(`DID: ${sampleDid}`);
-      expect(text).toContain(`humoco://contact?did=${encodeURIComponent(sampleDid)}`);
+      expect(text).not.toContain(`DID: ${sampleDid}`);
+      const lines = text.split('\n');
+      expect(lines).toHaveLength(2);
+      expect(lines[1]).toContain(`humoco://contact?did=${encodeURIComponent(sampleDid)}`);
     });
   });
 
   describe('parseContactCard', () => {
-    it('parses humoco://contact embedded in multiline text', () => {
+    it('parses humoco://contact embedded in multiline text with sync parameters', () => {
       const email = `
         Hallo Basti!
         Hier ist meine Kontaktkarte für Human Money:
         
-        humoco://contact?did=${encodeURIComponent(sampleDid)}&name=${encodeURIComponent('Dr. René Schäfer')}
+        humoco://contact?did=${encodeURIComponent(sampleDid)}&name=${encodeURIComponent('Dr. René Schäfer')}&sync=${encodeURIComponent('https://node1.humoco.org/sync.php')}&sync=${encodeURIComponent('https://node2.humoco.org/sync.php')}
         
         Bitte füge mich hinzu!
         Viele Grüße, René
@@ -47,12 +54,25 @@ describe('humocoUri Utilities', () => {
       expect(result).not.toBeNull();
       expect(result?.did).toBe(sampleDid);
       expect(result?.name).toBe('Dr. René Schäfer');
+      expect(result?.syncUrls).toEqual([
+        'https://node1.humoco.org/sync.php',
+        'https://node2.humoco.org/sync.php',
+      ]);
     });
 
-    it('parses humoco://contact without name', () => {
+    it('parses humoco://contact without name and without sync', () => {
       const raw = `Check this: humoco://contact?did=${encodeURIComponent(sampleDid)}`;
       const result = parseContactCard(raw);
-      expect(result).toEqual({ did: sampleDid, name: undefined });
+      expect(result).toEqual({ did: sampleDid, name: undefined, syncUrls: undefined });
+    });
+
+    it('limits parsed sync URLs to maximum 2 and filters non-http(s)', () => {
+      const raw = `humoco://contact?did=${encodeURIComponent(sampleDid)}&sync=ftp://bad.com&sync=https://sync1.org/sync&sync=https://sync2.org/sync&sync=https://sync3.org/sync`;
+      const result = parseContactCard(raw);
+      expect(result?.syncUrls).toEqual([
+        'https://sync1.org/sync',
+        'https://sync2.org/sync',
+      ]);
     });
 
     it('parses a standalone did:key string with surrounding whitespace', () => {

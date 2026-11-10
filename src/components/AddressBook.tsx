@@ -7,13 +7,14 @@ import { contactService } from '../services/contactService';
 import { wotService } from '../services/wotService';
 import { postService, POST_INBOX_UPDATED_EVENT } from '../services/postService';
 import { settingsService } from '../services/settingsService';
-import { marketService } from '../services/marketService';
-import { notifyDropStatusUpdated, DROP_STATUS_UPDATED_EVENT } from '../utils/dropEvents';
+import { marketService, triggerDebouncedChannelMembersSync } from '../services/marketService';
+import { useRateLimitCooldown } from '../hooks/useRateLimitCooldown';
+import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../utils/syncEvents';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeFile, readFile } from '@tauri-apps/plugin-fs';
 import { copyToClipboard } from '../utils/clipboard';
 import { HelpIcon } from './ui/HelpIcon';
-import { Contact, WotSummaryDto, WotProviderDto, FrontendPendingWotHandshake, FrontendDropOverviewStatus } from '../types';
+import { Contact, WotSummaryDto, WotProviderDto, FrontendPendingWotHandshake, FrontendSyncOverviewStatus } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import Avatar from 'boring-avatars';
 import ContactDialog from './ContactDialog';
@@ -65,7 +66,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [wotSummary, setWotSummary] = useState<WotSummaryDto | null>(null);
     const [providers, setProviders] = useState<WotProviderDto[]>([]);
-    const [dropOverview, setDropOverview] = useState<FrontendDropOverviewStatus | null>(null);
+    const [syncOverview, setSyncOverview] = useState<FrontendSyncOverviewStatus | null>(null);
     const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
     const [activeTab, setActiveTab] = useState<'contacts' | 'providers'>('contacts');
     const [isUpdatingHops, setIsUpdatingHops] = useState(false);
@@ -86,8 +87,9 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const [isWotPasswordModalOpen, setIsWotPasswordModalOpen] = useState(false);
     const [wotContainerPassword, setWotContainerPassword] = useState('');
     const [isImportingWot, setIsImportingWot] = useState(false);
-    const [isSyncingDrops, setIsSyncingDrops] = useState(false);
+    const [isSyncingServices, setIsSyncingServices] = useState(false);
     const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+    const { cooldownSeconds, isCoolingDown, checkAndTriggerCooldown } = useRateLimitCooldown();
 
     // Adaptive banner expansion: default to false if >0 rated contacts, true if 0 rated contacts
     const isNetworkExpanded = userExpanded !== null
@@ -97,7 +99,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         setUserExpanded(!isNetworkExpanded);
     };
 
-    const hasSyncService = (dropOverview?.connectedCount ?? 0) > 0;
+    const hasSyncService = (syncOverview?.connectedCount ?? 0) > 0;
 
     const handleNavigateToSyncSettings = () => {
         if (navigation?.navigateToSettingsSection) {
@@ -128,12 +130,12 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                     return [];
                 }),
                 postService.getPostInboxSummary().catch(() => null),
-                marketService.getDropOverviewStatus().catch(() => null)
+                marketService.getSyncOverviewStatus().catch(() => null)
             ]);
             setContacts(contactsResult);
             setWotSummary(summaryResult ?? null);
             setProviders(providersResult ?? []);
-            setDropOverview(dropStatus ?? null);
+            setSyncOverview(dropStatus ?? null);
             if (postInbox) {
                 setPendingHandshakes(postInbox.pendingWotHandshakes || []);
             }
@@ -146,20 +148,20 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
 
     useEffect(() => {
         loadContacts();
-        postService.syncPostDrops().catch(() => {});
+        postService.syncPostChannels().catch(() => {});
         window.addEventListener(POST_INBOX_UPDATED_EVENT, loadContacts);
         const onDropUpdated = (e: Event) => {
-            const custom = e as CustomEvent<FrontendDropOverviewStatus | undefined>;
+            const custom = e as CustomEvent<FrontendSyncOverviewStatus | undefined>;
             if (custom.detail) {
-                setDropOverview(custom.detail);
+                setSyncOverview(custom.detail);
             } else {
-                marketService.getDropOverviewStatus().then(setDropOverview).catch(() => {});
+                marketService.getSyncOverviewStatus().then(setSyncOverview).catch(() => {});
             }
         };
-        window.addEventListener(DROP_STATUS_UPDATED_EVENT, onDropUpdated);
+        window.addEventListener(SYNC_STATUS_UPDATED_EVENT, onDropUpdated);
         return () => {
             window.removeEventListener(POST_INBOX_UPDATED_EVENT, loadContacts);
-            window.removeEventListener(DROP_STATUS_UPDATED_EVENT, onDropUpdated);
+            window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, onDropUpdated);
         };
     }, [loadContacts]);
 
@@ -174,6 +176,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             await protectAction(async (pwd) => {
                 await contactService.saveContact(contact, pwd || undefined);
             });
+            triggerDebouncedChannelMembersSync(1500);
             await loadContacts();
             logger.info("Contact saved successfully");
         } catch (err) {
@@ -189,6 +192,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             await protectAction(async (pwd) => {
                 await contactService.deleteContact(deleteRequest, pwd || undefined);
             });
+            triggerDebouncedChannelMembersSync(1500);
             await loadContacts();
             logger.info("Contact deleted");
         } catch (err) {
@@ -295,9 +299,10 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
 
     const handleCopyContactCard = async () => {
         try {
-            const [did, profile] = await Promise.all([
+            const [did, profile, settings] = await Promise.all([
                 voucherService.getUserId().catch(() => ''),
-                profileService.getProfile().catch(() => null)
+                profileService.getProfile().catch(() => null),
+                settingsService.getSettings().catch(() => null),
             ]);
             if (!did) {
                 logger.warn("No user ID found for contact card");
@@ -306,7 +311,31 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             }
             const nameParts = [profile?.firstName, profile?.lastName].filter(Boolean);
             const name = nameParts.length > 0 ? nameParts.join(' ') : profile?.organization;
-            const cardText = buildContactCardText({ did, name: name || undefined });
+
+            const syncUrls: string[] = [];
+            if (settings?.marketSelectedSyncs && settings.marketSelectedSyncs.length > 0) {
+                for (const d of settings.marketSelectedSyncs) {
+                    const u = d.writeUrl || d.readUrl;
+                    if (u && (u.startsWith('https://') || u.startsWith('http://'))) {
+                        syncUrls.push(u);
+                    }
+                }
+            } else if (settings?.publicSyncs && settings.publicSyncs.length > 0) {
+                for (const d of settings.publicSyncs) {
+                    if (d.enabled) {
+                        const u = d.writeUrl || d.readUrl;
+                        if (u && (u.startsWith('https://') || u.startsWith('http://'))) {
+                            syncUrls.push(u);
+                        }
+                    }
+                }
+            }
+
+            const cardText = buildContactCardText({
+                did,
+                name: name || undefined,
+                syncUrls: syncUrls.slice(0, 2),
+            });
             const success = await copyToClipboard(cardText);
             if (!success) {
                 setFeedbackMsg({ type: 'error', message: t('contacts.copyContactCardFailed') });
@@ -334,6 +363,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             setPendingWotImportBytes(null);
             setWotContainerPassword('');
             if (result) {
+                triggerDebouncedChannelMembersSync(1500);
                 if (result.isProviderFilter) {
                     setFeedbackMsg({
                         type: 'success',
@@ -375,6 +405,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             await protectAction(async (pwd) => {
                 await wotService.setProviderTrust(issuerDid, level, pwd || null);
             });
+            triggerDebouncedChannelMembersSync(1500);
             await loadContacts();
         } catch (err) {
             logger.error("Failed to set provider trust: " + stringifyError(err));
@@ -407,6 +438,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             await protectAction(async (pwd) => {
                 await wotService.removeProvider(deleteProviderRequest.issuerDid, pwd || null);
             });
+            triggerDebouncedChannelMembersSync(1500);
             setFeedbackMsg({ type: 'success', message: t('contacts.providerRemovedSuccess') });
             await loadContacts();
         } catch (err) {
@@ -440,30 +472,59 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         }
     };
 
-    const handleSyncDrops = async () => {
-        setIsSyncingDrops(true);
+    const handleSyncServices = async () => {
+        if (isCoolingDown) return;
+        setIsSyncingServices(true);
         try {
-            const [res] = await Promise.all([
-                marketService.syncMarketDrops({ forceUpload: true }),
-                postService.syncPostDrops().catch(() => null)
+            const [res, postRes] = await Promise.all([
+                marketService.syncMarketChannels({ forceUpload: true }),
+                postService.syncPostChannels().catch((err) => {
+                    checkAndTriggerCooldown(err);
+                    return null;
+                })
             ]);
-            const updatedOverview = await marketService.getDropOverviewStatus().catch(() => null);
+            if (res) {
+                checkAndTriggerCooldown(res);
+            }
+            if (postRes) {
+                checkAndTriggerCooldown(postRes);
+            }
+            const updatedOverview = await marketService.getSyncOverviewStatus().catch(() => null);
             if (updatedOverview) {
-                setDropOverview(updatedOverview);
-                notifyDropStatusUpdated(updatedOverview);
+                setSyncOverview(updatedOverview);
+                notifySyncStatusUpdated(updatedOverview);
             } else {
-                notifyDropStatusUpdated();
+                notifySyncStatusUpdated();
             }
             await loadContacts();
-            const msg = t('contacts.syncDropsSuccess', 'Sync-Dienste synchronisiert: {{wot}} Vertrauensliste(n), {{cards}} Angebot(e).', {
-                wot: res.importedWotLists,
-                cards: res.importedCards,
-            });
-            setFeedbackMsg({ type: 'success', message: msg });
+
+            const allErrors: string[] = [];
+            if (res?.errors && res.errors.length > 0) {
+                allErrors.push(...res.errors);
+            }
+            if (postRes?.errors && postRes.errors.length > 0) {
+                allErrors.push(...postRes.errors);
+            }
+
+            if (allErrors.length > 0) {
+                const has429 = allErrors.some(e => e.includes('429') || e.toLowerCase().includes('rate limit'));
+                const errorDetail = allErrors.join(', ');
+                const errorMsg = has429
+                    ? `${t('contacts.syncServicesErrors', 'Fehler beim Synchronisieren:')} Rate-Limit erreicht (HTTP 429). Bitte später erneut versuchen.`
+                    : `${t('contacts.syncServicesErrors', 'Fehler beim Synchronisieren:')} ${errorDetail}`;
+                setFeedbackMsg({ type: 'error', message: errorMsg });
+            } else {
+                const msg = t('contacts.syncServicesSuccess', 'Sync-Dienste synchronisiert: {{wot}} Vertrauensliste(n), {{cards}} Angebot(e).', {
+                    wot: res?.importedWotLists ?? 0,
+                    cards: res?.importedCards ?? 0,
+                });
+                setFeedbackMsg({ type: 'success', message: msg });
+            }
         } catch (err) {
+            checkAndTriggerCooldown(err);
             setFeedbackMsg({ type: 'error', message: translateError(err, t) });
         } finally {
-            setIsSyncingDrops(false);
+            setIsSyncingServices(false);
         }
     };
 
@@ -521,7 +582,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             } else {
                 setFeedbackMsg({
                     type: 'error',
-                    message: t('contacts.handshakeNoDrop', 'Kein gemeinsamer Sync-Dienst für diesen Kontakt erreichbar.')
+                    message: t('contacts.handshakeNoSync', 'Kein gemeinsamer Sync-Dienst für diesen Kontakt erreichbar.')
                 });
             }
         } catch (e) {
@@ -612,13 +673,17 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                             <Button
                                 type="button"
                                 variant="secondary"
-                                onClick={handleSyncDrops}
-                                disabled={isSyncingDrops}
+                                onClick={handleSyncServices}
+                                disabled={isSyncingServices || isCoolingDown}
                                 className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
-                                title={t('contacts.syncDropsTooltip', 'Vertrauenseinstufungen und Angebote über konfigurierte Sync-Dienste abgleichen')}
+                                title={t('contacts.syncServicesTooltip', 'Vertrauenseinstufungen und Angebote über konfigurierte Sync-Dienste abgleichen')}
                             >
-                                <RefreshCw size={14} className={isSyncingDrops ? 'animate-spin' : ''} />
-                                {isSyncingDrops ? t('settings.syncing', 'Synchronisiere...') : t('contacts.syncDropsButton', 'Über Sync-Dienste synchronisieren')}
+                                <RefreshCw size={14} className={isSyncingServices ? 'animate-spin' : ''} />
+                                {isCoolingDown
+                                    ? t('contacts.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })
+                                    : isSyncingServices
+                                    ? t('settings.syncing', 'Synchronisiere...')
+                                    : t('contacts.syncServicesButton', 'Über Sync-Dienste synchronisieren')}
                             </Button>
                             <Button
                                 type="button"
@@ -1141,15 +1206,62 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                                             </span>
                                                         )
                                                     )}
-                                                    {contact.drops && contact.drops.length > 0 && (
-                                                        <span
-                                                            data-testid="contact-has-drop-badge"
-                                                            className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm flex items-center gap-1"
-                                                            title={t('contacts.hasDropTooltip')}
+                                                    {contact.syncs && contact.syncs.length > 0 && (
+                                                        <div
+                                                            data-testid="contact-has-sync-badge"
+                                                            className="flex flex-wrap items-center gap-1.5"
                                                         >
-                                                            <Server size={9} />
-                                                            {t('contacts.hasDrop')}
-                                                        </span>
+                                                            <span
+                                                                className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm flex items-center gap-1"
+                                                                title={t('contacts.hasSyncTooltip')}
+                                                            >
+                                                                <Server size={9} />
+                                                                {t('contacts.hasSync')}
+                                                            </span>
+                                                            {contact.syncs.map((syncEp, idx) => {
+                                                                const host = (() => {
+                                                                    try {
+                                                                        return new URL(syncEp.writeUrl || syncEp.readUrl).hostname;
+                                                                    } catch {
+                                                                        return syncEp.writeUrl || syncEp.readUrl;
+                                                                    }
+                                                                })();
+                                                                const isFailing = (syncEp.failCount ?? 0) > 0;
+                                                                const isSeen = !isFailing && !!syncEp.lastSeenAt;
+
+                                                                let badgeColor = 'bg-slate-50 text-slate-600 border-slate-200';
+                                                                let dotColor = 'bg-slate-400';
+                                                                let statusLabel = t('contacts.syncUntested');
+                                                                let tooltip = `${host} (${t('contacts.syncUntested')})`;
+
+                                                                if (isFailing) {
+                                                                    badgeColor = syncEp.failCount && syncEp.failCount >= 3
+                                                                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                                                        : 'bg-amber-50 text-amber-700 border-amber-200';
+                                                                    dotColor = syncEp.failCount && syncEp.failCount >= 3 ? 'bg-rose-500' : 'bg-amber-500';
+                                                                    statusLabel = syncEp.failCount && syncEp.failCount >= 3 ? t('contacts.syncUnreachable') : t('contacts.syncWarning');
+                                                                    tooltip = `${host} - ${statusLabel} (${t('contacts.syncFailCount')} ${syncEp.failCount})`;
+                                                                } else if (isSeen) {
+                                                                    badgeColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                                                                    dotColor = 'bg-emerald-500';
+                                                                    statusLabel = t('contacts.syncReachable');
+                                                                    const dateStr = syncEp.lastSeenAt ? new Date(syncEp.lastSeenAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                                                                    tooltip = `${host} - ${statusLabel}${dateStr ? ` (${t('contacts.syncLastSeen')} ${dateStr})` : ''}`;
+                                                                }
+
+                                                                return (
+                                                                    <span
+                                                                        key={`${syncEp.writeUrl || syncEp.readUrl}-${idx}`}
+                                                                        className={`px-1.5 py-0.5 rounded-md text-[9px] font-semibold border shadow-sm flex items-center gap-1 ${badgeColor}`}
+                                                                        title={tooltip}
+                                                                    >
+                                                                        <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+                                                                        <span className="font-mono">{host}</span>
+                                                                        <span className="opacity-75 font-normal">({statusLabel})</span>
+                                                                    </span>
+                                                                );
+                                                            })}
+                                                        </div>
                                                     )}
                                                 </div>
 

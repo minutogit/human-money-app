@@ -9,8 +9,8 @@ The **HuMoCo Sync-Dienst** is an ultra-lightweight, zero-dependency PHP script d
 * **Zero Dependencies:** Pure PHP (>= 7.4 with core `ext-sodium`). No Composer, no SQL or SQLite database, no background daemons, and no external extensions.
 * **Zero Plaintext Knowledge:** The server operator, hoster, and network observers see only encrypted binary blobs (`SlotBlob` / `PostBoxEntry` / `.hmcbackup`). The server cannot decrypt contact cards, marketplace listings, trust lists, or messages.
 * **Strict 64-Hex Ed25519 Request Signatures:** Every mutating request is signed with detached Ed25519 signatures validated via `sodium_crypto_sign_verify_detached`:
-  - **Private Drops:** Members sign with a stealth key derived via ECDH + `HUMOCO_DROP_STEALTH_SEED_V1` ($P$).
-  - **Public Drops:** Users sign with a deterministic registration key ($R$) derived from mnemonic + provider canonical URL.
+  - **Private Sync Services:** Members sign with a stealth key derived via ECDH + `HUMOCO_DROP_STEALTH_SEED_V1` ($P$).
+  - **Public Sync Services:** Users sign with a deterministic registration key ($R$) derived from mnemonic + provider canonical URL.
 * **Direct Static Reads (Zero PHP overhead on reads):** Clients poll `<read_url>/index.json` and `<read_url>/<pubkey64>.<channel>.bin` directly via static web server delivery (Apache / Nginx / Caddy), completely bypassing PHP execution.
 * **Fixed 1-Inode IP Rate Limiter (`ratelimit.bin.php`):** A single 65,564-byte file with 4,096 buckets (16 bytes each) handles IP lockout under `flock`. It never allocates extra files, preventing inode exhaustion on shared web hosting.
 * **Proxy-Safe Member Exemption:** Authenticated Ed25519-signed requests bypass IP failure throttling (avoiding Cloudflare/Carrier-NAT lockout) and are rate-limited per pubkey via a dedicated token bucket.
@@ -45,13 +45,13 @@ tools/humoco-sync/
 ```php
 <?php
 return [
-    // 64-hex lowercase Ed25519 VerifyingKey of the drop admin
+    // 64-hex lowercase Ed25519 VerifyingKey of the sync admin
     'admin_pubkey'         => '0000000000000000000000000000000000000000000000000000000000000000',
 
     // Deterministic directory name, part of read_url
     'data_dir'             => 'd-0000000000000000',
 
-    // Optional URL where new users can register on public drops
+    // Optional URL where new users can register on public sync services
     'register_url'         => null,
 
     // Maximum number of member public keys per channel

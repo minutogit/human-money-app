@@ -21,10 +21,10 @@ import {
 import { save } from '@tauri-apps/plugin-dialog';
 import {
     AppSettings,
-    FrontendDiscoveredDrop,
-    FrontendDropAdminStatus,
+    FrontendDiscoveredSync,
+    FrontendSyncAdminStatus,
     FrontendMemberPolicyDto,
-    StoredPublicDrop,
+    StoredPublicSync,
 } from '../../types';
 import { marketService } from '../../services/marketService';
 import { settingsService } from '../../services/settingsService';
@@ -35,8 +35,9 @@ import { Input } from '../ui/Input';
 import { SegmentedTabs } from '../ui/SegmentedTabs';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { copyToClipboard } from '../../utils/clipboard';
-import { notifyDropStatusUpdated } from '../../utils/dropEvents';
+import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { translateError } from '../../utils/errorHelper';
+import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
 
 interface PolicyHelpPopoverProps {
     title: string;
@@ -212,20 +213,21 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
     const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
     // Tab 1 state: Connected services & features
-    const [discoveredDrops, setDiscoveredDrops] = useState<FrontendDiscoveredDrop[]>([]);
-    const [configuredPublicDrops, setConfiguredPublicDrops] = useState<StoredPublicDrop[]>([]);
+    const [discoveredDrops, setDiscoveredDrops] = useState<FrontendDiscoveredSync[]>([]);
+    const [configuredPublicDrops, setConfiguredPublicDrops] = useState<StoredPublicSync[]>([]);
     const [inputUrl, setInputUrl] = useState('');
     const [isProbing, setIsProbing] = useState(false);
     const [probeResult, setProbeResult] = useState<{ status: 'success' | 'unauthorized' | 'error'; message: string } | null>(null);
+    const { cooldownSeconds, isCoolingDown, checkAndTriggerCooldown } = useRateLimitCooldown();
 
     // Feature toggles
     const [postAcceptFromContacts, setPostAcceptFromContacts] = useState<boolean>(settings?.postAcceptFromContacts ?? true);
     const [marketSendCardOnPayment, setMarketSendCardOnPayment] = useState<boolean>(settings?.marketSendCardOnPayment ?? true);
-    const [wotShareViaDrop, setWotShareViaDrop] = useState<boolean>(settings?.wotShareViaDrop ?? true);
-    const [dropBackupEnabled, setDropBackupEnabled] = useState<boolean>(settings?.dropBackupEnabled ?? true);
+    const [wotShareViaSync, setWotShareViaDrop] = useState<boolean>(settings?.wotShareViaSync ?? true);
+    const [syncBackupEnabled, setDropBackupEnabled] = useState<boolean>(settings?.syncBackupEnabled ?? true);
 
     // Tab 2 state: Host / Own Sync Service
-    const [adminStatus, setAdminStatus] = useState<FrontendDropAdminStatus | null>(null);
+    const [adminStatus, setAdminStatus] = useState<FrontendSyncAdminStatus | null>(null);
     const [hostPolicy, setHostPolicy] = useState<FrontendMemberPolicyDto>({
         directMin: 2,
         hop2Enabled: true,
@@ -248,10 +250,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         if (settings) {
             setPostAcceptFromContacts(settings.postAcceptFromContacts ?? true);
             setMarketSendCardOnPayment(settings.marketSendCardOnPayment ?? true);
-            setWotShareViaDrop(settings.wotShareViaDrop ?? true);
-            setDropBackupEnabled(settings.dropBackupEnabled ?? true);
-            if (Array.isArray(settings.publicDrops)) {
-                setConfiguredPublicDrops(settings.publicDrops);
+            setWotShareViaDrop(settings.wotShareViaSync ?? true);
+            setDropBackupEnabled(settings.syncBackupEnabled ?? true);
+            if (Array.isArray(settings.publicSyncs)) {
+                setConfiguredPublicDrops(settings.publicSyncs);
             }
         }
     }, [settings]);
@@ -260,8 +262,8 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         setIsLoading(true);
         try {
             const [discovered, admin, s] = await Promise.all([
-                marketService.discoverAvailableDrops().catch(() => []),
-                marketService.getDropAdminStatus().catch(() => null),
+                marketService.discoverAvailableSyncs().catch(() => []),
+                marketService.getSyncAdminStatus().catch(() => null),
                 settingsService.getSettings().catch(() => null),
             ]);
             setDiscoveredDrops(Array.isArray(discovered) ? discovered : []);
@@ -269,9 +271,9 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             if (admin?.cardPolicy) {
                 setHostPolicy(admin.cardPolicy);
             }
-            if (Array.isArray(s?.publicDrops)) {
-                setConfiguredPublicDrops(s.publicDrops);
-            } else if (!settings?.publicDrops) {
+            if (Array.isArray(s?.publicSyncs)) {
+                setConfiguredPublicDrops(s.publicSyncs);
+            } else if (!settings?.publicSyncs) {
                 setConfiguredPublicDrops([]);
             }
         } catch {
@@ -296,7 +298,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             if (onSettingsUpdated) {
                 onSettingsUpdated(updated);
             }
-            notifyDropStatusUpdated();
+            notifySyncStatusUpdated();
         } catch (err) {
             setFeedback({ type: 'error', message: translateError(err, t) });
         }
@@ -310,26 +312,26 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         setIsProbing(true);
         setProbeResult(null);
         try {
-            const info = await marketService.probePublicDrop(trimmed);
+            const info = await marketService.probePublicSync(trimmed);
             if (info) {
                 // Check if key is authorized
                 const hasAuth = info.authorizedChannels.length > 0;
-                await marketService.savePublicDrop({
+                await marketService.savePublicSync({
                     writeUrl: info.writeUrl,
                     readUrl: info.readUrl,
                     dropPub: info.dropPub,
                     registerUrl: info.registerUrl,
-                    enabled: true,
+                    enabled: hasAuth,
                 });
                 setInputUrl('');
                 const s = await settingsService.getSettings();
-                if (s.publicDrops) {
-                    setConfiguredPublicDrops(s.publicDrops);
+                if (s.publicSyncs) {
+                    setConfiguredPublicDrops(s.publicSyncs);
                 }
                 if (onSettingsUpdated) {
                     onSettingsUpdated(s);
                 }
-                notifyDropStatusUpdated();
+                notifySyncStatusUpdated();
 
                 if (hasAuth) {
                     setProbeResult({
@@ -344,6 +346,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 }
             }
         } catch (err) {
+            checkAndTriggerCooldown(err);
             setProbeResult({
                 status: 'error',
                 message: `${t('settings.syncProbeError', 'Verbindung fehlgeschlagen')}: ${translateError(err, t)}`,
@@ -353,9 +356,9 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         }
     };
 
-    const handleTogglePublicDrop = async (drop: StoredPublicDrop) => {
+    const handleTogglePublicDrop = async (drop: StoredPublicSync) => {
         try {
-            await marketService.savePublicDrop({
+            await marketService.savePublicSync({
                 writeUrl: drop.writeUrl,
                 readUrl: drop.readUrl,
                 dropPub: drop.dropPub,
@@ -363,13 +366,13 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 enabled: !drop.enabled,
             });
             const s = await settingsService.getSettings();
-            if (s.publicDrops) {
-                setConfiguredPublicDrops(s.publicDrops);
+            if (s.publicSyncs) {
+                setConfiguredPublicDrops(s.publicSyncs);
             }
             if (onSettingsUpdated) {
                 onSettingsUpdated(s);
             }
-            notifyDropStatusUpdated();
+            notifySyncStatusUpdated();
         } catch (err) {
             setFeedback({ type: 'error', message: translateError(err, t) });
         }
@@ -377,21 +380,21 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
 
     const handleDeletePublicDrop = async (writeUrl: string) => {
         try {
-            await marketService.removePublicDrop(writeUrl, false);
+            await marketService.removePublicSync(writeUrl, false);
             const s = await settingsService.getSettings();
-            if (s.publicDrops) {
-                setConfiguredPublicDrops(s.publicDrops);
+            if (s.publicSyncs) {
+                setConfiguredPublicDrops(s.publicSyncs);
             }
             if (onSettingsUpdated) {
                 onSettingsUpdated(s);
             }
-            notifyDropStatusUpdated();
+            notifySyncStatusUpdated();
         } catch (err) {
             setFeedback({ type: 'error', message: translateError(err, t) });
         }
     };
 
-    const handleToggleDiscoveredDrop = async (discovered: FrontendDiscoveredDrop) => {
+    const handleToggleDiscoveredDrop = async (discovered: FrontendDiscoveredSync) => {
         try {
             const currentSelected = discoveredDrops.filter(d => d.isSelected).map(d => d.descriptor);
             const isCurrentlySelected = discovered.isSelected;
@@ -401,10 +404,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             } else {
                 updatedList = [...currentSelected, discovered.descriptor];
             }
-            await marketService.setSelectedUploadDrops(updatedList);
-            const refetched = await marketService.discoverAvailableDrops().catch(() => []);
+            await marketService.setSelectedUploadSyncs(updatedList);
+            const refetched = await marketService.discoverAvailableSyncs().catch(() => []);
             setDiscoveredDrops(refetched);
-            notifyDropStatusUpdated();
+            notifySyncStatusUpdated();
         } catch (err) {
             setFeedback({ type: 'error', message: translateError(err, t) });
         }
@@ -422,12 +425,12 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             });
             if (filePath) {
                 await protectAction(async (pwd) => {
-                    await marketService.prepareDropSetup({
+                    await marketService.prepareSyncSetup({
                         policy: hostPolicy,
                         maxMembers: hostMaxMembers,
                         maxTotalStorageMb: hostMaxStorageMb,
                     }, pwd || undefined);
-                    await marketService.saveDropSetupZip(filePath, pwd || undefined);
+                    await marketService.saveSyncSetupZip(filePath, pwd || undefined);
                 });
                 setFeedback({
                     type: 'success',
@@ -448,13 +451,13 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         setFeedback(null);
         try {
             await protectAction(async (pwd) => {
-                const testRes = await marketService.testDropConnection(trimmed, pwd || undefined);
+                const testRes = await marketService.testSyncConnection(trimmed, pwd || undefined);
                 if (!testRes.success || !testRes.writeOk || !testRes.readOk) {
                     throw new Error(testRes.message || 'Verbindung zum Webspace konnte nicht verifiziert werden.');
                 }
-                const admin = await marketService.finalizeDropSetup(trimmed, pwd || undefined);
+                const admin = await marketService.finalizeSyncSetup(trimmed, pwd || undefined);
                 setAdminStatus(admin);
-                notifyDropStatusUpdated();
+                notifySyncStatusUpdated();
                 setFeedback({
                     type: 'success',
                     message: t('settings.syncHostActivatedSuccess', 'Dein Sync-Dienst wurde erfolgreich aktiviert und verifiziert!'),
@@ -472,7 +475,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         setFeedback(null);
         try {
             await protectAction(async (pwd) => {
-                const updated = await marketService.updateDropAdminConfig({
+                const updated = await marketService.updateSyncAdminConfig({
                     cardPolicy: hostPolicy,
                     maxMembers: hostMaxMembers,
                     maxTotalStorageMb: hostMaxStorageMb,
@@ -495,7 +498,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         setFeedback(null);
         try {
             await protectAction(async (pwd) => {
-                const updated = await marketService.rotateDropAdminKey(pwd || undefined);
+                const updated = await marketService.rotateSyncAdminKey(pwd || undefined);
                 setAdminStatus(updated);
                 setFeedback({
                     type: 'success',
@@ -513,10 +516,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         setIsDeletingAdmin(true);
         try {
             await protectAction(async (pwd) => {
-                await marketService.deleteDropAdmin(pwd || undefined);
+                await marketService.deleteSyncAdmin(pwd || undefined);
                 setAdminStatus(null);
                 setIsDeleteConfirmOpen(false);
-                notifyDropStatusUpdated();
+                notifySyncStatusUpdated();
                 setFeedback({
                     type: 'success',
                     message: t('settings.syncHostDeletedSuccess', 'Dein Sync-Dienst wurde getrennt.'),
@@ -638,10 +641,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                 <label className="flex items-start gap-3 cursor-pointer group pt-1 border-t border-theme-subtle/50">
                                     <input
                                         type="checkbox"
-                                        checked={wotShareViaDrop}
+                                        checked={wotShareViaSync}
                                         onChange={(e) => {
                                             setWotShareViaDrop(e.target.checked);
-                                            updateFeatureToggle('wotShareViaDrop', e.target.checked);
+                                            updateFeatureToggle('wotShareViaSync', e.target.checked);
                                         }}
                                         className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
                                     />
@@ -658,10 +661,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                 <label className="flex items-start gap-3 cursor-pointer group pt-1 border-t border-theme-subtle/50">
                                     <input
                                         type="checkbox"
-                                        checked={dropBackupEnabled}
+                                        checked={syncBackupEnabled}
                                         onChange={(e) => {
                                             setDropBackupEnabled(e.target.checked);
-                                            updateFeatureToggle('dropBackupEnabled', e.target.checked);
+                                            updateFeatureToggle('syncBackupEnabled', e.target.checked);
                                         }}
                                         className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
                                     />
@@ -706,11 +709,17 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     variant="primary"
                                     size="sm"
                                     onClick={handleProbeAndAdd}
-                                    disabled={isProbing || !inputUrl.trim()}
+                                    disabled={isProbing || !inputUrl.trim() || isCoolingDown}
                                     className="gap-1.5 shrink-0"
                                 >
                                     <RefreshCw size={13} className={isProbing ? 'animate-spin' : ''} />
-                                    <span>{isProbing ? t('common.testing', 'Prüfe...') : t('settings.syncAddBtn', 'Verbinden & Prüfen')}</span>
+                                    <span>
+                                        {isCoolingDown
+                                            ? t('settings.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })
+                                            : isProbing
+                                            ? t('common.testing', 'Prüfe...')
+                                            : t('settings.syncAddBtn', 'Verbinden & Prüfen')}
+                                    </span>
                                 </Button>
                             </div>
 

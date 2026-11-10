@@ -58,7 +58,7 @@ export function TransactionHistoryView() {
     const [expandedId, setExpandedId] = useState<string | null>(null);
     const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-    // Dual-Delivery post drop status
+    // Dual-Delivery post sync status
     const [unacknowledgedPayments, setUnacknowledgedPayments] = useState<string[]>([]);
     const [isRedepositingId, setIsRedepositingId] = useState<string | null>(null);
     const [redepositFeedback, setRedepositFeedback] = useState<{ [key: string]: string }>({});

@@ -189,7 +189,7 @@ export function Dashboard() {
         };
 
         loadPostInbox();
-        postService.syncPostDrops().catch(() => {});
+        postService.syncPostChannels().catch(() => {});
         window.addEventListener(POST_INBOX_UPDATED_EVENT, loadPostInbox);
 
         return () => {

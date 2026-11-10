@@ -90,7 +90,7 @@ export function TransferSuccessView({
             if (res) {
                 setDepositedTo(res.depositedTo);
                 if (res.depositedTo > 0) {
-                    setFeedback(t('transfer.depositedInPostSuccess', '📦 Zahlung in der Ablage hinterlegt (wartet auf Abholung)'));
+                    setFeedback(t('transfer.depositedInPostSuccess', '📦 Zahlung im Sync-Dienst hinterlegt (wartet auf Abholung)'));
                 } else if (res.errors && res.errors.length > 0) {
                     setRedepositError(res.errors.join('; '));
                 }
@@ -196,25 +196,25 @@ export function TransferSuccessView({
                             </div>
                         </div>
 
-                        {/* Dual-Delivery Post Drop Status (§6.3) */}
+                        {/* Dual-Delivery Post Sync Status (§6.3) */}
                         {depositedTo > 0 ? (
                             <div data-testid="post-deposit-success-card" className="p-5 bg-emerald-50/80 border border-emerald-200 rounded-3xl space-y-2">
                                 <div className="flex items-center gap-2 text-emerald-800 font-bold text-sm">
                                     <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
-                                    <span>{t('transfer.depositedInPostSuccess', '📦 Zahlung in der Ablage hinterlegt (wartet auf Abholung)')}</span>
+                                    <span>{t('transfer.depositedInPostSuccess', '📦 Zahlung im Sync-Dienst hinterlegt (wartet auf Abholung)')}</span>
                                 </div>
                                 <p className="text-xs text-emerald-700 font-medium leading-relaxed">
-                                    {t('transfer.depositedInPostDesc', 'Die Zahlung wurde auf {{count}} Ablage(n) hinterlegt und wird vom Empfänger automatisch beim nächsten App-Start abgerufen.', { count: depositedTo })}
+                                    {t('transfer.depositedInPostDesc', 'Die Zahlung wurde in {{count}} Sync-Ablage(n) hinterlegt und wird vom Empfänger automatisch beim nächsten App-Start abgerufen.', { count: depositedTo })}
                                 </p>
                             </div>
                         ) : bundleId ? (
                             <div data-testid="post-deposit-retry-card" className="p-5 bg-amber-50/80 border border-amber-200 rounded-3xl space-y-3">
                                 <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
                                     <AlertTriangle size={18} className="text-amber-600 shrink-0" />
-                                    <span>{t('transfer.depositPendingTitle', 'Nicht in Ablage hinterlegt (offline oder keine gemeinsame Ablage)')}</span>
+                                    <span>{t('transfer.depositPendingTitle', 'Nicht im Sync-Dienst hinterlegt (offline oder kein gemeinsamer Sync-Dienst)')}</span>
                                 </div>
                                 <p className="text-xs text-amber-800/80 font-medium leading-relaxed">
-                                    {redepositError || t('transfer.depositPendingDesc', 'Die Zahlung konnte nicht automatisch auf einer Ablage hinterlegt werden. Du kannst es erneut versuchen oder die Zahlung direkt als Datei oder QR-Code übergeben.')}
+                                    {redepositError || t('transfer.depositPendingDesc', 'Die Zahlung konnte nicht automatisch in einem Sync-Dienst hinterlegt werden. Du kannst es erneut versuchen oder die Zahlung direkt als Datei oder QR-Code übergeben.')}
                                 </p>
                                 <Button
                                     variant="outline"
@@ -225,7 +225,7 @@ export function TransferSuccessView({
                                     className="w-full text-xs font-bold gap-2 border-amber-300 text-amber-900 hover:bg-amber-100/50"
                                 >
                                     {isRedepositing ? <RefreshCw size={14} className="animate-spin" /> : <UploadCloud size={14} />}
-                                    {isRedepositing ? t('transfer.depositing', 'Hinterlege in Ablage...') : t('transfer.retryDepositButton', 'Erneut in Ablage hinterlegen')}
+                                    {isRedepositing ? t('transfer.depositing', 'Hinterlege im Sync-Dienst...') : t('transfer.retryDepositButton', 'Erneut im Sync-Dienst hinterlegen')}
                                 </Button>
                             </div>
                         ) : null}

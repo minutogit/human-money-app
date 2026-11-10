@@ -63,6 +63,22 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     const [activeTab, setActiveTab] = useState<'profile' | 'security_backup' | 'sync_network' | 'standards_general'>('profile');
     const [isStandardsOpen, setIsStandardsOpen] = useState(false);
 
+    // Dev mode hidden trigger (7 clicks)
+    const [devClickCount, setDevClickCount] = useState(0);
+    const [isAdvancedNetworkOpen, setIsAdvancedNetworkOpen] = useState(false);
+    const [benchmarkResults, setBenchmarkResults] = useState<Array<{ url: string; latencyMs?: number; reachable: boolean }>>([]);
+    const [isBenchmarking, setIsBenchmarking] = useState(false);
+    const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
+    const [newServerName, setNewServerName] = useState('');
+    const [newServerUrl, setNewServerUrl] = useState('');
+    const [newServerAuthToken, setNewServerAuthToken] = useState('');
+    const [newServerPeerToken, setNewServerPeerToken] = useState('');
+    const [newRegionalUrl, setNewRegionalUrl] = useState('');
+    const [newRegionalPublicKey, setNewRegionalPublicKey] = useState('');
+    const [newRegionalBearerToken, setNewRegionalBearerToken] = useState('');
+    const [isRefreshingMesh, setIsRefreshingMesh] = useState(false);
+    const [meshRefreshFeedback, setMeshRefreshFeedback] = useState<string | null>(null);
+
     const nav = useOptionalNavigation();
     const appVersion = nav?.appVersion || '0.3.0';
 
@@ -90,22 +106,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             }
         }
     }, [nav?.appState]);
-
-    // Dev mode hidden trigger (7 clicks)
-    const [devClickCount, setDevClickCount] = useState(0);
-    const [isAdvancedNetworkOpen, setIsAdvancedNetworkOpen] = useState(false);
-    const [benchmarkResults, setBenchmarkResults] = useState<Array<{ url: string; latencyMs?: number; reachable: boolean }>>([]);
-    const [isBenchmarking, setIsBenchmarking] = useState(false);
-    const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
-    const [newServerName, setNewServerName] = useState('');
-    const [newServerUrl, setNewServerUrl] = useState('');
-    const [newServerAuthToken, setNewServerAuthToken] = useState('');
-    const [newServerPeerToken, setNewServerPeerToken] = useState('');
-    const [newRegionalUrl, setNewRegionalUrl] = useState('');
-    const [newRegionalPublicKey, setNewRegionalPublicKey] = useState('');
-    const [newRegionalBearerToken, setNewRegionalBearerToken] = useState('');
-    const [isRefreshingMesh, setIsRefreshingMesh] = useState(false);
-    const [meshRefreshFeedback, setMeshRefreshFeedback] = useState<string | null>(null);
 
     useEffect(() => {
         async function fetchSettings() {

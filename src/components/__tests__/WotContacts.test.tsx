@@ -162,8 +162,8 @@ describe('WoT Contacts & Trust Ratings', () => {
           return Promise.resolve({
             canReadMyMarketBefore: false,
             canReadMyMarketAfter: true,
-            canWriteMyDropBefore: false,
-            canWriteMyDropAfter: true,
+            canWriteMySyncBefore: false,
+            canWriteMySyncAfter: true,
             canReadMyWotBefore: false,
             canReadMyWotAfter: true,
           });
@@ -206,8 +206,8 @@ describe('WoT Contacts & Trust Ratings', () => {
           return Promise.resolve({
             canReadMyMarketBefore: true,
             canReadMyMarketAfter: false,
-            canWriteMyDropBefore: true,
-            canWriteMyDropAfter: false,
+            canWriteMySyncBefore: true,
+            canWriteMySyncAfter: false,
             canReadMyWotBefore: true,
             canReadMyWotAfter: false,
           });

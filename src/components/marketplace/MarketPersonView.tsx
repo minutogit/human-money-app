@@ -31,6 +31,7 @@ import { useNavigation } from '../../context/NavigationContext';
 import { useSession } from '../../context/SessionContext';
 import { contactService } from '../../services/contactService';
 import { marketService } from '../../services/marketService';
+import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
 import ContactDialog from '../ContactDialog';
 import { ShareCardModal } from './ShareCardModal';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -52,6 +53,7 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
 
     const [currentPerson, setCurrentPerson] = useState<FrontendMarketPerson>(person);
     const [isManualSyncing, setIsManualSyncing] = useState(false);
+    const { cooldownSeconds, isCoolingDown, checkAndTriggerCooldown } = useRateLimitCooldown();
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [isContactDialogOpen, setIsContactDialogOpen] = useState(false);
     const [copiedDid, setCopiedDid] = useState(false);
@@ -65,16 +67,20 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
     }, [person]);
 
     const handleManualSync = async () => {
+        if (isCoolingDown) return;
         setIsManualSyncing(true);
         try {
-            await marketService.syncMarketDrops();
+            const res = await marketService.syncMarketChannels();
+            if (res) {
+                checkAndTriggerCooldown(res);
+            }
             const list = await marketService.getMarketView();
             const updated = (list || []).find(p => p.did === currentPerson.did);
             if (updated) {
                 setCurrentPerson(updated);
             }
-        } catch {
-            // Silently retain current data
+        } catch (err) {
+            checkAndTriggerCooldown(err);
         } finally {
             setIsManualSyncing(false);
         }
@@ -331,15 +337,15 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                                                 {t('marketplace.sourceCard', { hops: src.hops })}
                                             </span>
                                         );
-                                    } else if (src.kind === 'drop') {
+                                    } else if (src.kind === 'sync') {
                                         return (
                                             <span 
                                                 key={i} 
-                                                title={t('marketplace.sourceDrop')}
+                                                title={t('marketplace.sourceSync')}
                                                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 text-sky-800 border border-sky-200 text-[10px] font-semibold"
                                             >
                                                 <Box size={11} />
-                                                {t('marketplace.sourceDrop')}
+                                                {t('marketplace.sourceSync')}
                                             </span>
                                         );
                                     }
@@ -376,7 +382,7 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
             <div className="space-y-4">
                 {currentPerson.listings.length === 0 ? (
                     <Card className="p-8 text-center bg-white border border-theme-subtle rounded-3xl">
-                        {Array.isArray(currentPerson.cardDrops) && currentPerson.cardDrops.length > 0 ? (
+                        {Array.isArray(currentPerson.cardSyncs) && currentPerson.cardSyncs.length > 0 ? (
                             <div className="max-w-md mx-auto space-y-3">
                                 <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center mx-auto">
                                     <RefreshCw size={24} className={isManualSyncing ? 'animate-spin' : ''} />
@@ -393,11 +399,17 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                                         variant="outline"
                                         size="sm"
                                         onClick={handleManualSync}
-                                        disabled={isManualSyncing}
+                                        disabled={isManualSyncing || isCoolingDown}
                                         className="gap-1.5 text-xs mx-auto"
                                     >
                                         <RefreshCw size={13} className={isManualSyncing ? 'animate-spin' : ''} />
-                                        <span>{isManualSyncing ? t('common.syncing', 'Synchronisiere...') : t('marketplace.fetchNowBtn', 'Jetzt abrufen')}</span>
+                                        <span>
+                                            {isCoolingDown
+                                                ? t('marketplace.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })
+                                                : isManualSyncing
+                                                ? t('common.syncing', 'Synchronisiere...')
+                                                : t('marketplace.fetchNowBtn', 'Jetzt abrufen')}
+                                        </span>
                                     </Button>
                                 </div>
                             </div>

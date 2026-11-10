@@ -45,7 +45,7 @@ vi.mock('../../services/backupService', () => ({
         probeBackup: vi.fn(),
         inspectBackup: vi.fn(),
         restoreBackup: vi.fn(),
-        fetchAndInspectDropBackup: vi.fn(),
+        fetchAndInspectBackup: vi.fn(),
         reconcileRestoredWalletL2: vi.fn(),
     },
 }));
@@ -234,7 +234,7 @@ describe('RestoreBackupView', () => {
     });
 
     it('allows restoring from a drop using mnemonic and drop address', async () => {
-        vi.mocked(backupService.fetchAndInspectDropBackup).mockResolvedValue({
+        vi.mocked(backupService.fetchAndInspectBackup).mockResolvedValue({
             stagedPath: '/tmp/drop_restore_123.hmcbackup',
             inspection: {
                 profileName: 'Bob',
@@ -275,16 +275,16 @@ describe('RestoreBackupView', () => {
             />
         );
 
-        // 1. Click "Restore from Drop"
-        fireEvent.click(screen.getByText('Restore from Drop'));
+        // 1. Click "Restore from Sync Service"
+        fireEvent.click(screen.getByText('Restore from Sync Service'));
 
         await waitFor(() => {
-            expect(screen.getByText('Load Backup from Drop')).toBeInTheDocument();
+            expect(screen.getByText('Load Backup from Sync Service')).toBeInTheDocument();
             expect(screen.getByText('Find & Load Backup')).toBeInTheDocument();
         });
 
         // Enter mnemonic words (paste phrase into first word input)
-        const firstWordInput = screen.getByTestId('restore-drop-word-0');
+        const firstWordInput = screen.getByTestId('restore-sync-word-0');
         fireEvent.change(firstWordInput, {
             target: {
                 value: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
@@ -292,15 +292,15 @@ describe('RestoreBackupView', () => {
         });
 
         // Enter drop address
-        const dropAddressInput = screen.getByTestId('restore-drop-input');
+        const dropAddressInput = screen.getByTestId('restore-sync-input');
         fireEvent.change(dropAddressInput, { target: { value: 'https://drop.example.org' } });
 
         // Click Find & Load Backup
         fireEvent.click(screen.getByText('Find & Load Backup'));
 
         await waitFor(() => {
-            expect(backupService.fetchAndInspectDropBackup).toHaveBeenCalledWith({
-                dropInput: 'https://drop.example.org',
+            expect(backupService.fetchAndInspectBackup).toHaveBeenCalledWith({
+                syncInput: 'https://drop.example.org',
                 mnemonic: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
                 passphrase: null,
                 userPrefix: null,

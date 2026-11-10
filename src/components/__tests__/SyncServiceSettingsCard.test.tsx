@@ -5,7 +5,7 @@ import { SyncServiceSettingsCard } from '../settings/SyncServiceSettingsCard';
 import { marketService } from '../../services/marketService';
 import { settingsService } from '../../services/settingsService';
 import { save } from '@tauri-apps/plugin-dialog';
-import { AppSettings, FrontendDropAdminStatus } from '../../types';
+import { AppSettings, FrontendSyncAdminStatus } from '../../types';
 
 vi.mock('react-i18next', () => {
     const fs = require('fs');
@@ -46,18 +46,18 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('../../services/marketService', () => ({
     marketService: {
-        discoverAvailableDrops: vi.fn(),
-        getDropAdminStatus: vi.fn(),
-        probePublicDrop: vi.fn(),
-        savePublicDrop: vi.fn(),
-        prepareDropSetup: vi.fn(),
-        saveDropSetupZip: vi.fn(),
-        testDropConnection: vi.fn(),
-        finalizeDropSetup: vi.fn(),
-        updateDropAdminConfig: vi.fn(),
-        rotateDropAdminKey: vi.fn(),
-        deleteDropAdmin: vi.fn(),
-        getDropOverviewStatus: vi.fn(),
+        discoverAvailableSyncs: vi.fn(),
+        getSyncAdminStatus: vi.fn(),
+        probePublicSync: vi.fn(),
+        savePublicSync: vi.fn(),
+        prepareSyncSetup: vi.fn(),
+        saveSyncSetupZip: vi.fn(),
+        testSyncConnection: vi.fn(),
+        finalizeSyncSetup: vi.fn(),
+        updateSyncAdminConfig: vi.fn(),
+        rotateSyncAdminKey: vi.fn(),
+        deleteSyncAdmin: vi.fn(),
+        getSyncOverviewStatus: vi.fn(),
     },
 }));
 
@@ -83,15 +83,15 @@ describe('SyncServiceSettingsCard Component', () => {
         activeNetwork: 'mainnet',
         postAcceptFromContacts: true,
         marketSendCardOnPayment: false,
-        wotShareViaDrop: true,
-        dropBackupEnabled: true,
-        publicDrops: [],
+        wotShareViaSync: true,
+        syncBackupEnabled: true,
+        publicSyncs: [],
     };
 
     beforeEach(() => {
         vi.clearAllMocks();
-        vi.mocked(marketService.discoverAvailableDrops).mockResolvedValue([]);
-        vi.mocked(marketService.getDropAdminStatus).mockResolvedValue(null);
+        vi.mocked(marketService.discoverAvailableSyncs).mockResolvedValue([]);
+        vi.mocked(marketService.getSyncAdminStatus).mockResolvedValue(null);
         vi.mocked(settingsService.getSettings).mockResolvedValue(defaultSettings);
     });
 
@@ -138,15 +138,15 @@ describe('SyncServiceSettingsCard Component', () => {
         });
     });
 
-    it('probes a public sync drop URL and adds it to publicDrops', async () => {
-        vi.mocked(marketService.probePublicDrop).mockResolvedValue({
+    it('probes a public sync drop URL and adds it to publicSyncs', async () => {
+        vi.mocked(marketService.probePublicSync).mockResolvedValue({
             writeUrl: 'https://test-drop.org/sync.php',
             readUrl: 'https://test-drop.org/sync.php',
             dropPub: 'test-pubkey',
             isAuthorized: true,
             authorizedChannels: ['mailbox', 'market', 'backup'],
         } as any);
-        vi.mocked(marketService.savePublicDrop).mockResolvedValue(undefined as any);
+        vi.mocked(marketService.savePublicSync).mockResolvedValue(undefined as any);
 
         render(
             <SyncServiceSettingsCard
@@ -162,8 +162,8 @@ describe('SyncServiceSettingsCard Component', () => {
         fireEvent.click(probeBtn);
 
         await waitFor(() => {
-            expect(marketService.probePublicDrop).toHaveBeenCalledWith('https://test-drop.org/sync.php');
-            expect(marketService.savePublicDrop).toHaveBeenCalledWith(
+            expect(marketService.probePublicSync).toHaveBeenCalledWith('https://test-drop.org/sync.php');
+            expect(marketService.savePublicSync).toHaveBeenCalledWith(
                 expect.objectContaining({
                     writeUrl: 'https://test-drop.org/sync.php',
                     enabled: true,
@@ -174,8 +174,8 @@ describe('SyncServiceSettingsCard Component', () => {
 
     it('switches to host tab and triggers setup ZIP generation', async () => {
         vi.mocked(save).mockResolvedValue('/tmp/humoco-sync-setup.zip');
-        vi.mocked(marketService.prepareDropSetup).mockResolvedValue(undefined as any);
-        vi.mocked(marketService.saveDropSetupZip).mockResolvedValue(undefined as any);
+        vi.mocked(marketService.prepareSyncSetup).mockResolvedValue(undefined as any);
+        vi.mocked(marketService.saveSyncSetupZip).mockResolvedValue(undefined as any);
 
         render(
             <SyncServiceSettingsCard
@@ -196,13 +196,13 @@ describe('SyncServiceSettingsCard Component', () => {
 
         await waitFor(() => {
             expect(save).toHaveBeenCalled();
-            expect(marketService.prepareDropSetup).toHaveBeenCalled();
-            expect(marketService.saveDropSetupZip).toHaveBeenCalledWith('/tmp/humoco-sync-setup.zip', 'mock-wallet-pw');
+            expect(marketService.prepareSyncSetup).toHaveBeenCalled();
+            expect(marketService.saveSyncSetupZip).toHaveBeenCalledWith('/tmp/humoco-sync-setup.zip', 'mock-wallet-pw');
         });
     });
 
     it('renders active admin dashboard when admin status is returned', async () => {
-        const mockAdmin: FrontendDropAdminStatus = {
+        const mockAdmin: FrontendSyncAdminStatus = {
             descriptor: {
                 readUrl: 'https://my-space.org/sync.php',
                 writeUrl: 'https://my-space.org/sync.php',
@@ -230,7 +230,7 @@ describe('SyncServiceSettingsCard Component', () => {
             activeSlotIds: [],
         };
 
-        vi.mocked(marketService.getDropAdminStatus).mockResolvedValue(mockAdmin);
+        vi.mocked(marketService.getSyncAdminStatus).mockResolvedValue(mockAdmin);
 
         render(
             <SyncServiceSettingsCard
@@ -252,7 +252,7 @@ describe('SyncServiceSettingsCard Component', () => {
     });
 
     it('allows editing policy options and updates them on the active server', async () => {
-        const mockAdmin: FrontendDropAdminStatus = {
+        const mockAdmin: FrontendSyncAdminStatus = {
             descriptor: {
                 readUrl: 'https://my-space.org/sync.php',
                 writeUrl: 'https://my-space.org/sync.php',
@@ -280,8 +280,8 @@ describe('SyncServiceSettingsCard Component', () => {
             activeSlotIds: [],
         };
 
-        vi.mocked(marketService.getDropAdminStatus).mockResolvedValue(mockAdmin);
-        vi.mocked(marketService.updateDropAdminConfig).mockResolvedValue({
+        vi.mocked(marketService.getSyncAdminStatus).mockResolvedValue(mockAdmin);
+        vi.mocked(marketService.updateSyncAdminConfig).mockResolvedValue({
             ...mockAdmin,
             cardPolicy: {
                 directMin: 3,
@@ -315,7 +315,7 @@ describe('SyncServiceSettingsCard Component', () => {
         fireEvent.click(updateBtn);
 
         await waitFor(() => {
-            expect(marketService.updateDropAdminConfig).toHaveBeenCalledWith(
+            expect(marketService.updateSyncAdminConfig).toHaveBeenCalledWith(
                 expect.objectContaining({
                     cardPolicy: expect.objectContaining({
                         directMin: 3,

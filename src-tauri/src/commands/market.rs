@@ -37,8 +37,8 @@ pub fn get_market_view_impl(
 
     let cards_vec: Vec<humoco_market::StoredCard> = store.cards.values().cloned().collect();
 
-    let sync_state: crate::state::StoredDropSync = service
-        .load_encrypted_data(crate::state::MARKET_DROP_SYNC_KEY, password.as_deref())
+    let sync_state: crate::state::StoredSyncState = service
+        .load_encrypted_data(crate::state::MARKET_SYNC_KEY, password.as_deref())
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
@@ -87,15 +87,15 @@ pub fn get_market_view_impl(
     for person in persons.iter_mut() {
         let can_did = crate::state::canonicalize_did(&person.did).unwrap_or_else(|_| person.did.clone());
         if let Some(read_url) = sync_state
-            .drop_sources_by_did
+            .sync_sources_by_did
             .get(&person.did)
-            .or_else(|| sync_state.drop_sources_by_did.get(&can_did))
+            .or_else(|| sync_state.sync_sources_by_did.get(&can_did))
         {
-            let drop_src = crate::models::FrontendEntrySource::Drop {
+            let sync_src = crate::models::FrontendEntrySource::Sync {
                 read_url: read_url.clone(),
             };
-            if !person.sources.contains(&drop_src) {
-                person.sources.push(drop_src);
+            if !person.sources.contains(&sync_src) {
+                person.sources.push(sync_src);
             }
         }
     }
@@ -444,12 +444,12 @@ pub fn import_contact_card_impl(
                 .save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password.as_deref())
                 .map_err(FrontendError::from)?;
             if let Some(stored) = store.cards.values().find(|sc| sc.card.did == did) {
-                let card_drops: Vec<crate::models::FrontendDropDescriptor> =
+                let card_syncs: Vec<crate::models::FrontendSyncDescriptor> =
                     stored.card.drops.iter().cloned().map(Into::into).collect();
-                state.update_contact_drops_from_card(
+                state.update_contact_syncs_from_card(
                     &mut service,
                     &did,
-                    &card_drops,
+                    &card_syncs,
                     password.as_deref(),
                 );
             }
@@ -602,7 +602,7 @@ mod tests {
         assert_eq!(dto_person.sources[1], FrontendEntrySource::Card { hops: 2 });
         assert_eq!(
             dto_person.sources[2],
-            FrontendEntrySource::Drop {
+            FrontendEntrySource::Sync {
                 read_url: "https://drop.example.com".to_string(),
             }
         );
@@ -611,7 +611,7 @@ mod tests {
             uuid: "std-1".to_string(),
         });
         assert!(dto_person.can_forward);
-        assert!(dto_person.card_drops.is_empty());
+        assert!(dto_person.card_syncs.is_empty());
 
         let json = serde_json::to_string(&dto_person).unwrap();
         assert!(json.contains("\"did\":\"did:key:z12345\""));
@@ -620,12 +620,12 @@ mod tests {
         assert!(json.contains("\"kind\":\"voucher\""));
         assert!(json.contains("\"kind\":\"card\""));
         assert!(json.contains("\"hops\":2"));
-        assert!(json.contains("\"kind\":\"drop\""));
+        assert!(json.contains("\"kind\":\"sync\""));
         assert!(json.contains("\"readUrl\":\"https://drop.example.com\""));
         assert!(json.contains("\"listingType\":\"offer\""));
         assert!(json.contains("\"origin\":\"voucher\""));
         assert!(json.contains("\"canForward\":true"));
-        assert!(json.contains("\"cardDrops\":[]"));
+        assert!(json.contains("\"cardSyncs\":[]"));
 
         let deserialized: FrontendMarketPerson = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.did, dto_person.did);
@@ -633,7 +633,7 @@ mod tests {
         assert_eq!(deserialized.listings, dto_person.listings);
         assert_eq!(deserialized.sources, dto_person.sources);
         assert_eq!(deserialized.can_forward, dto_person.can_forward);
-        assert_eq!(deserialized.card_drops, dto_person.card_drops);
+        assert_eq!(deserialized.card_syncs, dto_person.card_syncs);
     }
 
     #[test]

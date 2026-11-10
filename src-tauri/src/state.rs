@@ -11,8 +11,8 @@ pub const CONTACTS_DATA_NAME: &str = "address_book";
 pub const WOT_DATA_NAME: &str = "wot_register";
 pub const MARKET_CARD_STORE_KEY: &str = "market_card_store";
 pub const MARKET_OWN_CARD_KEY: &str = "market_own_card";
-pub const MARKET_DROP_ADMIN_KEY: &str = "market_drop_admin";
-pub const MARKET_DROP_SYNC_KEY: &str = "market_drop_sync";
+pub const MARKET_SYNC_ADMIN_KEY: &str = "market_sync_admin";
+pub const MARKET_SYNC_KEY: &str = "market_sync_state";
 pub const MARKET_POST_STATE_KEY: &str = "market_post_state";
 pub const BUNDLE_RETENTION_DAYS: i64 = 90;
 
@@ -56,10 +56,10 @@ pub struct StoredOwnCard {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct StoredDropAdmin {
+pub struct StoredSyncAdmin {
     pub descriptor: humoco_market::DropDescriptor,
     #[serde(default)]
-    pub drop_index: u32,
+    pub sync_index: u32,
     #[serde(default)]
     pub generation: u32,
     #[serde(default)]
@@ -76,6 +76,7 @@ pub struct StoredDropAdmin {
     pub allow: Vec<String>,
     pub deny: Vec<String>,
     pub blocked_pubkeys: Vec<String>,
+    pub last_members_hash: std::collections::BTreeMap<String, String>,
 }
 
 fn default_max_total_storage_mb() -> usize {
@@ -83,7 +84,7 @@ fn default_max_total_storage_mb() -> usize {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-pub struct StoredDropSync {
+pub struct StoredSyncState {
     pub last_upload_at: Option<u64>,
     pub last_readers_hash: Option<String>,
     pub last_uploaded_card_v: Option<u64>,
@@ -94,7 +95,7 @@ pub struct StoredDropSync {
     #[serde(default)]
     pub slot_mtimes: std::collections::BTreeMap<String, u64>,
     #[serde(default)]
-    pub drop_sources_by_did: std::collections::BTreeMap<String, String>,
+    pub sync_sources_by_did: std::collections::BTreeMap<String, String>,
 }
 
 pub struct AppState {
@@ -180,28 +181,10 @@ impl AppState {
                 *self.contacts.lock().unwrap() = Some(address_book.clone());
 
                 let wot_guard = self.wot.lock().unwrap();
-                let card_store: Option<humoco_market::CardStore> = service
-                    .load_encrypted_data(MARKET_CARD_STORE_KEY, password)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-
                 let mut contacts: Vec<FrontendContact> = address_book.contacts.into_values().collect();
                 for c in contacts.iter_mut() {
                     enrich_contact_with_wot(c, wot_guard.as_ref());
-                    if let Some(ref store) = card_store {
-                        if let Ok(can_did) = canonicalize_did(&c.did) {
-                            if let Some(stored) = store
-                                .cards
-                                .values()
-                                .find(|sc| canonicalize_did(&sc.card.did).ok().as_deref() == Some(&can_did))
-                            {
-                                let card_drops: Vec<crate::models::FrontendDropDescriptor> =
-                                    stored.card.drops.iter().cloned().map(Into::into).collect();
-                                c.drops = merge_contact_drops(&c.drops, &card_drops);
-                            }
-                        }
-                    }
-                    c.drops.truncate(3);
+                    c.syncs.truncate(2);
                 }
                 contacts.sort_by(|a, b| {
                     let name_a = a.profile.first_name.as_deref().unwrap_or("");
@@ -255,9 +238,12 @@ impl AppState {
             .cloned()
             .collect();
 
-        let mut old_drops = Vec::new();
+        let is_existing = address_book.contacts.contains_key(&contact.did) || !keys_to_remove.is_empty();
+
         if let Some(old) = address_book.contacts.get(&contact.did) {
-            old_drops.extend(old.drops.clone());
+            if contact.added_at.is_empty() {
+                contact.added_at = old.added_at.clone();
+            }
         }
 
         for k in keys_to_remove {
@@ -265,49 +251,55 @@ impl AppState {
                 if contact.added_at.is_empty() {
                     contact.added_at = old.added_at;
                 }
-                old_drops.extend(old.drops);
             }
         }
 
-        // Also merge drops from CardStore if present
-        let card_drops: Vec<crate::models::FrontendDropDescriptor> = service
-            .load_encrypted_data(MARKET_CARD_STORE_KEY, password)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<humoco_market::CardStore>(&bytes).ok())
-            .and_then(|store| {
-                store.cards.values()
-                    .find(|sc| canonicalize_did(&sc.card.did).ok().as_deref() == Some(&can_did))
-                    .map(|sc| sc.card.drops.iter().cloned().map(Into::into).collect())
-            })
-            .unwrap_or_default();
+        // Authoritative sync endpoints:
+        // For existing contacts, contact.syncs passed from caller/UI is authoritative.
+        // We do NOT revive old sync endpoints.
+        // For new contacts, if contact.syncs is empty, populate from CardStore if a card exists.
+        if is_existing {
+            contact.syncs = merge_contact_syncs(&[], &contact.syncs);
+            contact.syncs.truncate(2);
+        } else {
+            let card_syncs: Vec<crate::models::FrontendSyncDescriptor> = service
+                .load_encrypted_data(MARKET_CARD_STORE_KEY, password)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<humoco_market::CardStore>(&bytes).ok())
+                .and_then(|store| {
+                    store.cards.values()
+                        .find(|sc| canonicalize_did(&sc.card.did).ok().as_deref() == Some(&can_did))
+                        .map(|sc| sc.card.drops.iter().cloned().map(Into::into).collect())
+                })
+                .unwrap_or_default();
 
-        let mut all_drops = Vec::new();
-        all_drops.extend(contact.drops.clone());
-        all_drops.extend(old_drops);
-        all_drops.extend(card_drops);
-        contact.drops = merge_contact_drops(&[], &all_drops);
-        contact.drops.truncate(3);
+            let mut all_syncs = Vec::new();
+            all_syncs.extend(contact.syncs);
+            all_syncs.extend(card_syncs);
+            contact.syncs = merge_contact_syncs(&[], &all_syncs);
+            contact.syncs.truncate(2);
+        }
 
         // Zero-Config comfort: if user has no friend sync service enabled yet, auto-activate the first candidate
-        if !contact.drops.is_empty() {
+        if !contact.syncs.is_empty() {
             if let Ok(mut settings) = self.load_settings(service, password) {
-                let own_drop_url = service
-                    .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password)
+                let own_sync_url = service
+                    .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password)
                     .ok()
-                    .and_then(|bytes| serde_json::from_slice::<StoredDropAdmin>(&bytes).ok())
+                    .and_then(|bytes| serde_json::from_slice::<StoredSyncAdmin>(&bytes).ok())
                     .map(|admin| admin.descriptor.read_url);
 
-                let has_friend_drop = settings.market_selected_drops.iter()
-                    .any(|d| Some(&d.read_url) != own_drop_url.as_ref());
+                let has_friend_sync = settings.market_selected_syncs.iter()
+                    .any(|d| Some(&d.read_url) != own_sync_url.as_ref());
 
-                if !has_friend_drop {
-                    if let Some(candidate) = contact.drops.iter().find(|d| {
+                if !has_friend_sync {
+                    if let Some(candidate) = contact.syncs.iter().find(|d| {
                         !d.read_url.is_empty()
-                            && Some(&d.read_url) != own_drop_url.as_ref()
-                            && !settings.market_selected_drops.iter().any(|sd| sd.read_url == d.read_url)
+                            && Some(&d.read_url) != own_sync_url.as_ref()
+                            && !settings.market_selected_syncs.iter().any(|sd| sd.read_url == d.read_url)
                     }) {
-                        if settings.market_selected_drops.len() < 3 {
-                            settings.market_selected_drops.push(candidate.clone());
+                        if settings.market_selected_syncs.len() < 3 {
+                            settings.market_selected_syncs.push(candidate.clone());
                             let _ = self.save_settings(service, settings, password);
                         }
                     }
@@ -858,9 +850,9 @@ impl AppState {
                     }
                 }
                 if let Some(stored) = store.cards.values().find(|sc| sc.card.did == did) {
-                    let card_drops: Vec<crate::models::FrontendDropDescriptor> =
+                    let card_syncs: Vec<crate::models::FrontendSyncDescriptor> =
                         stored.card.drops.iter().cloned().map(Into::into).collect();
-                    self.update_contact_drops_from_card(service, &did, &card_drops, password);
+                    self.update_contact_syncs_from_card(service, &did, &card_syncs, password);
                 }
             }
             Ok(other) => {
@@ -872,14 +864,14 @@ impl AppState {
         }
     }
 
-    pub fn update_contact_drops_from_card(
+    pub fn update_contact_syncs_from_card(
         &self,
         service: &mut AppService,
         card_did: &str,
-        card_drops: &[crate::models::FrontendDropDescriptor],
+        card_syncs: &[crate::models::FrontendSyncDescriptor],
         password: Option<&str>,
     ) {
-        if card_drops.is_empty() {
+        if card_syncs.is_empty() {
             return;
         }
         let can_card_did = match canonicalize_did(card_did) {
@@ -896,9 +888,9 @@ impl AppState {
         for (k, contact) in address_book.contacts.iter_mut() {
             let is_match = k == card_did || canonicalize_did(k).ok().as_deref() == Some(&can_card_did);
             if is_match {
-                let merged = merge_contact_drops(&contact.drops, card_drops);
-                if contact.drops != merged {
-                    contact.drops = merged;
+                let merged = merge_contact_syncs(&contact.syncs, card_syncs);
+                if contact.syncs != merged {
+                    contact.syncs = merged;
                     updated = true;
                 }
             }
@@ -911,29 +903,89 @@ impl AppState {
             *self.contacts.lock().unwrap() = Some(address_book);
 
             if let Ok(mut settings) = self.load_settings(service, password) {
-                let own_drop_url = service
-                    .load_encrypted_data(MARKET_DROP_ADMIN_KEY, password)
+                let own_sync_url = service
+                    .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password)
                     .ok()
-                    .and_then(|bytes| serde_json::from_slice::<StoredDropAdmin>(&bytes).ok())
+                    .and_then(|bytes| serde_json::from_slice::<StoredSyncAdmin>(&bytes).ok())
                     .map(|admin| admin.descriptor.read_url);
 
-                let has_friend_drop = settings.market_selected_drops.iter()
-                    .any(|d| Some(&d.read_url) != own_drop_url.as_ref());
+                let has_friend_sync = settings.market_selected_syncs.iter()
+                    .any(|d| Some(&d.read_url) != own_sync_url.as_ref());
 
-                if !has_friend_drop {
-                    if let Some(candidate) = card_drops.iter().find(|d| {
+                if !has_friend_sync {
+                    if let Some(candidate) = card_syncs.iter().find(|d| {
                         !d.read_url.is_empty()
-                            && Some(&d.read_url) != own_drop_url.as_ref()
-                            && !settings.market_selected_drops.iter().any(|sd| sd.read_url == d.read_url)
+                            && Some(&d.read_url) != own_sync_url.as_ref()
+                            && !settings.market_selected_syncs.iter().any(|sd| sd.read_url == d.read_url)
                     }) {
-                        if settings.market_selected_drops.len() < 3 {
-                            settings.market_selected_drops.push(candidate.clone());
+                        if settings.market_selected_syncs.len() < 3 {
+                            settings.market_selected_syncs.push(candidate.clone());
                             let _ = self.save_settings(service, settings, password);
                         }
                     }
                 }
             }
         }
+    }
+
+    pub fn record_contact_sync_health_batch(
+        &self,
+        service: &mut AppService,
+        results: &[(String, bool)],
+        now_secs: u64,
+        password: Option<&str>,
+    ) -> bool {
+        if results.is_empty() {
+            return false;
+        }
+
+        let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
+            Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data).unwrap_or_default(),
+            Err(_) => return false,
+        };
+
+        let mut updated = false;
+        for (url, success) in results {
+            let norm_target = url.trim().trim_end_matches('/').to_lowercase();
+            if norm_target.is_empty() {
+                continue;
+            }
+            for contact in address_book.contacts.values_mut() {
+                for sync_ep in &mut contact.syncs {
+                    let norm_read = sync_ep.read_url.trim().trim_end_matches('/').to_lowercase();
+                    let norm_write = sync_ep.write_url.trim().trim_end_matches('/').to_lowercase();
+                    if norm_read == norm_target || norm_write == norm_target {
+                        if *success {
+                            sync_ep.last_seen_at = Some(now_secs);
+                            sync_ep.fail_count = 0;
+                        } else {
+                            sync_ep.last_error_at = Some(now_secs);
+                            sync_ep.fail_count = sync_ep.fail_count.saturating_add(1);
+                        }
+                        updated = true;
+                    }
+                }
+            }
+        }
+
+        if updated {
+            if let Ok(bytes) = serde_json::to_vec(&address_book) {
+                let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password);
+            }
+            *self.contacts.lock().unwrap() = Some(address_book);
+        }
+        updated
+    }
+
+    pub fn update_contact_sync_health(
+        &self,
+        service: &mut AppService,
+        endpoint_url: &str,
+        success: bool,
+        now_secs: u64,
+        password: Option<&str>,
+    ) -> bool {
+        self.record_contact_sync_health_batch(service, &[(endpoint_url.to_string(), success)], now_secs, password)
     }
 }
 
@@ -1018,18 +1070,18 @@ fn truncate_did(did: &str) -> String {
     }
 }
 
-pub fn merge_contact_drops(
-    existing: &[crate::models::FrontendDropDescriptor],
-    card_drops: &[crate::models::FrontendDropDescriptor],
-) -> Vec<crate::models::FrontendDropDescriptor> {
-    let mut result = Vec::with_capacity(3);
+pub fn merge_contact_syncs(
+    existing: &[crate::models::FrontendSyncDescriptor],
+    card_syncs: &[crate::models::FrontendSyncDescriptor],
+) -> Vec<crate::models::FrontendSyncDescriptor> {
+    let mut result = Vec::with_capacity(2);
     let mut seen = std::collections::HashSet::new();
 
-    // Newest card drops take precedence, preserving priority order
-    for d in card_drops {
+    // Newest card sync endpoints take precedence, preserving priority order
+    for d in card_syncs {
         if seen.insert(d.read_url.clone()) {
             result.push(d.clone());
-            if result.len() == 3 {
+            if result.len() == 2 {
                 return result;
             }
         }
@@ -1037,10 +1089,214 @@ pub fn merge_contact_drops(
     for d in existing {
         if seen.insert(d.read_url.clone()) {
             result.push(d.clone());
-            if result.len() == 3 {
+            if result.len() == 2 {
                 return result;
             }
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use crate::models::{FrontendContact, FrontendUserProfile, FrontendSyncDescriptor};
+
+    #[test]
+    fn test_save_contact_authoritative_syncs_deletion() {
+        let temp_dir = std::env::temp_dir().join(format!("humoco_state_test_{}", uuid::Uuid::new_v4()));
+        let password = "test-password-123";
+        let alice_service = crate::commands::sync::tests::setup_test_app(
+            &temp_dir.join("alice"),
+            "Test Alice",
+            crate::commands::sync::tests::ALICE_PHRASE,
+            password,
+        );
+        let bob_service = crate::commands::sync::tests::setup_test_app(
+            &temp_dir.join("bob"),
+            "Test Bob",
+            crate::commands::sync::tests::BOB_PHRASE,
+            password,
+        );
+        let bob_did = bob_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let mut service = state.service.lock().unwrap();
+
+        let sync1 = FrontendSyncDescriptor {
+            read_url: "https://sync1.example.org/sync.php".to_string(),
+            write_url: "https://sync1.example.org/sync.php".to_string(),
+            drop_pub: "pubkey1".to_string(),
+            slot_id: None,
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+        };
+        let sync2 = FrontendSyncDescriptor {
+            read_url: "https://sync2.example.org/sync.php".to_string(),
+            write_url: "https://sync2.example.org/sync.php".to_string(),
+            drop_pub: "pubkey2".to_string(),
+            slot_id: None,
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+        };
+
+        // 1. Initial contact with 2 sync endpoints
+        let initial_contact = FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile {
+                id: Some(bob_did.clone()),
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(2),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![sync1.clone(), sync2.clone()],
+        };
+
+        state.save_contact(&mut service, initial_contact, Some(password)).unwrap();
+
+        let loaded = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob = loaded.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob.syncs.len(), 2);
+
+        // 2. Update contact with sync2 removed (only sync1 remains)
+        let updated_one_sync = FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile {
+                id: Some(bob_did.clone()),
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: String::new(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(2),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![sync1.clone()], // sync2 removed!
+        };
+
+        state.save_contact(&mut service, updated_one_sync, Some(password)).unwrap();
+
+        // 3. Verify sync2 is deleted and NOT resurrected from old syncs
+        let loaded2 = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob2 = loaded2.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob2.syncs.len(), 1, "Deleted sync2 must not be resurrected");
+        assert_eq!(bob2.syncs[0].read_url, "https://sync1.example.org/sync.php");
+
+        // 4. Update contact with empty syncs (all syncs deleted)
+        let updated_zero_syncs = FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile {
+                id: Some(bob_did.clone()),
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: String::new(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(2),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![], // All removed!
+        };
+
+        state.save_contact(&mut service, updated_zero_syncs, Some(password)).unwrap();
+
+        // 5. Verify all syncs deleted
+        let loaded3 = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob3 = loaded3.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob3.syncs.len(), 0, "All syncs must be removed authoritatively");
+    }
+
+    #[test]
+    fn test_record_contact_sync_health_batch() {
+        let temp_dir = std::env::temp_dir().join(format!("humoco_health_test_{}", uuid::Uuid::new_v4()));
+        let password = "test-password-123";
+        let alice_service = crate::commands::sync::tests::setup_test_app(
+            &temp_dir.join("alice"),
+            "Test Alice",
+            crate::commands::sync::tests::ALICE_PHRASE,
+            password,
+        );
+        let bob_service = crate::commands::sync::tests::setup_test_app(
+            &temp_dir.join("bob"),
+            "Test Bob",
+            crate::commands::sync::tests::BOB_PHRASE,
+            password,
+        );
+        let bob_did = bob_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let mut service = state.service.lock().unwrap();
+
+        let sync_desc = FrontendSyncDescriptor {
+            read_url: "https://sync-endpoint.org/sync.php".to_string(),
+            write_url: "https://sync-endpoint.org/sync.php".to_string(),
+            drop_pub: "pub123".to_string(),
+            slot_id: None,
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+        };
+
+        let contact = FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile {
+                id: Some(bob_did.clone()),
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(2),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![sync_desc],
+        };
+        state.save_contact(&mut service, contact, Some(password)).unwrap();
+
+        // 1. Success update
+        let updated = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", true, 1000, Some(password));
+        assert!(updated);
+        let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob.syncs[0].last_seen_at, Some(1000));
+        assert_eq!(bob.syncs[0].fail_count, 0);
+
+        // 2. Failure update (increments fail_count)
+        let updated2 = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1100, Some(password));
+        assert!(updated2);
+        let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob.syncs[0].last_error_at, Some(1100));
+        assert_eq!(bob.syncs[0].fail_count, 1);
+
+        // 3. Second failure
+        let updated3 = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1200, Some(password));
+        assert!(updated3);
+        let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob.syncs[0].last_error_at, Some(1200));
+        assert_eq!(bob.syncs[0].fail_count, 2);
+
+        // 4. Recovery success resets fail_count
+        let updated4 = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", true, 1300, Some(password));
+        assert!(updated4);
+        let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob.syncs[0].last_seen_at, Some(1300));
+        assert_eq!(bob.syncs[0].fail_count, 0);
+    }
 }

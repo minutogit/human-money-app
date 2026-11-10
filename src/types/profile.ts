@@ -1,6 +1,6 @@
 // src/types/profile.ts
 
-import { FrontendDropDescriptor } from './market';
+import { FrontendSyncDescriptor } from './market';
 
 export type MnemonicLanguage =
     | "english"
@@ -59,7 +59,7 @@ export interface Contact {
     desiredHops?: number | null;
     hasPeerList?: boolean;
     peerListUpdatedAt?: number | null;
-    drops?: FrontendDropDescriptor[];
+    syncs?: FrontendSyncDescriptor[];
 }
 
 export interface CreatorData {

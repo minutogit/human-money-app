@@ -16,8 +16,10 @@ import { marketService } from "../services/marketService";
 import { postService } from "../services/postService";
 import { useNavigation } from "../context/NavigationContext";
 import { useSession } from "../context/SessionContext";
-import { FrontendDropOverviewStatus, FrontendDropSyncResult } from "../types";
-import { DROP_STATUS_UPDATED_EVENT, notifyDropStatusUpdated } from "../utils/dropEvents";
+import { FrontendSyncOverviewStatus, FrontendMarketSyncResult } from "../types";
+import { SYNC_STATUS_UPDATED_EVENT, notifySyncStatusUpdated } from "../utils/syncEvents";
+import { useRateLimitCooldown } from "../hooks/useRateLimitCooldown";
+import { rateLimitManager } from "../utils/rateLimitManager";
 import { Button } from "./ui/Button";
 
 export interface SyncServiceBadgeProps {
@@ -33,20 +35,22 @@ export const SyncServiceBadge: React.FC<SyncServiceBadgeProps> = ({
     const { navigateToSettingsSection } = useNavigation();
     const { isSessionActive } = useSession();
 
-    const [overview, setOverview] = useState<FrontendDropOverviewStatus>({
+    const [overview, setOverview] = useState<FrontendSyncOverviewStatus>({
         connectedCount: 0,
-        friendDrops: 0,
-        publicDrops: 0,
-        hasOwnDrop: false,
-        ownDropSoftWarning: false,
+        pendingCount: 0,
+        friendSyncs: 0,
+        publicSyncs: 0,
+        hasOwnSync: false,
+        ownSyncSoftWarning: false,
         lastSyncAt: null,
     });
     const [isChecking, setIsChecking] = useState(false);
     const [isOpen, setIsOpen] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
-    const [, setSyncFeedback] = useState<FrontendDropSyncResult | null>(null);
+    const [, setSyncFeedback] = useState<FrontendMarketSyncResult | null>(null);
     const popoverRef = useRef<HTMLDivElement>(null);
     const hasTriggeredDailySyncRef = useRef(false);
+    const { cooldownSeconds, isCoolingDown, checkAndTriggerCooldown } = useRateLimitCooldown();
 
     const refreshStatus = useCallback(async () => {
         if (!isSessionActive) {
@@ -54,29 +58,30 @@ export const SyncServiceBadge: React.FC<SyncServiceBadgeProps> = ({
         }
         setIsChecking(true);
         try {
-            const current = await marketService.getDropOverviewStatus();
+            const current = await marketService.getSyncOverviewStatus();
             setOverview(current);
 
-            // Gentle Daily Sync on App Open (§3.2): 1x täglich beim Öffnen der App
+            // Gentle Daily Sync on App Open (§3.2): 1x täglich beim Öffnen der App (Point G.2 throttle)
             if (!hasTriggeredDailySyncRef.current && current.connectedCount > 0 && navigator.onLine) {
                 const nowSecs = Math.floor(Date.now() / 1000);
                 const isOutdated = current.lastSyncAt == null || (nowSecs - current.lastSyncAt >= 86400);
                 hasTriggeredDailySyncRef.current = true;
-                if (isOutdated) {
-                    marketService.syncMarketDrops()
+                if (isOutdated && !rateLimitManager.isCoolingDown()) {
+                    marketService.syncMarketChannels()
                         .then(async (res) => {
                             if (res) {
+                                checkAndTriggerCooldown(res);
                                 setSyncFeedback(res);
-                                const updated = await marketService.getDropOverviewStatus();
+                                const updated = await marketService.getSyncOverviewStatus();
                                 setOverview(updated);
-                                notifyDropStatusUpdated(updated);
+                                notifySyncStatusUpdated(updated);
                             }
                         })
-                        .catch(() => {
-                            // Background sync failure handled silently
+                        .catch((err) => {
+                            checkAndTriggerCooldown(err);
                         });
-                    postService.syncPostDrops().catch(() => {
-                        // Background post sync failure handled silently
+                    postService.syncPostChannels().catch((err) => {
+                        checkAndTriggerCooldown(err);
                     });
                 }
             }
@@ -85,34 +90,35 @@ export const SyncServiceBadge: React.FC<SyncServiceBadgeProps> = ({
         } finally {
             setIsChecking(false);
         }
-    }, [isSessionActive]);
+    }, [isSessionActive, checkAndTriggerCooldown]);
 
     useEffect(() => {
         if (isSessionActive) {
             refreshStatus();
             const interval = window.setInterval(refreshStatus, 30000);
             const onUpdated = (e: Event) => {
-                const custom = e as CustomEvent<FrontendDropOverviewStatus | undefined>;
+                const custom = e as CustomEvent<FrontendSyncOverviewStatus | undefined>;
                 if (custom.detail) {
                     setOverview(custom.detail);
                 } else {
                     refreshStatus();
                 }
             };
-            window.addEventListener(DROP_STATUS_UPDATED_EVENT, onUpdated);
+            window.addEventListener(SYNC_STATUS_UPDATED_EVENT, onUpdated);
             return () => {
                 window.clearInterval(interval);
-                window.removeEventListener(DROP_STATUS_UPDATED_EVENT, onUpdated);
+                window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, onUpdated);
             };
         } else {
             hasTriggeredDailySyncRef.current = false;
             setSyncFeedback(null);
             setOverview({
                 connectedCount: 0,
-                friendDrops: 0,
-                publicDrops: 0,
-                hasOwnDrop: false,
-                ownDropSoftWarning: false,
+                pendingCount: 0,
+                friendSyncs: 0,
+                publicSyncs: 0,
+                hasOwnSync: false,
+                ownSyncSoftWarning: false,
                 lastSyncAt: null,
             });
         }
@@ -143,18 +149,28 @@ export const SyncServiceBadge: React.FC<SyncServiceBadgeProps> = ({
     }, [isOpen]);
 
     const handleSyncNow = async () => {
+        if (isCoolingDown) return;
         setIsSyncing(true);
         try {
-            const [res] = await Promise.all([
-                marketService.syncMarketDrops({ forceUpload: true }),
-                postService.syncPostDrops().catch(() => null),
+            const [res, postRes] = await Promise.all([
+                marketService.syncMarketChannels({ forceUpload: true }),
+                postService.syncPostChannels().catch((err) => {
+                    checkAndTriggerCooldown(err);
+                    return null;
+                }),
             ]);
-            setSyncFeedback(res);
-            const updated = await marketService.getDropOverviewStatus();
+            if (res) {
+                checkAndTriggerCooldown(res);
+                setSyncFeedback(res);
+            }
+            if (postRes) {
+                checkAndTriggerCooldown(postRes);
+            }
+            const updated = await marketService.getSyncOverviewStatus();
             setOverview(updated);
-            notifyDropStatusUpdated(updated);
-        } catch {
-            // Error handled by sync logic
+            notifySyncStatusUpdated(updated);
+        } catch (err) {
+            checkAndTriggerCooldown(err);
         } finally {
             setIsSyncing(false);
         }
@@ -166,7 +182,8 @@ export const SyncServiceBadge: React.FC<SyncServiceBadgeProps> = ({
     };
 
     const isConnected = overview.connectedCount > 0;
-    const isWarning = overview.ownDropSoftWarning;
+    const isWarning = overview.ownSyncSoftWarning;
+    const isPending = !isConnected && overview.pendingCount > 0;
 
     // Styling configuration
     const badgeConfig = isConnected
@@ -191,7 +208,7 @@ export const SyncServiceBadge: React.FC<SyncServiceBadgeProps> = ({
                         count: overview.connectedCount,
                         defaultValue: "{{count}} Sync-Dienste verbunden",
                     }),
-                title: t("settings.dropBadgeConnectedHint", {
+                title: t("settings.syncServiceBadgeConnectedHint", {
                     count: overview.connectedCount,
                     defaultValue: "{{count}} Sync-Dienst(e) aktiv für Hintergrund-Synchronisation",
                 }),
@@ -200,20 +217,29 @@ export const SyncServiceBadge: React.FC<SyncServiceBadgeProps> = ({
                 Icon: Cloud,
                 iconColor: "text-emerald-600 dark:text-emerald-400",
             }
-        : {
-            label: t("settings.syncServiceBadgeNotConnected", "Kein Sync-Dienst"),
-            title: t("settings.syncServiceBadgeNotConnectedHint", "Kein Sync-Dienst verbunden – Klick für Details und Optionen"),
-            containerStyle: "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-900/60 dark:text-slate-300 dark:border-slate-700 hover:bg-slate-200/80",
-            dotStyle: "bg-slate-400",
-            Icon: CloudOff,
-            iconColor: "text-slate-500 dark:text-slate-400",
-        };
+        : isPending
+            ? {
+                label: t("settings.syncServiceBadgePending", "Freischaltung ausstehend"),
+                title: t("settings.syncServiceBadgePendingHint", "Sync-Dienst erreichbar, aber Schlüssel-Freischaltung steht noch aus"),
+                containerStyle: "bg-amber-50/90 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60 hover:bg-amber-100/90",
+                dotStyle: "bg-amber-500",
+                Icon: AlertTriangle,
+                iconColor: "text-amber-600 dark:text-amber-400",
+            }
+            : {
+                label: t("settings.syncServiceBadgeNotConnected", "Kein Sync-Dienst"),
+                title: t("settings.syncServiceBadgeNotConnectedHint", "Kein Sync-Dienst verbunden – Klick für Details und Optionen"),
+                containerStyle: "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-900/60 dark:text-slate-300 dark:border-slate-700 hover:bg-slate-200/80",
+                dotStyle: "bg-slate-400",
+                Icon: CloudOff,
+                iconColor: "text-slate-500 dark:text-slate-400",
+            };
 
     const IconComp = badgeConfig.Icon;
 
     const lastSyncDisplay = overview.lastSyncAt
         ? new Date(overview.lastSyncAt * 1000).toLocaleString()
-        : t("settings.dropLastSyncNever", "Noch nicht synchronisiert");
+        : t("settings.syncLastSyncNever", "Noch nicht synchronisiert");
 
     return (
         <div className={`relative inline-flex items-center ${className}`} ref={popoverRef}>
@@ -279,7 +305,7 @@ export const SyncServiceBadge: React.FC<SyncServiceBadgeProps> = ({
 
                     <div className="p-2.5 bg-bg-app rounded-xl text-xs space-y-2 border border-theme-subtle">
                         <div className="flex justify-between items-center text-xs">
-                            <span className="text-theme-light">{t("settings.dropLastSync", "Zuletzt synchronisiert")}:</span>
+                            <span className="text-theme-light">{t("settings.syncLastSync", "Zuletzt synchronisiert")}:</span>
                             <span className="font-semibold text-theme-primary">{lastSyncDisplay}</span>
                         </div>
 
@@ -287,22 +313,28 @@ export const SyncServiceBadge: React.FC<SyncServiceBadgeProps> = ({
                             <div className="grid grid-cols-3 gap-1.5 pt-1 border-t border-theme-subtle/60 text-[11px]">
                                 <div className="flex items-center gap-1 text-theme-secondary">
                                     <Users size={12} className="text-theme-primary shrink-0" />
-                                    <span>{overview.friendDrops} Freunde</span>
+                                    <span>{overview.friendSyncs} Freunde</span>
                                 </div>
                                 <div className="flex items-center gap-1 text-theme-secondary">
                                     <Globe size={12} className="text-theme-primary shrink-0" />
-                                    <span>{overview.publicDrops} Öffentlich</span>
+                                    <span>{overview.publicSyncs} Öffentlich</span>
                                 </div>
                                 <div className="flex items-center gap-1 text-theme-secondary">
                                     <Server size={12} className="text-theme-primary shrink-0" />
-                                    <span>{overview.hasOwnDrop ? "1 Eigener" : "0 Eigene"}</span>
+                                    <span>{overview.hasOwnSync ? "1 Eigener" : "0 Eigene"}</span>
                                 </div>
+                            </div>
+                        )}
+
+                        {isPending && (
+                            <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 text-amber-800 dark:text-amber-200 text-[11px]">
+                                {t("settings.syncPendingAuthDesc", "Mindestens ein konfigurierter Sync-Dienst wartet noch auf die Freischaltung deines Schlüssels.")}
                             </div>
                         )}
 
                         {isWarning && (
                             <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 text-amber-800 dark:text-amber-200 text-[11px]">
-                                {t("settings.dropWarningStorageDesc", "Dein eigener Sync-Dienst ist zu mindestens 80% belegt.")}
+                                {t("settings.syncWarningStorageDesc", "Dein eigener Sync-Dienst ist zu mindestens 80% belegt.")}
                             </div>
                         )}
                     </div>
@@ -322,12 +354,18 @@ export const SyncServiceBadge: React.FC<SyncServiceBadgeProps> = ({
                             variant="primary"
                             size="sm"
                             onClick={handleSyncNow}
-                            disabled={isSyncing || !isConnected}
+                            disabled={isSyncing || !isConnected || isCoolingDown}
                             className="flex items-center gap-1.5 text-xs"
                             title={t("settings.syncNow", "Jetzt synchronisieren")}
                         >
                             <RefreshCw size={13} className={isSyncing ? "animate-spin" : ""} />
-                            <span>{isSyncing ? t("settings.syncing", "Synchronisiere...") : t("settings.syncNow", "Jetzt synchronisieren")}</span>
+                            <span>
+                                {isCoolingDown
+                                    ? t("settings.syncRateLimitWait", { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })
+                                    : isSyncing
+                                    ? t("settings.syncing", "Synchronisiere...")
+                                    : t("settings.syncNow", "Jetzt synchronisieren")}
+                            </span>
                         </Button>
                     </div>
                 </div>

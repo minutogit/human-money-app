@@ -71,12 +71,12 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 const existing = existingContacts.find(c => c.did === did);
 
                 let profile = existing?.profile;
-                let drops = existing?.drops;
+                let syncs = existing?.syncs;
                 if (!profile) {
                     const list = await marketService.getMarketView().catch(() => []);
                     const p = (list || []).find(x => x.did === did);
                     profile = p?.profile;
-                    drops = p?.cardDrops;
+                    syncs = p?.cardSyncs;
                 }
 
                 const defaultProfile = {
@@ -90,14 +90,14 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                     tags: existing?.tags || [],
                     addedAt: existing?.addedAt || new Date().toISOString(),
                     trustLevel: level,
-                    drops: drops || [],
+                    syncs: syncs || [],
                 };
 
                 await protectAction(async (pwd) => {
                     await contactService.saveContact(contactToSave, pwd || undefined);
                 });
 
-                marketService.syncMarketDrops().catch(() => {});
+                marketService.syncMarketChannels().catch(() => {});
             }
             setSelectedTrustLevel(level);
         } catch (err) {

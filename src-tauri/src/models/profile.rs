@@ -124,7 +124,7 @@ pub struct FrontendContact {
     #[serde(default)]
     pub peer_list_updated_at: Option<u64>,
     #[serde(default)]
-    pub drops: Vec<crate::models::FrontendDropDescriptor>,
+    pub syncs: Vec<crate::models::FrontendSyncDescriptor>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

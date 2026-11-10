@@ -175,7 +175,7 @@ mod tests {
             desired_hops: None,
             has_peer_list: false,
             peer_list_updated_at: None,
-            drops: vec![],
+            syncs: vec![],
         });
 
         let state_raw = AppState {
@@ -195,9 +195,9 @@ mod tests {
     }
 
     #[test]
-    fn test_save_contact_merges_drops_and_auto_activates_friend_drop() {
+    fn test_save_contact_merges_syncs_and_auto_activates_friend_sync() {
         use chrono::Utc;
-        use crate::models::{FrontendContact, FrontendUserProfile, FrontendDropDescriptor};
+        use crate::models::{FrontendContact, FrontendUserProfile, FrontendSyncDescriptor};
 
         let temp_dir = std::env::temp_dir().join(format!("humoco_contacts_test_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
@@ -219,14 +219,17 @@ mod tests {
         let mut service = state.service.lock().unwrap();
 
         let did = &bob_did;
-        let drop1 = FrontendDropDescriptor {
+        let sync1 = FrontendSyncDescriptor {
             read_url: "https://alice-drop.com/sync.php".to_string(),
             write_url: "https://alice-drop.com/sync.php".to_string(),
             drop_pub: "pubkey12345".to_string(),
             slot_id: None,
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
         };
 
-        // 1. Initial contact with drop1
+        // 1. Initial contact with sync1
         let initial_contact = FrontendContact {
             did: did.to_string(),
             profile: FrontendUserProfile {
@@ -241,17 +244,17 @@ mod tests {
             desired_hops: Some(2),
             has_peer_list: false,
             peer_list_updated_at: None,
-            drops: vec![drop1.clone()],
+            syncs: vec![sync1.clone()],
         };
 
         state.save_contact(&mut service, initial_contact, Some(password)).unwrap();
 
-        // Check settings: drop1 was auto-activated into market_selected_drops
+        // Check settings: sync1 was auto-activated into market_selected_syncs
         let settings = state.load_settings(&mut service, Some(password)).unwrap();
-        assert_eq!(settings.market_selected_drops.len(), 1);
-        assert_eq!(settings.market_selected_drops[0].read_url, "https://alice-drop.com/sync.php");
+        assert_eq!(settings.market_selected_syncs.len(), 1);
+        assert_eq!(settings.market_selected_syncs[0].read_url, "https://alice-drop.com/sync.php");
 
-        // 2. Overwrite contact with EMPTY drops (e.g. from 1-click handshake or profile edit)
+        // 2. Overwrite contact with EMPTY drops (user deleted drop)
         let updated_contact = FrontendContact {
             did: did.to_string(),
             profile: FrontendUserProfile {
@@ -266,16 +269,15 @@ mod tests {
             desired_hops: Some(2),
             has_peer_list: false,
             peer_list_updated_at: None,
-            drops: vec![], // Empty!
+            syncs: vec![], // Empty!
         };
 
         state.save_contact(&mut service, updated_contact, Some(password)).unwrap();
 
-        // 3. Verify drops were NOT lost and were preserved from old contact
+        // 3. Verify drops were deleted authoritatively and not resurrected
         let loaded_contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let alice = loaded_contacts.iter().find(|c| c.did == *did).expect("Alice should exist");
         assert_eq!(alice.profile.first_name, Some("Alice Renamed".to_string()));
-        assert_eq!(alice.drops.len(), 1, "Drops must not be erased when saving with empty drops");
-        assert_eq!(alice.drops[0].read_url, "https://alice-drop.com/sync.php");
+        assert_eq!(alice.syncs.len(), 0, "Sync endpoints must be deleted when saving with empty syncs");
     }
 }

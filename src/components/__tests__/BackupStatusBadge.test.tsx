@@ -57,7 +57,7 @@ vi.mock('react-i18next', () => {
 vi.mock('../../services/backupService', () => ({
     backupService: {
         getBackupStatus: vi.fn(),
-        syncDropBackup: vi.fn().mockResolvedValue({ uploadedTo: 1, authorizedTargets: 1 }),
+        syncBackup: vi.fn().mockResolvedValue({ uploadedTo: 1, authorizedTargets: 1 }),
     },
 }));
 
@@ -172,7 +172,7 @@ describe('BackupStatusBadge', () => {
         });
     });
 
-    it('invokes runAutoBackupPass and syncDropBackup when Back up now button is clicked', async () => {
+    it('invokes runAutoBackupPass and syncBackup when Back up now button is clicked', async () => {
         const spyRunPass = vi.spyOn(autoBackupUtils, 'runAutoBackupPass').mockResolvedValue({
             status: 'ok',
             lastBackupAt: '2026-10-31T16:00:00Z',
@@ -212,7 +212,7 @@ describe('BackupStatusBadge', () => {
 
         await waitFor(() => {
             expect(spyRunPass).toHaveBeenCalled();
-            expect(backupService.syncDropBackup).toHaveBeenCalled();
+            expect(backupService.syncBackup).toHaveBeenCalled();
         });
     });
 });

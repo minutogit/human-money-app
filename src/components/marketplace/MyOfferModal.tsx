@@ -217,8 +217,8 @@ export function MyOfferModal({ isOpen, onClose, onCardUpdated }: MyOfferModalPro
                 if (onCardUpdated) {
                     onCardUpdated();
                 }
-                marketService.syncMarketDrops({ forceUpload: true }).catch((e) => {
-                    logger.warn('Non-blocking drop upload on card save error: ' + String(e));
+                marketService.syncMarketChannels({ forceUpload: true }).catch((e) => {
+                    logger.warn('Non-blocking sync upload on card save error: ' + String(e));
                 });
             }
         } catch (err) {
@@ -242,8 +242,8 @@ export function MyOfferModal({ isOpen, onClose, onCardUpdated }: MyOfferModalPro
             if (onCardUpdated) {
                 onCardUpdated();
             }
-            marketService.deleteOwnDropSlots().catch((e) => {
-                logger.warn('Non-blocking drop slot delete error: ' + String(e));
+            marketService.deleteOwnSyncSlots().catch((e) => {
+                logger.warn('Non-blocking sync slot delete error: ' + String(e));
             });
         } catch (err) {
             setError(translateError(err, t));

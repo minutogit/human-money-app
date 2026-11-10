@@ -42,7 +42,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     const [confirmBackupPassword, setConfirmBackupPassword] = useState('');
     const [syncFolder, setSyncFolder] = useState<string>(settings?.backupSyncFolder || '');
     const [autoBackupEnabled, setAutoBackupEnabled] = useState<boolean>(settings?.autoBackupEnabled ?? true);
-    const [dropBackupEnabled, setDropBackupEnabled] = useState<boolean>(settings?.dropBackupEnabled ?? true);
+    const [syncBackupEnabled, setSyncBackupEnabled] = useState<boolean>(settings?.syncBackupEnabled ?? true);
     const [backupFrequency, setBackupFrequency] = useState<'after_mutation' | 'on_close' | 'daily' | 'manual'>(
         settings?.backupFrequency || 'after_mutation'
     );
@@ -60,7 +60,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
 
     const [isExporting, setIsExporting] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
-    const [isDropSyncing, setIsDropSyncing] = useState(false);
+    const [isSyncingBackup, setIsSyncingBackup] = useState(false);
     const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
     const validateCustomPassword = (): boolean => {
@@ -92,12 +92,12 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         }
     };
 
-    const handleToggleDropBackup = async (enabled: boolean) => {
-        setDropBackupEnabled(enabled);
+    const handleToggleSyncBackup = async (enabled: boolean) => {
+        setSyncBackupEnabled(enabled);
         if (settings) {
             const updated: AppSettings = {
                 ...settings,
-                dropBackupEnabled: enabled,
+                syncBackupEnabled: enabled,
             };
             try {
                 await settingsService.saveSettings(updated);
@@ -124,36 +124,36 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         }
     };
 
-    const handleManualDropBackup = async () => {
-        setIsDropSyncing(true);
+    const handleManualSyncBackup = async () => {
+        setIsSyncingBackup(true);
         setFeedback(null);
         try {
-            const res = await backupService.syncDropBackup();
+            const res = await backupService.syncBackup();
             if (res.uploadedTo > 0) {
                 setFeedback({
                     type: 'success',
-                    message: t('settings.dropBackupSuccess', `Sicherung erfolgreich in ${res.uploadedTo} Sync-Dienst(en) hinterlegt (${Math.round(res.paddedBytes / 1024)} KB).`),
+                    message: t('settings.syncBackupSuccess', `Sicherung erfolgreich in ${res.uploadedTo} Sync-Dienst(en) hinterlegt (${Math.round(res.paddedBytes / 1024)} KB).`),
                 });
                 if (settings && onSettingsUpdated) {
-                    onSettingsUpdated({ ...settings, lastDropBackupAt: res.timestamp ?? new Date().toISOString() });
+                    onSettingsUpdated({ ...settings, lastSyncBackupAt: res.timestamp ?? new Date().toISOString() });
                 }
                 const updatedStatus = await backupService.getBackupStatus().catch(() => null);
                 if (updatedStatus) setBackupStatus(updatedStatus);
             } else if (res.authorizedTargets === 0) {
                 setFeedback({
                     type: 'error',
-                    message: t('settings.noDropAuthorizedBackup', 'Kein verbundener Sync-Dienst hat den Backup-Kanal freigegeben. Bitte aktiviere "Backups erlauben" bei mindestens einem Sync-Dienst.'),
+                    message: t('settings.noSyncAuthorizedBackup', 'Kein verbundener Sync-Dienst hat den Backup-Kanal freigegeben. Bitte aktiviere "Backups erlauben" bei mindestens einem Sync-Dienst.'),
                 });
             } else {
                 setFeedback({
                     type: 'error',
-                    message: t('settings.dropBackupFailed', 'Sicherung in Sync-Dienst fehlgeschlagen: ' + res.errors.join(', ')),
+                    message: t('settings.syncBackupFailed', 'Sicherung in Sync-Dienst fehlgeschlagen: ' + res.errors.join(', ')),
                 });
             }
         } catch (err) {
             setFeedback({ type: 'error', message: translateError(err, t) });
         } finally {
-            setIsDropSyncing(false);
+            setIsSyncingBackup(false);
         }
     };
 
@@ -550,28 +550,28 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                 <div className="flex items-center gap-2">
                                     <Cloud size={16} className="text-theme-primary" />
                                     <h4 className="font-bold text-xs text-theme-secondary uppercase tracking-wider">
-                                        {t('settings.dropBackupTitle', 'Online-Backup (Sync-Dienst)')}
+                                        {t('settings.syncBackupTitle', 'Online-Backup (Sync-Dienst)')}
                                     </h4>
                                 </div>
-                                {settings?.lastDropBackupAt && (
+                                {settings?.lastSyncBackupAt && (
                                     <span className="text-[10px] text-theme-light flex items-center gap-1 font-mono">
                                         <Clock size={12} />
-                                        {new Date(settings.lastDropBackupAt).toLocaleString()}
+                                        {new Date(settings.lastSyncBackupAt).toLocaleString()}
                                     </span>
                                 )}
                             </div>
                             <p className="text-[11px] text-theme-light leading-relaxed">
-                                {t('settings.dropBackupDesc', 'Sichert die verschlüsselte Wallet (.hmcbackup mit 64-KB-Padding) automatisch bei autorisierten Sync-Diensten.')}
+                                {t('settings.syncBackupDesc', 'Sichert die verschlüsselte Wallet (.hmcbackup mit 64-KB-Padding) automatisch bei autorisierten Sync-Diensten.')}
                             </p>
 
                             {/* Live Status Indicator */}
                             <div className="p-3 bg-bg-app rounded-xl border border-theme-subtle/70 text-xs flex items-center justify-between">
                                 <span className="text-theme-light font-medium flex items-center gap-1.5">
-                                    <span className={`w-2 h-2 rounded-full ${dropBackupEnabled && backupStatus?.hasAuthorizedSyncBackupTarget ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                                    <span className={`w-2 h-2 rounded-full ${syncBackupEnabled && backupStatus?.hasAuthorizedSyncBackupTarget ? 'bg-emerald-500' : 'bg-slate-400'}`} />
                                     {t('settings.syncServiceStatusLabel', 'Status:')}
                                 </span>
                                 <span className="font-bold text-theme-primary">
-                                    {!dropBackupEnabled
+                                    {!syncBackupEnabled
                                         ? t('settings.backupDisabled', 'Deaktiviert')
                                         : !backupStatus?.hasAuthorizedSyncBackupTarget
                                         ? t('settings.noSyncBackupTargetWarning', 'Kein Sync-Dienst für Backups freigegeben')
@@ -582,17 +582,17 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                             <label className="flex items-start gap-2.5 cursor-pointer select-none pt-1">
                                 <input
                                     type="checkbox"
-                                    aria-label={t('settings.dropBackupToggleLabel', 'Automatisch im Sync-Dienst sichern')}
-                                    checked={dropBackupEnabled}
-                                    onChange={(e) => handleToggleDropBackup(e.target.checked)}
+                                    aria-label={t('settings.syncBackupToggleLabel', 'Automatisch im Sync-Dienst sichern')}
+                                    checked={syncBackupEnabled}
+                                    onChange={(e) => handleToggleSyncBackup(e.target.checked)}
                                     className="mt-0.5 rounded text-theme-primary focus:ring-theme-accent"
                                 />
                                 <div className="text-xs">
                                     <span className="font-bold text-theme-secondary block">
-                                        {t('settings.dropBackupToggleLabel', 'Automatisch im Sync-Dienst sichern')}
+                                        {t('settings.syncBackupToggleLabel', 'Automatisch im Sync-Dienst sichern')}
                                     </span>
                                     <span className="text-[11px] text-theme-light block leading-relaxed">
-                                        {t('settings.dropBackupToggleDesc', 'Lädt bei jeder Zustandsänderung (Zahlungen, Gutscheine, Bürgschaften, Kontakte) automatisch die Sicherung hoch.')}
+                                        {t('settings.syncBackupToggleDesc', 'Lädt bei jeder Zustandsänderung (Zahlungen, Gutscheine, Bürgschaften, Kontakte) automatisch die Sicherung hoch.')}
                                     </span>
                                 </div>
                             </label>
@@ -636,12 +636,12 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
 
                         <Button
                             type="button"
-                            onClick={handleManualDropBackup}
-                            disabled={isDropSyncing || !dropBackupEnabled}
+                            onClick={handleManualSyncBackup}
+                            disabled={isSyncingBackup || !syncBackupEnabled}
                             variant="secondary"
                             className="w-full flex items-center justify-center gap-2 text-xs py-2.5"
                         >
-                            {isDropSyncing ? (
+                            {isSyncingBackup ? (
                                 <>
                                     <RefreshCw size={14} className="animate-spin mr-2" />
                                     {t('settings.syncing', 'Sichere in Sync-Dienst...')}
@@ -649,7 +649,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                             ) : (
                                 <>
                                     <Cloud size={14} className="mr-2" />
-                                    {t('settings.syncDropNowButton', 'Jetzt in Sync-Dienst sichern')}
+                                    {t('settings.syncBackupNowButton', 'Jetzt in Sync-Dienst sichern')}
                                 </>
                             )}
                         </Button>

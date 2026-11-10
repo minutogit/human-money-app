@@ -122,7 +122,7 @@ export const BackupStatusBadge: React.FC<BackupStatusBadgeProps> = ({
             // Trigger both local folder backup pass and sync service backup pass
             await Promise.all([
                 runAutoBackupPass().catch(() => null),
-                backupService.syncDropBackup().catch(() => null),
+                backupService.syncBackup().catch(() => null),
             ]);
             await refreshStatus();
         } finally {
@@ -202,8 +202,8 @@ export const BackupStatusBadge: React.FC<BackupStatusBadgeProps> = ({
             iconColor: "text-slate-500 dark:text-slate-400",
         },
         manualOnly: {
-            label: t("settings.backupBadgeManualOnly", "Manuelle Sicherung"),
-            title: t("settings.backupBadgeManualOnlyHint", "Automatische Sicherung ist deaktiviert"),
+            label: t("settings.backupBadgeManual", "Manuelle Sicherung"),
+            title: t("settings.backupBadgeManualHint", "Automatische Sicherung ist deaktiviert"),
             containerStyle: "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-900/60 dark:text-slate-300 dark:border-slate-700 hover:bg-slate-200/80",
             dotStyle: "bg-slate-400",
             Icon: HardDrive,

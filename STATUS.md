@@ -3,10 +3,16 @@ project: human-money-app
 version: "0.5.1"
 phase: "beta"
 health: "green"
-last_updated: "2026-11-09"
+last_updated: "2026-11-10"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-064"
+    title: "Sync Service & Address Book Overhaul: Per-Contact Sync Management, Health Probing, Rate-Limit Cooldown & Channel Member Auto-Push"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-063"]
+    description: "Completed full Sync Service & Address Book overhaul: per-contact sync service management with URL validation, live probing, health status pills (connected, unauthorized, unreachable) in AddressBook and ContactDialog; auto-activation of friend sync targets on contact save; debounced channel member push across active syncs; global rate-limit cooldown manager with Retry-After header parsing; post sync event consolidation; unified 'Sync-Dienst' across all 5 locales (53 Vitest test suites / 431 tests, 70 src-tauri tests, 55 humoco-market tests passing with 0 warnings)."
   - id: "APP-063"
     title: "UI/UX Refactoring: Header Badges Z-Index & Opacity, Settings 4-Tabs Reorganization, Sync Service Terminology & Adaptive AddressBook"
     status: "completed"
@@ -397,7 +403,7 @@ priority_tasks:
 
 ## Current Focus
 
-Tauri v2 desktop/mobile wallet (`v0.5.0` Beta). Core voucher workflows, switchable Spendable/Net balance views, silent mount-safe auto-backups, `humoco://` contact & payment request sharing, global drag-and-drop, bank-grade Account Statement with CSV export, guided guarantor/redemption/proof workflows, unified navigation history & shared UI primitives (`APP-051`), global 1–4 hops reach selector, passwordless multi-contact `.wot` sharing & progressive-disclosure `BinaryFuse64` provider seals (`APP-052`), L2 PoS checkout, full Offline-First Web of Trust (`humoco-wot`), and the multi-purpose 4-channel drop infrastructure (`APP-054`–`APP-062`: channels `card`, `wot`, `backup`, `post` with clean-break 64-hex Ed25519 stealth/public auth, 1-inode rate limiter, dual-delivery payments, async co-signing & WoT handshakes) are fully integrated across 5 locales.
+Tauri v2 desktop/mobile wallet (`v0.5.1` Beta). Core voucher workflows, switchable Spendable/Net balance views, silent mount-safe auto-backups, `humoco://` contact & payment request sharing, global drag-and-drop, bank-grade Account Statement with CSV export, guided guarantor/redemption/proof workflows, unified navigation history & shared UI primitives (`APP-051`), global 1–4 hops reach selector, passwordless multi-contact `.wot` sharing & progressive-disclosure `BinaryFuse64` provider seals (`APP-052`), L2 PoS checkout, full Offline-First Web of Trust (`humoco-wot`), multi-purpose 4-channel sync infrastructure (`APP-054`–`APP-062`), and full Sync Service & Address Book overhaul (`APP-063`, `APP-064`: 4-tab settings, z-index/opacity fixes, per-contact sync URLs, live probing, health pills, rate-limit cooldown, and debounced member auto-push) are fully integrated across 5 locales.
 
 ## Architecture
 
@@ -667,6 +673,28 @@ Bumped `human-money-app` to `v0.4.0`. Delivered comprehensive user-centric impro
   - All 55 `humoco-market` unit/proptests passing.
   - All 61 `src-tauri` integration/unit tests passing (116 total Rust tests, 515 total app tests).
   - 0 ESLint warnings, 0 TypeScript errors, 0 Clippy warnings.
+
+### 2026-11-10 — v0.5.1: Sync Service & Address Book Overhaul (`APP-063`, `APP-064`)
+
+- **Settings 4-Tabs Reorganization & UX Enhancements (`APP-063`)**:
+  - Raised Header z-index and made badge popovers 100% opaque (`bg-white dark:bg-gray-900`) preventing overlap behind sticky headers.
+  - Reorganized SettingsView into 4 clean tabs: Profile, Security & Backups, Sync & Network, Standards & General with badge deep-link navigation.
+  - Enabled marketplace sync channel by default and streamlined backup settings with 'Backups erlauben' and configurable frequency selector.
+- **Sync Service & Address Book Integration (`APP-064`)**:
+  - Implemented per-contact sync service management in `ContactDialog.tsx` (up to 2 sync URLs) with format validation, HTTPS probing via `probe_sync_write_url`, and reachability health indicators.
+  - Added dynamic sync health status pills on contact cards (`connected`, `unauthorized`, `unreachable`) in `AddressBook.tsx` with popover showing last checked timestamp and URL.
+  - Added interactive pull-to-refresh & sync trigger for sync services in AddressBook with global rate-limit cooldown protection (`useRateLimitCooldown`, `rateLimitManager.ts`).
+  - Implemented debounced push channel members sync (`triggerDebouncedChannelMembersSync`) when saving/updating contacts so remote sync services update member lists automatically.
+  - Wired real-time trust change impact preview showing gained/lost read/write permissions for Market, Sync, WoT, and Post channels.
+  - Migrated legacy `dropEvents.ts` to unified `syncEvents.ts` and hardened `postSync.ts`.
+  - Added HTTP `Retry-After` header parsing and exponential client backoff in `sync_client.rs`.
+  - Complete i18n synchronization for all new keys across English, German, Spanish, French, and Italian.
+- **Full Verification**:
+  - All 53 Vitest test suites (431 tests) passing.
+  - All 70 `src-tauri` integration/unit tests passing.
+  - All 55 `humoco-market` unit/proptests passing (125 total Rust tests, 556 total app tests).
+  - 0 TypeScript errors, 0 ESLint errors, 0 Clippy warnings (`-D warnings`).
+
 
 
 

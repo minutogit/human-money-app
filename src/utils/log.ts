@@ -15,6 +15,7 @@ async function logToBackend(level: string, message: string) {
 }
 
 export const logger = {
+    debug: (message: string) => logToBackend("debug", message),
     info: (message: string) => logToBackend("info", message),
     warn: (message: string) => logToBackend("warn", message),
     error: (message: string) => logToBackend("error", message),

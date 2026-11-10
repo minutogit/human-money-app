@@ -6,7 +6,7 @@ import { marketService } from '../../../services/marketService';
 
 vi.mock('../../../services/marketService', () => ({
   marketService: {
-    syncMarketDrops: vi.fn().mockResolvedValue(undefined),
+    syncMarketChannels: vi.fn().mockResolvedValue(undefined),
     getMarketView: vi.fn(),
     exportForwardCard: vi.fn(),
     previewContactTrustChange: vi.fn().mockResolvedValue({ newlyAccessibleMembers: 0, newlyExcludedMembers: 0 }),
@@ -43,7 +43,7 @@ describe('MarketPersonView Component', () => {
       community: 'Builders',
     },
     trust: 'trusted',
-    cardDrops: [],
+    cardSyncs: [],
     sources: [{ kind: 'card', hops: 1 }],
     standards: [],
     listings: [],
@@ -55,10 +55,10 @@ describe('MarketPersonView Component', () => {
     vi.clearAllMocks();
   });
 
-  it('renders waiting for mutual handshake notice when listings are empty but cardDrops exist', () => {
+  it('renders waiting for mutual handshake notice when listings are empty but cardSyncs exist', () => {
     const personWithDrops: FrontendMarketPerson = {
       ...basePerson,
-      cardDrops: [
+      cardSyncs: [
         {
           readUrl: 'https://bob-sync.org/sync.php',
           writeUrl: 'https://bob-sync.org/sync.php',
@@ -74,10 +74,10 @@ describe('MarketPersonView Component', () => {
     expect(screen.getByRole('button', { name: /Jetzt abrufen|Fetch now/i })).toBeInTheDocument();
   });
 
-  it('triggers syncMarketDrops when clicking [Jetzt abrufen]', async () => {
+  it('triggers syncMarketChannels when clicking [Jetzt abrufen]', async () => {
     const personWithDrops: FrontendMarketPerson = {
       ...basePerson,
-      cardDrops: [
+      cardSyncs: [
         {
           readUrl: 'https://bob-sync.org/sync.php',
           writeUrl: 'https://bob-sync.org/sync.php',
@@ -94,15 +94,15 @@ describe('MarketPersonView Component', () => {
     fireEvent.click(fetchBtn);
 
     await waitFor(() => {
-      expect(marketService.syncMarketDrops).toHaveBeenCalled();
+      expect(marketService.syncMarketChannels).toHaveBeenCalled();
       expect(marketService.getMarketView).toHaveBeenCalled();
     });
   });
 
-  it('renders default acceptsOwnVouchers when listings are empty and no cardDrops exist', () => {
+  it('renders default acceptsOwnVouchers when listings are empty and no cardSyncs exist', () => {
     const personWithoutDrops: FrontendMarketPerson = {
       ...basePerson,
-      cardDrops: [],
+      cardSyncs: [],
     };
 
     render(<MarketPersonView person={personWithoutDrops} onBack={vi.fn()} />);

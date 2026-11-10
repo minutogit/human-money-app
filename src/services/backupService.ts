@@ -7,13 +7,13 @@ import {
     RestoreOutcomeDto,
     MnemonicLanguage,
     FrontendAutoBackupStatusDto,
-    FrontendDropBackupSyncResult,
-    FrontendDropBackupFetchDto,
+    FrontendBackupSyncResult,
+    FrontendBackupFetchDto,
     FrontendRestoreReconcileResultDto,
 } from "../types";
 
-export interface FetchAndInspectDropBackupArgs {
-    dropInput: string;
+export interface FetchAndInspectBackupArgs {
+    syncInput: string;
     mnemonic: string;
     passphrase?: string | null;
     userPrefix?: string | null;
@@ -115,15 +115,15 @@ export const backupService = {
         return await invoke<FrontendAutoBackupStatusDto>("run_auto_backup_sync");
     },
 
-    syncDropBackup: async (password?: string | null): Promise<FrontendDropBackupSyncResult> => {
-        return await invoke<FrontendDropBackupSyncResult>("sync_drop_backup", {
+    syncBackup: async (password?: string | null): Promise<FrontendBackupSyncResult> => {
+        return await invoke<FrontendBackupSyncResult>("sync_backup", {
             password: password ?? null,
         });
     },
 
-    fetchAndInspectDropBackup: async (args: FetchAndInspectDropBackupArgs): Promise<FrontendDropBackupFetchDto> => {
-        return await invoke<FrontendDropBackupFetchDto>("fetch_and_inspect_drop_backup", {
-            dropInput: args.dropInput,
+    fetchAndInspectBackup: async (args: FetchAndInspectBackupArgs): Promise<FrontendBackupFetchDto> => {
+        return await invoke<FrontendBackupFetchDto>("fetch_and_inspect_backup", {
+            syncInput: args.syncInput,
             mnemonic: args.mnemonic,
             passphrase: args.passphrase ?? null,
             userPrefix: args.userPrefix ?? null,

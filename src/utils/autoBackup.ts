@@ -3,17 +3,19 @@ import { backupService } from '../services/backupService';
 import { settingsService } from '../services/settingsService';
 import { logger } from './log';
 import { isBackendError, stringifyError } from './errorHelper';
-import { FrontendAutoBackupStatusDto, FrontendDropBackupSyncResult } from '../types';
-import { notifyDropStatusUpdated } from './dropEvents';
+import { FrontendAutoBackupStatusDto, FrontendBackupSyncResult } from '../types';
+import { notifySyncStatusUpdated } from './syncEvents';
+import { rateLimitManager } from './rateLimitManager';
 
 let backupInterval: number | null = null;
 let initialTimeout: number | null = null;
 let debounceTimer: number | null = null;
-let dropDebounceTimer: number | null = null;
+let syncDebounceTimer: number | null = null;
 let isBackupRunning = false;
-let isDropBackupRunning = false;
+let isSyncBackupRunning = false;
+let lastSyncBackupSuccessAt: number | null = null;
 
-export const DROP_BACKUP_DEBOUNCE_MS = 30_000;
+export const SYNC_BACKUP_DEBOUNCE_MS = 30_000;
 
 /**
  * Event name dispatched when backup status updates.
@@ -59,33 +61,56 @@ export async function runAutoBackupPass(): Promise<FrontendAutoBackupStatusDto |
 }
 
 /**
- * Runs a single drop backup pass if not already running.
+ * Runs a single sync backup pass if not already running.
+ * Point G.3: Background sync runs at most 1x daily (24h) unless `force` is true (after mutations).
  */
-export async function runDropBackupPass(): Promise<FrontendDropBackupSyncResult | null> {
-    if (isDropBackupRunning) {
+export async function runSyncBackupPass(force: boolean = false): Promise<FrontendBackupSyncResult | null> {
+    if (isSyncBackupRunning) {
         return null;
     }
-    isDropBackupRunning = true;
+    if (rateLimitManager.isCoolingDown()) {
+        logger.debug("Skipping sync backup pass due to active 429 rate limit cooldown.");
+        return null;
+    }
+    if (!force && lastSyncBackupSuccessAt !== null) {
+        const elapsed = Date.now() - lastSyncBackupSuccessAt;
+        if (elapsed < 86400_000) {
+            return null; // 24h background throttle
+        }
+    }
+
+    isSyncBackupRunning = true;
     try {
-        const result = await backupService.syncDropBackup();
+        const result = await backupService.syncBackup();
         dispatchBackupUpdated();
-        notifyDropStatusUpdated();
-        if (result && result.uploadedTo > 0) {
-            logger.info(`Drop backup synced: uploaded to ${result.uploadedTo} drop(s), ${result.paddedBytes} bytes.`);
+        notifySyncStatusUpdated();
+        if (result) {
+            const retrySecs = rateLimitManager.extractRetryAfter(result);
+            if (retrySecs) {
+                rateLimitManager.setCooldown(retrySecs);
+            }
+            if (result.uploadedTo > 0) {
+                lastSyncBackupSuccessAt = Date.now();
+                logger.info(`Sync backup synced: uploaded to ${result.uploadedTo} sync endpoint(s), ${result.paddedBytes} bytes.`);
+            }
         }
         return result;
     } catch (e) {
+        const retrySecs = rateLimitManager.extractRetryAfter(e);
+        if (retrySecs) {
+            rateLimitManager.setCooldown(retrySecs);
+        }
         const msg = stringifyError(e);
         const code = isBackendError(e) ? e.code : '';
         const isExpected = code === 'error.wallet.locked' || code === 'error.auth.sessionTimeout'
             || msg.includes("Wallet is locked") || msg.includes("Session timed out")
             || msg.includes("Wallet service unavailable");
         if (!isExpected) {
-            logger?.warn?.(`Drop backup background run encountered an issue: ${msg}`);
+            logger?.warn?.(`Sync backup background run encountered an issue: ${msg}`);
         }
         return null;
     } finally {
-        isDropBackupRunning = false;
+        isSyncBackupRunning = false;
     }
 }
 
@@ -102,7 +127,7 @@ export function startAutoBackupLoop() {
     initialTimeout = window.setTimeout(() => {
         initialTimeout = null;
         runAutoBackupPass();
-        runDropBackupPass();
+        runSyncBackupPass();
     }, 3000);
 
     // Run every 60 seconds (catches reconnected USB drives)
@@ -126,19 +151,20 @@ export function stopAutoBackupLoop() {
         window.clearTimeout(debounceTimer);
         debounceTimer = null;
     }
-    if (dropDebounceTimer) {
-        window.clearTimeout(dropDebounceTimer);
-        dropDebounceTimer = null;
+    if (syncDebounceTimer) {
+        window.clearTimeout(syncDebounceTimer);
+        syncDebounceTimer = null;
     }
+    lastSyncBackupSuccessAt = null;
 }
 
 /**
  * Triggers debounced backup passes:
  * - 2s debounce for local USB/folder backup pass
- * - 30s debounce for off-site Drop backup pass (configurable parameter for tests)
+ * - 30s debounce for off-site sync backup pass (configurable parameter for tests)
  * Call this after successful mutations (creating vouchers, receiving, signing, contacts).
  */
-export function triggerAutoBackup(delayMs = 2000, dropDelayMs = DROP_BACKUP_DEBOUNCE_MS) {
+export function triggerAutoBackup(delayMs = 2000, syncDelayMs = SYNC_BACKUP_DEBOUNCE_MS) {
     settingsService.getSettings().then((s) => {
         const freq = s.backupFrequency || 'after_mutation';
         if (freq === 'manual' || freq === 'on_close') {
@@ -159,13 +185,13 @@ export function triggerAutoBackup(delayMs = 2000, dropDelayMs = DROP_BACKUP_DEBO
             await runAutoBackupPass();
         }, delayMs);
 
-        if (dropDebounceTimer) {
-            window.clearTimeout(dropDebounceTimer);
+        if (syncDebounceTimer) {
+            window.clearTimeout(syncDebounceTimer);
         }
-        dropDebounceTimer = window.setTimeout(async () => {
-            dropDebounceTimer = null;
-            await runDropBackupPass();
-        }, dropDelayMs);
+        syncDebounceTimer = window.setTimeout(async () => {
+            syncDebounceTimer = null;
+            await runSyncBackupPass(true);
+        }, syncDelayMs);
     }).catch(() => {
         // Fallback default execution if settings fetch fails
         if (debounceTimer) {
@@ -176,12 +202,12 @@ export function triggerAutoBackup(delayMs = 2000, dropDelayMs = DROP_BACKUP_DEBO
             await runAutoBackupPass();
         }, delayMs);
 
-        if (dropDebounceTimer) {
-            window.clearTimeout(dropDebounceTimer);
+        if (syncDebounceTimer) {
+            window.clearTimeout(syncDebounceTimer);
         }
-        dropDebounceTimer = window.setTimeout(async () => {
-            dropDebounceTimer = null;
-            await runDropBackupPass();
-        }, dropDelayMs);
+        syncDebounceTimer = window.setTimeout(async () => {
+            syncDebounceTimer = null;
+            await runSyncBackupPass(true);
+        }, syncDelayMs);
     });
 }

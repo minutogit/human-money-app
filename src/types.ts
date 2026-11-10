@@ -53,15 +53,16 @@ export interface RestoreOutcomeDto {
   l2ReconciliationStatus: 'no_servers' | 'offline' | 'reconciled' | string;
 }
 
-export interface FrontendDropBackupSyncResult {
+export interface FrontendBackupSyncResult {
   uploadedTo: number;
   authorizedTargets: number;
   paddedBytes: number;
   timestamp?: string | null;
   errors: string[];
+  retryAfterSecs?: number | null;
 }
 
-export interface FrontendDropBackupFetchDto {
+export interface FrontendBackupFetchDto {
   stagedPath: string;
   matchedKeyKind: 'stealth' | 'public' | 'grace' | 'own' | string;
   sourceUrl: string;

@@ -8,6 +8,7 @@ import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
 import { contactService } from "../services/contactService";
 import { postService } from "../services/postService";
+import { runPostSyncPass } from "../utils/postSync";
 import { logger } from "../utils/log";
 import { translateError, stringifyError } from "../utils/errorHelper";
 import { 
@@ -520,6 +521,8 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     if (depositRes.errors && depositRes.errors.length > 0) {
                         depositError = depositRes.errors.join('; ');
                     }
+                    // Point G: Fast/prioritized sync after transaction send
+                    runPostSyncPass().catch(() => {});
                 } catch (err) {
                     depositError = String(err);
                 }

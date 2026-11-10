@@ -78,21 +78,22 @@ pub struct FrontendAutoBackupStatusDto {
     pub has_authorized_sync_backup_target: bool,
 }
 
-/// Result of an event-driven or manual drop backup sync run.
+/// Result of an event-driven or manual sync backup run.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendDropBackupSyncResult {
+pub struct FrontendBackupSyncResult {
     pub uploaded_to: usize,
     pub authorized_targets: usize,
     pub padded_bytes: usize,
     pub timestamp: Option<String>,
     pub errors: Vec<String>,
+    pub retry_after_secs: Option<u64>,
 }
 
-/// Metadata and staged path of a backup fetched from a drop during recovery wizard.
+/// Metadata and staged path of a backup fetched from a sync service during recovery wizard.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendDropBackupFetchDto {
+pub struct FrontendBackupFetchDto {
     pub staged_path: String,
     pub matched_key_kind: String, // "stealth" | "public" | "grace" | "own"
     pub source_url: String,

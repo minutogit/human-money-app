@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::models::FrontendDropDescriptor;
+use crate::models::FrontendSyncDescriptor;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -17,7 +17,7 @@ pub struct FrontendPendingSignRequest {
     pub sender_did: String,
     pub sender_name: Option<String>,
     pub created_at: u64,
-    pub reply_drops: Vec<FrontendDropDescriptor>,
+    pub reply_syncs: Vec<FrontendSyncDescriptor>,
     pub container_bytes: Vec<u8>,
 }
 
@@ -60,7 +60,7 @@ pub struct FrontendMarketInquiryItem {
     pub counterparty_name: Option<String>,
     pub message: String,
     pub created_at: u64,
-    pub reply_drops: Vec<FrontendDropDescriptor>,
+    pub reply_syncs: Vec<FrontendSyncDescriptor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply: Option<FrontendMarketInquiryReplyDto>,
 }
@@ -79,7 +79,7 @@ pub struct FrontendPostInboxSummary {
 #[serde(rename_all = "camelCase")]
 pub struct FrontendPostSyncResult {
     pub uploaded_to: usize,
-    pub polled_drops: usize,
+    pub polled_syncs: usize,
     pub imported_payments: usize,
     pub imported_receipts: usize,
     pub imported_signatures: usize,
@@ -89,4 +89,5 @@ pub struct FrontendPostSyncResult {
     pub new_inquiry_replies: usize,
     pub pruned_boxes: usize,
     pub errors: Vec<String>,
+    pub retry_after_secs: Option<u64>,
 }

@@ -236,7 +236,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                 }
             }
 
-            // Asymmetry Rule (§6.2): If not deposited to any drop (Bob has NO writable drop or network error)
+            // Asymmetry Rule (§6.2): If not deposited to any sync endpoint (Bob has NO writable sync endpoint or network error)
             // OR pure offline file flow, immediately offer the 1-click .sig file save dialog:
             if (!postDeposited) {
                 const filePath = await save({

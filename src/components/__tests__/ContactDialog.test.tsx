@@ -1,0 +1,242 @@
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import ContactDialog from '../ContactDialog';
+import { marketService } from '../../services/marketService';
+import { Contact } from '../../types';
+
+vi.mock('../../services/marketService', () => ({
+  marketService: {
+    previewContactTrustChange: vi.fn().mockResolvedValue(null),
+    probePublicSync: vi.fn(),
+  },
+}));
+
+vi.mock('../../utils/log', () => ({
+  logger: {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+  },
+}));
+
+describe('ContactDialog Component', () => {
+  const mockOnClose = vi.fn();
+  const mockOnSave = vi.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders existing contact with drops', () => {
+    const existing: Contact = {
+      did: 'did:key:z12345',
+      profile: {
+        id: 'did:key:z12345',
+        firstName: 'Alice',
+        lastName: 'Tester',
+      },
+      tags: ['friends'],
+      addedAt: '2024-01-01',
+      syncs: [
+        {
+          readUrl: 'https://sync1.example.com/sync.php',
+          writeUrl: 'https://sync1.example.com/sync.php',
+          dropPub: 'Pub1',
+          lastSeenAt: 1700000000,
+          failCount: 0,
+        },
+      ],
+    };
+
+    render(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+        existingContact={existing}
+      />
+    );
+
+    expect(screen.getByDisplayValue('Alice')).toBeInTheDocument();
+    expect(screen.getByText('sync1.example.com')).toBeInTheDocument();
+  });
+
+  it('probes and adds a new sync service', async () => {
+    vi.mocked(marketService.probePublicSync).mockResolvedValue({
+      writeUrl: 'https://new-sync.example.com/sync.php',
+      readUrl: 'https://new-sync.example.com/sync.php',
+      dropPub: 'NewDropPub789',
+      registerUrl: null,
+      accessPubkey: 'AccessKey123',
+      authorizedChannels: ['post'],
+    });
+
+    render(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+      />
+    );
+
+    const didInput = screen.getByPlaceholderText(/did:key:z\.\.\./i);
+    fireEvent.change(didInput, { target: { value: 'did:key:zNewContact' } });
+
+    const syncInput = screen.getByPlaceholderText(/https:\/\/sync-server\./i);
+    fireEvent.change(syncInput, { target: { value: 'https://new-sync.example.com/sync.php' } });
+
+    const probeBtn = screen.getByRole('button', { name: /contacts\.syncProbeAndAdd|Prüfen & Hinzufügen|Probe & Add/i });
+    fireEvent.click(probeBtn);
+
+    await waitFor(() => {
+      expect(marketService.probePublicSync).toHaveBeenCalledWith('https://new-sync.example.com/sync.php');
+      expect(screen.getByText('new-sync.example.com')).toBeInTheDocument();
+    });
+
+    // Save and verify drops are passed to onSave
+    const saveBtn = screen.getByRole('button', { name: /contacts\.saveContact|Save Contact|Kontakt speichern/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(mockOnSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          did: 'did:key:zNewContact',
+          syncs: [
+            expect.objectContaining({
+              writeUrl: 'https://new-sync.example.com/sync.php',
+              dropPub: 'NewDropPub789',
+            }),
+          ],
+        })
+      );
+    });
+  });
+
+  it('confirms and deletes a configured sync service', async () => {
+    const existing: Contact = {
+      did: 'did:key:z12345',
+      profile: {
+        id: 'did:key:z12345',
+        firstName: 'Alice',
+      },
+      tags: [],
+      addedAt: '2024-01-01',
+      syncs: [
+        {
+          readUrl: 'https://sync1.example.com/sync.php',
+          writeUrl: 'https://sync1.example.com/sync.php',
+          dropPub: 'Pub1',
+        },
+      ],
+    };
+
+    render(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+        existingContact={existing}
+      />
+    );
+
+    expect(screen.getByText('sync1.example.com')).toBeInTheDocument();
+
+    // Click trash button
+    const deleteBtn = screen.getByTitle(/contacts\.syncDelete|Remove|Entfernen/i);
+    fireEvent.click(deleteBtn);
+
+    // Confirmation appears
+    expect(screen.getByText(/contacts\.syncDeleteConfirm|Really remove sync service\?|Wirklich entfernen\?/i)).toBeInTheDocument();
+
+    // Confirm deletion
+    const confirmBtn = screen.getByRole('button', { name: /contacts\.syncDeleteConfirmBtn|Yes|Ja/i });
+    fireEvent.click(confirmBtn);
+
+    // Drop should be gone
+    expect(screen.queryByText('sync1.example.com')).not.toBeInTheDocument();
+
+    // Save should now submit drops as []
+    const saveBtn = screen.getByRole('button', { name: /contacts\.updateContact|Update Contact|Kontakt aktualisieren/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(mockOnSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          did: 'did:key:z12345',
+          syncs: [],
+        })
+      );
+    });
+  });
+
+  it('rejects adding duplicate sync service', async () => {
+    const existing: Contact = {
+      did: 'did:key:z12345',
+      profile: { id: 'did:key:z12345' },
+      tags: [],
+      addedAt: '2024-01-01',
+      syncs: [
+        {
+          readUrl: 'https://sync1.example.com/sync.php',
+          writeUrl: 'https://sync1.example.com/sync.php',
+          dropPub: 'Pub1',
+        },
+      ],
+    };
+
+    render(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+        existingContact={existing}
+      />
+    );
+
+    const syncInput = screen.getByPlaceholderText(/https:\/\/sync-server\./i);
+    fireEvent.change(syncInput, { target: { value: 'https://sync1.example.com/sync.php' } });
+
+    const probeBtn = screen.getByRole('button', { name: /contacts\.syncProbeAndAdd|Prüfen & Hinzufügen|Probe & Add/i });
+    fireEvent.click(probeBtn);
+
+    expect(screen.getByText(/contacts\.syncAlreadyAdded|already added|bereits vorhanden/i)).toBeInTheDocument();
+    expect(marketService.probePublicSync).not.toHaveBeenCalled();
+  });
+
+  it('enforces limit of max 2 sync services', () => {
+    const existing: Contact = {
+      did: 'did:key:z12345',
+      profile: { id: 'did:key:z12345' },
+      tags: [],
+      addedAt: '2024-01-01',
+      syncs: [
+        {
+          readUrl: 'https://sync1.example.com/sync.php',
+          writeUrl: 'https://sync1.example.com/sync.php',
+          dropPub: 'Pub1',
+        },
+        {
+          readUrl: 'https://sync2.example.com/sync.php',
+          writeUrl: 'https://sync2.example.com/sync.php',
+          dropPub: 'Pub2',
+        },
+      ],
+    };
+
+    render(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+        existingContact={existing}
+      />
+    );
+
+    expect(screen.getByText('sync1.example.com')).toBeInTheDocument();
+    expect(screen.getByText('sync2.example.com')).toBeInTheDocument();
+
+    // Input field should not be present; limit message shown
+    expect(screen.getByText(/contacts\.syncMaxReached|Maximal 2 Sync-Ablagen erlaubt|Maximum 2 sync services allowed/i)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/https:\/\/sync-server\./i)).not.toBeInTheDocument();
+  });
+});

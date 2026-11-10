@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Contact, PublicProfile, FrontendTrustChangeImpact } from '../types';
+import { FrontendSyncDescriptor } from '../types/market';
 import { marketService } from '../services/marketService';
 import Avatar from 'boring-avatars';
 import { translateError } from '../utils/errorHelper';
 import { HelpIcon } from './ui/HelpIcon';
 import { readFromClipboard } from '../utils/clipboard';
 import { parseContactCard } from '../utils/humocoUri';
-import { Clipboard, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Clipboard, CheckCircle2, AlertCircle, Server, Trash2 } from 'lucide-react';
 
 interface ContactDialogProps {
     isOpen: boolean;
@@ -36,6 +37,11 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [newTag, setNewTag] = useState('');
     const [trustLevel, setTrustLevel] = useState<number | null>(existingContact?.trustLevel ?? null);
     const [trustImpact, setTrustImpact] = useState<FrontendTrustChangeImpact | null>(null);
+    const [syncs, setSyncs] = useState<FrontendSyncDescriptor[]>(existingContact?.syncs || []);
+    const [syncInputUrl, setSyncInputUrl] = useState('');
+    const [isProbingSync, setIsProbingSync] = useState(false);
+    const [syncError, setSyncError] = useState<string | null>(null);
+    const [confirmDeleteUrl, setConfirmDeleteUrl] = useState<string | null>(null);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -72,6 +78,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setTags(existingContact.tags);
             setNotes(existingContact.notes || '');
             setTrustLevel(existingContact.trustLevel ?? null);
+            setSyncs(existingContact.syncs ? [...existingContact.syncs].slice(0, 2) : []);
         } else if (initialProfile) {
             setFirstName(initialProfile.firstName || '');
             setLastName(initialProfile.lastName || '');
@@ -80,6 +87,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setTags([]);
             setNotes('');
             setTrustLevel(null);
+            setSyncs([]);
         } else {
             // Reset for new contact
             setDid(initialDid || '');
@@ -89,10 +97,14 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setTags([]);
             setNotes('');
             setTrustLevel(null);
+            setSyncs([]);
         }
+        setSyncInputUrl('');
+        setSyncError(null);
+        setConfirmDeleteUrl(null);
     }, [existingContact, initialProfile, initialDid, isOpen]);
 
-    const applyContactCard = (rawText: string) => {
+    const applyContactCard = async (rawText: string) => {
         const parsed = parseContactCard(rawText);
         if (parsed) {
             setDid(parsed.did);
@@ -103,6 +115,29 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 } else {
                     setFirstName(parts[0]);
                     setLastName(parts.slice(1).join(' '));
+                }
+            }
+            if (parsed.syncUrls && parsed.syncUrls.length > 0) {
+                for (const url of parsed.syncUrls.slice(0, 2)) {
+                    try {
+                        const info = await marketService.probePublicSync(url);
+                        if (info) {
+                            setSyncs(prev => {
+                                if (prev.length >= 2 || prev.some(d => d.writeUrl === info.writeUrl)) {
+                                    return prev;
+                                }
+                                return [...prev, {
+                                    writeUrl: info.writeUrl,
+                                    readUrl: info.readUrl,
+                                    dropPub: info.dropPub,
+                                    lastSeenAt: Math.floor(Date.now() / 1000),
+                                    failCount: 0,
+                                }];
+                            });
+                        }
+                    } catch (e) {
+                        console.warn("Could not probe sync url from contact card:", url, e);
+                    }
                 }
             }
         }
@@ -125,11 +160,52 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 setError(t('contacts.invalidClipboardContent'));
                 return;
             }
-            applyContactCard(text);
+            await applyContactCard(text);
         } catch (e) {
             console.error("Failed to read from clipboard:", e);
             setError(t('contacts.clipboardReadFailed'));
         }
+    };
+
+    const handleProbeAndAddSync = async () => {
+        const trimmed = syncInputUrl.trim();
+        if (!trimmed) return;
+        if (syncs.length >= 2) {
+            setSyncError(t('contacts.syncMaxReached'));
+            return;
+        }
+        if (syncs.some(d => d.writeUrl.toLowerCase() === trimmed.toLowerCase() || d.readUrl.toLowerCase() === trimmed.toLowerCase())) {
+            setSyncError(t('contacts.syncAlreadyAdded'));
+            return;
+        }
+        setIsProbingSync(true);
+        setSyncError(null);
+        try {
+            const info = await marketService.probePublicSync(trimmed);
+            if (!info || !info.dropPub) {
+                setSyncError(t('contacts.syncProbeFailed'));
+                return;
+            }
+            const newSync: FrontendSyncDescriptor = {
+                writeUrl: info.writeUrl,
+                readUrl: info.readUrl,
+                dropPub: info.dropPub,
+                lastSeenAt: Math.floor(Date.now() / 1000),
+                failCount: 0,
+            };
+            setSyncs(prev => [...prev, newSync].slice(0, 2));
+            setSyncInputUrl('');
+        } catch (err) {
+            console.error("Failed to probe sync service:", err);
+            setSyncError(t('contacts.syncProbeFailed'));
+        } finally {
+            setIsProbingSync(false);
+        }
+    };
+
+    const handleDeleteSync = (url: string) => {
+        setSyncs(prev => prev.filter(d => d.writeUrl !== url && d.readUrl !== url));
+        setConfirmDeleteUrl(null);
     };
 
     if (!isOpen) return null;
@@ -155,6 +231,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 desiredHops: trustLevel === 0 ? 0 : null,
                 hasPeerList: existingContact?.hasPeerList,
                 peerListUpdatedAt: existingContact?.peerListUpdatedAt,
+                syncs: syncs.length > 0 ? syncs : [],
             };
             await onSave(contact);
             onClose();
@@ -270,6 +347,140 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                         />
                     </div>
 
+                    {/* Sync-Ablagen (Direct Sync Services) */}
+                    <div className="space-y-2 pt-1 border-t border-theme-subtle/50">
+                        <div>
+                            <div className="flex items-center gap-1.5">
+                                <label className="text-xs font-bold text-theme-light uppercase tracking-widest">
+                                    {t('contacts.syncEndpointsLabel')}
+                                </label>
+                                <Server size={14} className="text-theme-light" />
+                            </div>
+                            <p className="text-[11px] text-theme-light leading-tight mt-0.5">
+                                {t('contacts.syncEndpointsHint')}
+                            </p>
+                        </div>
+
+                        {/* List of configured Sync-Ablagen */}
+                        {syncs.length > 0 && (
+                            <div className="space-y-2">
+                                {syncs.map((d, index) => {
+                                    const host = (() => {
+                                        try {
+                                            return new URL(d.writeUrl || d.readUrl).hostname;
+                                        } catch {
+                                            return d.writeUrl || d.readUrl;
+                                        }
+                                    })();
+                                    const isFailing = (d.failCount ?? 0) > 0;
+                                    const isSeen = !isFailing && !!d.lastSeenAt;
+                                    const dotColor = isFailing
+                                        ? (d.failCount && d.failCount >= 3 ? 'bg-rose-500' : 'bg-amber-500')
+                                        : (isSeen ? 'bg-emerald-500' : 'bg-slate-400');
+                                    const statusLabel = isFailing
+                                        ? (d.failCount && d.failCount >= 3 ? t('contacts.syncUnreachable') : t('contacts.syncWarning'))
+                                        : (isSeen ? t('contacts.syncReachable') : t('contacts.syncUntested'));
+
+                                    const isConfirming = confirmDeleteUrl === d.writeUrl;
+
+                                    return (
+                                        <div
+                                            key={`${d.writeUrl}-${index}`}
+                                            className="flex items-center justify-between p-2.5 bg-white border border-theme-subtle rounded-xl text-xs shadow-sm"
+                                        >
+                                            <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
+                                                <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="font-mono text-xs font-semibold text-theme-secondary truncate" title={d.writeUrl}>
+                                                        {host}
+                                                    </div>
+                                                    <div className="text-[10px] text-theme-light truncate">
+                                                        {statusLabel}
+                                                        {d.lastSeenAt ? ` • ${t('contacts.syncLastSeen')} ${new Date(d.lastSeenAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {isConfirming ? (
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                    <span className="text-[10px] font-bold text-rose-600">
+                                                        {t('contacts.syncDeleteConfirm')}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleDeleteSync(d.writeUrl)}
+                                                        className="px-2 py-1 bg-rose-600 text-white text-[10px] font-bold rounded-lg hover:bg-rose-700 transition-colors"
+                                                    >
+                                                        {t('contacts.syncDeleteConfirmBtn')}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setConfirmDeleteUrl(null)}
+                                                        className="px-2 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-lg hover:bg-slate-200 transition-colors"
+                                                    >
+                                                        {t('contacts.syncDeleteCancelBtn')}
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setConfirmDeleteUrl(d.writeUrl)}
+                                                    className="p-1.5 text-theme-light hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shrink-0"
+                                                    title={t('contacts.syncDelete')}
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {/* Input & Probe button for new Sync-Ablage (if < 2) */}
+                        {syncs.length < 2 ? (
+                            <div className="space-y-1.5">
+                                <div className="flex gap-2">
+                                    <input
+                                        type="url"
+                                        value={syncInputUrl}
+                                        onChange={(e) => {
+                                            setSyncInputUrl(e.target.value);
+                                            setSyncError(null);
+                                        }}
+                                        placeholder={t('contacts.syncInputPlaceholder')}
+                                        disabled={isProbingSync}
+                                        className="flex-1 bg-white border border-theme-subtle rounded-xl px-3 py-2 text-xs font-mono text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm disabled:opacity-50"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={handleProbeAndAddSync}
+                                        disabled={isProbingSync || !syncInputUrl.trim()}
+                                        className="px-3 py-2 bg-theme-primary text-white rounded-xl text-xs font-bold hover:bg-theme-accent disabled:opacity-50 disabled:hover:bg-theme-primary transition-all shadow-sm shrink-0 flex items-center gap-1.5"
+                                    >
+                                        {isProbingSync ? (
+                                            <>
+                                                <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                                <span>{t('contacts.syncProbing')}</span>
+                                            </>
+                                        ) : (
+                                            t('contacts.syncProbeAndAdd')
+                                        )}
+                                    </button>
+                                </div>
+                                {syncError && (
+                                    <p className="text-[11px] font-semibold text-rose-600">
+                                        {syncError}
+                                    </p>
+                                )}
+                            </div>
+                        ) : (
+                            <p className="text-[11px] text-theme-light italic">
+                                {t('contacts.syncMaxReached')}
+                            </p>
+                        )}
+                    </div>
+
                     {/* Personal Trust Rating */}
                     <div className="space-y-2 pt-1 border-t border-theme-subtle/50">
                         <div className="flex items-center gap-1.5">
@@ -344,7 +555,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                         {/* Permission Change Preview */}
                         {trustImpact && (
                             (trustImpact.canReadMyMarketBefore !== trustImpact.canReadMyMarketAfter ||
-                             trustImpact.canWriteMyDropBefore !== trustImpact.canWriteMyDropAfter ||
+                             trustImpact.canWriteMySyncBefore !== trustImpact.canWriteMySyncAfter ||
                              trustImpact.canReadMyWotBefore !== trustImpact.canReadMyWotAfter ||
                              trustImpact.canSendMePostBefore !== trustImpact.canSendMePostAfter) && (
                                 <div className="mt-2 space-y-1.5 p-2 bg-bg-app rounded-xl border border-theme-subtle/70">
@@ -364,8 +575,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                     )}
 
                                     {/* Writing permission change */}
-                                    {trustImpact.canWriteMyDropBefore !== trustImpact.canWriteMyDropAfter && (
-                                        trustImpact.canWriteMyDropAfter ? (
+                                    {trustImpact.canWriteMySyncBefore !== trustImpact.canWriteMySyncAfter && (
+                                        trustImpact.canWriteMySyncAfter ? (
                                             <div data-testid="trust-preview-gain-write" className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
                                                 <CheckCircle2 size={13} className="shrink-0" />
                                                 <span>{t('contacts.trustPreviewGainWrite')}</span>

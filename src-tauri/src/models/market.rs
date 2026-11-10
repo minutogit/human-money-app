@@ -75,7 +75,7 @@ pub enum FrontendEntrySource {
     Voucher,
     Card { hops: u8 },
     #[serde(rename_all = "camelCase")]
-    Drop { read_url: String },
+    Sync { read_url: String },
 }
 
 impl From<humoco_market::EntrySource> for FrontendEntrySource {
@@ -83,7 +83,7 @@ impl From<humoco_market::EntrySource> for FrontendEntrySource {
         match s {
             humoco_market::EntrySource::Voucher => Self::Voucher,
             humoco_market::EntrySource::Card { hops } => Self::Card { hops },
-            humoco_market::EntrySource::Drop { read_url } => Self::Drop { read_url },
+            humoco_market::EntrySource::Drop { read_url } => Self::Sync { read_url },
         }
     }
 }
@@ -124,27 +124,36 @@ impl From<humoco_market::StandardRef> for FrontendStandardRef {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendDropDescriptor {
+pub struct FrontendSyncDescriptor {
     pub write_url: String,
     pub read_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_id: Option<String>,
     pub drop_pub: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error_at: Option<u64>,
+    #[serde(default)]
+    pub fail_count: u32,
 }
 
-impl From<humoco_market::DropDescriptor> for FrontendDropDescriptor {
+impl From<humoco_market::DropDescriptor> for FrontendSyncDescriptor {
     fn from(d: humoco_market::DropDescriptor) -> Self {
         Self {
             write_url: d.write_url,
             read_url: d.read_url,
             slot_id: d.slot_id,
             drop_pub: d.drop_pub,
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
         }
     }
 }
 
-impl From<FrontendDropDescriptor> for humoco_market::DropDescriptor {
-    fn from(d: FrontendDropDescriptor) -> Self {
+impl From<FrontendSyncDescriptor> for humoco_market::DropDescriptor {
+    fn from(d: FrontendSyncDescriptor) -> Self {
         Self {
             write_url: d.write_url,
             read_url: d.read_url,
@@ -198,7 +207,7 @@ pub struct FrontendContactCardDto {
     pub max_hops: u8,
     pub profile: crate::models::FrontendUserProfile,
     pub listings: Vec<FrontendCardListingInput>,
-    pub drops: Vec<FrontendDropDescriptor>,
+    pub syncs: Vec<FrontendSyncDescriptor>,
 }
 
 impl From<humoco_market::ContactCard> for FrontendContactCardDto {
@@ -210,7 +219,7 @@ impl From<humoco_market::ContactCard> for FrontendContactCardDto {
             max_hops: c.max_hops,
             profile: c.profile.into(),
             listings: c.listings.into_iter().map(Into::into).collect(),
-            drops: c.drops.into_iter().map(Into::into).collect(),
+            syncs: c.drops.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -266,7 +275,7 @@ pub struct FrontendMarketPerson {
     pub standards: Vec<FrontendStandardRef>,
     pub trust: FrontendTrustTier,
     pub can_forward: bool,
-    pub card_drops: Vec<FrontendDropDescriptor>,
+    pub card_syncs: Vec<FrontendSyncDescriptor>,
 }
 
 impl From<humoco_market::MarketPerson> for FrontendMarketPerson {
@@ -297,7 +306,7 @@ impl From<humoco_market::MarketPerson> for FrontendMarketPerson {
             standards: p.standards.into_iter().map(Into::into).collect(),
             trust: p.trust.into(),
             can_forward: p.can_forward,
-            card_drops: p.card_drops.into_iter().map(Into::into).collect(),
+            card_syncs: p.card_drops.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -341,8 +350,8 @@ impl From<FrontendMemberPolicyDto> for humoco_market::MemberPolicy {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendDropSetupDraft {
-    pub descriptor: FrontendDropDescriptor,
+pub struct FrontendSyncSetupDraft {
+    pub descriptor: FrontendSyncDescriptor,
     pub data_dir: String,
     pub admin_pubkey: String,
     pub generation: u32,
@@ -354,8 +363,8 @@ pub struct FrontendDropSetupDraft {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendDropAdminStatus {
-    pub descriptor: FrontendDropDescriptor,
+pub struct FrontendSyncAdminStatus {
+    pub descriptor: FrontendSyncDescriptor,
     pub admin_pubkey: String,
     pub generation: u32,
     pub rotation_retire_at: Option<u64>,
@@ -379,7 +388,7 @@ pub struct FrontendDropAdminStatus {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendDropAdminUpdateRequest {
+pub struct FrontendSyncAdminUpdateRequest {
     pub card_policy: Option<FrontendMemberPolicyDto>,
     pub allow: Option<Vec<String>>,
     pub deny: Option<Vec<String>>,
@@ -390,7 +399,7 @@ pub struct FrontendDropAdminUpdateRequest {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendPublicDropInfo {
+pub struct FrontendPublicSyncInfo {
     pub write_url: String,
     pub read_url: String,
     pub drop_pub: String,
@@ -401,18 +410,19 @@ pub struct FrontendPublicDropInfo {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendDropOverviewStatus {
+pub struct FrontendSyncOverviewStatus {
     pub connected_count: usize,
-    pub friend_drops: usize,
-    pub public_drops: usize,
-    pub has_own_drop: bool,
-    pub own_drop_soft_warning: bool,
+    pub pending_count: usize,
+    pub friend_syncs: usize,
+    pub public_syncs: usize,
+    pub has_own_sync: bool,
+    pub own_sync_soft_warning: bool,
     pub last_sync_at: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendDropConnectionTestResult {
+pub struct FrontendSyncConnectionTestResult {
     pub success: bool,
     pub message: String,
     pub write_ok: bool,
@@ -421,8 +431,8 @@ pub struct FrontendDropConnectionTestResult {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendDiscoveredDrop {
-    pub descriptor: FrontendDropDescriptor,
+pub struct FrontendDiscoveredSync {
+    pub descriptor: FrontendSyncDescriptor,
     pub is_authorized: bool,
     pub is_selected: bool,
     pub source_label: String,
@@ -430,14 +440,15 @@ pub struct FrontendDiscoveredDrop {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendDropSyncResult {
+pub struct FrontendMarketSyncResult {
     pub skipped_wifi_only: bool,
     pub uploaded_to: usize,
-    pub polled_drops: usize,
+    pub polled_syncs: usize,
     pub decrypted_slots: usize,
     pub imported_cards: usize,
     pub imported_wot_lists: usize,
     pub errors: Vec<String>,
+    pub retry_after_secs: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -447,8 +458,8 @@ pub struct FrontendTrustChangeImpact {
     pub can_read_my_market_after: bool,
     pub can_read_my_wot_before: bool,
     pub can_read_my_wot_after: bool,
-    pub can_write_my_drop_before: bool,
-    pub can_write_my_drop_after: bool,
+    pub can_write_my_sync_before: bool,
+    pub can_write_my_sync_after: bool,
     pub can_send_me_post_before: bool,
     pub can_send_me_post_after: bool,
 }

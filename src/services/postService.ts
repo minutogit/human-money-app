@@ -6,7 +6,7 @@ import {
     FrontendPostInboxSummary,
     FrontendPostSyncResult,
     FrontendMarketInquiryItem,
-    FrontendDropDescriptor,
+    FrontendSyncDescriptor,
 } from "../types";
 import { triggerAutoBackup } from "../utils/autoBackup";
 
@@ -101,7 +101,7 @@ export const postService = {
         listingId: string,
         listingTitle: string,
         message: string,
-        recipientDrops: FrontendDropDescriptor[],
+        recipientSyncs: FrontendSyncDescriptor[],
         password?: string
     ): Promise<FrontendMarketInquiryItem> => {
         const res = await invoke<FrontendMarketInquiryItem>("send_market_inquiry_via_post", {
@@ -109,7 +109,7 @@ export const postService = {
             listingId,
             listingTitle,
             message,
-            recipientDrops,
+            recipientSyncs,
             password: password || undefined,
         });
         notifyPostInboxUpdated();
@@ -157,11 +157,11 @@ export const postService = {
         return await invoke<FrontendPostInboxSummary>("get_post_inbox_summary", password ? { password } : {});
     },
 
-    syncPostDrops: async (
+    syncPostChannels: async (
         isWifi?: boolean,
         password?: string
     ): Promise<FrontendPostSyncResult> => {
-        const res = await invoke<FrontendPostSyncResult>("sync_post_drops", {
+        const res = await invoke<FrontendPostSyncResult>("sync_post_channels", {
             isWifi: typeof isWifi === 'boolean' ? isWifi : undefined,
             password: password || undefined,
         });

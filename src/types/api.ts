@@ -2,7 +2,7 @@
 
 import { ReceiveSuccessPayload, IntentDispatchObservation } from './transaction';
 import { VoucherDetails } from './voucher';
-import { FrontendDropDescriptor, StoredPublicDrop } from './market';
+import { FrontendSyncDescriptor, StoredPublicSync } from './market';
 
 export interface ReceiveBundleArgs {
     bundleData: number[];
@@ -90,11 +90,11 @@ export interface AppSettings {
     marketSendCardOnPayment?: boolean;
     shareMinLevel?: number;
     marketPollWifiOnly?: boolean;
-    marketSelectedDrops?: FrontendDropDescriptor[];
-    publicDrops?: StoredPublicDrop[];
-    wotShareViaDrop?: boolean;
-    dropBackupEnabled?: boolean;
-    lastDropBackupAt?: string | null;
+    marketSelectedSyncs?: FrontendSyncDescriptor[];
+    publicSyncs?: StoredPublicSync[];
+    wotShareViaSync?: boolean;
+    syncBackupEnabled?: boolean;
+    lastSyncBackupAt?: string | null;
     pendingRestoreL2Reconciliation?: boolean;
     balanceViewMode?: 'spendable' | 'net';
     autoBackupEnabled?: boolean;
@@ -146,7 +146,7 @@ export type AppState =
     | { view: "recreate_profile" }
     | { view: "restore_backup"; previousView?: AppState }
     | { view: "needs_recovery" }
-    | { view: "settings"; openDropsModal?: boolean; openDropsTab?: 'friend_drops' | 'public_drops' | 'own_drop'; initialSection?: 'sync' | 'backup' | 'network' }
+    | { view: "settings"; initialSection?: 'sync' | 'backup' | 'network' | 'profile' | 'standards' }
     | { view: "support" }
     | { view: "bug_report" }
     | { view: "create_voucher"; previousView?: AppState }

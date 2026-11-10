@@ -3,7 +3,7 @@ use humoco_market::{DropRotationCertificate, SignedDropHeaders};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct DropIndexEntry {
+pub struct SyncIndexEntry {
     pub id: String, // 64-hex pubkey
     pub channel: String,
     pub mtime: u64,
@@ -16,14 +16,14 @@ pub struct DropIndexEntry {
 pub enum IndexFetchResult {
     NotModified,
     Modified {
-        entries: Vec<DropIndexEntry>,
+        entries: Vec<SyncIndexEntry>,
         etag: Option<String>,
         last_modified: Option<String>,
     },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct DropServerInfo {
+pub struct SyncServerInfo {
     pub drop_pub: String,
     pub read_url: String,
     #[serde(default)]
@@ -35,7 +35,7 @@ pub struct DropServerInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DropCapabilityResult {
+pub struct SyncCapabilityResult {
     pub authorized: bool,
     pub max_bytes: Option<usize>,
     pub ttl_days: Option<u32>,
@@ -55,7 +55,7 @@ pub enum PutSlotOutcome {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct DropServerAdminStatus {
+pub struct SyncServerAdminStatus {
     pub used_bytes: u64,
     pub max_bytes: u64,
     pub soft_limit_bytes: u64,
@@ -68,7 +68,7 @@ pub struct DropServerAdminStatus {
     pub rotation: Option<DropRotationCertificate>,
 }
 
-pub fn validate_drop_url(url: &str) -> Result<(), String> {
+pub fn validate_sync_url(url: &str) -> Result<(), String> {
     let trimmed = url.trim();
     if trimmed.starts_with("https://")
         || trimmed.starts_with("http://127.0.0.1")
@@ -78,26 +78,26 @@ pub fn validate_drop_url(url: &str) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "Drop URL must use HTTPS (or local dev loopback, got '{}')",
+        "Sync URL must use HTTPS (or local dev loopback, got '{}')",
         url
     ))
 }
 
-pub fn create_drop_http_client() -> reqwest::Client {
+pub fn create_sync_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
-pub fn create_drop_probe_client() -> reqwest::Client {
+pub fn create_sync_probe_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
-pub fn generate_drop_nonce() -> String {
+pub fn generate_sync_nonce() -> String {
     let mut bytes = [0u8; 16];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
     hex::encode(bytes)
@@ -138,11 +138,37 @@ pub fn apply_verified_rotation(
     }
 }
 
-pub async fn fetch_drop_info(
+pub fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> u64 {
+    if let Some(val) = headers.get(reqwest::header::RETRY_AFTER) {
+        if let Ok(s) = val.to_str() {
+            if let Ok(secs) = s.trim().parse::<u64>() {
+                return secs;
+            }
+        }
+    }
+    60
+}
+
+pub fn extract_retry_after_from_error_str(err: &str) -> Option<u64> {
+    if let Some(pos) = err.find("Retry-After:") {
+        let after = &err[pos + "Retry-After:".len()..];
+        let trimmed = after.trim_start();
+        let num_str: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(secs) = num_str.parse::<u64>() {
+            return Some(secs);
+        }
+    }
+    if err.contains("429") {
+        return Some(60);
+    }
+    None
+}
+
+pub async fn fetch_sync_info(
     client: &reqwest::Client,
     write_url: &str,
-) -> Result<DropServerInfo, String> {
-    validate_drop_url(write_url)?;
+) -> Result<SyncServerInfo, String> {
+    validate_sync_url(write_url)?;
     let sep = if write_url.contains('?') { "&" } else { "?" };
     let url = format!("{}{}info", write_url, sep);
 
@@ -150,9 +176,16 @@ pub async fn fetch_drop_info(
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("Network error fetching drop info from {}: {}", write_url, e))?;
+        .map_err(|e| format!("Network error fetching sync info from {}: {}", write_url, e))?;
 
     let status = resp.status();
+    if status.as_u16() == 429 {
+        let secs = parse_retry_after(resp.headers());
+        return Err(format!(
+            "Rate limited fetching sync info from {} (HTTP 429). Retry-After: {}s",
+            write_url, secs
+        ));
+    }
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
         return Err(format!(
@@ -163,10 +196,10 @@ pub async fn fetch_drop_info(
     }
 
     let rotation = extract_rotation_header(resp.headers());
-    let mut info: DropServerInfo = resp
+    let mut info: SyncServerInfo = resp
         .json()
         .await
-        .map_err(|e| format!("Failed to parse drop info JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse sync info JSON: {}", e))?;
 
     if info.rotation.is_none() {
         info.rotation = rotation;
@@ -180,8 +213,8 @@ pub async fn head_slot_capability(
     write_url: &str,
     pubkey_hex64: &str,
     channel: &str,
-) -> Result<DropCapabilityResult, String> {
-    validate_drop_url(write_url)?;
+) -> Result<SyncCapabilityResult, String> {
+    validate_sync_url(write_url)?;
 
     let resp = client
         .head(write_url)
@@ -212,7 +245,7 @@ pub async fn head_slot_capability(
             .map(|s| s.trim().trim_matches('"').to_string())
             .filter(|s| !s.is_empty());
 
-        Ok(DropCapabilityResult {
+        Ok(SyncCapabilityResult {
             authorized: true,
             max_bytes,
             ttl_days,
@@ -220,7 +253,7 @@ pub async fn head_slot_capability(
             rotation,
         })
     } else if status.as_u16() == 403 {
-        Ok(DropCapabilityResult {
+        Ok(SyncCapabilityResult {
             authorized: false,
             max_bytes: None,
             ttl_days: None,
@@ -228,7 +261,8 @@ pub async fn head_slot_capability(
             rotation,
         })
     } else if status.as_u16() == 429 {
-        Err("Rate limited by drop server (HTTP 429)".to_string())
+        let secs = parse_retry_after(resp.headers());
+        Err(format!("Rate limited by sync server (HTTP 429). Retry-After: {}s", secs))
     } else {
         Err(format!(
             "Server returned HTTP {} on slot capability check",
@@ -245,7 +279,7 @@ pub async fn put_slot(
     blob_bytes: &[u8],
     if_match: Option<&str>,
 ) -> Result<PutSlotOutcome, String> {
-    validate_drop_url(write_url)?;
+    validate_sync_url(write_url)?;
 
     let mut req = client
         .put(write_url)
@@ -281,11 +315,12 @@ pub async fn put_slot(
         let current_etag = extract_etag(resp.headers());
         Ok(PutSlotOutcome::PreconditionFailed { current_etag })
     } else if status_code == 413 {
-        Err("Payload too large: drop server rejected slot size (HTTP 413)".to_string())
+        Err("Payload too large: sync server rejected slot size (HTTP 413)".to_string())
     } else if status_code == 429 {
-        Err("Too many requests: drop server rate limit exceeded (HTTP 429)".to_string())
+        let secs = parse_retry_after(resp.headers());
+        Err(format!("Too many requests: sync server rate limit exceeded (HTTP 429). Retry-After: {}s", secs))
     } else if status_code == 507 {
-        Err("Insufficient storage: drop server quota exceeded (HTTP 507)".to_string())
+        Err("Insufficient storage: sync server quota exceeded (HTTP 507)".to_string())
     } else {
         let text = resp.text().await.unwrap_or_default();
         Err(format!(
@@ -302,7 +337,7 @@ pub async fn delete_slot(
     signed_headers: &SignedDropHeaders,
     channel: &str,
 ) -> Result<(), String> {
-    validate_drop_url(write_url)?;
+    validate_sync_url(write_url)?;
 
     let resp = client
         .delete(write_url)
@@ -318,6 +353,9 @@ pub async fn delete_slot(
     let status = resp.status();
     if status.as_u16() == 200 || status.as_u16() == 204 {
         Ok(())
+    } else if status.as_u16() == 429 {
+        let secs = parse_retry_after(resp.headers());
+        Err(format!("Rate limited deleting slot (HTTP 429). Retry-After: {}s", secs))
     } else {
         let text = resp.text().await.unwrap_or_default();
         Err(format!(
@@ -335,7 +373,7 @@ pub async fn push_members(
     channel: &str,
     pubkeys: &[String],
 ) -> Result<(), String> {
-    validate_drop_url(write_url)?;
+    validate_sync_url(write_url)?;
     let sep = if write_url.contains('?') { "&" } else { "?" };
     let url = format!("{}{}members&channel={}", write_url, sep, channel);
 
@@ -343,7 +381,7 @@ pub async fn push_members(
         .map_err(|e| format!("Failed to serialize members payload: {}", e))?;
 
     let timestamp = current_unix_timestamp();
-    let nonce = generate_drop_nonce();
+    let nonce = generate_sync_nonce();
     let signed = humoco_market::sign_admin_request(
         admin_sk,
         "PUT_MEMBERS",
@@ -368,6 +406,9 @@ pub async fn push_members(
     let status = resp.status();
     if status.as_u16() == 200 || status.as_u16() == 204 {
         Ok(())
+    } else if status.as_u16() == 429 {
+        let secs = parse_retry_after(resp.headers());
+        Err(format!("Rate limited pushing members (HTTP 429). Retry-After: {}s", secs))
     } else {
         let text = resp.text().await.unwrap_or_default();
         Err(format!(
@@ -384,7 +425,7 @@ pub async fn rotate_admin_key(
     new_admin_sk: &SigningKey,
     cert: &DropRotationCertificate,
 ) -> Result<(), String> {
-    validate_drop_url(write_url)?;
+    validate_sync_url(write_url)?;
     let sep = if write_url.contains('?') { "&" } else { "?" };
     let url = format!("{}{}rotate", write_url, sep);
 
@@ -392,7 +433,7 @@ pub async fn rotate_admin_key(
         .map_err(|e| format!("Failed to serialize rotation certificate: {}", e))?;
 
     let timestamp = current_unix_timestamp();
-    let nonce = generate_drop_nonce();
+    let nonce = generate_sync_nonce();
     let signed = humoco_market::sign_admin_request(
         new_admin_sk,
         "ROTATE",
@@ -417,6 +458,9 @@ pub async fn rotate_admin_key(
     let status = resp.status();
     if status.is_success() {
         Ok(())
+    } else if status.as_u16() == 429 {
+        let secs = parse_retry_after(resp.headers());
+        Err(format!("Rate limited rotating admin key (HTTP 429). Retry-After: {}s", secs))
     } else {
         let text = resp.text().await.unwrap_or_default();
         Err(format!(
@@ -431,13 +475,13 @@ pub async fn fetch_admin_status(
     client: &reqwest::Client,
     write_url: &str,
     admin_sk: &SigningKey,
-) -> Result<DropServerAdminStatus, String> {
-    validate_drop_url(write_url)?;
+) -> Result<SyncServerAdminStatus, String> {
+    validate_sync_url(write_url)?;
     let sep = if write_url.contains('?') { "&" } else { "?" };
     let url = format!("{}{}status", write_url, sep);
 
     let timestamp = current_unix_timestamp();
-    let nonce = generate_drop_nonce();
+    let nonce = generate_sync_nonce();
     let signed = humoco_market::sign_admin_request(
         admin_sk,
         "STATUS",
@@ -458,6 +502,10 @@ pub async fn fetch_admin_status(
         .map_err(|e| format!("Network error fetching admin status: {}", e))?;
 
     let status = resp.status();
+    if status.as_u16() == 429 {
+        let secs = parse_retry_after(resp.headers());
+        return Err(format!("Rate limited fetching admin status (HTTP 429). Retry-After: {}s", secs));
+    }
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
         return Err(format!(
@@ -467,7 +515,7 @@ pub async fn fetch_admin_status(
         ));
     }
 
-    let status_data: DropServerAdminStatus = resp
+    let status_data: SyncServerAdminStatus = resp
         .json()
         .await
         .map_err(|e| format!("Failed to parse admin status JSON: {}", e))?;
@@ -481,7 +529,7 @@ pub async fn list_index(
     cached_etag: Option<&str>,
     cached_last_modified: Option<&str>,
 ) -> Result<IndexFetchResult, String> {
-    validate_drop_url(read_url)?;
+    validate_sync_url(read_url)?;
     let base = read_url.trim().trim_end_matches('/');
     let url = format!("{}/index.json", base);
 
@@ -509,6 +557,10 @@ pub async fn list_index(
             last_modified: None,
         });
     }
+    if status.as_u16() == 429 {
+        let secs = parse_retry_after(resp.headers());
+        return Err(format!("Rate limited fetching index (HTTP 429). Retry-After: {}s", secs));
+    }
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
         return Err(format!(
@@ -525,7 +577,7 @@ pub async fn list_index(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    let entries: Vec<DropIndexEntry> = resp
+    let entries: Vec<SyncIndexEntry> = resp
         .json()
         .await
         .map_err(|e| format!("Failed to parse index.json: {}", e))?;
@@ -543,7 +595,7 @@ pub async fn get_slot(
     id: &str,
     channel: &str,
 ) -> Result<Option<Vec<u8>>, String> {
-    validate_drop_url(read_url)?;
+    validate_sync_url(read_url)?;
     let base = read_url.trim().trim_end_matches('/');
     let url = format!("{}/{}.{}.bin", base, id, channel);
 
@@ -555,6 +607,11 @@ pub async fn get_slot(
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
+    }
+
+    if resp.status().as_u16() == 429 {
+        let secs = parse_retry_after(resp.headers());
+        return Err(format!("Rate limited fetching slot {} (HTTP 429). Retry-After: {}s", id, secs));
     }
 
     if !resp.status().is_success() {
@@ -571,4 +628,36 @@ pub async fn get_slot(
         .map_err(|e| format!("Failed to read slot bytes: {}", e))?;
 
     Ok(Some(bytes.to_vec()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_retry_after_header() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        // Missing header -> 60s fallback
+        assert_eq!(parse_retry_after(&headers), 60);
+
+        // Valid integer seconds
+        headers.insert(reqwest::header::RETRY_AFTER, "45".parse().unwrap());
+        assert_eq!(parse_retry_after(&headers), 45);
+
+        // Invalid string -> 60s fallback
+        headers.insert(reqwest::header::RETRY_AFTER, "invalid_seconds".parse().unwrap());
+        assert_eq!(parse_retry_after(&headers), 60);
+    }
+
+    #[test]
+    fn test_extract_retry_after_from_error_str() {
+        let err1 = "Rate limited by sync server (HTTP 429). Retry-After: 45s";
+        assert_eq!(extract_retry_after_from_error_str(err1), Some(45));
+
+        let err2 = "Server returned HTTP 429: Too Many Requests";
+        assert_eq!(extract_retry_after_from_error_str(err2), Some(60));
+
+        let err3 = "Network timeout: connection refused";
+        assert_eq!(extract_retry_after_from_error_str(err3), None);
+    }
 }

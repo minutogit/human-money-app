@@ -155,7 +155,7 @@ export function ExportSigningRequestModal({
             } else if (res && res.errors && res.errors.length > 0) {
                 setExportError(res.errors.join('; '));
             } else {
-                setExportError(t('voucher.signRequest.sentViaPostZeroDrops', 'Keine Ablage für diesen Kontakt erreichbar. Bitte nutze den .ask Datei-Export.'));
+                setExportError(t('voucher.signRequest.sentViaPostZeroSyncs', 'Keine Ablage für diesen Kontakt erreichbar. Bitte nutze den .ask Datei-Export.'));
             }
         } catch (e) {
             setExportError(translateError(e, t));

@@ -29,7 +29,8 @@ vi.mock('react-i18next', () => {
     }
 
     const stableT = (key: string, defaultValueOrOptions?: any, maybeOptions?: any) => {
-        let val = (enTranslations as Record<string, string>)[key] || key;
+        let val = (enTranslations as Record<string, string>)[key]
+            || (typeof defaultValueOrOptions === 'string' ? defaultValueOrOptions : key);
         const options = (typeof defaultValueOrOptions === 'object' && defaultValueOrOptions !== null)
             ? defaultValueOrOptions
             : (typeof maybeOptions === 'object' && maybeOptions !== null)
@@ -55,14 +56,14 @@ vi.mock('react-i18next', () => {
 
 vi.mock('../../services/marketService', () => ({
     marketService: {
-        getDropOverviewStatus: vi.fn(),
-        syncMarketDrops: vi.fn(),
+        getSyncOverviewStatus: vi.fn(),
+        syncMarketChannels: vi.fn(),
     },
 }));
 
 vi.mock('../../services/postService', () => ({
     postService: {
-        syncPostDrops: vi.fn().mockResolvedValue(null),
+        syncPostChannels: vi.fn().mockResolvedValue(null),
     },
 }));
 
@@ -72,12 +73,13 @@ describe('SyncServiceBadge Component', () => {
     });
 
     it('renders not connected state (count = 0) and opens popover on click', async () => {
-        vi.mocked(marketService.getDropOverviewStatus).mockResolvedValue({
+        vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
             connectedCount: 0,
-            friendDrops: 0,
-            publicDrops: 0,
-            hasOwnDrop: false,
-            ownDropSoftWarning: false,
+            pendingCount: 0,
+            friendSyncs: 0,
+            publicSyncs: 0,
+            hasOwnSync: false,
+            ownSyncSoftWarning: false,
             lastSyncAt: null,
         });
 
@@ -103,12 +105,13 @@ describe('SyncServiceBadge Component', () => {
     });
 
     it('closes popover on Escape key', async () => {
-        vi.mocked(marketService.getDropOverviewStatus).mockResolvedValue({
+        vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
             connectedCount: 0,
-            friendDrops: 0,
-            publicDrops: 0,
-            hasOwnDrop: false,
-            ownDropSoftWarning: false,
+            pendingCount: 0,
+            friendSyncs: 0,
+            publicSyncs: 0,
+            hasOwnSync: false,
+            ownSyncSoftWarning: false,
             lastSyncAt: null,
         });
 
@@ -128,12 +131,13 @@ describe('SyncServiceBadge Component', () => {
     });
 
     it('renders connected state (count = 2) and displays breakdown in popover', async () => {
-        vi.mocked(marketService.getDropOverviewStatus).mockResolvedValue({
+        vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
             connectedCount: 2,
-            friendDrops: 1,
-            publicDrops: 1,
-            hasOwnDrop: false,
-            ownDropSoftWarning: false,
+            pendingCount: 0,
+            friendSyncs: 1,
+            publicSyncs: 1,
+            hasOwnSync: false,
+            ownSyncSoftWarning: false,
             lastSyncAt: 1730000000,
         });
 
@@ -157,17 +161,18 @@ describe('SyncServiceBadge Component', () => {
         fireEvent.click(syncBtn);
 
         await waitFor(() => {
-            expect(marketService.syncMarketDrops).toHaveBeenCalledWith({ forceUpload: true });
+            expect(marketService.syncMarketChannels).toHaveBeenCalledWith({ forceUpload: true });
         });
     });
 
     it('renders soft warning state when own sync service storage is >= 80% full', async () => {
-        vi.mocked(marketService.getDropOverviewStatus).mockResolvedValue({
+        vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
             connectedCount: 1,
-            friendDrops: 0,
-            publicDrops: 0,
-            hasOwnDrop: true,
-            ownDropSoftWarning: true,
+            pendingCount: 0,
+            friendSyncs: 0,
+            publicSyncs: 0,
+            hasOwnSync: true,
+            ownSyncSoftWarning: true,
             lastSyncAt: 1730000000,
         });
 
@@ -183,6 +188,32 @@ describe('SyncServiceBadge Component', () => {
         await waitFor(() => {
             expect(screen.getByRole('dialog')).toBeInTheDocument();
             expect(screen.getByText(/Your own .* is 80% or more full|Dein eigener/i)).toBeInTheDocument();
+        });
+    });
+
+    it('renders pending state when authorization is pending (pendingCount > 0, connectedCount = 0)', async () => {
+        vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
+            connectedCount: 0,
+            pendingCount: 1,
+            friendSyncs: 0,
+            publicSyncs: 0,
+            hasOwnSync: false,
+            ownSyncSoftWarning: false,
+            lastSyncAt: null,
+        });
+
+        render(<SyncServiceBadge />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/Freischaltung ausstehend|Authorization pending/i)).toBeInTheDocument();
+        });
+
+        // Click badge to open popover
+        fireEvent.click(screen.getByRole('button', { name: /Sync-Dienst Status:.*(Freischaltung ausstehend|Authorization pending)/i }));
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+            expect(screen.getByText(/wartet noch auf die Freischaltung deines Schlüssels|waiting for your key to be authorized/i)).toBeInTheDocument();
         });
     });
 });

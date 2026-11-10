@@ -9,7 +9,7 @@ vi.mock('../../../services/marketService', () => ({
     importContactCard: vi.fn(),
     getOwnContactCard: vi.fn(),
     getMarketView: vi.fn(),
-    syncMarketDrops: vi.fn().mockResolvedValue(undefined),
+    syncMarketChannels: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -45,7 +45,7 @@ describe('ImportCardModal Component', () => {
         validUntil: 2000000000,
         maxHops: 2,
         listings: [],
-        drops: [],
+        syncs: [],
       },
       cardJws: 'mock-jws',
       envelopeJson: '{"envelope":"test"}',
@@ -62,7 +62,7 @@ describe('ImportCardModal Component', () => {
         listings: [],
         sources: [{ kind: 'card', hops: 1 }],
         standards: [],
-        cardDrops: [{ readUrl: 'https://bob.org/sync.php', writeUrl: 'https://bob.org/sync.php', dropPub: 'pub' }],
+        cardSyncs: [{ readUrl: 'https://bob.org/sync.php', writeUrl: 'https://bob.org/sync.php', dropPub: 'pub' }],
         asOf: 1000,
         canForward: true,
       },
@@ -108,7 +108,7 @@ describe('ImportCardModal Component', () => {
     expect(screen.getByAltText(/HuMoCo Counter QR Code/i)).toBeInTheDocument();
   });
 
-  it('clicking Level 2 saves contact with trustLevel: 2 and triggers syncMarketDrops', async () => {
+  it('clicking Level 2 saves contact with trustLevel: 2 and triggers syncMarketChannels', async () => {
     vi.mocked(marketService.importContactCard).mockResolvedValue({
       status: 'accepted',
       did: 'did:key:z6MkuBob456',
@@ -138,7 +138,7 @@ describe('ImportCardModal Component', () => {
         }),
         'mock-password'
       );
-      expect(marketService.syncMarketDrops).toHaveBeenCalled();
+      expect(marketService.syncMarketChannels).toHaveBeenCalled();
     });
   });
 });

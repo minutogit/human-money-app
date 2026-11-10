@@ -40,7 +40,7 @@ export interface RestoreBackupViewProps {
     onBack: () => void;
 }
 
-type WizardStep = 'select_source' | 'drop_source' | 'unlock_and_inspect' | 'completed';
+type WizardStep = 'select_source' | 'sync_source' | 'unlock_and_inspect' | 'completed';
 
 export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
     onRestoreSuccess,
@@ -54,9 +54,9 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
     const [probe, setProbe] = useState<BackupProbeDto | null>(null);
 
     // Drop restore state
-    const [dropInput, setDropInput] = useState('');
-    const [isFetchingDrop, setIsFetchingDrop] = useState(false);
-    const [matchedDropKeyKind, setMatchedDropKeyKind] = useState<string | null>(null);
+    const [syncInput, setSyncInput] = useState('');
+    const [isFetchingSync, setIsFetchingSync] = useState(false);
+    const [matchedSyncKeyKind, setMatchedSyncKeyKind] = useState<string | null>(null);
     const [isReconcilingL2, setIsReconcilingL2] = useState(false);
 
     // Credential state
@@ -216,7 +216,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
         }
     };
 
-    const handleFetchAndInspectDropBackup = async () => {
+    const handleFetchAndInspectBackup = async () => {
         setFeedback(null);
         const mnemonic = getFullMnemonic();
         const words = mnemonic.split(' ').filter(Boolean);
@@ -224,15 +224,15 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
             setFeedback({ type: 'error', message: t('auth.enterValidSeed') });
             return;
         }
-        if (!dropInput.trim()) {
-            setFeedback({ type: 'error', message: t('profile.backupRestoreDropAddressRequired', 'Bitte gib eine Sync-Dienst-Adresse oder einen Deskriptor ein.') });
+        if (!syncInput.trim()) {
+            setFeedback({ type: 'error', message: t('profile.backupRestoreSyncAddressRequired', 'Bitte gib eine Sync-Dienst-Adresse oder einen Deskriptor ein.') });
             return;
         }
 
-        setIsFetchingDrop(true);
+        setIsFetchingSync(true);
         try {
-            const result = await backupService.fetchAndInspectDropBackup({
-                dropInput: dropInput.trim(),
+            const result = await backupService.fetchAndInspectBackup({
+                syncInput: syncInput.trim(),
                 mnemonic,
                 passphrase: passphrase || null,
                 userPrefix: userPrefix || null,
@@ -241,7 +241,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
 
             setSourcePath(result.stagedPath);
             setInspection(result.inspection);
-            setMatchedDropKeyKind(result.matchedKeyKind);
+            setMatchedSyncKeyKind(result.matchedKeyKind);
             setCredentialMode('mnemonic');
             setProbe({
                 sourceKind: 'file',
@@ -253,10 +253,10 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
             });
             setStep('unlock_and_inspect');
         } catch (err) {
-            logger.error(`Fetch drop backup failed: ${stringifyError(err)}`);
+            logger.error(`Fetch sync backup failed: ${stringifyError(err)}`);
             setFeedback({ type: 'error', message: translateError(err, t) });
         } finally {
-            setIsFetchingDrop(false);
+            setIsFetchingSync(false);
         }
     };
 
@@ -340,7 +340,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                     data-testid="restore-back-btn"
                     onClick={(e) => {
                         if (e.target === e.currentTarget) {
-                            if (step === 'unlock_and_inspect' || step === 'drop_source') {
+                            if (step === 'unlock_and_inspect' || step === 'sync_source') {
                                 setStep('select_source');
                             } else {
                                 onBack();
@@ -349,7 +349,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                     }}
                 >
                     <BackButton
-                        onClick={step === 'unlock_and_inspect' || step === 'drop_source' ? () => setStep('select_source') : onBack}
+                        onClick={step === 'unlock_and_inspect' || step === 'sync_source' ? () => setStep('select_source') : onBack}
                         label={t('common.back')}
                     />
                 </div>
@@ -451,14 +451,14 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                             </div>
                         </button>
 
-                        {/* Drop Option */}
+                        {/* Sync Service Option */}
                         <button
                             type="button"
-                            data-testid="restore-select-drop-btn"
+                            data-testid="restore-select-sync-btn"
                             onClick={() => {
                                 setFeedback(null);
                                 setCredentialMode('mnemonic');
-                                setStep('drop_source');
+                                setStep('sync_source');
                             }}
                             className="p-6 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex flex-col justify-between gap-4 cursor-pointer group shadow-sm hover:shadow-md"
                         >
@@ -467,14 +467,14 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                             </div>
                             <div className="space-y-1">
                                 <h3 className="text-sm font-black text-theme-secondary group-hover:text-theme-primary">
-                                    {t('profile.backupRestoreSelectDrop', 'Von Sync-Dienst wiederherstellen')}
+                                    {t('profile.backupRestoreSelectSync', 'Von Sync-Dienst wiederherstellen')}
                                 </h3>
                                 <p className="text-xs text-theme-light font-medium leading-relaxed">
-                                    {t('profile.backupRestoreSelectDropDesc', 'Freundes-, eigenen oder öffentlichen Sync-Dienst mit Mnemonic abrufen')}
+                                    {t('profile.backupRestoreSelectSyncDesc', 'Freundes-, eigenen oder öffentlichen Sync-Dienst mit Mnemonic abrufen')}
                                 </p>
                             </div>
                             <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
-                                <span>{t('profile.backupRestoreSelectDropAction', 'Sync-Dienst abrufen')}</span>
+                                <span>{t('profile.backupRestoreSelectSyncAction', 'Sync-Dienst abrufen')}</span>
                                 <ArrowRight size={14} />
                             </div>
                         </button>
@@ -482,18 +482,18 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                 </div>
             )}
 
-            {/* STEP 1b: Drop Source (Von Sync-Dienst wiederherstellen) */}
-            {step === 'drop_source' && (
+            {/* STEP 1b: Sync Source (Von Sync-Dienst wiederherstellen) */}
+            {step === 'sync_source' && (
                 <div className="space-y-6">
                     <div className="p-4 bg-theme-primary/5 border border-theme-primary/20 rounded-2xl flex items-center justify-between gap-4">
                         <div className="flex items-center gap-3 min-w-0">
                             <Server size={20} className="text-theme-primary shrink-0" />
                             <div className="min-w-0">
                                 <p className="text-[10px] font-black uppercase tracking-wider text-theme-primary">
-                                    {t('profile.backupRestoreDropHeader', 'Von Sync-Dienst wiederherstellen')}
+                                    {t('profile.backupRestoreSyncHeader', 'Von Sync-Dienst wiederherstellen')}
                                 </p>
                                 <p className="text-xs text-theme-secondary font-medium">
-                                    {t('profile.backupRestoreDropSubtitle', 'Gib deine Mnemonic-Wörter und die Adresse des Sync-Dienstes ein.')}
+                                    {t('profile.backupRestoreSyncSubtitle', 'Gib deine Mnemonic-Wörter und die Adresse des Sync-Dienstes ein.')}
                                 </p>
                             </div>
                         </div>
@@ -554,8 +554,8 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                                         {idx + 1}.
                                     </span>
                                     <input
-                                        id={`restore-drop-word-${idx}`}
-                                        data-testid={`restore-drop-word-${idx}`}
+                                        id={`restore-sync-word-${idx}`}
+                                        data-testid={`restore-sync-word-${idx}`}
                                         type="text"
                                         value={word}
                                         onChange={(e) => handleWordChange(idx, e.target.value)}
@@ -567,40 +567,40 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                             ))}
                         </div>
 
-                        {/* Drop Address Input */}
+                        {/* Sync Address Input */}
                         <div className="space-y-1.5 pt-3 border-t border-theme-subtle">
                             <label className="text-xs font-bold text-theme-secondary flex items-center justify-between">
-                                <span>{t('profile.backupRestoreDropAddressLabel', 'Sync-Dienst-Adresse oder Deskriptor')}</span>
+                                <span>{t('profile.backupRestoreSyncAddressLabel', 'Sync-Dienst-Adresse oder Deskriptor')}</span>
                             </label>
                             <Input
-                                data-testid="restore-drop-input"
+                                data-testid="restore-sync-input"
                                 type="text"
-                                placeholder={t('profile.backupRestoreDropAddressPlaceholder', 'z. B. sync.verein.de, https://freund.de/sync.php oder JSON-Deskriptor')}
-                                value={dropInput}
-                                onChange={(e) => setDropInput(e.target.value)}
-                                disabled={isFetchingDrop}
+                                placeholder={t('profile.backupRestoreSyncAddressPlaceholder', 'z. B. sync.verein.de, https://freund.de/sync.php oder JSON-Deskriptor')}
+                                value={syncInput}
+                                onChange={(e) => setSyncInput(e.target.value)}
+                                disabled={isFetchingSync}
                             />
                             <p className="text-[11px] text-theme-light">
-                                {t('profile.backupRestoreDropAddressHint', 'Webspace-Adresse eines eigenen, Freundes- oder öffentlichen Sync-Dienstes.')}
+                                {t('profile.backupRestoreSyncAddressHint', 'Webspace-Adresse eines eigenen, Freundes- oder öffentlichen Sync-Dienstes.')}
                             </p>
                         </div>
 
                         <Button
-                            data-testid="restore-drop-fetch-btn"
+                            data-testid="restore-sync-fetch-btn"
                             variant="primary"
-                            onClick={handleFetchAndInspectDropBackup}
-                            disabled={isFetchingDrop}
+                            onClick={handleFetchAndInspectBackup}
+                            disabled={isFetchingSync}
                             className="w-full mt-2"
                         >
-                            {isFetchingDrop ? (
+                            {isFetchingSync ? (
                                 <>
                                     <RefreshCw size={14} className="animate-spin mr-2" />
-                                    {t('profile.backupRestoreFetchingDrop', 'Sync-Dienst wird durchsucht...')}
+                                    {t('profile.backupRestoreFetchingSync', 'Sync-Dienst wird durchsucht...')}
                                 </>
                             ) : (
                                 <>
                                     <Search size={14} className="mr-2" />
-                                    {t('profile.backupRestoreFetchDropBtn', 'Sicherung suchen & laden')}
+                                    {t('profile.backupRestoreFetchSyncBtn', 'Sicherung suchen & laden')}
                                 </>
                             )}
                         </Button>
@@ -614,20 +614,20 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                     {/* Source Selected Banner */}
                     <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-4">
                         <div className="flex items-center gap-3 min-w-0">
-                            {matchedDropKeyKind ? (
+                            {matchedSyncKeyKind ? (
                                 <Server size={18} className="text-theme-primary shrink-0" />
                             ) : (
                                 <Folder size={18} className="text-theme-primary shrink-0" />
                             )}
                             <div className="min-w-0">
                                 <p className="text-[10px] font-black uppercase tracking-wider text-theme-light flex items-center gap-2">
-                                    <span>{matchedDropKeyKind ? 'Sync-Dienst-Sicherung' : (probe?.sourceKind === 'folder' ? 'Backup Folder' : 'Backup Archive')}</span>
-                                    {matchedDropKeyKind && (
+                                    <span>{matchedSyncKeyKind ? 'Sync-Dienst-Sicherung' : (probe?.sourceKind === 'folder' ? 'Backup Folder' : 'Backup Archive')}</span>
+                                    {matchedSyncKeyKind && (
                                         <span className="px-2 py-0.5 rounded-full bg-theme-primary/10 text-theme-primary font-bold">
-                                            {matchedDropKeyKind === 'stealth' && 'Stealth-Schlüssel'}
-                                            {matchedDropKeyKind === 'public' && 'Öffentlicher Sync-Dienst'}
-                                            {matchedDropKeyKind === 'grace' && 'Grace-Schlüssel'}
-                                            {matchedDropKeyKind === 'own' && 'Eigener Sync-Dienst'}
+                                            {matchedSyncKeyKind === 'stealth' && 'Stealth-Schlüssel'}
+                                            {matchedSyncKeyKind === 'public' && 'Öffentlicher Sync-Dienst'}
+                                            {matchedSyncKeyKind === 'grace' && 'Grace-Schlüssel'}
+                                            {matchedSyncKeyKind === 'own' && 'Eigener Sync-Dienst'}
                                         </span>
                                     )}
                                 </p>

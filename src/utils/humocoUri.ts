@@ -10,11 +10,13 @@
 export interface ContactCardParams {
   did: string;
   name?: string;
+  syncUrls?: string[];
 }
 
 export interface ParsedContactCard {
   did: string;
   name?: string;
+  syncUrls?: string[];
 }
 
 export interface PaymentRequestParams {
@@ -49,9 +51,9 @@ export interface ParsedCardUri {
 }
 
 /**
- * Builds a friendly, human-readable contact card text block containing a humoco://contact URI.
+ * Builds a canonical humoco://contact URI with optional name and up to 2 sync URLs.
  */
-export function buildContactCardText({ did, name }: ContactCardParams): string {
+export function buildContactUri({ did, name, syncUrls }: ContactCardParams): string {
   const cleanDid = did.trim();
   const cleanName = name?.trim();
 
@@ -60,25 +62,39 @@ export function buildContactCardText({ did, name }: ContactCardParams): string {
   if (cleanName) {
     params.set('name', cleanName);
   }
-
-  const uri = `humoco://contact?${params.toString().replace(/\+/g, '%20')}`;
-
-  const lines: string[] = ['Human Money Kontaktkarte:'];
-  if (cleanName) {
-    lines.push(`Name: ${cleanName}`);
+  if (syncUrls && syncUrls.length > 0) {
+    const valid = syncUrls
+      .map(s => s.trim())
+      .filter(s => s.startsWith('https://') || s.startsWith('http://'))
+      .slice(0, 2);
+    for (const url of valid) {
+      params.append('sync', url);
+    }
   }
-  lines.push(`DID: ${cleanDid}`);
-  lines.push('');
-  lines.push(uri);
 
-  return lines.join('\n');
+  return `humoco://contact?${params.toString().replace(/\+/g, '%20')}`;
 }
 
 /**
- * Parses a contact card from raw text.
+ * Builds a compact, friendly contact card text block (2 lines) containing a humoco://contact URI.
+ * Redundant plaintext DID line is removed.
+ */
+export function buildContactCardText(params: ContactCardParams): string {
+  const cleanName = params.name?.trim();
+  const uri = buildContactUri(params);
+
+  const header = cleanName
+    ? `Human Money Kontakt: ${cleanName}`
+    : 'Human Money Kontakt:';
+
+  return `${header}\n${uri}`;
+}
+
+/**
+ * Parses a contact card from raw text or humoco://contact URI.
  * 
  * Handles:
- * 1. Embedded humoco://contact?did=...&name=... inside multiline emails/chat messages
+ * 1. Embedded humoco://contact?did=...&name=...&sync=... inside multiline emails/chat messages
  * 2. Standalone DID string (did:key:... or prefix:tag@did:key:...)
  */
 export function parseContactCard(input: string): ParsedContactCard | null {
@@ -90,9 +106,18 @@ export function parseContactCard(input: string): ParsedContactCard | null {
       const searchParams = new URLSearchParams(match[1]);
       const did = searchParams.get('did')?.trim();
       const name = searchParams.get('name')?.trim() || undefined;
+      const rawSync = searchParams.getAll('sync');
+      const syncUrls = rawSync
+        .map(s => s.trim())
+        .filter(s => s.startsWith('https://') || s.startsWith('http://'))
+        .slice(0, 2);
 
       if (did && (did.startsWith('did:') || did.includes('@did:'))) {
-        return { did, name };
+        return {
+          did,
+          name,
+          syncUrls: syncUrls.length > 0 ? syncUrls : undefined,
+        };
       }
     } catch {
       // Fall through if URL parsing fails

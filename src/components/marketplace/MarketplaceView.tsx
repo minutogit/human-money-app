@@ -26,6 +26,8 @@ import { marketService } from '../../services/marketService';
 import { postService, POST_INBOX_UPDATED_EVENT } from '../../services/postService';
 import { profileService } from '../../services/profileService';
 import { settingsService } from '../../services/settingsService';
+import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
+import { rateLimitManager } from '../../utils/rateLimitManager';
 import { PageLayout } from '../ui/PageLayout';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
@@ -40,7 +42,10 @@ import { ImportCardModal } from './ImportCardModal';
 import { ShareCardModal } from './ShareCardModal';
 import { truncateUserId } from '../../utils/userIdHelper';
 import { translateError } from '../../utils/errorHelper';
-import { DROP_STATUS_UPDATED_EVENT } from '../../utils/dropEvents';
+import { SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
+
+const MARKET_BACKGROUND_SYNC_INTERVAL_MS = 6 * 3600 * 1000;
+let lastMarketSyncTimestamp = 0;
 
 export interface MarketplaceViewProps {
     initialSelectedDid?: string;
@@ -50,6 +55,7 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
     const { t } = useTranslation();
     const { navigate, goBack, appState, navigateToSettingsSection } = useNavigation();
     const { protectAction } = useSession();
+    const { cooldownSeconds, isCoolingDown, checkAndTriggerCooldown } = useRateLimitCooldown();
 
     const [people, setPeople] = useState<FrontendMarketPerson[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -92,7 +98,7 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
     const [connectedSyncCount, setConnectedSyncCount] = useState<number | null>(null);
 
     const refreshSyncStatus = useCallback(() => {
-        marketService.getDropOverviewStatus()
+        marketService.getSyncOverviewStatus()
             .then(status => {
                 setConnectedSyncCount(status.connectedCount);
             })
@@ -103,12 +109,12 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
 
     useEffect(() => {
         refreshSyncStatus();
-        const handleDropStatus = () => {
+        const handleSyncStatus = () => {
             refreshSyncStatus();
         };
-        window.addEventListener(DROP_STATUS_UPDATED_EVENT, handleDropStatus);
+        window.addEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncStatus);
         return () => {
-            window.removeEventListener(DROP_STATUS_UPDATED_EVENT, handleDropStatus);
+            window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncStatus);
         };
     }, [refreshSyncStatus]);
 
@@ -157,27 +163,36 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
         }
     }, [t]);
 
-    const triggerDropSync = useCallback(() => {
-        marketService.syncMarketDrops()
+    const triggerChannelSync = useCallback((forceManual: boolean = false) => {
+        if (!forceManual) {
+            if (rateLimitManager.isCoolingDown()) return;
+            const now = Date.now();
+            if (now - lastMarketSyncTimestamp < MARKET_BACKGROUND_SYNC_INTERVAL_MS) {
+                return;
+            }
+        }
+        marketService.syncMarketChannels({ forceUpload: forceManual })
             .then((res) => {
+                lastMarketSyncTimestamp = Date.now();
+                checkAndTriggerCooldown(res);
                 if (res && res.importedCards > 0) {
                     loadMarketView();
                 }
             })
-            .catch(() => {
-                // Non-blocking sync error
+            .catch((err) => {
+                checkAndTriggerCooldown(err);
             });
-    }, [loadMarketView]);
+    }, [loadMarketView, checkAndTriggerCooldown]);
 
     useEffect(() => {
         loadMarketView();
-        triggerDropSync();
-        postService.syncPostDrops().catch(() => {});
+        triggerChannelSync();
+        postService.syncPostChannels().catch(() => {});
         window.addEventListener(POST_INBOX_UPDATED_EVENT, loadMarketView);
         return () => {
             window.removeEventListener(POST_INBOX_UPDATED_EVENT, loadMarketView);
         };
-    }, [loadMarketView, triggerDropSync]);
+    }, [loadMarketView, triggerChannelSync]);
 
     const handleSendInquiry = async () => {
         if (!inquiryTarget || !inquiryMessage.trim()) return;
@@ -190,7 +205,7 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
                     inquiryTarget.listing.listingId,
                     inquiryTarget.listing.title,
                     inquiryMessage.trim(),
-                    inquiryTarget.person.cardDrops,
+                    inquiryTarget.person.cardSyncs,
                     pwd || undefined
                 );
             });
@@ -441,13 +456,13 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
                         size="sm"
                         onClick={() => {
                             loadMarketView();
-                            triggerDropSync();
+                            triggerChannelSync(true);
                         }}
-                        disabled={isLoading}
+                        disabled={isLoading || isCoolingDown}
                         className="gap-2 shadow-xs"
                     >
                         <RefreshCw size={14} className={isLoading ? "animate-spin" : ""} />
-                        <span>{t('marketplace.refresh')}</span>
+                        <span>{isCoolingDown ? t('marketplace.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` }) : t('marketplace.refresh')}</span>
                     </Button>
                 </div>
             }
@@ -917,7 +932,7 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
 
                                                                 return (
                                                                     <>
-                                                                        {!isOwn && listing.allowInquiries && person.cardDrops && person.cardDrops.length > 0 && (
+                                                                        {!isOwn && listing.allowInquiries && person.cardSyncs && person.cardSyncs.length > 0 && (
                                                                             <Button
                                                                                 size="xs"
                                                                                 variant="outline"
@@ -1087,7 +1102,7 @@ export function MarketplaceView({ initialSelectedDid }: MarketplaceViewProps) {
 
                                                                 return (
                                                                     <>
-                                                                        {!isOwn && listing.allowInquiries && person.cardDrops && person.cardDrops.length > 0 && (
+                                                                        {!isOwn && listing.allowInquiries && person.cardSyncs && person.cardSyncs.length > 0 && (
                                                                             <Button
                                                                                 size="xs"
                                                                                 variant="outline"

@@ -55,7 +55,7 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
     vi.clearAllMocks();
   });
 
-  it('renders emerald success card when initially deposited to 1 or more drops', async () => {
+  it('renders emerald success card when initially deposited to 1 or more sync endpoints', async () => {
     render(
       <TransferSuccessView
         bundleData={dummyBundleData}
@@ -69,14 +69,14 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
 
     // Emerald card is visible
     expect(screen.getByText(/Payment deposited in Post/i)).toBeInTheDocument();
-    expect(screen.getByText(/transfer bundle was securely deposited into 2 Post drop/i)).toBeInTheDocument();
+    expect(screen.getByText(/transfer bundle was securely deposited into 2 Post sync/i)).toBeInTheDocument();
 
     // Direct sharing options remain fully accessible (100% offline sovereignty)
     expect(screen.getByText(/Show QR Code/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument();
   });
 
-  it('renders amber pending card when initially deposited to 0 drops', async () => {
+  it('renders amber pending card when initially deposited to 0 sync endpoints', async () => {
     render(
       <TransferSuccessView
         bundleData={dummyBundleData}
@@ -84,14 +84,14 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
         summary="10.00 Minuto"
         bundleId={bundleId}
         initialDepositedTo={0}
-        depositError="No active drops"
+        depositError="No active sync endpoints"
         onDone={vi.fn()}
       />
     );
 
     // Amber pending card is displayed
     expect(screen.getByText(/Deposit Pending or Incomplete/i)).toBeInTheDocument();
-    expect(screen.getByText("No active drops")).toBeInTheDocument();
+    expect(screen.getByText("No active sync endpoints")).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Redeposit into Post/i })).toBeInTheDocument();
   });
 

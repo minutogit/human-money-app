@@ -8,16 +8,16 @@ import {
     FrontendForwardCardExport,
     FrontendImportCardResult,
     FrontendMemberPolicyDto,
-    FrontendDropSetupDraft,
-    FrontendDropAdminStatus,
-    FrontendDropAdminUpdateRequest,
-    FrontendDropConnectionTestResult,
-    FrontendDiscoveredDrop,
-    FrontendDropDescriptor,
-    FrontendDropSyncResult,
+    FrontendSyncSetupDraft,
+    FrontendSyncAdminStatus,
+    FrontendSyncAdminUpdateRequest,
+    FrontendSyncConnectionTestResult,
+    FrontendDiscoveredSync,
+    FrontendSyncDescriptor,
+    FrontendMarketSyncResult,
     FrontendTrustChangeImpact,
-    FrontendPublicDropInfo,
-    FrontendDropOverviewStatus,
+    FrontendPublicSyncInfo,
+    FrontendSyncOverviewStatus,
 } from "../types";
 
 export const marketService = {
@@ -45,13 +45,13 @@ export const marketService = {
         return await invoke<FrontendImportCardResult>("import_contact_card", { payload, password: password || undefined });
     },
 
-    // --- Phase 3: Drop Management (Ablagen) ---
+    // --- Phase 3 & 4: Sync Service Management ---
 
-    prepareDropSetup: async (
+    prepareSyncSetup: async (
         args?: { policy?: FrontendMemberPolicyDto; maxMembers?: number; maxTotalStorageMb?: number },
         password?: string
-    ): Promise<FrontendDropSetupDraft> => {
-        return await invoke<FrontendDropSetupDraft>("prepare_drop_setup", {
+    ): Promise<FrontendSyncSetupDraft> => {
+        return await invoke<FrontendSyncSetupDraft>("prepare_sync_setup", {
             policy: args?.policy,
             maxMembers: args?.maxMembers,
             maxTotalStorageMb: args?.maxTotalStorageMb,
@@ -59,58 +59,58 @@ export const marketService = {
         });
     },
 
-    saveDropSetupZip: async (filePath: string, password?: string): Promise<void> => {
-        return await invoke<void>("save_drop_setup_zip", {
+    saveSyncSetupZip: async (filePath: string, password?: string): Promise<void> => {
+        return await invoke<void>("save_sync_setup_zip", {
             filePath,
             password: password || undefined,
         });
     },
 
-    finalizeDropSetup: async (baseUrl: string, password?: string): Promise<FrontendDropAdminStatus> => {
-        return await invoke<FrontendDropAdminStatus>("finalize_drop_setup", {
+    finalizeSyncSetup: async (baseUrl: string, password?: string): Promise<FrontendSyncAdminStatus> => {
+        return await invoke<FrontendSyncAdminStatus>("finalize_sync_setup", {
             baseUrl,
             password: password || undefined,
         });
     },
 
-    testDropConnection: async (baseUrl: string, password?: string): Promise<FrontendDropConnectionTestResult> => {
-        return await invoke<FrontendDropConnectionTestResult>("test_drop_connection", {
+    testSyncConnection: async (baseUrl: string, password?: string): Promise<FrontendSyncConnectionTestResult> => {
+        return await invoke<FrontendSyncConnectionTestResult>("test_sync_connection", {
             baseUrl,
             password: password || undefined,
         });
     },
 
-    getDropAdminStatus: async (password?: string): Promise<FrontendDropAdminStatus | null> => {
-        return await invoke<FrontendDropAdminStatus | null>("get_drop_admin_status", password ? { password } : {});
+    getSyncAdminStatus: async (password?: string): Promise<FrontendSyncAdminStatus | null> => {
+        return await invoke<FrontendSyncAdminStatus | null>("get_sync_admin_status", password ? { password } : {});
     },
 
-    updateDropAdminConfig: async (
-        update: FrontendDropAdminUpdateRequest,
+    updateSyncAdminConfig: async (
+        update: FrontendSyncAdminUpdateRequest,
         pushNow: boolean = false,
         password?: string
-    ): Promise<FrontendDropAdminStatus> => {
-        return await invoke<FrontendDropAdminStatus>("update_drop_admin_config", {
+    ): Promise<FrontendSyncAdminStatus> => {
+        return await invoke<FrontendSyncAdminStatus>("update_sync_admin_config", {
             update,
             pushNow,
             password: password || undefined,
         });
     },
 
-    blockDropSlot: async (pubkeyHex64: string, password?: string): Promise<FrontendDropAdminStatus> => {
-        return await invoke<FrontendDropAdminStatus>("block_drop_slot", {
+    blockSyncSlot: async (pubkeyHex64: string, password?: string): Promise<FrontendSyncAdminStatus> => {
+        return await invoke<FrontendSyncAdminStatus>("block_sync_slot", {
             pubkeyHex64,
             password: password || undefined,
         });
     },
 
-    probePublicDrop: async (url: string, password?: string): Promise<FrontendPublicDropInfo> => {
-        return await invoke<FrontendPublicDropInfo>("probe_public_drop", {
+    probePublicSync: async (url: string, password?: string): Promise<FrontendPublicSyncInfo> => {
+        return await invoke<FrontendPublicSyncInfo>("probe_public_sync", {
             url,
             password: password || undefined,
         });
     },
 
-    savePublicDrop: async (
+    savePublicSync: async (
         params: {
             writeUrl: string;
             readUrl: string;
@@ -119,8 +119,8 @@ export const marketService = {
             enabled: boolean;
         },
         password?: string
-    ): Promise<FrontendPublicDropInfo> => {
-        return await invoke<FrontendPublicDropInfo>("save_public_drop", {
+    ): Promise<FrontendPublicSyncInfo> => {
+        return await invoke<FrontendPublicSyncInfo>("save_public_sync", {
             writeUrl: params.writeUrl,
             readUrl: params.readUrl,
             dropPub: params.dropPub,
@@ -130,57 +130,57 @@ export const marketService = {
         });
     },
 
-    removePublicDrop: async (
+    removePublicSync: async (
         writeUrl: string,
         deleteRemoteSlots: boolean = false,
         password?: string
     ): Promise<void> => {
-        return await invoke<void>("remove_public_drop", {
+        return await invoke<void>("remove_public_sync", {
             writeUrl,
             deleteRemoteSlots,
             password: password || undefined,
         });
     },
 
-    rotateDropAdminKey: async (password?: string): Promise<FrontendDropAdminStatus> => {
-        return await invoke<FrontendDropAdminStatus>("rotate_drop_admin_key", password ? { password } : {});
+    rotateSyncAdminKey: async (password?: string): Promise<FrontendSyncAdminStatus> => {
+        return await invoke<FrontendSyncAdminStatus>("rotate_sync_admin_key", password ? { password } : {});
     },
 
-    getDropOverviewStatus: async (password?: string): Promise<FrontendDropOverviewStatus> => {
-        return await invoke<FrontendDropOverviewStatus>("get_drop_overview_status", password ? { password } : {});
+    getSyncOverviewStatus: async (password?: string): Promise<FrontendSyncOverviewStatus> => {
+        return await invoke<FrontendSyncOverviewStatus>("get_sync_overview_status", password ? { password } : {});
     },
 
-    deleteDropAdmin: async (password?: string): Promise<void> => {
-        return await invoke<void>("delete_drop_admin", password ? { password } : {});
+    deleteSyncAdmin: async (password?: string): Promise<void> => {
+        return await invoke<void>("delete_sync_admin", password ? { password } : {});
     },
 
-    discoverAvailableDrops: async (password?: string): Promise<FrontendDiscoveredDrop[]> => {
-        return await invoke<FrontendDiscoveredDrop[]>("discover_available_drops", password ? { password } : {});
+    discoverAvailableSyncs: async (password?: string): Promise<FrontendDiscoveredSync[]> => {
+        return await invoke<FrontendDiscoveredSync[]>("discover_available_syncs", password ? { password } : {});
     },
 
-    setSelectedUploadDrops: async (
-        drops: FrontendDropDescriptor[],
+    setSelectedUploadSyncs: async (
+        syncs: FrontendSyncDescriptor[],
         password?: string
-    ): Promise<FrontendDropDescriptor[]> => {
-        return await invoke<FrontendDropDescriptor[]>("set_selected_upload_drops", {
-            drops,
+    ): Promise<FrontendSyncDescriptor[]> => {
+        return await invoke<FrontendSyncDescriptor[]>("set_selected_upload_syncs", {
+            syncs,
             password: password || undefined,
         });
     },
 
-    syncMarketDrops: async (
+    syncMarketChannels: async (
         args?: { isWifi?: boolean; forceUpload?: boolean },
         password?: string
-    ): Promise<FrontendDropSyncResult> => {
-        return await invoke<FrontendDropSyncResult>("sync_market_drops", {
+    ): Promise<FrontendMarketSyncResult> => {
+        return await invoke<FrontendMarketSyncResult>("sync_market_channels", {
             isWifi: args?.isWifi,
             forceUpload: args?.forceUpload,
             password: password || undefined,
         });
     },
 
-    deleteOwnDropSlots: async (password?: string): Promise<number> => {
-        return await invoke<number>("delete_own_drop_slots", password ? { password } : {});
+    deleteOwnSyncSlots: async (password?: string): Promise<number> => {
+        return await invoke<number>("delete_own_sync_slots", password ? { password } : {});
     },
 
     previewContactTrustChange: async (
@@ -194,5 +194,29 @@ export const marketService = {
             password: password || undefined,
         });
     },
+
+    syncChannelMembers: async (password?: string): Promise<number> => {
+        return await invoke<number>("sync_channel_members", password ? { password } : {});
+    },
 };
 
+let channelMembersDebounceTimer: number | null = null;
+
+/**
+ * Triggers a 1.5s (1500ms) debounced call to sync_channel_members.
+ * Rapid consecutive edits to contacts/trust levels coalesce into a single upload.
+ */
+export function triggerDebouncedChannelMembersSync(delayMs: number = 1500): void {
+    if (typeof window === 'undefined') return;
+    if (channelMembersDebounceTimer !== null) {
+        window.clearTimeout(channelMembersDebounceTimer);
+    }
+    channelMembersDebounceTimer = window.setTimeout(async () => {
+        channelMembersDebounceTimer = null;
+        try {
+            await marketService.syncChannelMembers();
+        } catch {
+            // Background upload errors handled silently
+        }
+    }, delayMs);
+}

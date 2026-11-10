@@ -284,7 +284,7 @@ uuid = "minuto-uuid-123"`,
     vi.mocked(postService.replyDetachedSignatureViaPost).mockResolvedValue({
       msgId: 'msg-reply-123',
       depositedTo: 0,
-      errors: ['No reachable drops'],
+      errors: ['No reachable sync endpoints'],
     });
 
     (save as Mock).mockResolvedValue('/tmp/signature-fallback.sig');
