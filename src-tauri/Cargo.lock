@@ -2418,6 +2418,7 @@ dependencies = [
 name = "humoco-market"
 version = "0.2.0"
 dependencies = [
+ "base64 0.22.1",
  "blake3",
  "bs58",
  "chacha20poly1305",
@@ -2428,6 +2429,7 @@ dependencies = [
  "hmac",
  "human_money_core",
  "rand 0.8.6",
+ "rand_core 0.6.4",
  "serde",
  "serde_json",
  "serde_json_canonicalizer",

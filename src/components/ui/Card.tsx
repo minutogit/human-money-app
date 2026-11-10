@@ -1,7 +1,7 @@
 // src/components/ui/Card.tsx
 import React from 'react';
 
-interface CardProps {
+interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
     children: React.ReactNode;
     className?: string;
     header?: React.ReactNode;
@@ -16,7 +16,8 @@ export function Card({
     header,
     variant = 'default', 
     hover = false,
-    onClick 
+    onClick,
+    ...rest
 }: CardProps) {
     const baseStyles = "rounded-3xl transition-all duration-300 overflow-hidden";
     
@@ -37,6 +38,7 @@ export function Card({
         <div 
             className={`${baseStyles} ${variantStyles[variant]} ${hoverStyles} ${className}`}
             onClick={onClick}
+            {...rest}
         >
             {header && (
                 <div className={`px-6 py-4 border-b transition-colors ${

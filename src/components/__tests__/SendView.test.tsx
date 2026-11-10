@@ -129,7 +129,7 @@ amount_decimal_places = 4`,
     render(<SendView />);
 
     await waitFor(() => {
-      expect(screen.getByRole('textbox', { name: /User ID \(DID\)/i })).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument();
       expect(screen.getByPlaceholderText(/did:key:z/i)).toBeInTheDocument();
     });
   });
@@ -221,7 +221,7 @@ amount_decimal_places = 4`,
     render(<SendView />);
 
     // Type recipient ID
-    const recipientInput = await screen.findByRole('textbox', { name: /User ID \(DID\)/i });
+    const recipientInput = await screen.findByRole('textbox', { name: /User ID/i });
     fireEvent.change(recipientInput, { target: { value: 'did:key:z456' } });
 
     // Click on the voucher card to select it
@@ -427,7 +427,7 @@ amount_decimal_places = 4`,
     expect(screen.getByText(/Your name is hidden/i)).toBeInTheDocument();
 
     // Fill recipient ID
-    const recipientInput = await screen.findByRole('textbox', { name: /User ID \(DID\)/i });
+    const recipientInput = await screen.findByRole('textbox', { name: /User ID/i });
     fireEvent.change(recipientInput, { target: { value: 'did:key:z456' } });
 
     // Select voucher

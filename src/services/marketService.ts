@@ -2,9 +2,10 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import {
-    FrontendMarketPerson,
-    FrontendOwnContactCard,
-    FrontendSaveOwnCardRequest,
+    FrontendMarketSnapshot,
+    FrontendMyMarketProfile,
+    FrontendSaveMyMarketProfileRequest,
+    FrontendAdInput,
     FrontendForwardCardExport,
     FrontendImportCardResult,
     FrontendMemberPolicyDto,
@@ -21,31 +22,75 @@ import {
 } from "../types";
 
 export const marketService = {
-    getMarketView: async (password?: string): Promise<FrontendMarketPerson[]> => {
-        return await invoke<FrontendMarketPerson[]>("get_market_view", password ? { password } : {});
+    getMyMarketProfile: async (password?: string): Promise<FrontendMyMarketProfile> => {
+        return await invoke<FrontendMyMarketProfile>("get_my_market_profile", password ? { password } : {});
     },
 
-    getOwnContactCard: async (password?: string): Promise<FrontendOwnContactCard | null> => {
-        return await invoke<FrontendOwnContactCard | null>("get_own_contact_card", password ? { password } : {});
+    saveMyMarketProfile: async (
+        request: FrontendSaveMyMarketProfileRequest,
+        password?: string
+    ): Promise<FrontendMyMarketProfile> => {
+        return await invoke<FrontendMyMarketProfile>("save_my_market_profile", {
+            request,
+            password: password || undefined,
+        });
     },
 
-    saveOwnContactCard: async (request: FrontendSaveOwnCardRequest, password?: string): Promise<FrontendOwnContactCard> => {
-        return await invoke<FrontendOwnContactCard>("save_own_contact_card", { request, password: password || undefined });
+    setCardPublished: async (
+        published: boolean,
+        deleteRemote: boolean = false,
+        password?: string
+    ): Promise<FrontendMyMarketProfile> => {
+        return await invoke<FrontendMyMarketProfile>("set_card_published", {
+            published,
+            deleteRemote,
+            password: password || undefined,
+        });
     },
 
-    deleteOwnContactCard: async (password?: string): Promise<void> => {
-        return await invoke<void>("delete_own_contact_card", password ? { password } : {});
+    upsertAd: async (ad: FrontendAdInput, password?: string): Promise<FrontendMyMarketProfile> => {
+        return await invoke<FrontendMyMarketProfile>("upsert_ad", {
+            ad,
+            password: password || undefined,
+        });
+    },
+
+    renewAd: async (id: string, durationDays: number, password?: string): Promise<FrontendMyMarketProfile> => {
+        return await invoke<FrontendMyMarketProfile>("renew_ad", {
+            id,
+            durationDays,
+            password: password || undefined,
+        });
+    },
+
+    deleteAd: async (id: string, password?: string): Promise<FrontendMyMarketProfile> => {
+        return await invoke<FrontendMyMarketProfile>("delete_ad", {
+            id,
+            password: password || undefined,
+        });
+    },
+
+    getMarketView: async (password?: string): Promise<FrontendMarketSnapshot> => {
+        return await invoke<FrontendMarketSnapshot>("get_market_view", password ? { password } : {});
     },
 
     exportForwardCard: async (did: string, password?: string): Promise<FrontendForwardCardExport> => {
         return await invoke<FrontendForwardCardExport>("export_forward_card", { did, password: password || undefined });
     },
 
+    recommendMarketCard: async (did: string, password?: string): Promise<FrontendForwardCardExport> => {
+        return await invoke<FrontendForwardCardExport>("recommend_market_card", { did, password: password || undefined });
+    },
+
     importContactCard: async (payload: string, password?: string): Promise<FrontendImportCardResult> => {
         return await invoke<FrontendImportCardResult>("import_contact_card", { payload, password: password || undefined });
     },
 
-    // --- Phase 3 & 4: Sync Service Management ---
+    deleteForeignContactCard: async (did: string, password?: string): Promise<void> => {
+        return await invoke<void>("delete_foreign_contact_card", { did, password: password || undefined });
+    },
+
+    // --- Sync Service Management ---
 
     prepareSyncSetup: async (
         args?: { policy?: FrontendMemberPolicyDto; maxMembers?: number; maxTotalStorageMb?: number },

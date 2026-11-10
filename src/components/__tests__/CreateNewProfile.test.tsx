@@ -286,7 +286,7 @@ describe('CreateNewProfile Component', () => {
       }, { timeout: 3000 });
 
       await waitFor(() => {
-        expect(screen.getByText('Step 3: Secure Your Wallet')).toBeInTheDocument();
+        expect(screen.getByText(/Step 3: Secure Your (Profile|Wallet)/i)).toBeInTheDocument();
       }, { timeout: 4000 });
     });
   });

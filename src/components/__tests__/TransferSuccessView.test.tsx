@@ -69,7 +69,7 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
 
     // Emerald card is visible
     expect(screen.getByText(/Payment deposited in Post/i)).toBeInTheDocument();
-    expect(screen.getByText(/transfer bundle was securely deposited into 2 Post sync/i)).toBeInTheDocument();
+    expect(screen.getByText(/transfer bundle was securely deposited into 2 (Post sync|sync service)/i)).toBeInTheDocument();
 
     // Direct sharing options remain fully accessible (100% offline sovereignty)
     expect(screen.getByText(/Show QR Code/i)).toBeInTheDocument();

@@ -7,14 +7,17 @@ import { transferService } from "../services/transferService";
 import { profileService } from "../services/profileService";
 import { contactService } from "../services/contactService";
 import { settingsService } from "../services/settingsService";
+import { marketService } from "../services/marketService";
 import { copyToClipboard } from "../utils/clipboard";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
-import { AggregatedBalance, VoucherSummary, WalletEvent, AppSettings, FrontendPendingSignRequest, FrontendPendingWotHandshake } from "../types";
+import { AggregatedBalance, VoucherSummary, WalletEvent, AppSettings, FrontendPendingSignRequest, FrontendPendingWotHandshake, IntegrityReport } from "../types";
 import { postService, POST_INBOX_UPDATED_EVENT } from "../services/postService";
 import { useSession } from "../context/SessionContext";
 import { IntegrityReportModal } from "./IntegrityReportModal";
+import { FirstStepsChecklist } from "./FirstStepsChecklist";
+import { InfoHint } from "./ui/InfoHint";
 import { PageLayout } from "./ui/PageLayout";
 import { 
     Plus, 
@@ -64,6 +67,8 @@ export function Dashboard() {
     const [showIntegrityModal, setShowIntegrityModal] = useState(false);
     const [showBackupReminder, setShowBackupReminder] = useState(false);
     const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+    const [contactsCount, setContactsCount] = useState(0);
+    const [syncConnectedCount, setSyncConnectedCount] = useState(0);
     const [balanceViewMode, setBalanceViewMode] = useState<'spendable' | 'net'>('spendable');
     const [activeInfoPopover, setActiveInfoPopover] = useState<string | null>(null);
     const [popoverAnchorRect, setPopoverAnchorRect] = useState<DOMRect | null>(null);
@@ -110,7 +115,7 @@ export function Dashboard() {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, , voucherSummaries, , , eventHistory, userSettings] = await Promise.all([
+                const [id, balanceList, , voucherSummaries, , contacts, eventHistory, userSettings, syncOverview] = await Promise.all([
                     profileService.getUserId(),
                     voucherService.getTotalBalanceByCurrency(),
                     transferService.getHistory().catch(() => []),
@@ -118,11 +123,14 @@ export function Dashboard() {
                     profileService.getProfile().catch(() => null),
                     contactService.getContacts().catch(() => []),
                     transferService.getEventHistory(0, 5).catch(() => []),
-                    settingsService.getSettings().catch(() => null)
+                    settingsService.getSettings().catch(() => null),
+                    marketService.getSyncOverviewStatus().catch(() => null),
                 ]);
                 setUserId(id);
                 setBalances(balanceList || []);
                 setRecentEvents(eventHistory || []);
+                setContactsCount((contacts || []).length);
+                setSyncConnectedCount(syncOverview?.connectedCount || 0);
                 
                 const activeCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "active").length;
                 const incompleteCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "incomplete").length;
@@ -289,6 +297,38 @@ export function Dashboard() {
         return { top, left };
     }
 
+    const getIntegrityDetails = (report: IntegrityReport) => {
+        switch (report.type) {
+            case 'integrityOutdated':
+                return {
+                    title: t('dashboard.warningOutdatedTitle', 'Veralteter Profil-Stand erkannt'),
+                    desc: t('dashboard.warningOutdatedDesc', 'Dein lokaler Datenstand passt nicht mehr zum gesicherten Profil-Siegel. Ohne Reparatur können Zahlungen fehlschlagen.'),
+                    topic: 'offlineProtection' as const,
+                };
+            case 'manipulatedItems':
+            case 'missingItems':
+                return {
+                    title: t('dashboard.warningConflictTitle', 'Gutschein-Konflikt oder Datenabweichung erkannt'),
+                    desc: t('dashboard.warningConflictDesc', 'Gutscheindaten weichen vom kryptographischen Nachweis ab. Repariere dein Profil jetzt, um Datenverlust zu vermeiden.'),
+                    topic: 'conflicts' as const,
+                };
+            case 'invalidSignature':
+                return {
+                    title: t('dashboard.warningInvalidSigTitle', 'Ungültige Profil-Signatur erkannt'),
+                    desc: t('dashboard.warningInvalidSigDesc', 'Die Signatur deines Profil-Zustands stimmt nicht überein. Zahlungen sind bis zur Reparatur gesperrt.'),
+                    topic: 'offlineProtection' as const,
+                };
+            case 'unknownItems':
+            case 'missingIntegrityRecord':
+            default:
+                return {
+                    title: t('dashboard.warningSealTitle', 'Profil-Integrität muss aktualisiert werden'),
+                    desc: t('dashboard.warningSealDesc', 'Für dein Profil liegt noch kein aktuelles Siegel vor. Aktualisiere es jetzt, um dein Profil zu schützen.'),
+                    topic: 'offlineProtection' as const,
+                };
+        }
+    };
+
     function formatAmount(amountStr: string): string {
         const num = parseFloat(amountStr);
         if (isNaN(num)) return amountStr;
@@ -376,10 +416,47 @@ export function Dashboard() {
                 </header>
             }
         >
-            <div className="max-w-5xl mx-auto space-y-8">
+            <div className="max-w-5xl mx-auto space-y-6 pb-24 md:pb-8">
+                {/* Primary Quick Actions Bar - Always visible without scrolling */}
+                <div 
+                    className="fixed bottom-0 inset-x-0 z-30 p-3 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md border-t border-theme-subtle flex items-center justify-center gap-3 md:static md:p-0 md:bg-transparent md:border-0 md:mb-6"
+                    data-testid="dashboard-primary-actions"
+                >
+                    <Button 
+                        onClick={() => navigate({ view: 'send_vouchers' })} 
+                        className="flex-1 md:flex-initial min-w-[130px] sm:min-w-[150px] gap-2 shadow-sm"
+                        size="md"
+                        disabled={activeVouchersCount === 0}
+                        data-testid="dashboard-action-send"
+                    >
+                        <ArrowUpRight size={18} />
+                        <span>{t('transfer.send')}</span>
+                    </Button>
+                    <Button 
+                        onClick={() => navigate({ view: 'receive_bundle' })} 
+                        className="flex-1 md:flex-initial min-w-[130px] sm:min-w-[150px] gap-2 shadow-sm"
+                        variant="secondary"
+                        size="md"
+                        data-testid="dashboard-action-receive"
+                    >
+                        <ArrowDownLeft size={18} />
+                        <span>{t('transfer.receive')}</span>
+                    </Button>
+                    <Button 
+                        onClick={() => navigate({ view: 'create_voucher', previousView: { view: 'logged_in' } })}
+                        className="flex-1 md:flex-initial min-w-[130px] sm:min-w-[150px] gap-2 shadow-sm"
+                        variant="secondary"
+                        size="md"
+                        data-testid="dashboard-action-create"
+                    >
+                        <Plus size={18} />
+                        <span>{t('common.create')}</span>
+                    </Button>
+                </div>
+
                 {/* Welcome Message */}
                 {balances.length === 0 && (
-                    <div className="px-2 pt-4 text-center">
+                    <div className="px-2 pt-2 text-center">
                         <h1 className="text-3xl font-black text-theme-primary tracking-tighter">{t('dashboard.welcomeTitle')}</h1>
                         <p className="text-sm font-medium text-theme-light mt-1">{t('dashboard.welcomeSubtitle')}</p>
                     </div>
@@ -467,31 +544,45 @@ export function Dashboard() {
                         </Card>
                     )}
 
-                    {integrityReport && integrityReport.type !== 'valid' && (
-                        <Card 
-                            variant="glass" 
-                            className={`py-2 px-4 flex items-center justify-between cursor-pointer border-l-4 ${
-                                integrityReport.type === 'unknownItems' || integrityReport.type === 'missingIntegrityRecord'
-                                ? 'border-l-blue-500' : 'border-l-red-500'
-                            }`}
-                            onClick={() => setShowIntegrityModal(true)}
-                            hover
-                        >
-                            <div className="flex items-center gap-4">
-                                <div className={`p-2 rounded-xl ${
-                                    integrityReport.type === 'unknownItems' || integrityReport.type === 'missingIntegrityRecord'
-                                    ? 'bg-blue-500 text-white' : 'bg-red-500 text-white'
-                                }`}>
-                                    <ShieldAlert size={20} />
+                    {integrityReport && integrityReport.type !== 'valid' && (() => {
+                        const details = getIntegrityDetails(integrityReport);
+                        const isSoft = integrityReport.type === 'unknownItems' || integrityReport.type === 'missingIntegrityRecord';
+                        return (
+                            <Card 
+                                variant="glass" 
+                                className={`py-3 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-l-4 ${
+                                    isSoft ? 'border-l-blue-500 bg-blue-50/40' : 'border-l-red-500 bg-red-50/40'
+                                }`}
+                                data-testid="security-warning-card"
+                            >
+                                <div className="flex items-start gap-3 min-w-0">
+                                    <div className={`p-2 rounded-xl shrink-0 mt-0.5 ${
+                                        isSoft ? 'bg-blue-500 text-white' : 'bg-red-500 text-white'
+                                    }`}>
+                                        <ShieldAlert size={20} />
+                                    </div>
+                                    <div className="min-w-0 space-y-1">
+                                        <p className="font-bold text-sm text-theme-secondary">
+                                            {details.title}
+                                        </p>
+                                        <p className="text-xs text-theme-light">
+                                            {details.desc}
+                                        </p>
+                                        <InfoHint topic={details.topic} />
+                                    </div>
                                 </div>
-                                <div>
-                                    <p className="font-bold text-sm text-theme-secondary">{t('dashboard.securityWarning')}</p>
-                                    <p className="text-xs opacity-70">{t('dashboard.securityWarningDesc')}</p>
-                                </div>
-                            </div>
-                            <ArrowUpRight size={18} className="opacity-30" />
-                        </Card>
-                    )}
+                                <Button
+                                    variant="primary"
+                                    size="xs"
+                                    onClick={() => setShowIntegrityModal(true)}
+                                    data-testid="fix-integrity-button"
+                                    className="shrink-0 self-end sm:self-center bg-rose-600 hover:bg-rose-700 text-white"
+                                >
+                                    {t('dashboard.fixNow', 'Jetzt beheben')}
+                                </Button>
+                            </Card>
+                        );
+                    })()}
 
                     {quarantinedCount > 0 && (
                         <Card 
@@ -554,6 +645,15 @@ export function Dashboard() {
                     )}
                 </div>
 
+                {/* Zone 1.5: Getting Started Checklist */}
+                <FirstStepsChecklist 
+                    hasBackup={Boolean(appSettings?.lastBackupAt || appSettings?.backupSyncFolder)}
+                    hasContact={contactsCount > 0}
+                    hasVoucher={activeVouchersCount > 0 || (balances || []).length > 0}
+                    hasSync={syncConnectedCount > 0}
+                    userId={userId}
+                />
+
                 {/* Zone 2: Balances (Wallet Cards) */}
                 <section>
                     <div className="flex items-center justify-between mb-4 px-2">
@@ -588,6 +688,45 @@ export function Dashboard() {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             {[1, 2].map(i => <div key={i} className="h-48 bg-white/50 animate-pulse rounded-3xl border border-theme-subtle/50"></div>)}
                         </div>
+                    ) : balances.length === 0 ? (
+                        <Card 
+                            variant="none" 
+                            className="border-2 border-dashed border-theme-subtle bg-white/30 dark:bg-gray-800/20 p-8 rounded-3xl flex flex-col items-center justify-center text-center space-y-4"
+                            data-testid="dashboard-empty-balances"
+                        >
+                            <div className="max-w-md mx-auto space-y-2">
+                                <h3 className="text-base font-bold text-theme-primary">
+                                    {t('dashboard.noVouchersTitle', 'Noch keine Gutscheine')}
+                                </h3>
+                                <p className="text-sm text-theme-secondary leading-relaxed">
+                                    {t('dashboard.emptyBalanceExplanation', 'Gutscheine sind Versprechen von Menschen – z. B. eine Stunde Hilfe. Erstelle deinen ersten oder lass dir einen schicken.')}
+                                </p>
+                                <div className="pt-2 flex justify-center">
+                                    <InfoHint topic="voucherBasics" />
+                                </div>
+                            </div>
+                            <div className="flex flex-wrap justify-center gap-3 pt-2">
+                                <Button 
+                                    onClick={() => navigate({ view: 'create_voucher', previousView: { view: 'logged_in' } })}
+                                    className="gap-2 shadow-sm"
+                                    size="sm"
+                                    data-testid="empty-balance-create-btn"
+                                >
+                                    <Plus size={16} />
+                                    <span>{t('voucher.create')}</span>
+                                </Button>
+                                <Button 
+                                    onClick={() => navigate({ view: 'receive_bundle' })} 
+                                    className="gap-2 shadow-sm"
+                                    variant="secondary"
+                                    size="sm"
+                                    data-testid="empty-balance-receive-btn"
+                                >
+                                    <ArrowDownLeft size={16} />
+                                    <span>{t('transfer.receive')}</span>
+                                </Button>
+                            </div>
+                        </Card>
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             {balances.map((balance, idx) => {
@@ -683,13 +822,13 @@ export function Dashboard() {
                                 );
                             })}
                             
-                            {/* Empty State / Add More Placeholder */}
-                            {balances.length < 2 && (
+                            {/* Add More Placeholder when 1 balance */}
+                            {balances.length === 1 && (
                                 <Card 
                                     variant="none" 
-                                    className="border-2 border-dashed border-theme-subtle bg-transparent p-6 h-48 flex flex-col items-center justify-center text-theme-placeholder hover:border-theme-primary hover:text-theme-primary transition-all group"
+                                    className="border-2 border-dashed border-theme-subtle bg-transparent p-6 h-48 flex flex-col items-center justify-center text-theme-placeholder hover:border-theme-primary hover:text-theme-primary transition-all group cursor-pointer"
                                     hover
-                                    onClick={() => navigate({ view: 'create_voucher' })}
+                                    onClick={() => navigate({ view: 'create_voucher', previousView: { view: 'logged_in' } })}
                                 >
                                     <Plus size={32} className="mb-2 opacity-50 group-hover:scale-110 transition-transform" />
                                     <span className="text-sm font-bold uppercase tracking-widest">{t('voucher.create')}</span>
@@ -697,37 +836,6 @@ export function Dashboard() {
                             )}
                         </div>
                     )}
-                </section>
-
-                {/* Zone 3: Quick Actions */}
-                <section className="flex flex-wrap justify-center gap-4">
-                    <Button 
-                        onClick={() => navigate({ view: 'send_vouchers' })} 
-                        className="min-w-[140px] gap-2 shadow-premium"
-                        size="lg"
-                        disabled={activeVouchersCount === 0}
-                    >
-                        <ArrowUpRight size={20} />
-                        {t('transfer.send')}
-                    </Button>
-                    <Button 
-                        onClick={() => navigate({ view: 'receive_bundle' })} 
-                        className="min-w-[140px] gap-2 shadow-premium"
-                        variant="secondary"
-                        size="lg"
-                    >
-                        <ArrowDownLeft size={20} />
-                        {t('transfer.receive')}
-                    </Button>
-                    <Button 
-                        onClick={() => navigate({ view: 'create_voucher' })}
-                        className="min-w-[140px] gap-2 shadow-premium"
-                        variant="secondary"
-                        size="lg"
-                    >
-                        <Plus size={20} />
-                        {t('common.create')}
-                    </Button>
                 </section>
 
                 {/* Zone 4: Tasks / Pending */}

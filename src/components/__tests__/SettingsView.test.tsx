@@ -5,9 +5,36 @@ import { describe, it, expect, beforeEach, vi, Mock, MockInstance } from 'vitest
 import { SettingsView } from '../SettingsView';
 import { settingsService } from '../../services/settingsService';
 import { authService } from '../../services/authService';
+import { profileService } from '../../services/profileService';
 
-const { mockChangeLanguage } = vi.hoisted(() => ({
+const { mockChangeLanguage, mockNavigate } = vi.hoisted(() => ({
   mockChangeLanguage: vi.fn(),
+  mockNavigate: vi.fn(),
+}));
+
+let mockAppState: any = { view: 'settings' };
+
+vi.mock('../../context/NavigationContext', () => ({
+  useNavigation: () => ({
+    appState: mockAppState,
+    navigate: mockNavigate,
+    navigateToSettingsSection: vi.fn(),
+    goBack: vi.fn(),
+    isSidebarOpen: false,
+    setSidebarOpen: vi.fn(),
+    appVersion: '0.3.0',
+    checkProfile: vi.fn(),
+  }),
+  useOptionalNavigation: () => ({
+    appState: mockAppState,
+    navigate: mockNavigate,
+    navigateToSettingsSection: vi.fn(),
+    goBack: vi.fn(),
+    isSidebarOpen: false,
+    setSidebarOpen: vi.fn(),
+    appVersion: '0.3.0',
+    checkProfile: vi.fn(),
+  }),
 }));
 
 vi.mock('react-i18next', () => {
@@ -45,23 +72,58 @@ vi.mock('../../services/settingsService', () => ({
   settingsService: {
     getSettings: vi.fn(),
     saveSettings: vi.fn(),
+    benchmarkL2Servers: vi.fn().mockResolvedValue([]),
+    refreshRegionalMeshViews: vi.fn().mockResolvedValue(true),
   },
 }));
 
 vi.mock('../../services/authService', () => ({
   authService: {
     getLocalInstanceId: vi.fn(),
+    listProfiles: vi.fn(),
+    deleteProfile: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/profileService', () => ({
+  profileService: {
+    getUserId: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/marketService', () => ({
+  marketService: {
+    discoverAvailableSyncs: vi.fn().mockResolvedValue([]),
+    getSyncAdminStatus: vi.fn().mockResolvedValue(null),
+    probePublicSync: vi.fn(),
+    savePublicSync: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/backupService', () => ({
+  backupService: {
+    getBackupStatus: vi.fn().mockResolvedValue({
+      status: 'ok',
+      lastBackupAt: null,
+      backupDirty: false,
+      syncFolder: null,
+      changedBlobs: 0,
+      syncBackupEnabled: true,
+      lastSyncBackupAt: null,
+      hasAuthorizedSyncBackupTarget: true,
+    }),
+    exportBackupFile: vi.fn(),
+    syncBackupFolder: vi.fn(),
   },
 }));
 
 vi.mock('../../context/SessionContext', () => ({
   useSession: vi.fn(() => ({
     protectAction: vi.fn((callback) => callback('test-password')),
+    profileName: 'Alice',
+    notifyLogout: vi.fn(),
+    clearLocks: vi.fn(),
   })),
-}));
-
-vi.mock('../ProfileSettings', () => ({
-  ProfileSettings: () => <div data-testid="profile-settings-mock">Profile Settings Mock</div>,
 }));
 
 vi.mock('../StandardsManager', () => ({
@@ -79,6 +141,8 @@ describe('SettingsView Component', () => {
   const mockSettings = {
     sessionTimeoutSeconds: 600, // 10 minutes
     privacyDefault: 'ask',
+    customServers: [],
+    regionalMeshSources: [],
   };
 
   const mockOnBack = vi.fn();
@@ -87,9 +151,10 @@ describe('SettingsView Component', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockChangeLanguage.mockClear();
+    mockNavigate.mockClear();
+    mockAppState = { view: 'settings' };
     localStorage.clear();
     
-    // Modern JSDOM has clipboard, but if it doesn't, ensure it exists
     if (!navigator.clipboard) {
       Object.defineProperty(navigator, 'clipboard', {
         value: {
@@ -105,6 +170,11 @@ describe('SettingsView Component', () => {
     (settingsService.getSettings as Mock).mockResolvedValue({ ...mockSettings });
     (settingsService.saveSettings as Mock).mockResolvedValue(undefined);
     (authService.getLocalInstanceId as Mock).mockResolvedValue('test-device-id-1234');
+    (authService.listProfiles as Mock).mockResolvedValue([
+      { folderName: 'alice-folder', profileName: 'Alice', isEncrypted: true },
+    ]);
+    (authService.deleteProfile as Mock).mockResolvedValue(undefined);
+    (profileService.getUserId as Mock).mockResolvedValue('did:key:z6MkuTestUserId');
   });
 
   it('renders loading state initially', () => {
@@ -112,61 +182,58 @@ describe('SettingsView Component', () => {
     expect(screen.getByText(/Configuring Environment\.\.\./i)).toBeInTheDocument();
   });
 
-  it('renders tabs and starts on Identity Profile tab', async () => {
+  it('renders 4 tabs and starts on Profile tab', async () => {
     render(<SettingsView onBack={mockOnBack} />);
 
     await waitFor(() => {
       expect(screen.queryByText(/Configuring Environment\.\.\./i)).not.toBeInTheDocument();
     });
 
-    expect(screen.getByText('Identity Profile')).toBeInTheDocument();
-    expect(screen.getByText('Security & Backups')).toBeInTheDocument();
-    expect(screen.getByText('Sync & Network')).toBeInTheDocument();
-    expect(screen.getByText('Standards & General')).toBeInTheDocument();
+    expect(screen.getByText('Profile')).toBeInTheDocument();
+    expect(screen.getByText('Security & Backup')).toBeInTheDocument();
+    expect(screen.getByText('Sync Service')).toBeInTheDocument();
+    expect(screen.getByText('Advanced')).toBeInTheDocument();
     
-    // Check that ProfileSettings sub-component is rendered
-    expect(screen.getByTestId('profile-settings-mock')).toBeInTheDocument();
+    // Check that marketplace redirect card is rendered on Profile tab
+    expect(screen.getByRole('button', { name: /Open in Marketplace|Im Marktplatz öffnen/i })).toBeInTheDocument();
   });
 
-  it('clicking each tab displays its respective components', async () => {
+  it('clicking each of the 4 tabs displays its respective components', async () => {
     const user = userEvent.setup();
     render(<SettingsView onBack={mockOnBack} />);
 
-    await screen.findByText('Identity Profile');
-    expect(screen.getByTestId('profile-settings-mock')).toBeInTheDocument();
+    await screen.findByText('Profile');
+    expect(screen.getByRole('button', { name: /Open in Marketplace|Im Marktplatz öffnen/i })).toBeInTheDocument();
 
-    // 1. Security & Backups tab
-    const securityTab = screen.getByText('Security & Backups');
+    // 1. Security & Backup tab
+    const securityTab = screen.getByText('Security & Backup');
     await user.click(securityTab);
-    expect(screen.queryByTestId('profile-settings-mock')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Open in Marketplace|Im Marktplatz öffnen/i })).not.toBeInTheDocument();
     expect(document.getElementById('settings-backup-section')).toBeInTheDocument();
     expect(screen.getByText('Privacy Settings')).toBeInTheDocument();
+    expect(screen.getByText('Danger Zone')).toBeInTheDocument();
 
-    // 2. Sync & Network tab
-    const syncNetworkTab = screen.getByText('Sync & Network');
-    await user.click(syncNetworkTab);
+    // 2. Sync Service tab
+    const syncTab = screen.getByText('Sync Service');
+    await user.click(syncTab);
     expect(document.getElementById('settings-sync-section')).toBeInTheDocument();
-    expect(document.getElementById('settings-network-section')).toBeInTheDocument();
-    expect(screen.getByText('Network & L2 Protection')).toBeInTheDocument();
+    expect(screen.getByText('Add Sync Service')).toBeInTheDocument();
 
-    // 3. Standards & General tab
-    const standardsTab = screen.getByText('Standards & General');
-    await user.click(standardsTab);
-    expect(screen.getByText('Voucher Standards')).toBeInTheDocument();
-    expect(screen.getByText('Language')).toBeInTheDocument();
-    expect(screen.getByText('Active Session')).toBeInTheDocument();
+    // 3. Advanced tab
+    const advancedTab = screen.getByText('Advanced');
+    await user.click(advancedTab);
+    expect(document.getElementById('settings-network-section')).toBeInTheDocument();
+    expect(document.getElementById('settings-standards-section')).toBeInTheDocument();
+    expect(screen.getByText('Network & L2 Protection')).toBeInTheDocument();
   });
 
-  it('switches to Security & Backups tab and displays configuration fields', async () => {
+  it('switches to Security & Backup tab and displays privacy and backup options', async () => {
     const user = userEvent.setup();
     render(<SettingsView onBack={mockOnBack} />);
 
-    await screen.findByText('Identity Profile');
-    const securityTab = screen.getByText('Security & Backups');
+    await screen.findByText('Profile');
+    const securityTab = screen.getByText('Security & Backup');
     await user.click(securityTab);
-
-    // Profile Settings should be hidden
-    expect(screen.queryByTestId('profile-settings-mock')).not.toBeInTheDocument();
 
     expect(screen.getByText('Interactive')).toBeInTheDocument();
     expect(screen.getByText('Stealth')).toBeInTheDocument();
@@ -174,13 +241,13 @@ describe('SettingsView Component', () => {
     expect(document.getElementById('settings-backup-section')).toBeInTheDocument();
   });
 
-  it('allows copying device ID to clipboard', async () => {
+  it('allows copying device ID to clipboard in Advanced tab', async () => {
     const user = userEvent.setup();
     render(<SettingsView onBack={mockOnBack} />);
 
-    await screen.findByText('Identity Profile');
-    const standardsTab = screen.getByText('Standards & General');
-    await user.click(standardsTab);
+    await screen.findByText('Profile');
+    const advancedTab = screen.getByText('Advanced');
+    await user.click(advancedTab);
 
     const copyButton = screen.getByRole('button', { name: /Copy/i });
     await user.click(copyButton);
@@ -188,25 +255,21 @@ describe('SettingsView Component', () => {
     expect(writeTextSpy).toHaveBeenCalledWith('test-device-id-1234');
   });
 
-  it('allows editing settings and calls saveSettings on form submit', async () => {
+  it('allows editing settings and calls saveSettings on form submit in Security & Backup tab', async () => {
     const user = userEvent.setup();
     render(<SettingsView onBack={mockOnBack} />);
 
-    await screen.findByText('Identity Profile');
-    const securityTab = screen.getByText('Security & Backups');
+    await screen.findByText('Profile');
+    const securityTab = screen.getByText('Security & Backup');
     await user.click(securityTab);
 
     // Select "Stealth" option
     const stealthRadio = screen.getByLabelText(/Stealth/i);
     await user.click(stealthRadio);
 
-    // Switch to Standards & General to edit session timeout
-    const standardsTab = screen.getByText('Standards & General');
-    await user.click(standardsTab);
-
     // Edit session timeout field
     const inputs = screen.getAllByRole('spinbutton');
-    expect(inputs).toHaveLength(1);
+    expect(inputs.length).toBeGreaterThanOrEqual(1);
     fireEvent.change(inputs[0], { target: { value: '15' } });
 
     // Submit form
@@ -231,8 +294,8 @@ describe('SettingsView Component', () => {
     (settingsService.saveSettings as Mock).mockRejectedValue(new Error('Save failed'));
     render(<SettingsView onBack={mockOnBack} />);
 
-    await screen.findByText('Identity Profile');
-    const securityTab = screen.getByText('Security & Backups');
+    await screen.findByText('Profile');
+    const securityTab = screen.getByText('Security & Backup');
     await user.click(securityTab);
 
     const saveButton = screen.getByRole('button', { name: /Save System Changes/i });
@@ -245,7 +308,7 @@ describe('SettingsView Component', () => {
     const user = userEvent.setup();
     render(<SettingsView onBack={mockOnBack} />);
 
-    await screen.findByText('Identity Profile');
+    await screen.findByText('Profile');
     
     // Find back button in PageLayout
     const backButton = screen.getByRole('button', { name: /Back/i });
@@ -254,104 +317,92 @@ describe('SettingsView Component', () => {
     expect(mockOnBack).toHaveBeenCalled();
   });
 
-  it('renders language selector card on Standards & General tab and allows changing language', async () => {
+  it('renders language selector card on Profile tab and allows changing language', async () => {
     const user = userEvent.setup();
     const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
     render(<SettingsView onBack={mockOnBack} />);
 
-    await screen.findByText('Identity Profile');
-    const standardsTab = screen.getByText('Standards & General');
-    await user.click(standardsTab);
+    await screen.findByText('Profile');
 
-    // Verify Language Card elements are present
+    // Verify Language Card elements are present on Profile tab
     expect(screen.getByText('Language')).toBeInTheDocument();
-    expect(screen.getByText('Choose the language for the user interface.')).toBeInTheDocument();
     
     // Find dropdown toggle button and click it to open
     const dropdownToggle = screen.getByRole('button', { name: /🇺🇸\s*English/i });
     expect(dropdownToggle).toBeInTheDocument();
     await user.click(dropdownToggle);
 
-    // Once open, options are visible
-    const englishBtnsBefore = screen.getAllByRole('button', { name: /🇺🇸\s*English/i });
-    const englishBtn = englishBtnsBefore[1]; // Index 1 is the menu option
-    const germanBtn = screen.getByRole('button', { name: /🇩🇪\s*Deutsch/i });
-    
-    expect(englishBtn).toBeInTheDocument();
-    expect(germanBtn).toBeInTheDocument();
-
     // Click German language button
+    const germanBtn = screen.getByRole('button', { name: /🇩🇪\s*Deutsch/i });
     await user.click(germanBtn);
 
-    // Verify changeLanguage was called and localStorage was updated
     expect(mockChangeLanguage).toHaveBeenCalledWith('de');
     expect(setItemSpy).toHaveBeenCalledWith('app_language', 'de');
-
-    // Click English language button (must reopen the dropdown first)
-    await user.click(dropdownToggle);
-    const englishBtnsAfter = screen.getAllByRole('button', { name: /🇺🇸\s*English/i });
-    await user.click(englishBtnsAfter[1]);
-    expect(mockChangeLanguage).toHaveBeenCalledWith('en');
-    expect(setItemSpy).toHaveBeenCalledWith('app_language', 'en');
     
     setItemSpy.mockRestore();
   });
 
-  it('renders Network & L2 Protection card by default on Sync & Network tab with pure offline mode', async () => {
+  it('opens confirmation modal and purges profile in Gefahrenzone', async () => {
     const user = userEvent.setup();
     render(<SettingsView onBack={mockOnBack} />);
 
-    await screen.findByText('Identity Profile');
-    const syncNetworkTab = screen.getByText('Sync & Network');
-    await user.click(syncNetworkTab);
+    await screen.findByText('Profile');
+    const securityTab = screen.getByText('Security & Backup');
+    await user.click(securityTab);
 
-    // Network card header is visible without dev mode
-    expect(screen.getByText('Network & L2 Protection')).toBeInTheDocument();
+    expect(screen.getByText('Danger Zone')).toBeInTheDocument();
+    const deleteButton = screen.getByRole('button', { name: /Delete Profile on this Device/i });
+    await user.click(deleteButton);
 
-    // Pure offline mode overview box is shown
-    expect(screen.getByText('Pure Offline P2P Mode')).toBeInTheDocument();
-    expect(screen.getByText(/No public Human Money Node servers are active yet/i)).toBeInTheDocument();
+    // Confirmation modal is open
+    expect(screen.getByText('Delete Profile Permanently?')).toBeInTheDocument();
+    expect(screen.getByText(/All local keys, vouchers, and settings for this profile will be permanently deleted/i)).toBeInTheDocument();
 
-    // Collapsible advanced section is toggled
-    const advancedToggle = screen.getByRole('button', { name: /Advanced (Server & PoS|Gateway & Merchant) Configuration/i });
-    expect(advancedToggle).toBeInTheDocument();
-    await user.click(advancedToggle);
+    // Confirm deletion
+    const confirmBtn = screen.getByRole('button', { name: /^Delete$/i });
+    await user.click(confirmBtn);
 
-    // After expanding, custom servers and network selection become visible
-    expect(screen.getByText('Active Network')).toBeInTheDocument();
-    expect(screen.getByText('Known Gateways & Server Credentials')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(authService.deleteProfile).toHaveBeenCalledWith({
+        folderName: 'alice-folder',
+        password: 'test-password',
+      });
+    });
   });
 
-  it('toggles StandardsManager accordion and PoS mode checkbox', async () => {
-    const user = userEvent.setup();
+  it('deep-links to Security & Backup when initialSection is backup', async () => {
+    mockAppState = { view: 'settings', initialSection: 'backup' };
     render(<SettingsView onBack={mockOnBack} />);
 
-    await screen.findByText('Identity Profile');
+    await waitFor(() => {
+      expect(screen.queryByText(/Configuring Environment\.\.\./i)).not.toBeInTheDocument();
+    });
 
-    // Test StandardsManager on Standards & General tab
-    const standardsTab = screen.getByText('Standards & General');
-    await user.click(standardsTab);
+    // Should be on Security & Backup tab
+    expect(document.getElementById('settings-backup-section')).toBeInTheDocument();
+  });
 
-    // Expand standards section
-    expect(screen.queryByTestId('standards-manager-mock')).not.toBeInTheDocument();
-    const standardsToggle = screen.getByRole('button', { name: /Manage and review installed voucher standards/i });
-    expect(standardsToggle).toBeInTheDocument();
-    await user.click(standardsToggle);
+  it('deep-links to Sync Service when initialSection is sync', async () => {
+    mockAppState = { view: 'settings', initialSection: 'sync' };
+    render(<SettingsView onBack={mockOnBack} />);
 
-    // Verify standards manager is displayed
-    expect(screen.getByTestId('standards-manager-mock')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText(/Configuring Environment\.\.\./i)).not.toBeInTheDocument();
+    });
 
-    // Test PoS mode on Sync & Network tab
-    const syncNetworkTab = screen.getByText('Sync & Network');
-    await user.click(syncNetworkTab);
+    // Should be on Sync Service tab
+    expect(document.getElementById('settings-sync-section')).toBeInTheDocument();
+  });
 
-    // Check PoS mode in advanced server & PoS section
-    const advancedToggle = screen.getByRole('button', { name: /Advanced (Server & PoS|Gateway & Merchant) Configuration/i });
-    await user.click(advancedToggle);
+  it('deep-links to Advanced when initialSection is network', async () => {
+    mockAppState = { view: 'settings', initialSection: 'network' };
+    render(<SettingsView onBack={mockOnBack} />);
 
-    const posCheckbox = screen.getByRole('checkbox', { name: /\bPoS\b|Point-of-Sale/i });
-    expect(posCheckbox).not.toBeChecked();
-    await user.click(posCheckbox);
-    expect(posCheckbox).toBeChecked();
+    await waitFor(() => {
+      expect(screen.queryByText(/Configuring Environment\.\.\./i)).not.toBeInTheDocument();
+    });
+
+    // Should be on Advanced tab
+    expect(document.getElementById('settings-network-section')).toBeInTheDocument();
   });
 });

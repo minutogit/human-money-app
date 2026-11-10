@@ -36,7 +36,6 @@ pub struct FrontendPendingWotHandshake {
 #[serde(rename_all = "camelCase")]
 pub struct FrontendMarketInquiryReplyDto {
     pub inquiry_id: String,
-    pub listing_id: String,
     pub decision: String, // "confirm" | "decline"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -53,8 +52,7 @@ pub struct FrontendMarketInquiryReplyDto {
 #[serde(rename_all = "camelCase")]
 pub struct FrontendMarketInquiryItem {
     pub inquiry_id: String,
-    pub listing_id: String,
-    pub listing_title: String,
+    pub target: humoco_market::InquiryTarget,
     pub counterparty_did: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub counterparty_name: Option<String>,

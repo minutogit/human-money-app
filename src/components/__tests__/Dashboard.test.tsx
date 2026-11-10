@@ -6,13 +6,15 @@ import { voucherService } from '../../services/voucherService';
 import { settingsService } from '../../services/settingsService';
 import { transferService } from '../../services/transferService';
 import { contactService } from '../../services/contactService';
-import { AggregatedBalance, VoucherSummary, AppSettings } from '../../types';
+import { marketService } from '../../services/marketService';
+import { AggregatedBalance, VoucherSummary, AppSettings, IntegrityReport } from '../../types';
 
 vi.mock('../../services/profileService');
 vi.mock('../../services/voucherService');
 vi.mock('../../services/settingsService');
 vi.mock('../../services/transferService');
 vi.mock('../../services/contactService');
+vi.mock('../../services/marketService');
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
     writeText: vi.fn(),
 }));
@@ -28,11 +30,13 @@ vi.mock('../../context/NavigationContext', () => ({
     }),
 }));
 
+let mockIntegrityReport: IntegrityReport | null = null;
+
 vi.mock('../../context/SessionContext', () => ({
     useSession: () => ({
         isSessionActive: true,
         profileName: 'Alice',
-        integrityReport: null,
+        integrityReport: mockIntegrityReport,
         protectAction: vi.fn((fn: (pwd: string | null) => unknown) => fn('pwd')),
         lockSession: vi.fn(),
     }),
@@ -40,9 +44,11 @@ vi.mock('../../context/SessionContext', () => ({
 
 vi.mock('react-i18next', () => ({
     useTranslation: () => ({
-        t: (key: string, options?: Record<string, unknown>) => {
-            if (options?.amount !== undefined) return `${key}:${String(options.amount)}`;
-            if (options?.count !== undefined) return `${key}:${String(options.count)}`;
+        t: (key: string, defaultOrOptions?: string | Record<string, unknown>, options?: Record<string, unknown>) => {
+            const opts = (typeof defaultOrOptions === 'object' ? defaultOrOptions : options) || {};
+            if (opts.amount !== undefined) return `${key}:${String(opts.amount)}`;
+            if (opts.count !== undefined) return `${key}:${String(opts.count)}`;
+            if (typeof defaultOrOptions === 'string') return defaultOrOptions;
             return key;
         },
         i18n: { language: 'en' },
@@ -96,6 +102,16 @@ describe('Dashboard Component', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         localStorage.clear();
+        mockIntegrityReport = null;
+        vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
+            connectedCount: 0,
+            pendingCount: 0,
+            friendSyncs: 0,
+            publicSyncs: 0,
+            hasOwnSync: false,
+            ownSyncSoftWarning: false,
+            lastSyncAt: null,
+        });
         vi.mocked(profileService.getUserId).mockResolvedValue('did:key:own');
         vi.mocked(profileService.getProfile).mockResolvedValue({
             id: 'did:key:own',
@@ -178,5 +194,67 @@ describe('Dashboard Component', () => {
             const copyBtn = screen.getByTitle(/dashboard\.copyUserIdHint/i);
             expect(copyBtn).toBeInTheDocument();
         });
+    });
+
+    it('renders primary action bar at the top with send, receive, and create buttons', async () => {
+        render(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('dashboard-primary-actions')).toBeInTheDocument();
+        });
+
+        const sendBtn = screen.getByTestId('dashboard-action-send');
+        const receiveBtn = screen.getByTestId('dashboard-action-receive');
+        const createBtn = screen.getByTestId('dashboard-action-create');
+
+        expect(sendBtn).toBeInTheDocument();
+        expect(receiveBtn).toBeInTheDocument();
+        expect(createBtn).toBeInTheDocument();
+
+        fireEvent.click(sendBtn);
+        expect(mockNavigate).toHaveBeenCalledWith({ view: 'send_vouchers' });
+
+        fireEvent.click(receiveBtn);
+        expect(mockNavigate).toHaveBeenCalledWith({ view: 'receive_bundle' });
+
+        fireEvent.click(createBtn);
+        expect(mockNavigate).toHaveBeenCalledWith({ view: 'create_voucher', previousView: { view: 'logged_in' } });
+    });
+
+    it('displays concrete cause-based security warning with "Jetzt beheben" button and info hint', async () => {
+        mockIntegrityReport = { type: 'manipulatedItems', items: ['item-1'] };
+        render(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('security-warning-card')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('Gutschein-Konflikt oder Datenabweichung erkannt')).toBeInTheDocument();
+        expect(screen.getByTestId('fix-integrity-button')).toBeInTheDocument();
+
+        // Clicking "Jetzt beheben" opens the integrity report modal
+        fireEvent.click(screen.getByTestId('fix-integrity-button'));
+        await waitFor(() => {
+            expect(screen.getByText('integrity.manipulatedItemsTitle')).toBeInTheDocument();
+        });
+    });
+
+    it('displays explanatory empty balance state with voucherBasics hint when balances are empty', async () => {
+        vi.mocked(voucherService.getTotalBalanceByCurrency).mockResolvedValue([]);
+        vi.mocked(voucherService.getSummaries).mockResolvedValue([]);
+
+        render(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('dashboard-empty-balances')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('Noch keine Gutscheine')).toBeInTheDocument();
+        expect(screen.getByText(/Gutscheine sind Versprechen von Menschen/i)).toBeInTheDocument();
+
+        // Check empty state buttons
+        const createBtn = screen.getByTestId('empty-balance-create-btn');
+        fireEvent.click(createBtn);
+        expect(mockNavigate).toHaveBeenCalledWith({ view: 'create_voucher', previousView: { view: 'logged_in' } });
     });
 });

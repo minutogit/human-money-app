@@ -7,6 +7,7 @@ pub mod market_view;
 pub mod model;
 pub mod post;
 pub mod qr;
+pub mod sd_card;
 pub mod slot;
 pub mod sync_access;
 

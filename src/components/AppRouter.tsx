@@ -24,7 +24,7 @@ import { useSession } from '../context/SessionContext';
 import { useNavigation } from '../context/NavigationContext';
 import { SupportView } from './SupportView';
 import { BugReportView } from './BugReportView';
-import { ConceptView } from './ConceptView';
+import { HelpCenterView } from './HelpCenterView';
 import { MarketplaceView } from './marketplace/MarketplaceView';
 
 export const AppRouter: React.FC = () => {
@@ -83,8 +83,8 @@ export const AppRouter: React.FC = () => {
             return <SupportView onBack={goBack} />;
         case "bug_report":
             return <BugReportView onBack={goBack} />;
-        case "concept":
-            return <ConceptView />;
+        case "help_center":
+            return <HelpCenterView initialTopic={appState.topic} onBack={goBack} />;
         case "needs_recovery":
             return <WalletRecovery 
                 onRecoverySuccess={() => {
@@ -104,6 +104,7 @@ export const AppRouter: React.FC = () => {
             return <AddressBook 
                 onBack={goBack} 
                 initialSearchQuery={appState.initialSearchQuery}
+                initialOpenAddModal={appState.initialOpenAddModal}
             />;
         case "send_vouchers":
             return <SendView
@@ -162,7 +163,13 @@ export const AppRouter: React.FC = () => {
         case "wallet":
             return <WalletView />;
         case "marketplace":
-            return <MarketplaceView initialSelectedDid={appState.selectedDid} />;
+            return (
+                <MarketplaceView
+                    initialSelectedDid={appState.selectedDid}
+                    initialTab={appState.initialTab}
+                    initialOpenEditor={appState.initialOpenEditor}
+                />
+            );
         default:
             return (
                 <div className="flex h-full w-full items-center justify-center">

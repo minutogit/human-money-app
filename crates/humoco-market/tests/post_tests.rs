@@ -1,15 +1,14 @@
 use ed25519_dalek::SigningKey;
 use human_money_core::crypto::create_user_id;
 use humoco_market::{
-    compute_dummy_tag16, compute_listing_id, compute_post_tag16, create_dummy_post_box,
-    decode_post_slot, derive_dummy_key, derive_post_box_key, derive_post_shared_secret,
-    encode_post_slot, is_own_dummy_post_box, merge_post_slot, seal_post_box,
-    try_open_post_box_any_sender, try_open_post_box_from_sender, validate_market_inquiry,
-    validate_market_inquiry_reply, validate_post_delivery_receipt, validate_wot_handshake_assertion,
-    DropDescriptor, InquiryRateTracker, ListingType, MarketError, MarketInquiry,
-    MarketInquiryDecision, MarketInquiryReply, PostDeliveryReceipt, PostEnvelope,
-    WotHandshakeAssertion, DROP_POST_MAX_BYTES, MAX_INQUIRY_CHARS, POST_BOX_TIERS,
-    POST_SLOT_MAGIC,
+    compute_dummy_tag16, compute_post_tag16, create_dummy_post_box, decode_post_slot,
+    derive_dummy_key, derive_post_box_key, derive_post_shared_secret, encode_post_slot,
+    is_own_dummy_post_box, merge_post_slot, seal_post_box, try_open_post_box_any_sender,
+    try_open_post_box_from_sender, validate_market_inquiry, validate_market_inquiry_reply,
+    validate_post_delivery_receipt, validate_wot_handshake_assertion, DropDescriptor,
+    InquiryRateTracker, InquiryTarget, MarketError, MarketInquiry, MarketInquiryDecision,
+    MarketInquiryReply, PostDeliveryReceipt, PostEnvelope, WotHandshakeAssertion,
+    DROP_POST_MAX_BYTES, MAX_INQUIRY_CHARS, POST_BOX_TIERS, POST_SLOT_MAGIC,
 };
 use proptest::prelude::*;
 
@@ -315,14 +314,28 @@ fn test_decode_post_slot_corruptions() {
 
 #[test]
 fn test_market_inquiry_models_and_rate_limiting() {
+    let ad_target = InquiryTarget::Ad {
+        ad_id: "0123456789abcdef".to_string(),
+        ad_title: "Fresh Bio Honey".to_string(),
+    };
     let inquiry = MarketInquiry {
         inquiry_id: "inq-123".to_string(),
-        listing_id: "lst-abc".to_string(),
-        listing_title: "Fresh Bio Honey".to_string(),
+        target: ad_target,
         message: "Hello! Is this still available for pickup this weekend?".to_string(),
         created_at: 1700000000,
     };
     assert!(validate_market_inquiry(&inquiry).is_ok());
+
+    // Person inquiry variant
+    let person_inquiry = MarketInquiry {
+        inquiry_id: "inq-456".to_string(),
+        target: InquiryTarget::Person {
+            skill_title: Some("Honey Maker".to_string()),
+        },
+        message: "Hi, can you make custom honey?".to_string(),
+        created_at: 1700000000,
+    };
+    assert!(validate_market_inquiry(&person_inquiry).is_ok());
 
     // Empty message
     let mut empty_msg = inquiry.clone();
@@ -341,7 +354,6 @@ fn test_market_inquiry_models_and_rate_limiting() {
     // Reply testing
     let reply = MarketInquiryReply {
         inquiry_id: "inq-123".to_string(),
-        listing_id: "lst-abc".to_string(),
         decision: MarketInquiryDecision::Confirm,
         note: Some("Yes, pickup available!".to_string()),
         payment_uri: Some("humoco:transfer?amount=5".to_string()),
@@ -357,7 +369,7 @@ fn test_market_inquiry_models_and_rate_limiting() {
 
     // Rate tracker testing (max 3 for testing)
     let mut tracker = InquiryRateTracker::new(3);
-    let listing_id = "listing-honey-01";
+    let target_key = "ad:0123456789abcdef";
 
     let buyer_1 = "aaaa".repeat(16);
     let buyer_2 = "bbbb".repeat(16);
@@ -365,31 +377,31 @@ fn test_market_inquiry_models_and_rate_limiting() {
     let buyer_4 = "dddd".repeat(16);
 
     // Record buyer 1
-    assert!(tracker.record_inquiry(&buyer_1, listing_id).is_ok());
-    assert_eq!(tracker.open_count(listing_id), 1);
-    assert!(tracker.has_open_inquiry(&buyer_1, listing_id));
+    assert!(tracker.record_inquiry(&buyer_1, target_key).is_ok());
+    assert_eq!(tracker.open_count(target_key), 1);
+    assert!(tracker.has_open_inquiry(&buyer_1, target_key));
 
     // Duplicate inquiry from buyer 1 rejected
-    let dup_err = tracker.record_inquiry(&buyer_1, listing_id);
+    let dup_err = tracker.record_inquiry(&buyer_1, target_key);
     assert!(dup_err.is_err());
 
     // Record buyer 2 and 3
-    assert!(tracker.record_inquiry(&buyer_2, listing_id).is_ok());
-    assert!(tracker.record_inquiry(&buyer_3, listing_id).is_ok());
-    assert_eq!(tracker.open_count(listing_id), 3);
+    assert!(tracker.record_inquiry(&buyer_2, target_key).is_ok());
+    assert!(tracker.record_inquiry(&buyer_3, target_key).is_ok());
+    assert_eq!(tracker.open_count(target_key), 3);
 
     // Buyer 4 exceeds limit (max 3)
-    let cap_err = tracker.record_inquiry(&buyer_4, listing_id);
+    let cap_err = tracker.record_inquiry(&buyer_4, target_key);
     assert!(cap_err.is_err());
 
     // Resolve buyer 1
-    assert!(tracker.resolve_inquiry(&buyer_1, listing_id));
-    assert_eq!(tracker.open_count(listing_id), 2);
-    assert!(!tracker.has_open_inquiry(&buyer_1, listing_id));
+    assert!(tracker.resolve_inquiry(&buyer_1, target_key));
+    assert_eq!(tracker.open_count(target_key), 2);
+    assert!(!tracker.has_open_inquiry(&buyer_1, target_key));
 
     // Now buyer 4 can record
-    assert!(tracker.record_inquiry(&buyer_4, listing_id).is_ok());
-    assert_eq!(tracker.open_count(listing_id), 3);
+    assert!(tracker.record_inquiry(&buyer_4, target_key).is_ok());
+    assert_eq!(tracker.open_count(target_key), 3);
 }
 
 #[test]
@@ -423,13 +435,20 @@ fn test_auxiliary_payload_validations() {
     bad_level.proposed_level = 2; // only 0 or 1 allowed
     assert!(validate_wot_handshake_assertion(&bad_level).is_err());
 
-    // Listing ID computation
-    let id1 = compute_listing_id(&alice_did, ListingType::Offer, "Organic Apples");
-    let id2 = compute_listing_id(&alice_did, ListingType::Offer, "Organic Apples");
-    let id3 = compute_listing_id(&alice_did, ListingType::Request, "Organic Apples");
-    assert_eq!(id1.len(), 16);
-    assert_eq!(id1, id2);
-    assert_ne!(id1, id3);
+    // InquiryTarget target_key tests
+    let ad_t = InquiryTarget::Ad {
+        ad_id: "abcdef0123456789".to_string(),
+        ad_title: "Title".to_string(),
+    };
+    assert_eq!(ad_t.target_key(), "ad:abcdef0123456789");
+
+    let person_t = InquiryTarget::Person {
+        skill_title: Some("Garden Work".to_string()),
+    };
+    assert_eq!(person_t.target_key(), "person:garden work");
+
+    let general_t = InquiryTarget::Person { skill_title: None };
+    assert_eq!(general_t.target_key(), "person");
 }
 
 // ---------------------------------------------------------------------------

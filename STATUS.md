@@ -7,6 +7,72 @@ last_updated: "2026-11-10"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-UX-07"
+    title: "Phase 6 Feinschliff & Absicherung: 32-Step UI Tour, ui-audit Skill Overhaul, Automated Glossary Lint Test & Beginner Flow Verification"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-UX-01", "APP-UX-02", "APP-UX-03", "APP-UX-04", "APP-UX-05a", "APP-UX-05b", "APP-UX-05c", "APP-UX-05d", "APP-UX-05e", "APP-UX-06"]
+    description: "Completed Phase 6 polishing and validation: updated tour-catalog.mjs, ui-tour.mjs, and .agents/skills/ui-audit/SKILL.md to 32 canonical steps across 5 chapters (covering Help Center, Marketplace 3 tabs + ProfileCardEditor, Settings 4 tabs, and AddressBook + AddContactModal); removed temporary legacy tab aliases from tourBridge and SettingsView (Zero-Compat); implemented automated Vitest text lint suite (src/locales/__tests__/glossaryLint.test.ts) enforcing docs/UX_GLOSSARY.md forbidden terms and WoT guarantor prohibition; added beginner integration flows test suite (src/__tests__/beginnerFlows.test.tsx); verified 491/491 vitest tests, 73 src-tauri tests, 57 humoco-market tests, clippy (0 warnings), build, and tour:auto (32/32 passed)."
+  - id: "APP-UX-06"
+    title: "Phase 5 Settings Modularization: 4 Tabs Architecture, Zero-Fallback i18n, Backup Prominence & Zero-Jargon Clean Break"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-064"]
+    description: "Modularized SettingsView into 4 dedicated tab components under `src/components/settings/` (ProfileTab, SecurityBackupTab, ConnectionTab, AdvancedTab), each < 400 lines; added top status banner and primary one-click action in BackupSettingsCard with 'Nach jeder Änderung' as recommended default; separated SyncServiceSettingsCard into consumer vs host modes; eliminated all inline fallback strings in `t(...)` calls across all locales; integrated deep-linking for all section aliases; updated Vitest suites (28/28 tests) and verified automated UI tour (28/28 passed)."
+  - id: "APP-UX-05e"
+    title: "Phase 4e Profil-Vereinheitlichung außerhalb des Marktplatzes: Single Source of Truth & Concept Docs"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-UX-05d"]
+    description: "Unified profile management to a single source of truth in Marketplace 'Meins'; removed redundant profile/needs editing from ProfileSettings and CreatorIdentityForm; wired business card share artifacts across AddressBook and Marketplace; updated concept documentation."
+  - id: "APP-UX-05d"
+    title: "Phase 4d Marktplatz Frontend: 3-Tab Architecture (BoardTab, PeopleTab, MineTab) & ProfileCardEditor"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-UX-05c"]
+    description: "Rebuilt Marketplace frontend with 3 intuitive tabs (BoardTab Pinnwand, PeopleTab Menschen, MineTab Meins), AdCard, AdEditorModal, RenewAdModal, and ProfileCardEditor featuring field-level selective disclosure (Everyone/Contacts/Nobody) and live preview; deleted obsolete listing components and i18n keys."
+  - id: "APP-UX-05c"
+    title: "Phase 4c Tauri-Backend Marktplatz: MARKET_OWN_PROFILE_KEY, SD-Card Signing & Clean Break Commands"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-UX-05b"]
+    description: "Implemented new encrypted storage MARKET_OWN_PROFILE_KEY, auto-renewing rebuild_and_sign_own_card, build_share_artifacts, and clean break commands (get_my_market_profile, save_my_market_profile, set_card_published, upsert_ad, renew_ad, delete_ad, get_market_view); removed legacy contact card commands."
+  - id: "APP-UX-05b"
+    title: "Phase 4b Crate humoco-market: Market-View, Pinnwand (build_ad_board) & 16-Hex Inquiries"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-UX-05a"]
+    description: "Implemented MarketPerson, build_market_view, build_ad_board with descending renewal sorting, MarketInquiry / MarketInquiryReply targeting Ad or Person, and distance-based card forwarding with honest recipient privacy stripping."
+  - id: "APP-UX-05a"
+    title: "Phase 4a Crate humoco-market: SD-Card Format, Skill/Ad Content Types & Validation"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-UX-01"]
+    description: "Clean break in humoco-market crate: eliminated legacy listings in favor of Skill and Ad content types, built SdCard format with 16-byte CSPRNG salts, 128-bit SHA-256 truncated digests, 32-digest decoy padding, 180-day max duration, and accept_envelope versioning."
+  - id: "APP-UX-04"
+    title: "Phase 3 Adressbuch 'Kontakte & Vertrauen': 4 Human Trust Levels, AddContactModal & Reach Selector"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-UX-01", "APP-UX-02"]
+    description: "Overhauled AddressBook to 'Kontakte & Vertrauen': replaced numeric levels with 4 human stages ('Als Mensch bestätigt', 'Bekannt', 'Freund', 'Enger Vertrauter'), integrated 4-tile AddContactModal, business card sharing modal, natural language reach selector, and clear empty states."
+  - id: "APP-UX-03"
+    title: "Phase 2 Dashboard & Navigation: StatusChip, Cause-Based Security Warnings & FirstStepsChecklist"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-UX-01", "APP-UX-02"]
+    description: "Consolidated 3 header badges into 1 unified StatusChip with detailed status popover, introduced specific cause-based security warning banners, FirstStepsChecklist empty state, top primary action bar, and streamlined sidebar navigation with collapsible 'Mehr' section."
+  - id: "APP-UX-02"
+    title: "Phase 1 Hilfe-System: Central HELP_TOPICS Registry, InfoHint Inline Components & HelpCenterView"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-UX-01"]
+    description: "Established centralized HELP_TOPICS registry, InfoHint inline explanation component with 'Mehr erfahren →' links, HelpModal markdown-light renderer, and searchable HelpCenterView replacing legacy ConceptView."
+  - id: "APP-UX-01"
+    title: "Phase 0 UX-Glossar: Unified Human-Centric Terminology & Zero-Jargon Foundation"
+    status: "completed"
+    priority: "high"
+    depends_on: []
+    description: "Created docs/UX_GLOSSARY.md establishing mandatory terminology (Sync-Dienst, Visitenkarte, Fähigkeit, Inserat, Pinnwand, Vertrauensliste, Benutzer-ID, Profil / Meine Gutscheine, Konflikte); eliminated forbidden jargon across all UI keys."
   - id: "APP-064"
     title: "Sync Service & Address Book Overhaul: Per-Contact Sync Management, Health Probing, Rate-Limit Cooldown & Channel Member Auto-Push"
     status: "completed"

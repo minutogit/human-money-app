@@ -3,7 +3,7 @@ import { BackButton } from './BackButton';
 
 export interface PageLayoutProps {
     title?: string | React.ReactNode;
-    description?: string;
+    description?: string | React.ReactNode;
     onBack?: () => void;
     actions?: React.ReactNode;
     customHeader?: React.ReactNode;
@@ -51,7 +51,11 @@ export function PageLayout({
                                         title
                                     )}
                                     {description && (
-                                        <p className="text-[11px] sm:text-xs font-medium text-theme-light uppercase tracking-wider opacity-75 mt-0.5 leading-snug">{description}</p>
+                                        typeof description === 'string' ? (
+                                            <p className="text-[11px] sm:text-xs font-medium text-theme-light uppercase tracking-wider opacity-75 mt-0.5 leading-snug">{description}</p>
+                                        ) : (
+                                            <div className="text-[11px] sm:text-xs font-medium text-theme-light mt-0.5 leading-snug">{description}</div>
+                                        )
                                     )}
                                 </div>
                             )}

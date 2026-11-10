@@ -4,12 +4,55 @@ use chrono::DateTime;
 use human_money_core::models::profile::PublicProfile;
 use human_money_core::services::crypto::{create_user_id, get_pubkey_from_user_id};
 use human_money_core::Voucher;
+use serde::{Deserialize, Serialize};
 
 use crate::card::forward_envelope;
 use crate::model::{
-    EntrySource, ListingOrigin, ListingType, MarketListing, MarketPerson, StandardRef, StoredCard,
-    TrustTier, MAX_LISTING_TEXT_CHARS, MAX_LISTING_TITLE_CHARS,
+    Ad, DropDescriptor, EntrySource, StandardRef, StoredCard, TrustTier,
+    MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
 };
+use crate::sd_card::{active_ads, decoded_items, extract_public_profile, extract_skills, CardItem};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillOrigin {
+    Card,
+    Voucher,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketSkill {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<String>,
+    pub origin: SkillOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MarketPerson {
+    pub did: String,
+    pub profile: PublicProfile,
+    pub skills: Vec<MarketSkill>,
+    pub active_ads: Vec<Ad>,
+    pub ads_pending: u8,
+    pub allow_inquiries: bool,
+    pub sources: Vec<EntrySource>,
+    pub as_of: u64,
+    pub standards: Vec<StandardRef>,
+    pub trust: TrustTier,
+    pub can_forward: bool,
+    pub card_drops: Vec<DropDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardItem {
+    pub owner_did: String,
+    pub owner_name: String,
+    pub trust: TrustTier,
+    pub ad: Ad,
+}
 
 /// Truncates a UTF-8 string at a word boundary (whitespace) such that the resulting
 /// string including the trailing '…' does not exceed `max_chars`.
@@ -36,33 +79,31 @@ fn truncate_at_word_boundary(text: &str, max_chars: usize) -> String {
     format!("{}…", prefix)
 }
 
-/// Extracts a single listing from an optional profile text field.
-fn extract_listing(raw_input: &str, listing_type: ListingType) -> Option<MarketListing> {
+/// Extracts a single skill from a voucher's service_offer profile field.
+fn extract_voucher_skill(raw_input: &str) -> Option<MarketSkill> {
     let trimmed = raw_input.trim();
     if trimmed.is_empty() {
         return None;
     }
 
     let char_count = trimmed.chars().count();
-    let (title, text) = if char_count <= MAX_LISTING_TITLE_CHARS {
+    let (title, text) = if char_count <= MAX_SKILL_TITLE_CHARS {
         (trimmed.to_string(), None)
     } else {
-        let title = truncate_at_word_boundary(trimmed, MAX_LISTING_TITLE_CHARS);
-        let text = if char_count <= MAX_LISTING_TEXT_CHARS {
+        let title = truncate_at_word_boundary(trimmed, MAX_SKILL_TITLE_CHARS);
+        let text = if char_count <= MAX_SKILL_TEXT_CHARS {
             trimmed.to_string()
         } else {
-            truncate_at_word_boundary(trimmed, MAX_LISTING_TEXT_CHARS)
+            truncate_at_word_boundary(trimmed, MAX_SKILL_TEXT_CHARS)
         };
         (title, Some(text))
     };
 
-    Some(MarketListing {
-        listing_type,
+    Some(MarketSkill {
         title,
         text,
         pricing: None,
-        origin: ListingOrigin::Voucher,
-        allow_inquiries: false,
+        origin: SkillOrigin::Voucher,
     })
 }
 
@@ -78,12 +119,13 @@ struct MergedEntry {
     card_data: Option<StoredCard>,
 }
 
-/// Builds the aggregated marketplace view from vouchers (Phase 1) and stored cards (Phase 2+).
+/// Builds the aggregated marketplace view from vouchers and stored SD-cards.
 pub fn build_market_view<'a>(
     vouchers: impl IntoIterator<Item = &'a Voucher>,
     cards: &[StoredCard],
     own_did: &str,
     classify: &dyn Fn(&str) -> TrustTier,
+    now: u64,
 ) -> Vec<MarketPerson> {
     let own_pk = get_pubkey_from_user_id(own_did.trim()).ok();
 
@@ -163,7 +205,7 @@ pub fn build_market_view<'a>(
 
     // 2. Process stored cards
     for stored in cards {
-        let card_pk = match get_pubkey_from_user_id(&stored.card.did) {
+        let card_pk = match get_pubkey_from_user_id(&stored.card.payload.did) {
             Ok(pk) => pk,
             Err(_) => continue,
         };
@@ -182,7 +224,7 @@ pub fn build_market_view<'a>(
 
         if let Some(entry) = merged.get_mut(&pk_bytes) {
             if let Some(ref existing_card) = entry.card_data {
-                if stored.card.v > existing_card.card.v {
+                if stored.card.payload.v > existing_card.card.payload.v {
                     entry.card_data = Some(stored.clone());
                 }
             } else {
@@ -215,57 +257,71 @@ pub fn build_market_view<'a>(
             continue;
         }
 
-        let mut listings = Vec::new();
+        let mut skills = Vec::new();
         let mut sources = Vec::new();
         let mut standards = Vec::new();
         let mut can_forward = false;
         let mut card_drops = Vec::new();
+        let mut ads = Vec::new();
+        let mut ads_pending = 0;
+        let mut allow_inquiries = false;
 
-        // Card listings appear first
+        // Card skills appear first
         if let Some(ref stored) = entry.card_data {
-            for l in &stored.card.listings {
-                listings.push(MarketListing {
-                    listing_type: l.listing_type,
-                    title: l.title.clone(),
-                    text: l.text.clone(),
-                    pricing: l.pricing.clone(),
-                    origin: ListingOrigin::Card,
-                    allow_inquiries: l.allow_inquiries,
+            for s in extract_skills(&stored.card) {
+                skills.push(MarketSkill {
+                    title: s.title,
+                    text: s.text,
+                    pricing: s.pricing,
+                    origin: SkillOrigin::Card,
                 });
             }
+            ads = active_ads(&stored.card, now);
+            let disclosed_ads_count = decoded_items(&stored.card)
+                .iter()
+                .filter(|(item, _)| matches!(item, CardItem::Ad(_)))
+                .count() as u8;
+            ads_pending = stored.card.payload.ad_count.saturating_sub(disclosed_ads_count);
+            allow_inquiries = stored.card.payload.allow_inquiries;
             sources.push(EntrySource::Card { hops: stored.hops });
             can_forward = forward_envelope(stored).is_some();
-            card_drops = stored.card.drops.clone();
+            card_drops = stored.card.payload.drops.clone();
         }
 
-        // Voucher listings appear after card listings
+        // Voucher service_offer becomes a skill, with deduplication:
+        // A card skill with the same title (case-insensitive, trimmed) supersedes a voucher skill.
         if let Some(ref vd) = entry.voucher_data {
             if let Some(ref offer) = vd.newest_profile.service_offer {
-                if let Some(l) = extract_listing(offer, ListingType::Offer) {
-                    listings.push(l);
-                }
-            }
-            if let Some(ref needs) = vd.newest_profile.needs {
-                if let Some(l) = extract_listing(needs, ListingType::Request) {
-                    listings.push(l);
+                if let Some(vs) = extract_voucher_skill(offer) {
+                    let is_dup = skills
+                        .iter()
+                        .any(|s| s.title.trim().eq_ignore_ascii_case(vs.title.trim()));
+                    if !is_dup {
+                        skills.push(vs);
+                    }
                 }
             }
             sources.push(EntrySource::Voucher);
             standards = vd.standards.clone();
         }
 
-        // Profile selection: Card profile wins if card.v >= voucher_as_of or no voucher
+        // Profile selection:
+        // Card profile wins if card.payload.v >= voucher_as_of.
+        // Maintainer decision 7: Preserve voucher `needs` on `profile.needs`.
         let (profile, as_of) = match (&entry.card_data, &entry.voucher_data) {
             (Some(c), Some(v)) => {
-                let max_as_of = c.card.v.max(v.newest_as_of);
-                let prof = if c.card.v >= v.newest_as_of {
-                    c.card.profile.clone()
+                let max_as_of = c.card.payload.v.max(v.newest_as_of);
+                let mut prof = if c.card.payload.v >= v.newest_as_of {
+                    extract_public_profile(&c.card)
                 } else {
                     v.newest_profile.clone()
                 };
+                if prof.needs.is_none() {
+                    prof.needs = v.newest_profile.needs.clone();
+                }
                 (prof, max_as_of)
             }
-            (Some(c), None) => (c.card.profile.clone(), c.card.v),
+            (Some(c), None) => (extract_public_profile(&c.card), c.card.payload.v),
             (None, Some(v)) => (v.newest_profile.clone(), v.newest_as_of),
             (None, None) => continue,
         };
@@ -273,7 +329,10 @@ pub fn build_market_view<'a>(
         persons.push(MarketPerson {
             did: entry.canonical_did,
             profile,
-            listings,
+            skills,
+            active_ads: ads,
+            ads_pending,
+            allow_inquiries,
             sources,
             as_of,
             standards,
@@ -298,4 +357,56 @@ pub fn build_market_view<'a>(
     });
 
     persons
+}
+
+fn format_person_name(profile: &PublicProfile, fallback_did: &str) -> String {
+    let first = profile.first_name.as_deref().unwrap_or("").trim();
+    let last = profile.last_name.as_deref().unwrap_or("").trim();
+    let full = match (first.is_empty(), last.is_empty()) {
+        (false, false) => format!("{} {}", first, last),
+        (false, true) => first.to_string(),
+        (true, false) => last.to_string(),
+        (true, true) => String::new(),
+    };
+    if !full.is_empty() {
+        return full;
+    }
+    if let Some(ref org) = profile.organization {
+        let trimmed = org.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Some(ref com) = profile.community {
+        let trimmed = com.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    fallback_did.to_string()
+}
+
+pub fn build_ad_board(people: &[MarketPerson]) -> Vec<BoardItem> {
+    let mut board = Vec::new();
+
+    for person in people {
+        let owner_name = format_person_name(&person.profile, &person.did);
+        for ad in &person.active_ads {
+            board.push(BoardItem {
+                owner_did: person.did.clone(),
+                owner_name: owner_name.clone(),
+                trust: person.trust,
+                ad: ad.clone(),
+            });
+        }
+    }
+
+    // Sorted by ad.renewed_at.unwrap_or(ad.published_at) descending, tie-breaker: ad.id
+    board.sort_by(|a, b| {
+        let time_a = a.ad.renewed_at.unwrap_or(a.ad.published_at);
+        let time_b = b.ad.renewed_at.unwrap_or(b.ad.published_at);
+        time_b.cmp(&time_a).then_with(|| a.ad.id.cmp(&b.ad.id))
+    });
+
+    board
 }

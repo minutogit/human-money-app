@@ -1,0 +1,163 @@
+import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { ProfileCardEditor } from '../ProfileCardEditor';
+import { FrontendMyMarketProfile } from '../../../types';
+
+describe('ProfileCardEditor Component', () => {
+  const mockMyProfile: FrontendMyMarketProfile = {
+    profile: {
+      id: 'did:key:z6MkuSelf',
+      firstName: 'Max',
+      lastName: 'Mustermann',
+      organization: 'Mustermann Holz',
+      community: 'Zimmerer e.V.',
+      address: {
+        street: 'Waldweg 1',
+        zipCode: '12345',
+        city: 'Holzhausen',
+        country: 'DE',
+      },
+      email: 'max@holz.de',
+      phone: '+49170123456',
+      url: 'https://holz-mustermann.de',
+    },
+    visibility: {
+      name: 'everyone',
+      organization: 'everyone',
+      community: 'everyone',
+      city: 'everyone',
+      url: 'everyone',
+      picture: 'everyone',
+      street: 'contacts',
+      email: 'contacts',
+      phone: 'contacts',
+      coordinates: 'contacts',
+      gender: 'contacts',
+    },
+    skills: [
+      {
+        title: 'Möbelbau',
+        text: 'Tische und Stühle nach Maß',
+        pricing: '50 Minuto / Std',
+      },
+    ],
+    ads: [],
+    maxHops: 2,
+    allowInquiries: true,
+    published: true,
+    qrIsPartial: false,
+  };
+
+  it('renders editor form with all profile fields and visibility badges', () => {
+    const onSave = vi.fn();
+    const onClose = vi.fn();
+
+    render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={onClose}
+        myProfile={mockMyProfile}
+        onSave={onSave}
+      />
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: /Visitenkarte bearbeiten|Edit business card/i })).toBeInTheDocument();
+
+    // Check prefilled inputs
+    expect(screen.getByDisplayValue('Max')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Mustermann')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Mustermann Holz')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Möbelbau')).toBeInTheDocument();
+
+    // Check live preview has Max Mustermann
+    expect(screen.getByText('Max Mustermann')).toBeInTheDocument();
+
+    // Submit form
+    const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
+    fireEvent.click(saveBtn);
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      profile: expect.objectContaining({
+        firstName: 'Max',
+        lastName: 'Mustermann',
+        organization: 'Mustermann Holz',
+      }),
+      visibility: expect.objectContaining({
+        name: 'everyone',
+        organization: 'everyone',
+      }),
+      skills: expect.arrayContaining([
+        expect.objectContaining({ title: 'Möbelbau' }),
+      ]),
+    }));
+  });
+
+  it('applies business preset when clicked', () => {
+    const onSave = vi.fn();
+
+    render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={{
+          ...mockMyProfile,
+          visibility: {
+            name: 'contacts',
+            organization: 'nobody',
+            community: 'nobody',
+            city: 'nobody',
+            url: 'nobody',
+            picture: 'nobody',
+            street: 'nobody',
+            email: 'nobody',
+            phone: 'nobody',
+            coordinates: 'nobody',
+            gender: 'nobody',
+          },
+        }}
+        onSave={onSave}
+      />
+    );
+
+    const presetCheckbox = screen.getByTestId('business-preset-checkbox');
+    fireEvent.click(presetCheckbox);
+
+    // Save
+    const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
+    fireEvent.click(saveBtn);
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      visibility: expect.objectContaining({
+        organization: 'everyone',
+        email: 'everyone',
+        phone: 'everyone',
+        url: 'everyone',
+      }),
+    }));
+  });
+
+  it('adds and removes skills up to 8 max', () => {
+    render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={mockMyProfile}
+        onSave={vi.fn()}
+      />
+    );
+
+    // Add skill
+    const addSkillBtn = screen.getByRole('button', { name: /Fähigkeit hinzufügen|Add skill/i });
+    fireEvent.click(addSkillBtn);
+
+    const inputs = screen.getAllByPlaceholderText(/Fähigkeit \(z\. B\. Holzarbeiten|Skill \(e\.g\./i);
+    expect(inputs.length).toBe(2);
+
+    // Remove first skill
+    const deleteBtns = screen.getAllByRole('button', { name: /Fähigkeit entfernen|Remove skill/i });
+    fireEvent.click(deleteBtns[0]);
+
+    const remainingInputs = screen.getAllByPlaceholderText(/Fähigkeit \(z\. B\. Holzarbeiten|Skill \(e\.g\./i);
+    expect(remainingInputs.length).toBe(1);
+  });
+});

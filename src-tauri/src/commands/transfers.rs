@@ -104,26 +104,36 @@ pub async fn create_transfer_bundle(
 
         if settings.market_send_card_on_payment {
             let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
-            let own_card_opt: Option<crate::state::StoredOwnCard> = service
-                .load_encrypted_data(crate::state::MARKET_OWN_CARD_KEY, password.as_deref())
+            let own_profile_opt: Option<crate::models::StoredOwnMarketProfile> = service
+                .load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password.as_deref())
                 .ok()
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
-            if let Some(own_card) = own_card_opt {
-                if now_secs < own_card.card.valid_until {
-                    if let Ok(peer_pk) = human_money_core::crypto::get_pubkey_from_user_id(&recipient_id) {
-                        let peer_pk_bytes = *peer_pk.as_bytes();
-                        let store: humoco_market::CardStore = service
-                            .load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref())
-                            .ok()
-                            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                            .unwrap_or_default();
+            if let Some(own_profile) = own_profile_opt {
+                if own_profile.published {
+                    if let Some(card) = own_profile.last_card {
+                        if now_secs < card.payload.valid_until {
+                            if let Ok(peer_pk) = human_money_core::crypto::get_pubkey_from_user_id(&recipient_id) {
+                                let peer_pk_bytes = *peer_pk.as_bytes();
+                                let store: humoco_market::CardStore = service
+                                    .load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref())
+                                    .ok()
+                                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                                    .unwrap_or_default();
 
-                        if humoco_market::should_attach_card(&store, &peer_pk_bytes, own_card.card.v) {
-                            let env = humoco_market::own_envelope(own_card.card_jws);
-                            if let Ok(json) = serde_json::to_string(&env) {
-                                contact_card_json = Some(json);
-                                pending_card_sent = Some((peer_pk_bytes, own_card.card.v));
+                                if humoco_market::should_attach_card(&store, &peer_pk_bytes, card.payload.v) {
+                                    let wire_opt = match humoco_market::render_wire(&card, 1, humoco_market::WireFilter::NoAds) {
+                                        Some(wire) if wire.len() <= humoco_market::MAX_BUNDLE_CARD_WIRE_BYTES => Some(wire),
+                                        _ => humoco_market::render_wire(&card, 1, humoco_market::WireFilter::FitBytes(humoco_market::MAX_BUNDLE_CARD_WIRE_BYTES)),
+                                    };
+                                    if let Some(wire) = wire_opt {
+                                        let env = humoco_market::own_envelope(wire);
+                                        if let Ok(json) = serde_json::to_string(&env) {
+                                            contact_card_json = Some(json);
+                                            pending_card_sent = Some((peer_pk_bytes, card.payload.v));
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

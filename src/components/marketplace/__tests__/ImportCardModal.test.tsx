@@ -7,7 +7,7 @@ import { contactService } from '../../../services/contactService';
 vi.mock('../../../services/marketService', () => ({
   marketService: {
     importContactCard: vi.fn(),
-    getOwnContactCard: vi.fn(),
+    getMyMarketProfile: vi.fn(),
     getMarketView: vi.fn(),
     syncMarketChannels: vi.fn().mockResolvedValue(undefined),
   },
@@ -37,36 +37,52 @@ describe('ImportCardModal Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(marketService.getOwnContactCard).mockResolvedValue({
-      card: {
-        did: 'did:key:z6MkuOwn123',
-        profile: { id: 'alice-id', firstName: 'Alice', lastName: 'Self' },
-        v: 1,
-        validUntil: 2000000000,
-        maxHops: 2,
-        listings: [],
-        syncs: [],
+    vi.mocked(marketService.getMyMarketProfile).mockResolvedValue({
+      profile: { id: 'alice-id', firstName: 'Alice', lastName: 'Self' },
+      visibility: {
+        name: 'everyone',
+        organization: 'everyone',
+        community: 'everyone',
+        city: 'everyone',
+        url: 'everyone',
+        picture: 'everyone',
+        street: 'everyone',
+        email: 'everyone',
+        phone: 'everyone',
+        coordinates: 'everyone',
+        gender: 'everyone',
       },
-      cardJws: 'mock-jws',
-      envelopeJson: '{"envelope":"test"}',
+      skills: [],
+      ads: [],
+      maxHops: 2,
+      allowInquiries: true,
+      published: true,
       shareUri: 'humoco://card?env=test',
+      fileWire: '{"envelope":"test"}',
       qrSvg: '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>',
-      isCompactQr: false,
+      qrIsPartial: false,
     });
     vi.mocked(contactService.getContacts).mockResolvedValue([]);
-    vi.mocked(marketService.getMarketView).mockResolvedValue([
-      {
-        did: 'did:key:z6MkuBob456',
-        profile: { id: 'bob-id', firstName: 'Bob', lastName: 'Partner' },
-        trust: 'trusted',
-        listings: [],
-        sources: [{ kind: 'card', hops: 1 }],
-        standards: [],
-        cardSyncs: [{ readUrl: 'https://bob.org/sync.php', writeUrl: 'https://bob.org/sync.php', dropPub: 'pub' }],
-        asOf: 1000,
-        canForward: true,
-      },
-    ]);
+    vi.mocked(marketService.getMarketView).mockResolvedValue({
+      board: [],
+      people: [
+        {
+          did: 'did:key:z6MkuBob456',
+          profile: { id: 'bob-id', firstName: 'Bob', lastName: 'Partner' },
+          trust: 'trusted',
+          skills: [],
+          activeAds: [],
+          adsPending: 0,
+          sources: [{ kind: 'card', hops: 1 }],
+          standards: [],
+          cardSyncs: [{ readUrl: 'https://bob.org/sync.php', writeUrl: 'https://bob.org/sync.php', dropPub: 'pub' }],
+          asOf: 1000,
+          canForward: true,
+          allowInquiries: true,
+        },
+      ],
+      now: 1000,
+    });
   });
 
   it('renders file upload button and textarea for card input', () => {
@@ -99,8 +115,8 @@ describe('ImportCardModal Component', () => {
     // Check 1-click trust level buttons
     await waitFor(() => {
       expect(screen.getByText(/In mein Adressbuch aufnehmen als|Add to my address book as/i)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Vertraut.*Stufe 2|Trusted.*Level 2/i })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Bekannt.*Stufe 1|Known.*Level 1/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Freund.*Stufe 2|Friend.*Level 2|Vertraut.*Stufe 2|Trusted.*Level 2/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Bekannt.*Stufe 1|Acquaintance.*Level 1|Known.*Level 1/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Nur im Marktplatz merken|Keep in marketplace only/i })).toBeInTheDocument();
     });
 
@@ -124,10 +140,10 @@ describe('ImportCardModal Component', () => {
     fireEvent.click(importBtn);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Vertraut.*Stufe 2|Trusted.*Level 2/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Freund.*Stufe 2|Friend.*Level 2|Vertraut.*Stufe 2|Trusted.*Level 2/i })).toBeInTheDocument();
     });
 
-    const trust2Btn = screen.getByRole('button', { name: /Vertraut.*Stufe 2|Trusted.*Level 2/i });
+    const trust2Btn = screen.getByRole('button', { name: /Freund.*Stufe 2|Friend.*Level 2|Vertraut.*Stufe 2|Trusted.*Level 2/i });
     fireEvent.click(trust2Btn);
 
     await waitFor(() => {

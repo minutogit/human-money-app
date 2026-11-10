@@ -1,7 +1,7 @@
 // src/components/marketplace/ShareCardModal.tsx
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { QrCode, Download, Copy, Check, AlertCircle, Share2 } from 'lucide-react';
+import { QrCode, Download, Copy, Check, AlertCircle, Share2, Info } from 'lucide-react';
 import { ModalShell } from '../ui/ModalShell';
 import { Button } from '../ui/Button';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -16,11 +16,11 @@ export interface ShareCardModalProps {
     onClose: () => void;
     title?: string;
     subtitle?: string;
-    envelopeJson: string;
-    shareUri: string;
+    fileWire?: string | null;
+    shareUri?: string | null;
     qrSvg?: string | null;
     did?: string;
-    isCompactQr?: boolean;
+    qrIsPartial?: boolean;
 }
 
 export function ShareCardModal({
@@ -28,11 +28,11 @@ export function ShareCardModal({
     onClose,
     title,
     subtitle,
-    envelopeJson,
+    fileWire,
     shareUri,
     qrSvg,
     did,
-    isCompactQr,
+    qrIsPartial = false,
 }: ShareCardModalProps) {
     const { t } = useTranslation();
     const [copied, setCopied] = useState(false);
@@ -40,6 +40,7 @@ export function ShareCardModal({
     const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
     const handleCopy = async () => {
+        if (!shareUri) return;
         const ok = await copyToClipboard(shareUri);
         if (ok) {
             setCopied(true);
@@ -48,6 +49,7 @@ export function ShareCardModal({
     };
 
     const handleSaveFile = async () => {
+        if (!fileWire) return;
         setIsSaving(true);
         setSaveStatus(null);
         try {
@@ -59,7 +61,7 @@ export function ShareCardModal({
                 filePath = await save({
                     defaultPath: defaultFilename,
                     filters: [
-                        { name: t('marketplace.cardFilterName'), extensions: ['hmcard'] },
+                        { name: t('marketplace.cardFilterName', 'HuMoCo Visitenkarte (.hmcard)'), extensions: ['hmcard'] },
                     ],
                 });
             } catch (err) {
@@ -67,30 +69,29 @@ export function ShareCardModal({
             }
 
             if (filePath) {
-                const bytes = new TextEncoder().encode(envelopeJson);
+                const bytes = new TextEncoder().encode(fileWire);
                 await writeFile(filePath, bytes);
-                setSaveStatus({ type: 'success', message: t('marketplace.cardFileSaved') });
+                setSaveStatus({ type: 'success', message: t('marketplace.cardFileSaved', 'Datei erfolgreich gespeichert.') });
             } else if (filePath === null && typeof window !== 'undefined' && window.document) {
-                // Fallback to browser download if not cancelled by user in a pure browser context
-                const blob = new Blob([envelopeJson], { type: 'application/json' });
+                const blob = new Blob([fileWire], { type: 'text/plain;charset=utf-8' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
                 a.download = defaultFilename;
                 a.click();
                 URL.revokeObjectURL(url);
-                setSaveStatus({ type: 'success', message: t('marketplace.cardFileDownloaded') });
+                setSaveStatus({ type: 'success', message: t('marketplace.cardFileDownloaded', 'Datei heruntergeladen.') });
             }
         } catch (err) {
             logger.error(`Failed to save contact card file: ${stringifyError(err)}`);
-            setSaveStatus({ type: 'error', message: t('marketplace.cardFileSaveFailed') });
+            setSaveStatus({ type: 'error', message: t('marketplace.cardFileSaveFailed', 'Speichern der Datei fehlgeschlagen.') });
         } finally {
             setIsSaving(false);
         }
     };
 
-    const modalTitle = title || t('marketplace.shareCardTitle');
-    const modalSubtitle = subtitle || t('marketplace.shareCardSubtitle');
+    const modalTitle = title || t('marketplace.shareCardTitle', 'Visitenkarte teilen');
+    const modalSubtitle = subtitle || t('marketplace.shareCardSubtitle', 'Teilen per QR-Code, Datei oder Link');
 
     return (
         <ModalShell
@@ -111,7 +112,7 @@ export function ShareCardModal({
             footer={
                 <div className="flex justify-end w-full">
                     <Button variant="secondary" onClick={onClose} size="sm">
-                        {t('common.close')}
+                        {t('common.close', 'Schließen')}
                     </Button>
                 </div>
             }
@@ -123,16 +124,16 @@ export function ShareCardModal({
                     <Button
                         variant="outline"
                         onClick={handleSaveFile}
-                        disabled={isSaving}
+                        disabled={isSaving || !fileWire}
                         className="h-auto py-3 px-3.5 flex items-start gap-2.5 text-left border-theme-subtle hover:border-theme-primary/30"
                     >
                         <Download size={18} className="text-theme-primary shrink-0 mt-0.5" />
                         <div className="min-w-0">
                             <div className="text-xs font-bold text-theme-secondary">
-                                {t('marketplace.saveCardFileBtn')}
+                                {t('marketplace.saveCardFileBtn', 'Als Datei speichern')}
                             </div>
                             <div className="text-[10px] text-theme-light truncate">
-                                {t('marketplace.saveCardFileDesc')}
+                                {t('marketplace.saveCardFileDesc', 'Speichert eine .hmcard Datei')}
                             </div>
                         </div>
                     </Button>
@@ -141,6 +142,7 @@ export function ShareCardModal({
                     <Button
                         variant="outline"
                         onClick={handleCopy}
+                        disabled={!shareUri}
                         className="h-auto py-3 px-3.5 flex items-start gap-2.5 text-left border-theme-subtle hover:border-theme-primary/30"
                     >
                         {copied ? (
@@ -150,10 +152,10 @@ export function ShareCardModal({
                         )}
                         <div className="min-w-0">
                             <div className="text-xs font-bold text-theme-secondary">
-                                {copied ? t('marketplace.linkCopied') : t('marketplace.copyCardLinkBtn')}
+                                {copied ? t('marketplace.linkCopied', 'Link kopiert!') : t('marketplace.copyCardLinkBtn', 'Link kopieren')}
                             </div>
                             <div className="text-[10px] text-theme-light truncate">
-                                {t('marketplace.copyCardLinkDesc')}
+                                {t('marketplace.copyCardLinkDesc', 'Kopiert humoco://card Link')}
                             </div>
                         </div>
                     </Button>
@@ -175,7 +177,7 @@ export function ShareCardModal({
                 {/* QR Code Section below */}
                 <div className="flex flex-col items-center justify-center p-4 bg-bg-app rounded-2xl border border-theme-subtle">
                     {qrSvg ? (
-                        <div className="space-y-2 text-center">
+                        <div className="space-y-3 text-center w-full">
                             <img
                                 src={`data:image/svg+xml;utf8,${encodeURIComponent(qrSvg)}`}
                                 alt="HuMoCo Contact Card QR Code"
@@ -183,12 +185,16 @@ export function ShareCardModal({
                             />
                             <p className="text-[11px] text-theme-light flex items-center justify-center gap-1.5 pt-1">
                                 <QrCode size={13} />
-                                <span>
-                                    {isCompactQr
-                                        ? t('marketplace.compactQrHint', 'Kompakt-Code für schnellen Scan – Inserate werden nach Bestätigung über den Sync-Dienst geladen')
-                                        : t('marketplace.qrScanHint')}
-                                </span>
+                                <span>{t('marketplace.qrScanHint', 'Mit der Human Money Kamera scannen')}</span>
                             </p>
+                            {qrIsPartial && (
+                                <div className="text-xs p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 flex items-start gap-2 text-left mt-2">
+                                    <Info size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                                    <p className="leading-relaxed">
+                                        {t('marketplace.qrPartialNotice', 'Der QR-Code enthält die wichtigsten Angaben. Den Rest bekommt dein Gegenüber über den Sync-Dienst oder als Datei.')}
+                                    </p>
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <div className="p-4 text-center space-y-2">
@@ -196,10 +202,10 @@ export function ShareCardModal({
                                 <AlertCircle size={20} />
                             </div>
                             <h4 className="text-xs font-bold text-theme-secondary">
-                                {t('marketplace.qrTooLargeTitle')}
+                                {t('marketplace.qrTooLargeTitle', 'Zu groß für QR-Code')}
                             </h4>
                             <p className="text-[11px] text-theme-light max-w-xs mx-auto leading-relaxed">
-                                {t('marketplace.qrTooLargeDesc')}
+                                {t('marketplace.qrTooLargeDesc', 'Aufgrund umfangreicher Angaben ist der Datenumfang zu groß für einen QR-Code. Bitte teile die Visitenkarte als Datei oder Direktlink.')}
                             </p>
                         </div>
                     )}

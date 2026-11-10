@@ -9,6 +9,7 @@ import { useSession } from '../context/SessionContext';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
+import { InfoHint } from './ui/InfoHint';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { logger } from '../utils/log';
 import { 
@@ -132,7 +133,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
             if (res.uploadedTo > 0) {
                 setFeedback({
                     type: 'success',
-                    message: t('settings.syncBackupSuccess', `Sicherung erfolgreich in ${res.uploadedTo} Sync-Dienst(en) hinterlegt (${Math.round(res.paddedBytes / 1024)} KB).`),
+                    message: t('settings.syncBackupSuccess', { count: res.uploadedTo, size: Math.round(res.paddedBytes / 1024) }),
                 });
                 if (settings && onSettingsUpdated) {
                     onSettingsUpdated({ ...settings, lastSyncBackupAt: res.timestamp ?? new Date().toISOString() });
@@ -142,12 +143,12 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
             } else if (res.authorizedTargets === 0) {
                 setFeedback({
                     type: 'error',
-                    message: t('settings.noSyncAuthorizedBackup', 'Kein verbundener Sync-Dienst hat den Backup-Kanal freigegeben. Bitte aktiviere "Backups erlauben" bei mindestens einem Sync-Dienst.'),
+                    message: t('settings.noSyncAuthorizedBackup'),
                 });
             } else {
                 setFeedback({
                     type: 'error',
-                    message: t('settings.syncBackupFailed', 'Sicherung in Sync-Dienst fehlgeschlagen: ' + res.errors.join(', ')),
+                    message: t('settings.syncBackupFailed', { error: res.errors.join(', ') }),
                 });
             }
         } catch (err) {
@@ -179,7 +180,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         if (!validateCustomPassword()) return;
 
         try {
-            const defaultName = `humoco-wallet-backup-${new Date().toISOString().slice(0, 10)}.hmcbackup`;
+            const defaultName = `humoco-backup-${new Date().toISOString().slice(0, 10)}.hmcbackup`;
             const selectedPath = await save({
                 defaultPath: defaultName,
                 filters: [{ name: 'HuMoCo Backup', extensions: ['hmcbackup'] }],
@@ -300,6 +301,14 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         }
     };
 
+    const handleCreateBackupNow = async () => {
+        if (syncFolder) {
+            await handleSyncFolder();
+        } else {
+            await handleExportFile();
+        }
+    };
+
     const lastBackupDisplay = settings?.lastBackupAt
         ? new Date(settings.lastBackupAt).toLocaleString()
         : t('settings.backupNever');
@@ -322,6 +331,46 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
             }
         >
             <div className="space-y-6">
+                {/* Prominent Status Banner */}
+                <div
+                    className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                        settings?.lastBackupAt
+                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-950 dark:text-emerald-200'
+                            : 'bg-rose-500/10 border-rose-500/20 text-rose-950 dark:text-rose-200'
+                    }`}
+                >
+                    <div className="flex items-start gap-3">
+                        {settings?.lastBackupAt ? (
+                            <CheckCircle2 size={22} className="text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                        ) : (
+                            <AlertCircle size={22} className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                        )}
+                        <div className="space-y-1">
+                            <span className="text-sm font-bold block">
+                                {settings?.lastBackupAt
+                                    ? t('settings.backupBannerProtected', { time: new Date(settings.lastBackupAt).toLocaleString() })
+                                    : t('settings.backupBannerUnprotected')}
+                            </span>
+                            <InfoHint topic="backup" />
+                        </div>
+                    </div>
+                    <Button
+                        type="button"
+                        variant="primary"
+                        data-testid="backup-now-button"
+                        onClick={handleCreateBackupNow}
+                        disabled={isExporting || isSyncing || isSyncingBackup}
+                        className="shrink-0 gap-2 text-xs"
+                    >
+                        {isExporting || isSyncing || isSyncingBackup ? (
+                            <RefreshCw size={14} className="animate-spin" />
+                        ) : (
+                            <Archive size={14} />
+                        )}
+                        <span>{t('settings.backupNowButton')}</span>
+                    </Button>
+                </div>
+
                 <p className="text-xs text-theme-light font-medium">
                     {t('settings.backupCardSubtitle')}
                 </p>
@@ -469,19 +518,19 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                 <label className="flex items-start gap-2.5 cursor-pointer select-none">
                                     <input
                                         type="checkbox"
-                                        aria-label={t('settings.autoBackupToggleLabel', 'Automatisch im Hintergrund sichern')}
+                                        aria-label={t('settings.autoBackupToggleLabel')}
                                         checked={autoBackupEnabled}
                                         onChange={(e) => handleToggleAutoBackup(e.target.checked)}
                                         className="mt-0.5 rounded text-theme-primary focus:ring-theme-accent"
                                     />
                                     <div className="text-xs">
                                         <span className="font-bold text-theme-secondary block">
-                                            {t('settings.autoBackupToggleLabel', 'Automatisch im Hintergrund sichern')}
+                                            {t('settings.autoBackupToggleLabel')}
                                         </span>
                                         <span className="text-[11px] text-theme-light block leading-relaxed">
                                             {protectionMode === 'custom_password'
-                                                ? t('settings.autoBackupPasswordNotice', 'Hinweis: Bei eigenem Backup-Passwort ist Hintergrund-Sync pausiert (nur manuelle Sicherung).')
-                                                : t('settings.autoBackupToggleDesc', 'Sichert deine Gutscheine und Kontakte nach jeder Änderung lautlos im Hintergrund.')}
+                                                ? t('settings.autoBackupPasswordNotice')
+                                                : t('settings.autoBackupToggleDesc')}
                                         </span>
                                     </div>
                                 </label>
@@ -550,7 +599,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                 <div className="flex items-center gap-2">
                                     <Cloud size={16} className="text-theme-primary" />
                                     <h4 className="font-bold text-xs text-theme-secondary uppercase tracking-wider">
-                                        {t('settings.syncBackupTitle', 'Online-Backup (Sync-Dienst)')}
+                                        {t('settings.syncBackupTitle')}
                                     </h4>
                                 </div>
                                 {settings?.lastSyncBackupAt && (
@@ -561,38 +610,38 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                 )}
                             </div>
                             <p className="text-[11px] text-theme-light leading-relaxed">
-                                {t('settings.syncBackupDesc', 'Sichert die verschlüsselte Wallet (.hmcbackup mit 64-KB-Padding) automatisch bei autorisierten Sync-Diensten.')}
+                                {t('settings.syncBackupDesc')}
                             </p>
 
                             {/* Live Status Indicator */}
                             <div className="p-3 bg-bg-app rounded-xl border border-theme-subtle/70 text-xs flex items-center justify-between">
                                 <span className="text-theme-light font-medium flex items-center gap-1.5">
                                     <span className={`w-2 h-2 rounded-full ${syncBackupEnabled && backupStatus?.hasAuthorizedSyncBackupTarget ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-                                    {t('settings.syncServiceStatusLabel', 'Status:')}
+                                    {t('settings.syncServiceStatusLabel')}
                                 </span>
                                 <span className="font-bold text-theme-primary">
                                     {!syncBackupEnabled
-                                        ? t('settings.backupDisabled', 'Deaktiviert')
+                                        ? t('settings.backupDisabled')
                                         : !backupStatus?.hasAuthorizedSyncBackupTarget
-                                        ? t('settings.noSyncBackupTargetWarning', 'Kein Sync-Dienst für Backups freigegeben')
-                                        : t('settings.syncBackupActive', 'Aktiv & bereit')}
+                                        ? t('settings.noSyncBackupTargetWarning')
+                                        : t('settings.syncBackupActive')}
                                 </span>
                             </div>
 
                             <label className="flex items-start gap-2.5 cursor-pointer select-none pt-1">
                                 <input
                                     type="checkbox"
-                                    aria-label={t('settings.syncBackupToggleLabel', 'Automatisch im Sync-Dienst sichern')}
+                                    aria-label={t('settings.syncBackupToggleLabel')}
                                     checked={syncBackupEnabled}
                                     onChange={(e) => handleToggleSyncBackup(e.target.checked)}
                                     className="mt-0.5 rounded text-theme-primary focus:ring-theme-accent"
                                 />
                                 <div className="text-xs">
                                     <span className="font-bold text-theme-secondary block">
-                                        {t('settings.syncBackupToggleLabel', 'Automatisch im Sync-Dienst sichern')}
+                                        {t('settings.syncBackupToggleLabel')}
                                     </span>
                                     <span className="text-[11px] text-theme-light block leading-relaxed">
-                                        {t('settings.syncBackupToggleDesc', 'Lädt bei jeder Zustandsänderung (Zahlungen, Gutscheine, Bürgschaften, Kontakte) automatisch die Sicherung hoch.')}
+                                        {t('settings.syncBackupToggleDesc')}
                                     </span>
                                 </div>
                             </label>
@@ -601,22 +650,27 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                             <div className="pt-2 border-t border-theme-subtle/50 space-y-1.5">
                                 <label className="text-xs font-bold text-theme-secondary flex items-center gap-1.5">
                                     <Clock size={13} className="text-theme-primary" />
-                                    {t('settings.backupFrequencyTitle', 'Sicherungshäufigkeit')}
+                                    {t('settings.backupFrequencyTitle')}
                                 </label>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                                     {[
-                                        { id: 'after_mutation', label: t('settings.backupFreqAfterMutation', 'Nach Transaktionen (30s)'), desc: t('settings.backupFreqAfterMutationDesc', 'Automatisch kurz nach Änderungen (empfohlen)') },
-                                        { id: 'on_close', label: t('settings.backupFreqOnClose', 'Beim Schließen / Abmelden'), desc: t('settings.backupFreqOnCloseDesc', 'Nur beim Verlassen der Wallet') },
-                                        { id: 'daily', label: t('settings.backupFreqDaily', 'Einmal täglich'), desc: t('settings.backupFreqDailyDesc', 'Beim ersten Öffnen am Tag') },
-                                        { id: 'manual', label: t('settings.backupFreqManual', 'Nur manuell'), desc: t('settings.backupFreqManualDesc', 'Nur bei Klick auf "Jetzt sichern"') }
+                                        { id: 'after_mutation', label: t('settings.backupFreqAfterMutation'), desc: t('settings.backupFreqAfterMutationDesc'), recommended: true },
+                                        { id: 'on_close', label: t('settings.backupFreqOnClose'), desc: t('settings.backupFreqOnCloseDesc'), recommended: false },
+                                        { id: 'daily', label: t('settings.backupFreqDaily'), desc: t('settings.backupFreqDailyDesc'), recommended: false },
+                                        { id: 'manual', label: t('settings.backupFreqManual'), desc: t('settings.backupFreqManualDesc'), recommended: false }
                                     ].map((freq) => (
                                         <label
                                             key={freq.id}
                                             className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col ${backupFrequency === freq.id ? 'bg-theme-primary/5 border-theme-primary' : 'bg-white dark:bg-slate-800 border-theme-subtle/70 hover:border-theme-primary/40'}`}
                                         >
                                             <div className="flex items-center justify-between">
-                                                <span className={`text-xs font-bold ${backupFrequency === freq.id ? 'text-theme-primary' : 'text-theme-secondary'}`}>
+                                                <span className={`text-xs font-bold flex items-center ${backupFrequency === freq.id ? 'text-theme-primary' : 'text-theme-secondary'}`}>
                                                     {freq.label}
+                                                    {freq.recommended && (
+                                                        <span className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300">
+                                                            {t('common.recommended')}
+                                                        </span>
+                                                    )}
                                                 </span>
                                                 <input
                                                     type="radio"
@@ -644,12 +698,12 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                             {isSyncingBackup ? (
                                 <>
                                     <RefreshCw size={14} className="animate-spin mr-2" />
-                                    {t('settings.syncing', 'Sichere in Sync-Dienst...')}
+                                    {t('settings.syncing')}
                                 </>
                             ) : (
                                 <>
                                     <Cloud size={14} className="mr-2" />
-                                    {t('settings.syncBackupNowButton', 'Jetzt in Sync-Dienst sichern')}
+                                    {t('settings.syncBackupNowButton')}
                                 </>
                             )}
                         </Button>

@@ -213,29 +213,65 @@ export const TOUR_STEPS = [
     {
         id: '3.1',
         chapter: 3,
-        title: 'Adressbuch & Kontakte (WoT)',
+        title: 'Kontakte & Vertrauen (Übersicht)',
         file: 'src/components/AddressBook.tsx',
-        description: 'Subjektives Vertrauensnetzwerk mit Trust-Levels (0–3), SD-JWT Sync und DIDs.',
+        description: 'Subjektives Vertrauensnetzwerk mit 4 Stufen (Als Mensch bestätigt, Bekannt, Freund, Enger Vertrauter), Reichweite und Visitenkarten-Teilen.',
         auth: true,
         appState: { view: 'address_book' }
     },
     {
         id: '3.2',
         chapter: 3,
-        title: 'Marktplatz & Kontaktkarten',
-        file: 'src/components/marketplace/MarketplaceView.tsx',
-        description: 'Lokale Angebote, Gesuche und dezentral synchronisierte Visitenkarten.',
+        title: 'Kontakt hinzufügen (Einstieg)',
+        file: 'src/components/AddContactModal.tsx',
+        description: 'Zentrales Einstiegsmodal mit 4 Wegen: QR scannen, Zwischenablage, Datei (.hmcard) und Benutzer-ID.',
         auth: true,
-        appState: { view: 'marketplace' }
+        appState: { view: 'address_book', initialOpenAddModal: true }
+    },
+    {
+        id: '3.3',
+        chapter: 3,
+        title: 'Marktplatz: Pinnwand',
+        file: 'src/components/marketplace/BoardTab.tsx',
+        description: 'Aktuelle Inserate (Angebote und Gesuche) aus dem persönlichen Vertrauensumfeld mit Restlaufzeit und Filter.',
+        auth: true,
+        appState: { view: 'marketplace', initialTab: 'board' }
+    },
+    {
+        id: '3.4',
+        chapter: 3,
+        title: 'Marktplatz: Menschen',
+        file: 'src/components/marketplace/PeopleTab.tsx',
+        description: 'Verzeichnis der Menschen im Umfeld mit Fähigkeiten, Vertrauens-Badge und Ortsangaben.',
+        auth: true,
+        appState: { view: 'marketplace', initialTab: 'people' }
+    },
+    {
+        id: '3.5',
+        chapter: 3,
+        title: 'Marktplatz: Meins & Inserate',
+        file: 'src/components/marketplace/MineTab.tsx',
+        description: 'Eigene Visitenkarte, aktive und abgelaufene Inserate, Statusanzeige und eingegangene Anfragen.',
+        auth: true,
+        appState: { view: 'marketplace', initialTab: 'mine' }
+    },
+    {
+        id: '3.6',
+        chapter: 3,
+        title: 'Visitenkarten- & Profil-Editor',
+        file: 'src/components/marketplace/ProfileCardEditor.tsx',
+        description: 'Einheitlicher Editor für Profildaten, Fähigkeiten, selektive Freigabe pro Feld (Alle, Kontakte, Niemand) und Reichweite.',
+        auth: true,
+        appState: { view: 'marketplace', initialTab: 'mine', initialOpenEditor: true }
     },
 
     // --- Chapter 4: Einstellungen & Systemkonfiguration ---
     {
         id: '4.1',
         chapter: 4,
-        title: 'Einstellungen: Profil & Allgemein',
-        file: 'src/components/SettingsView.tsx',
-        description: 'Eigene Identitätsdaten, Visitenkarte, Sprachen und Auto-Lock Timeout.',
+        title: 'Einstellungen: Profil & Benutzer-ID',
+        file: 'src/components/settings/ProfileTab.tsx',
+        description: 'Eigene Benutzer-ID (kopierbar), Sprachauswahl und Verweis-Karte zum Bearbeiten der Visitenkarte im Marktplatz.',
         auth: true,
         appState: { view: 'settings', initialSection: 'profile' },
         settingsTab: 'profile'
@@ -243,32 +279,32 @@ export const TOUR_STEPS = [
     {
         id: '4.2',
         chapter: 4,
-        title: 'Einstellungen: Sync Service & Kanäle',
-        file: 'src/components/settings/SyncServiceSettingsCard.tsx',
-        description: 'Zero-Knowledge Relays, Postbox-Slots, Mesh-Verbindungen und Sync-Status.',
+        title: 'Einstellungen: Sicherheit & Backup',
+        file: 'src/components/settings/SecurityBackupTab.tsx',
+        description: 'Vollverschlüsselte automatische Datensicherung mit Statusbanner, Primäraktion zur Sofortsicherung und Privatsphäre.',
         auth: true,
-        appState: { view: 'settings', initialSection: 'sync' },
-        settingsTab: 'sync_network'
+        appState: { view: 'settings', initialSection: 'security' },
+        settingsTab: 'security'
     },
     {
         id: '4.3',
         chapter: 4,
-        title: 'Einstellungen: Backup & Export',
-        file: 'src/components/BackupSettingsCard.tsx',
-        description: 'Vollverschlüsselte automatische Datensicherung, Export-Pfade und Privatsphäre.',
+        title: 'Einstellungen: Sync-Dienst',
+        file: 'src/components/settings/ConnectionTab.tsx',
+        description: 'Verbundene Sync-Dienste, Einladungslinks und Kanal-Schalter für den verschlüsselten Datenabgleich.',
         auth: true,
-        appState: { view: 'settings', initialSection: 'backup' },
-        settingsTab: 'security_backup'
+        appState: { view: 'settings', initialSection: 'connection' },
+        settingsTab: 'connection'
     },
     {
         id: '4.4',
         chapter: 4,
-        title: 'Einstellungen: Netzwerk & Standards',
-        file: 'src/components/SettingsView.tsx',
-        description: 'L2 Collision Lock Registry Shards, Quorum-Benchmarks und CEL Standards Manager.',
+        title: 'Einstellungen: Erweitert',
+        file: 'src/components/settings/AdvancedTab.tsx',
+        description: 'L2 Collision Lock Shards, Host-Modus für eigene Dienste, CEL-Gutschein-Standards und Entwickleroptionen.',
         auth: true,
-        appState: { view: 'settings', initialSection: 'network' },
-        settingsTab: 'sync_network'
+        appState: { view: 'settings', initialSection: 'advanced' },
+        settingsTab: 'advanced'
     },
 
     // --- Chapter 5: Sicherheit, Konflikte & Hilfe ---
@@ -295,7 +331,7 @@ export const TOUR_STEPS = [
         chapter: 5,
         title: 'Fork-Lock Sicherheits-Sperre',
         file: 'src/components/ForkLockOverlay.tsx',
-        description: 'Sofortige Wallet-Sperre bei gleichzeitiger Fork-/Klon-Nutzung auf mehreren Geräten.',
+        description: 'Sofortige Profil-Sperre bei gleichzeitiger Fork-/Klon-Nutzung auf mehreren Geräten.',
         auth: true,
         appState: { view: 'logged_in' },
         sessionOverrides: { isForkLocked: true }
@@ -303,11 +339,11 @@ export const TOUR_STEPS = [
     {
         id: '5.4',
         chapter: 5,
-        title: 'Konzept & Hilfe',
-        file: 'src/components/ConceptView.tsx',
-        description: 'Interaktive Erklärung der HuMoCo Philosophie: Kein Blockchain, vertraue Menschen, prüfe Mathe.',
+        title: 'Hilfe-Center',
+        file: 'src/components/HelpCenterView.tsx',
+        description: 'Zentrales Hilfe-Center mit thematischen Erklärungen, Suchfunktion, Kategorien und Verwandten Themen.',
         auth: false,
-        appState: { view: 'concept' }
+        appState: { view: 'help_center' }
     },
     {
         id: '5.5',
@@ -535,44 +571,163 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         }
     ];
 
+    const MOCK_MY_MARKET_PROFILE = {
+        profile: MOCK_PROFILE,
+        visibility: {
+            name: "everyone",
+            organization: "everyone",
+            community: "everyone",
+            city: "everyone",
+            url: "everyone",
+            picture: "everyone",
+            street: "contacts",
+            email: "contacts",
+            phone: "contacts",
+            coordinates: "nobody",
+            gender: "nobody"
+        },
+        skills: [
+            {
+                title: "Gartenarbeit & Permakultur",
+                text: "Beratung und Hilfe bei Naturgärten und Obstbaumschnitt im Dreisamtal.",
+                pricing: "60 Minuto / Std."
+            },
+            {
+                title: "Holzhandwerk",
+                text: "Kleine Reparaturen von Holzmöbeln und Schnitzereien.",
+                pricing: "Auf Anfrage"
+            }
+        ],
+        ads: [
+            {
+                id: "ad_tour_sample_01",
+                kind: "offer",
+                title: "Bio-Saatgut & Kompost abzugeben",
+                text: "Alte Tomatensorten und frischer Schwarzerde-Kompost aus dem eigenen Garten.",
+                pricing: "10 Minuto",
+                publishedAt: Math.floor(Date.now() / 1000) - 86400 * 10,
+                expiresAt: Math.floor(Date.now() / 1000) + 86400 * 80,
+                allowInquiries: true,
+                status: "active",
+                daysLeft: 80
+            }
+        ],
+        maxHops: 2,
+        allowInquiries: true,
+        published: true,
+        shareUri: "humoco://card/tour_mock_payload",
+        fileWire: "mock_card_wire_data",
+        qrSvg: "<svg viewBox='0 0 100 100'><rect width='100' height='100' fill='#0284c7'/></svg>",
+        qrIsPartial: false
+    };
+
     const MOCK_MARKET_PERSONS = [
         {
             did: MOCK_RECIPIENT_DID,
             profile: MOCK_CONTACTS[0].profile,
-            listings: [
+            skills: [
                 {
-                    listingId: "list_bob_01",
-                    listingType: "offer",
                     title: "Holzreparaturen & Möbelbau",
                     text: "Ich helfe gerne bei Reparaturen von Holzmöbeln oder beim Terrassenbau.",
                     pricing: "60 Minuto / Std.",
-                    origin: "card",
+                    origin: "card"
+                }
+            ],
+            activeAds: [
+                {
+                    id: "ad_bob_01",
+                    kind: "offer",
+                    title: "Holzreparaturen & Möbelbau",
+                    text: "Ich helfe gerne bei Reparaturen von Holzmöbeln oder beim Terrassenbau.",
+                    pricing: "60 Minuto / Std.",
+                    publishedAt: Math.floor(Date.now() / 1000) - 86400 * 5,
+                    expiresAt: Math.floor(Date.now() / 1000) + 86400 * 85,
                     allowInquiries: true
                 }
             ],
+            adsPending: 0,
+            allowInquiries: true,
             sources: [{ kind: "card", hops: 1 }],
             asOf: Math.floor(Date.now() / 1000) - 3600,
-            standards: [{ name: "Minuto", uuid: "std_minuto_de" }]
+            standards: [{ name: "Minuto", uuid: "std_minuto_de" }],
+            trust: "trusted",
+            canForward: true,
+            cardSyncs: []
         },
         {
             did: MOCK_CAROL_DID,
             profile: MOCK_CONTACTS[1].profile,
-            listings: [
+            skills: [
                 {
-                    listingId: "list_carol_01",
-                    listingType: "offer",
+                    title: "Regionaler Bio-Honig",
+                    text: "Kalt geschleuderter Frühlingsblütenhonig aus dem Schwarzwald.",
+                    pricing: "10 FreeTaler / Glas",
+                    origin: "card"
+                }
+            ],
+            activeAds: [
+                {
+                    id: "ad_carol_01",
+                    kind: "offer",
                     title: "Regionaler Bio-Honig (500g Glas)",
                     text: "Kalt geschleuderter Frühlingsblütenhonig aus dem Schwarzwald.",
                     pricing: "10 FreeTaler / Glas",
-                    origin: "card",
+                    publishedAt: Math.floor(Date.now() / 1000) - 86400 * 2,
+                    expiresAt: Math.floor(Date.now() / 1000) + 86400 * 88,
                     allowInquiries: true
                 }
             ],
+            adsPending: 0,
+            allowInquiries: true,
             sources: [{ kind: "card", hops: 1 }],
             asOf: Math.floor(Date.now() / 1000) - 7200,
-            standards: [{ name: "FreeTaler", uuid: "std_freetaler_v1" }]
+            standards: [{ name: "FreeTaler", uuid: "std_freetaler_v1" }],
+            trust: "trusted",
+            canForward: true,
+            cardSyncs: []
         }
     ];
+
+    const MOCK_BOARD_ITEMS = [
+        {
+            ownerDid: MOCK_RECIPIENT_DID,
+            ownerName: "Bob Baumeister",
+            trust: "trusted",
+            ad: {
+                id: "ad_bob_01",
+                kind: "offer",
+                title: "Holzreparaturen & Möbelbau",
+                text: "Ich helfe gerne bei Reparaturen von Holzmöbeln oder beim Terrassenbau.",
+                pricing: "60 Minuto / Std.",
+                publishedAt: Math.floor(Date.now() / 1000) - 86400 * 5,
+                expiresAt: Math.floor(Date.now() / 1000) + 86400 * 85,
+                allowInquiries: true
+            },
+            daysLeft: 85
+        },
+        {
+            ownerDid: MOCK_CAROL_DID,
+            ownerName: "Carol Kranz",
+            trust: "trusted",
+            ad: {
+                id: "ad_carol_01",
+                kind: "offer",
+                title: "Regionaler Bio-Honig (500g Glas)",
+                text: "Kalt geschleuderter Frühlingsblütenhonig aus dem Schwarzwald.",
+                pricing: "10 FreeTaler / Glas",
+                publishedAt: Math.floor(Date.now() / 1000) - 86400 * 2,
+                expiresAt: Math.floor(Date.now() / 1000) + 86400 * 88,
+                allowInquiries: true
+            },
+            daysLeft: 88
+        }
+    ];
+
+    const MOCK_MARKET_SNAPSHOT = {
+        board: MOCK_BOARD_ITEMS,
+        people: MOCK_MARKET_PERSONS,
+        now: Math.floor(Date.now() / 1000)
+    };
 
     const MOCK_CONFLICT_PROOF = {
         proofId: MOCK_PROOF_ID,
@@ -742,27 +897,58 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         "get_contacts": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_CONTACTS,
         "save_contact": () => null,
         "delete_contact": () => null,
-        "get_market_view": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_MARKET_PERSONS,
-        "get_own_contact_card": () => ({
-            did: MOCK_USER_DID,
-            profile: MOCK_PROFILE,
-            listings: [
-                {
-                    listingId: "list_alice_01",
-                    listingType: "offer",
-                    title: "Permakultur & Gartenhilfe",
-                    text: "Biete Gartenarbeit, Baumrückschnitt und Permakultur-Beratung im Dreisamtal.",
-                    pricing: "60 Minuto / Std.",
-                    origin: "card",
-                    allowInquiries: true
+        "get_market_view": () => window.__HUMOCO_SCENARIO__ === 'empty' ? { board: [], people: [], now: Math.floor(Date.now() / 1000) } : MOCK_MARKET_SNAPSHOT,
+        "get_my_market_profile": () => window.__HUMOCO_SCENARIO__ === 'empty' ? null : MOCK_MY_MARKET_PROFILE,
+        "save_my_market_profile": (args) => {
+            if (args?.request) {
+                Object.assign(MOCK_MY_MARKET_PROFILE, args.request);
+            }
+            return MOCK_MY_MARKET_PROFILE;
+        },
+        "set_card_published": (args) => {
+            MOCK_MY_MARKET_PROFILE.published = args?.published ?? true;
+            return MOCK_MY_MARKET_PROFILE;
+        },
+        "upsert_ad": (args) => {
+            if (args?.ad) {
+                const existingIdx = MOCK_MY_MARKET_PROFILE.ads.findIndex(a => a.id === args.ad.id);
+                const newAd = {
+                    id: args.ad.id || ("ad_mock_" + Date.now()),
+                    kind: args.ad.kind,
+                    title: args.ad.title,
+                    text: args.ad.text,
+                    pricing: args.ad.pricing,
+                    publishedAt: Math.floor(Date.now() / 1000),
+                    expiresAt: Math.floor(Date.now() / 1000) + (args.ad.durationDays || 90) * 86400,
+                    allowInquiries: args.ad.allowInquiries,
+                    status: 'active',
+                    daysLeft: args.ad.durationDays || 90
+                };
+                if (existingIdx >= 0) {
+                    MOCK_MY_MARKET_PROFILE.ads[existingIdx] = newAd;
+                } else {
+                    MOCK_MY_MARKET_PROFILE.ads.push(newAd);
                 }
-            ],
-            asOf: Math.floor(Date.now() / 1000)
-        }),
-        "save_own_contact_card": (args) => args?.request || null,
-        "delete_own_contact_card": () => null,
+            }
+            return MOCK_MY_MARKET_PROFILE;
+        },
+        "renew_ad": (args) => {
+            const ad = MOCK_MY_MARKET_PROFILE.ads.find(a => a.id === args?.id);
+            if (ad) {
+                ad.expiresAt = Math.floor(Date.now() / 1000) + (args.durationDays || 90) * 86400;
+                ad.daysLeft = args.durationDays || 90;
+                ad.status = 'active';
+            }
+            return MOCK_MY_MARKET_PROFILE;
+        },
+        "delete_ad": (args) => {
+            MOCK_MY_MARKET_PROFILE.ads = MOCK_MY_MARKET_PROFILE.ads.filter(a => a.id !== args?.id);
+            return MOCK_MY_MARKET_PROFILE;
+        },
         "export_forward_card": () => ({ exportPayload: "humoco://card/alice_payload", targetDid: MOCK_USER_DID }),
+        "recommend_market_card": () => ({ exportPayload: "humoco://card/rec_payload", targetDid: MOCK_USER_DID }),
         "import_contact_card": () => ({ did: MOCK_CAROL_DID, importedCount: 1 }),
+        "delete_foreign_contact_card": () => null,
         "preview_contact_trust_change": () => ({ scoreDelta: 0.25, newLevel: 3, bottlenecks: [] }),
         "sync_channel_members": () => 2,
         "delete_own_sync_slots": () => 1,
@@ -917,7 +1103,7 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
     window.__TAURI_INTERNALS__ = {
         invoke: async function(cmd, args, options) {
             if (window.__HUMOCO_SCENARIO__ === 'error') {
-                const errorCommands = ['get_vouchers', 'get_voucher_details', 'get_contacts', 'get_market_view', 'save_settings'];
+                const errorCommands = ['get_vouchers', 'get_voucher_details', 'get_contacts', 'get_market_view', 'get_my_market_profile', 'save_settings'];
                 if (errorCommands.includes(cmd)) {
                     const err = new Error("Simulated Backend Error in Scenario 'error'");
                     err.code = "error.mock.simulated";

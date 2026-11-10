@@ -3,21 +3,28 @@ use human_money_core::crypto::{create_user_id, ed25519_sk_to_x25519_sk};
 use humoco_market::{
     build_card_bundle, open_multi_class_slot_blob, open_slot_blob, open_slot_payload,
     pad_backup_slot_bytes, seal_multi_class_slot_blob, seal_slot_blob, seal_slot_payload,
-    unpad_backup_slot_bytes, CardBundle, CardEnvelope, CardStore, ContactCard, MarketError,
-    StoredCard, BACKUP_PAD_BLOCK_BYTES, BACKUP_SLOT_MAGIC, DROP_BACKUP_MAX_BYTES,
-    SLOT_MULTI_MAGIC,
+    unpad_backup_slot_bytes, CardBundle, CardEnvelope, CardPayload, CardStore, MarketError, SdCard,
+    StoredCard, BACKUP_PAD_BLOCK_BYTES, BACKUP_SLOT_MAGIC, CARD_SD_PADDED_LEN,
+    DROP_BACKUP_MAX_BYTES, SLOT_MULTI_MAGIC,
 };
 use proptest::prelude::*;
 
-fn dummy_card(did: &str, v: u64) -> ContactCard {
-    ContactCard {
-        did: did.to_string(),
-        v,
-        valid_until: 1800000000,
-        max_hops: 2,
-        profile: Default::default(),
-        listings: vec![],
-        drops: vec![],
+fn dummy_sd_card(did: &str, v: u64) -> SdCard {
+    SdCard {
+        jws: format!("header.{}.signature", did),
+        payload: CardPayload {
+            did: did.to_string(),
+            v,
+            valid_until: 1800000000,
+            max_hops: 2,
+            ad_count: 0,
+            allow_inquiries: false,
+            drops: vec![],
+            _sd: (0..CARD_SD_PADDED_LEN)
+                .map(|i| format!("digest_{:02}", i))
+                .collect(),
+        },
+        disclosures: std::collections::BTreeMap::new(),
     }
 }
 
@@ -32,7 +39,7 @@ fn test_slot_blob_seal_open_and_unauthorized() {
 
     let bundle = CardBundle {
         envelopes: vec![CardEnvelope {
-            card_jws: "header.payload.signature".to_string(),
+            card_wire: "header.payload.signature~".to_string(),
             hops: 1,
         }],
     };
@@ -103,7 +110,7 @@ fn test_slot_blob_contains_no_plaintext_dids() {
 
     let bundle = CardBundle {
         envelopes: vec![CardEnvelope {
-            card_jws: format!("header.{}.signature", author_did),
+            card_wire: format!("header.{}.signature~", author_did),
             hops: 1,
         }],
     };
@@ -128,12 +135,12 @@ fn test_build_card_bundle_sorting_and_trimming() {
         let vk = sk.verifying_key();
         let did = create_user_id(&vk, None).unwrap();
 
-        let card = dummy_card(&did, i as u64);
+        let card = dummy_sd_card(&did, i as u64);
         store.cards.insert(
             *vk.as_bytes(),
             StoredCard {
                 card,
-                card_jws: format!("jws-{}", i),
+                card_wire: format!("wire-{}", i),
                 hops: 1,
                 received_at: 1000,
             },
@@ -148,9 +155,9 @@ fn test_build_card_bundle_sorting_and_trimming() {
         }
     };
 
-    let bundle = build_card_bundle(Some("own-jws"), &store, &trust_level, 65536);
+    let bundle = build_card_bundle(Some("own-wire~"), &store, &trust_level, 65536);
     // Own card is first
-    assert_eq!(bundle.envelopes[0].card_jws, "own-jws");
+    assert_eq!(bundle.envelopes[0].card_wire, "own-wire~");
     assert_eq!(bundle.envelopes[0].hops, 1);
     // Max 1 own + 20 forwarded = 21 cards
     assert_eq!(bundle.envelopes.len(), 21);

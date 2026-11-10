@@ -148,7 +148,6 @@ pub fn run() {
             get_transaction_history, prepare_transfer_plan, rank_vouchers_for_recipient,
             checkout_received_bundle, submit_l2_send_intent, configure_regional_mesh_authority, verify_live_checkout_and_release, evaluate_checkout_release, verify_checkout_response_with_authority,
             get_app_settings, save_app_settings,
-            update_user_profile,
             log_to_backend,
             // Multi-signature commands
             create_signing_request_bundle, open_voucher_signing_request, create_detached_signature_response_bundle,
@@ -176,12 +175,17 @@ pub fn run() {
             get_wot_summary, set_wot_max_hops, export_wot_package, import_wot_package, evaluate_voucher_trust_preview,
             get_wot_providers, set_wot_provider_trust, remove_wot_provider, refresh_wot_provider_url,
             // Marketplace
+            get_my_market_profile,
+            save_my_market_profile,
+            set_card_published,
+            upsert_ad,
+            renew_ad,
+            delete_ad,
             get_market_view,
-            get_own_contact_card,
-            save_own_contact_card,
-            delete_own_contact_card,
             export_forward_card,
             import_contact_card,
+            delete_foreign_contact_card,
+            recommend_market_card,
             // Sync Services
             prepare_sync_setup,
             save_sync_setup_zip,

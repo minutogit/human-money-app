@@ -99,7 +99,7 @@ describe('BackupSettingsCard', () => {
 
     it('renders card title, subtitle, and protection mode', () => {
         render(<BackupSettingsCard settings={defaultSettings} />);
-        expect(screen.getByText('Encrypted Wallet Backups')).toBeInTheDocument();
+        expect(screen.getByText(/Encrypted (Profile|Wallet) Backups/i)).toBeInTheDocument();
         expect(screen.getByText('Protection Mode')).toBeInTheDocument();
         expect(screen.getByText(/Local Backup Folder/i)).toBeInTheDocument();
         expect(screen.getByText(/Export Single File/i)).toBeInTheDocument();

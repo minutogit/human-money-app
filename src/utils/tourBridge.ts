@@ -1,7 +1,7 @@
 // src/utils/tourBridge.ts
 import { AppState } from '../types';
 
-export type SettingsTabId = 'profile' | 'security_backup' | 'sync_network' | 'standards_general';
+export type SettingsTabId = 'profile' | 'security' | 'connection' | 'advanced';
 
 export interface HumocoTourState {
     appState?: AppState;
@@ -22,7 +22,7 @@ const PUBLIC_VIEWS = new Set([
     'recreate_profile',
     'restore_backup',
     'needs_recovery',
-    'concept'
+    'help_center'
 ]);
 
 class TourBridge {

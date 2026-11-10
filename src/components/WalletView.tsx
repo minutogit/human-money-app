@@ -16,7 +16,9 @@ import { VoucherCard } from "./ui/VoucherCard";
 import { formatDate } from "../utils/format";
 import { 
     Plus, 
-    History
+    History,
+    ArrowUpRight,
+    ArrowDownLeft
 } from "lucide-react";
 
 import { useNavigation } from "../context/NavigationContext";
@@ -144,10 +146,39 @@ export function WalletView() {
             description={t('wallet.description')} 
             onBack={goBack}
             actions={
-                <Button onClick={() => navigate({ view: 'create_voucher' })} size="sm" className="gap-2">
-                    <Plus size={18} />
-                    {t('common.create')}
-                </Button>
+                <div className="flex items-center gap-2">
+                    <Button 
+                        onClick={() => navigate({ view: 'send_vouchers' })} 
+                        size="sm"
+                        variant="secondary"
+                        className="gap-1.5"
+                        disabled={vouchers.filter(v => v.status === 'active').length === 0}
+                        data-testid="wallet-action-send"
+                    >
+                        <ArrowUpRight size={16} />
+                        <span className="hidden sm:inline">{t('transfer.send')}</span>
+                    </Button>
+                    <Button 
+                        onClick={() => navigate({ view: 'receive_bundle' })} 
+                        size="sm"
+                        variant="secondary"
+                        className="gap-1.5"
+                        data-testid="wallet-action-receive"
+                    >
+                        <ArrowDownLeft size={16} />
+                        <span className="hidden sm:inline">{t('transfer.receive')}</span>
+                    </Button>
+                    <Button 
+                        onClick={() => navigate({ view: 'create_voucher', previousView: appState })} 
+                        size="sm" 
+                        variant="primary"
+                        className="gap-1.5"
+                        data-testid="wallet-action-create"
+                    >
+                        <Plus size={16} />
+                        <span>{t('common.create')}</span>
+                    </Button>
+                </div>
             }
         >
             <div className="max-w-5xl mx-auto space-y-6">

@@ -10,7 +10,7 @@ pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
 pub const CONTACTS_DATA_NAME: &str = "address_book";
 pub const WOT_DATA_NAME: &str = "wot_register";
 pub const MARKET_CARD_STORE_KEY: &str = "market_card_store";
-pub const MARKET_OWN_CARD_KEY: &str = "market_own_card";
+pub const MARKET_OWN_PROFILE_KEY: &str = "market_own_profile";
 pub const MARKET_SYNC_ADMIN_KEY: &str = "market_sync_admin";
 pub const MARKET_SYNC_KEY: &str = "market_sync_state";
 pub const MARKET_POST_STATE_KEY: &str = "market_post_state";
@@ -47,12 +47,6 @@ pub struct StoredPostState {
     pub buyer_inquiries: Vec<crate::models::FrontendMarketInquiryItem>,
     #[serde(default)]
     pub inquiry_rate_tracker: humoco_market::InquiryRateTracker,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
-pub struct StoredOwnCard {
-    pub card: humoco_market::ContactCard,
-    pub card_jws: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -268,8 +262,8 @@ impl AppState {
                 .and_then(|bytes| serde_json::from_slice::<humoco_market::CardStore>(&bytes).ok())
                 .and_then(|store| {
                     store.cards.values()
-                        .find(|sc| canonicalize_did(&sc.card.did).ok().as_deref() == Some(&can_did))
-                        .map(|sc| sc.card.drops.iter().cloned().map(Into::into).collect())
+                        .find(|sc| canonicalize_did(&sc.card.payload.did).ok().as_deref() == Some(&can_did))
+                        .map(|sc| sc.card.payload.drops.iter().cloned().map(Into::into).collect())
                 })
                 .unwrap_or_default();
 
@@ -849,9 +843,9 @@ impl AppState {
                         log::warn!("Failed to save CardStore after accepting piggybacked card: {}", e);
                     }
                 }
-                if let Some(stored) = store.cards.values().find(|sc| sc.card.did == did) {
+                if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
                     let card_syncs: Vec<crate::models::FrontendSyncDescriptor> =
-                        stored.card.drops.iter().cloned().map(Into::into).collect();
+                        stored.card.payload.drops.iter().cloned().map(Into::into).collect();
                     self.update_contact_syncs_from_card(service, &did, &card_syncs, password);
                 }
             }

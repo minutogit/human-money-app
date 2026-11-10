@@ -13,7 +13,7 @@ import { tourBridge } from '../utils/tourBridge';
 export interface NavigationContextType {
     appState: AppState;
     navigate: (newState: AppState) => void;
-    navigateToSettingsSection: (section: 'sync' | 'backup' | 'network') => void;
+    navigateToSettingsSection: (section: 'sync' | 'backup' | 'network' | 'profile' | 'standards' | 'security' | 'connection' | 'advanced') => void;
     goBack: () => void;
     isSidebarOpen: boolean;
     setSidebarOpen: (open: boolean) => void;
@@ -63,7 +63,7 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
         setAppState(newState);
     }, []);
 
-    const navigateToSettingsSection = useCallback((section: 'sync' | 'backup' | 'network') => {
+    const navigateToSettingsSection = useCallback((section: 'sync' | 'backup' | 'network' | 'profile' | 'standards' | 'security' | 'connection' | 'advanced') => {
         navigate({ view: 'settings', initialSection: section });
     }, [navigate]);
 

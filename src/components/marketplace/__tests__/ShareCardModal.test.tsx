@@ -21,7 +21,7 @@ describe('ShareCardModal Component', () => {
   const defaultProps = {
     isOpen: true,
     onClose: vi.fn(),
-    envelopeJson: '{"card_jws":"jwt","hops":1}',
+    fileWire: '{"card_jws":"jwt","hops":1}',
     shareUri: 'humoco://card?env=eyJ0ZXN0IjoxfQ',
     did: 'did:key:z6MkuTest123',
   };
@@ -38,7 +38,7 @@ describe('ShareCardModal Component', () => {
       />
     );
 
-    const img = screen.getByAltText(/HuMoCo Contact Card QR Code/i);
+    const img = screen.getByAltText(/HuMoCo (Contact|Business) Card QR Code/i);
     expect(img).toBeInTheDocument();
     expect(img).toHaveAttribute('src', expect.stringContaining('data:image/svg+xml;utf8'));
     expect(screen.queryByText(/Too large for QR code|Zu groß für QR-Code/i)).not.toBeInTheDocument();
@@ -52,9 +52,9 @@ describe('ShareCardModal Component', () => {
       />
     );
 
-    expect(screen.queryByAltText(/HuMoCo Contact Card QR Code/i)).not.toBeInTheDocument();
+    expect(screen.queryByAltText(/HuMoCo (Contact|Business) Card QR Code/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Too large for QR code|Zu groß für QR-Code/i)).toBeInTheDocument();
-    expect(screen.getByText(/Due to extensive listings|Aufgrund umfangreicher Inserate/i)).toBeInTheDocument();
+    expect(screen.getByText(/Due to extensive (listings|ads)|Aufgrund umfangreicher Inserate/i)).toBeInTheDocument();
   });
 
   it('copies share URI to clipboard when clicking Copy Link', async () => {
@@ -105,15 +105,15 @@ describe('ShareCardModal Component', () => {
     expect(screen.getByText(/File saved successfully|Datei erfolgreich gespeichert/i)).toBeInTheDocument();
   });
 
-  it('renders compact QR hint when isCompactQr is true', () => {
+  it('renders partial QR hint when qrIsPartial is true', () => {
     render(
       <ShareCardModal
         {...defaultProps}
         qrSvg='<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="#fff"/></svg>'
-        isCompactQr={true}
+        qrIsPartial={true}
       />
     );
 
-    expect(screen.getByText(/Kompakt-Code für schnellen Scan|Compact code for quick scanning/i)).toBeInTheDocument();
+    expect(screen.getByText(/wichtigsten Angaben|most important information/i)).toBeInTheDocument();
   });
 });

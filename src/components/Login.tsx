@@ -707,10 +707,10 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                     <div className="pt-4 border-t border-theme-subtle/40 flex flex-col items-center gap-1.5 text-center">
                         <button
                             type="button"
-                            onClick={() => navigate({ view: "concept" })}
+                            onClick={() => navigate({ view: "help_center" })}
                             className="text-xs text-theme-primary hover:text-theme-primary/85 font-bold hover:underline focus:outline-none flex items-center gap-1.5 mt-4 cursor-pointer transition-colors"
                         >
-                            <BookOpen size={14} /> {t('dashboard.conceptReadConceptLink')}
+                            <BookOpen size={14} /> {t('helpCenter.readConceptLink')}
                         </button>
                         <button
                             type="button"

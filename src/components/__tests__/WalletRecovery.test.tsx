@@ -69,7 +69,7 @@ describe('WalletRecovery Component', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('Recover Wallet')).toBeInTheDocument();
+        expect(screen.getByText(/Recover (Profile|Wallet)/i)).toBeInTheDocument();
       });
     });
 
@@ -285,7 +285,7 @@ describe('WalletRecovery Component', () => {
       );
 
       await waitFor(() => {
-        const recoverButton = screen.getByText('Recover Wallet & Login');
+        const recoverButton = screen.getByText(/Recover (Profile|Wallet) & Log\s*In/i);
         expect(recoverButton).toBeDisabled();
       });
 
@@ -298,7 +298,7 @@ describe('WalletRecovery Component', () => {
       });
 
       await waitFor(() => {
-        const recoverButton = screen.getByText('Recover Wallet & Login');
+        const recoverButton = screen.getByText(/Recover (Profile|Wallet) & Log\s*In/i);
         expect(recoverButton).not.toBeDisabled();
       }, { timeout: 1000 });
     });
@@ -537,7 +537,7 @@ describe('WalletRecovery Component', () => {
       const confirmPasswordInput = screen.getByPlaceholderText('Repeat your new password');
       fireEvent.change(confirmPasswordInput, { target: { value: 'password456' } });
 
-      const recoverButton = screen.getByText('Recover Wallet & Login');
+      const recoverButton = screen.getByText(/Recover (Profile|Wallet) & Log\s*In/i);
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
@@ -571,7 +571,7 @@ describe('WalletRecovery Component', () => {
       const confirmPasswordInput = screen.getByPlaceholderText('Repeat your new password');
       fireEvent.change(confirmPasswordInput, { target: { value: 'short' } });
 
-      const recoverButton = screen.getByText('Recover Wallet & Login');
+      const recoverButton = screen.getByText(/Recover (Profile|Wallet) & Log\s*In/i);
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
@@ -605,7 +605,7 @@ describe('WalletRecovery Component', () => {
       const confirmPasswordInput = screen.getByPlaceholderText('Repeat your new password');
       fireEvent.change(confirmPasswordInput, { target: { value: 'password456' } });
 
-      const recoverButton = screen.getByText('Recover Wallet & Login');
+      const recoverButton = screen.getByText(/Recover (Profile|Wallet) & Log\s*In/i);
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
@@ -674,7 +674,7 @@ describe('WalletRecovery Component', () => {
       const confirmPasswordInput = screen.getByPlaceholderText('Repeat your new password');
       fireEvent.change(confirmPasswordInput, { target: { value: 'password123' } });
 
-      const recoverButton = screen.getByText('Recover Wallet & Login');
+      const recoverButton = screen.getByText(/Recover (Profile|Wallet) & Log\s*In/i);
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
@@ -709,7 +709,7 @@ describe('WalletRecovery Component', () => {
       fireEvent.change(confirmPasswordInput, { target: { value: 'password123' } });
 
       await waitFor(() => {
-        const recoverButton = screen.getByText('Recover Wallet & Login');
+        const recoverButton = screen.getByText(/Recover (Profile|Wallet) & Log\s*In/i);
         expect(recoverButton).toBeDisabled();
       });
     });
@@ -743,7 +743,7 @@ describe('WalletRecovery Component', () => {
       const confirmPasswordInput = screen.getByPlaceholderText('Repeat your new password');
       fireEvent.change(confirmPasswordInput, { target: { value: 'password123' } });
 
-      const recoverButton = screen.getByText('Recover Wallet & Login');
+      const recoverButton = screen.getByText(/Recover (Profile|Wallet) & Log\s*In/i);
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
@@ -793,7 +793,7 @@ describe('WalletRecovery Component', () => {
       const confirmPasswordInput = screen.getByPlaceholderText('Repeat your new password');
       fireEvent.change(confirmPasswordInput, { target: { value: 'password123' } });
 
-      const recoverButton = screen.getByText('Recover Wallet & Login');
+      const recoverButton = screen.getByText(/Recover (Profile|Wallet) & Log\s*In/i);
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
@@ -863,11 +863,11 @@ describe('WalletRecovery Component', () => {
       const confirmPasswordInput = screen.getByPlaceholderText('Repeat your new password');
       fireEvent.change(confirmPasswordInput, { target: { value: 'password123' } });
 
-      const recoverButton = screen.getByText('Recover Wallet & Login');
+      const recoverButton = screen.getByText(/Recover (Profile|Wallet) & Log\s*In/i);
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
-        expect(screen.getByText(/Recovering wallet, please wait/i)).toBeInTheDocument();
+        expect(screen.getByText(/Recovering (profile|wallet), please wait/i)).toBeInTheDocument();
         expect(recoverButton).toBeDisabled();
       });
 
@@ -929,11 +929,11 @@ describe('WalletRecovery Component', () => {
       const confirmPasswordInput = screen.getByPlaceholderText('Repeat your new password');
       fireEvent.change(confirmPasswordInput, { target: { value: 'password123' } });
 
-      const recoverButton = screen.getByText('Recover Wallet & Login');
+      const recoverButton = screen.getByText(/Recover (Profile|Wallet) & Log\s*In/i);
       fireEvent.click(recoverButton);
 
       await waitFor(() => {
-        expect(screen.getByText(/Error recovering wallet/i)).toBeInTheDocument();
+        expect(screen.getByText(/Error recovering (profile|wallet)/i)).toBeInTheDocument();
       }, { timeout: 3000 });
 
       expect(mockOnRecoverySuccess).not.toHaveBeenCalled();

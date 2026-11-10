@@ -7,6 +7,7 @@ import {
     FrontendPostSyncResult,
     FrontendMarketInquiryItem,
     FrontendSyncDescriptor,
+    InquiryTarget,
 } from "../types";
 import { triggerAutoBackup } from "../utils/autoBackup";
 
@@ -98,16 +99,14 @@ export const postService = {
 
     sendMarketInquiryViaPost: async (
         recipientDid: string,
-        listingId: string,
-        listingTitle: string,
+        target: InquiryTarget,
         message: string,
         recipientSyncs: FrontendSyncDescriptor[],
         password?: string
     ): Promise<FrontendMarketInquiryItem> => {
         const res = await invoke<FrontendMarketInquiryItem>("send_market_inquiry_via_post", {
             recipientDid,
-            listingId,
-            listingTitle,
+            target,
             message,
             recipientSyncs,
             password: password || undefined,

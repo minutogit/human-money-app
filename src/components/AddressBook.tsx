@@ -12,20 +12,28 @@ import { useRateLimitCooldown } from '../hooks/useRateLimitCooldown';
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../utils/syncEvents';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeFile, readFile } from '@tauri-apps/plugin-fs';
-import { copyToClipboard } from '../utils/clipboard';
 import { HelpIcon } from './ui/HelpIcon';
-import { Contact, WotSummaryDto, WotProviderDto, FrontendPendingWotHandshake, FrontendSyncOverviewStatus } from '../types';
+import { InfoHint } from './ui/InfoHint';
+import { 
+    Contact, 
+    WotSummaryDto, 
+    WotProviderDto, 
+    FrontendPendingWotHandshake, 
+    FrontendSyncOverviewStatus,
+    FrontendMyMarketProfile,
+    PublicProfile 
+} from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import Avatar from 'boring-avatars';
 import ContactDialog from './ContactDialog';
+import { AddContactModal } from './AddContactModal';
+import { ShareCardModal } from './marketplace/ShareCardModal';
+import { TrustLevelRadioCards } from './TrustLevelRadioCards';
 import { logger } from '../utils/log';
 import { stringifyError, translateError } from '../utils/errorHelper';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { useSession } from '../context/SessionContext';
 import { useOptionalNavigation } from '../context/NavigationContext';
-import { profileService } from '../services/profileService';
-import { voucherService } from '../services/voucherService';
-import { buildContactCardText } from '../utils/humocoUri';
 import { AlertBanner } from './ui/AlertBanner';
 import { ModalShell } from './ui/ModalShell';
 import { PageLoadingState, PageEmptyState } from './ui/PageState';
@@ -42,8 +50,6 @@ import {
     Users,
     X,
     Share2,
-    Copy,
-    Check,
     Upload,
     RefreshCw,
     Server,
@@ -51,15 +57,18 @@ import {
     ChevronDown,
     ChevronUp,
     CloudOff,
-    Settings
+    Settings,
+    MoreHorizontal,
+    Check
 } from 'lucide-react';
 
 interface AddressBookProps {
     onBack: () => void;
     initialSearchQuery?: string;
+    initialOpenAddModal?: boolean;
 }
 
-const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery }) => {
+const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, initialOpenAddModal }) => {
     const { t } = useTranslation();
     const { protectAction } = useSession();
     const navigation = useOptionalNavigation();
@@ -74,6 +83,13 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const [selectedTag, setSelectedTag] = useState<string | null>(null);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingContact, setEditingContact] = useState<Contact | null>(null);
+    const [initialAddDid, setInitialAddDid] = useState<string | undefined>(undefined);
+    const [initialAddProfile, setInitialAddProfile] = useState<Partial<PublicProfile> | undefined>(undefined);
+    const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(initialOpenAddModal || false);
+    const [isShareCardModalOpen, setIsShareCardModalOpen] = useState(false);
+    const [ownProfileForShare, setOwnProfileForShare] = useState<FrontendMyMarketProfile | null>(null);
+    const [isPublishPromptOpen, setIsPublishPromptOpen] = useState(false);
+    const [isTrustListModalOpen, setIsTrustListModalOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [deleteRequest, setDeleteRequest] = useState<string | null>(null);
     const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -82,7 +98,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const [isExporting, setIsExporting] = useState(false);
     const [refreshingProviderDid, setRefreshingProviderDid] = useState<string | null>(null);
     const [deleteProviderRequest, setDeleteProviderRequest] = useState<WotProviderDto | null>(null);
-    const [copiedContactCard, setCopiedContactCard] = useState(false);
     const [pendingWotImportBytes, setPendingWotImportBytes] = useState<number[] | null>(null);
     const [isWotPasswordModalOpen, setIsWotPasswordModalOpen] = useState(false);
     const [wotContainerPassword, setWotContainerPassword] = useState('');
@@ -90,6 +105,16 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
     const [isSyncingServices, setIsSyncingServices] = useState(false);
     const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
     const { cooldownSeconds, isCoolingDown, checkAndTriggerCooldown } = useRateLimitCooldown();
+
+    // Handshakes
+    const [pendingHandshakes, setPendingHandshakes] = useState<FrontendPendingWotHandshake[]>([]);
+    const [isHandshakesExpanded, setIsHandshakesExpanded] = useState(false);
+    const [handshakeAcceptedLevels, setHandshakeAcceptedLevels] = useState<{ [msgId: string]: number }>({});
+    const [handshakeReturnFlags, setHandshakeReturnFlags] = useState<{ [msgId: string]: boolean }>({});
+    const [isAcceptingHandshake, setIsAcceptingHandshake] = useState<string | null>(null);
+    const [sendHandshakeContact, setSendHandshakeContact] = useState<Contact | null>(null);
+    const [sendHandshakeLevel, setSendHandshakeLevel] = useState<number>(1);
+    const [isSendingHandshake, setIsSendingHandshake] = useState(false);
 
     // Adaptive banner expansion: default to false if >0 rated contacts, true if 0 rated contacts
     const isNetworkExpanded = userExpanded !== null
@@ -106,15 +131,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             navigation.navigateToSettingsSection('sync');
         }
     };
-
-    // Async WoT Handshakes (§6.4.2)
-    const [pendingHandshakes, setPendingHandshakes] = useState<FrontendPendingWotHandshake[]>([]);
-    const [handshakeAcceptedLevels, setHandshakeAcceptedLevels] = useState<{ [msgId: string]: number }>({});
-    const [handshakeReturnFlags, setHandshakeReturnFlags] = useState<{ [msgId: string]: boolean }>({});
-    const [isAcceptingHandshake, setIsAcceptingHandshake] = useState<string | null>(null);
-    const [sendHandshakeContact, setSendHandshakeContact] = useState<Contact | null>(null);
-    const [sendHandshakeLevel, setSendHandshakeLevel] = useState<number>(1);
-    const [isSendingHandshake, setIsSendingHandshake] = useState(false);
 
     const loadContacts = useCallback(async () => {
         setIsLoading(true);
@@ -171,6 +187,12 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         }
     }, [initialSearchQuery]);
 
+    useEffect(() => {
+        if (initialOpenAddModal) {
+            setIsAddContactModalOpen(true);
+        }
+    }, [initialOpenAddModal]);
+
     const handleSaveContact = async (contact: Contact) => {
         try {
             await protectAction(async (pwd) => {
@@ -219,6 +241,37 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             setFeedbackMsg({ type: 'error', message: translateError(err, t) });
         } finally {
             setIsUpdatingHops(false);
+        }
+    };
+
+    const handleOpenShareCard = async () => {
+        try {
+            const myProfile = await marketService.getMyMarketProfile();
+            setOwnProfileForShare(myProfile);
+            if (!myProfile.published) {
+                setIsPublishPromptOpen(true);
+                return;
+            }
+            setIsShareCardModalOpen(true);
+        } catch (err) {
+            logger.error("Failed to load market profile for sharing: " + stringifyError(err));
+            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
+        }
+    };
+
+    const handleConfirmPublishAndShare = async () => {
+        try {
+            const updated = await protectAction(async (pwd) => {
+                return await marketService.setCardPublished(true, false, pwd || undefined);
+            });
+            if (updated) {
+                setOwnProfileForShare(updated);
+                setIsPublishPromptOpen(false);
+                setIsShareCardModalOpen(true);
+            }
+        } catch (err) {
+            logger.error("Failed to publish business card: " + stringifyError(err));
+            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
         }
     };
 
@@ -297,58 +350,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         }
     };
 
-    const handleCopyContactCard = async () => {
-        try {
-            const [did, profile, settings] = await Promise.all([
-                voucherService.getUserId().catch(() => ''),
-                profileService.getProfile().catch(() => null),
-                settingsService.getSettings().catch(() => null),
-            ]);
-            if (!did) {
-                logger.warn("No user ID found for contact card");
-                setFeedbackMsg({ type: 'error', message: t('contacts.noOwnDidError') });
-                return;
-            }
-            const nameParts = [profile?.firstName, profile?.lastName].filter(Boolean);
-            const name = nameParts.length > 0 ? nameParts.join(' ') : profile?.organization;
-
-            const syncUrls: string[] = [];
-            if (settings?.marketSelectedSyncs && settings.marketSelectedSyncs.length > 0) {
-                for (const d of settings.marketSelectedSyncs) {
-                    const u = d.writeUrl || d.readUrl;
-                    if (u && (u.startsWith('https://') || u.startsWith('http://'))) {
-                        syncUrls.push(u);
-                    }
-                }
-            } else if (settings?.publicSyncs && settings.publicSyncs.length > 0) {
-                for (const d of settings.publicSyncs) {
-                    if (d.enabled) {
-                        const u = d.writeUrl || d.readUrl;
-                        if (u && (u.startsWith('https://') || u.startsWith('http://'))) {
-                            syncUrls.push(u);
-                        }
-                    }
-                }
-            }
-
-            const cardText = buildContactCardText({
-                did,
-                name: name || undefined,
-                syncUrls: syncUrls.slice(0, 2),
-            });
-            const success = await copyToClipboard(cardText);
-            if (!success) {
-                setFeedbackMsg({ type: 'error', message: t('contacts.copyContactCardFailed') });
-                return;
-            }
-            setCopiedContactCard(true);
-            setTimeout(() => setCopiedContactCard(false), 2500);
-        } catch (err) {
-            logger.error("Failed to copy contact card: " + stringifyError(err));
-            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
-        }
-    };
-
     const executeImportWot = async (fileBytes: number[], password?: string) => {
         setIsImportingWot(true);
         try {
@@ -400,6 +401,28 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         }
     };
 
+    const handleImportWot = async () => {
+        try {
+            const settings = await settingsService.getSettings().catch(() => null);
+            const selectedPath = await open({
+                multiple: false,
+                defaultPath: settings?.lastUsedDirectory,
+                filters: [{ name: t('transfer.importFile.wotFilter'), extensions: ['wot'] }]
+            });
+            if (typeof selectedPath === 'string') {
+                if (settings) {
+                    await updateLastUsedDirectory(selectedPath, settings, protectAction).catch(() => {});
+                }
+                const fileUint8Array = await readFile(selectedPath);
+                const fileBytes = Array.from(fileUint8Array);
+                await executeImportWot(fileBytes);
+            }
+        } catch (err) {
+            logger.error("Failed to read WoT file: " + stringifyError(err));
+            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
+        }
+    };
+
     const handleSetProviderTrust = async (issuerDid: string, level: number) => {
         try {
             await protectAction(async (pwd) => {
@@ -446,29 +469,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             setFeedbackMsg({ type: 'error', message: translateError(err, t) });
         } finally {
             setDeleteProviderRequest(null);
-        }
-    };
-
-
-    const handleImportWot = async () => {
-        try {
-            const settings = await settingsService.getSettings().catch(() => null);
-            const selectedPath = await open({
-                multiple: false,
-                defaultPath: settings?.lastUsedDirectory,
-                filters: [{ name: t('transfer.importFile.wotFilter'), extensions: ['wot'] }]
-            });
-            if (typeof selectedPath === 'string') {
-                if (settings) {
-                    await updateLastUsedDirectory(selectedPath, settings, protectAction).catch(() => {});
-                }
-                const fileUint8Array = await readFile(selectedPath);
-                const fileBytes = Array.from(fileUint8Array);
-                await executeImportWot(fileBytes);
-            }
-        } catch (err) {
-            logger.error("Failed to read WoT file: " + stringifyError(err));
-            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
         }
     };
 
@@ -539,7 +539,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             if (res) {
                 setFeedbackMsg({
                     type: 'success',
-                    message: t('contacts.handshakeAcceptedSuccess', 'Vertrauensbestätigung akzeptiert (Stufe {{level}})', { level })
+                    message: t('contacts.handshakeAcceptedSuccess', 'Vertrauensbestätigung akzeptiert')
                 });
                 await loadContacts();
             }
@@ -574,7 +574,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
             if (res && res.depositedTo > 0) {
                 setFeedbackMsg({
                     type: 'success',
-                    message: t('contacts.handshakeSentSuccess', '📦 Vertrauensbestätigung (F2F) über Sync-Dienst hinterlegt')
+                    message: t('contacts.handshakeSentSuccess', 'Vertrauensbestätigung über Sync-Dienst gesendet')
                 });
                 setSendHandshakeContact(null);
             } else if (res && res.errors && res.errors.length > 0) {
@@ -606,36 +606,58 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
         return matchesSearch && matchesTag;
     });
 
+    const currentMaxHops = wotSummary?.ownListMaxHops ?? 3;
+
+    const reachAudienceExplanation = (() => {
+        switch (currentMaxHops) {
+            case 1:
+                return t('contacts.wotReachAudience1', 'Nur Personen, die du direkt in deinen Kontakten hast.');
+            case 2:
+                return t('contacts.wotReachAudience2', 'Deine Kontakte und deren direkte Kontakte (Freunde von Freunden).');
+            case 3:
+                return t('contacts.wotReachAudience3', 'Dein erweitertes Umfeld über bis zu drei Stufen.');
+            case 4:
+            default:
+                return t('contacts.wotReachAudience4', 'Das gesamte erreichbare Netzwerk (maximale Weiterleitung).');
+        }
+    })();
+
     return (
         <PageLayout 
             title={t('contacts.title')} 
-            description={t('contacts.description')} 
+            description={
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <span>{t('contacts.description')}</span>
+                    <InfoHint topic="wotNetwork" />
+                </div>
+            } 
             onBack={onBack}
             actions={
                 <>
                     <Button
                         variant="secondary"
                         size="sm"
-                        onClick={handleCopyContactCard}
+                        onClick={handleOpenShareCard}
                         className="gap-2"
-                        title={copiedContactCard ? t('contacts.copiedContactCard') : t('contacts.copyContactCard')}
+                        title={t('contacts.shareMyBusinessCard')}
                     >
-                        {copiedContactCard ? <Check size={18} className="text-emerald-500" /> : <Copy size={18} />}
+                        <Share2 size={18} />
                         <span className="hidden sm:inline">
-                            {copiedContactCard ? t('contacts.copiedContactCard') : t('contacts.copyContactCard')}
+                            {t('contacts.shareMyBusinessCard')}
                         </span>
                     </Button>
                     <Button
                         size="sm"
                         onClick={() => {
-                            setEditingContact(null);
-                            setIsDialogOpen(true);
+                            setInitialAddDid(undefined);
+                            setInitialAddProfile(undefined);
+                            setIsAddContactModalOpen(true);
                         }}
                         className="gap-2"
-                        title={t('contacts.newContact')}
+                        title={t('contacts.addContact')}
                     >
                         <UserPlus size={18} />
-                        <span>{t('contacts.newContact')}</span>
+                        <span>{t('contacts.addContact')}</span>
                     </Button>
                 </>
             }
@@ -688,6 +710,17 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                             <Button
                                 type="button"
                                 variant="secondary"
+                                onClick={() => setIsTrustListModalOpen(true)}
+                                className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
+                                title={t('contacts.trustListMenuDesc', 'Vertrauenslisten offline teilen oder einlesen')}
+                                data-testid="trust-list-menu-button"
+                            >
+                                <MoreHorizontal size={14} />
+                                <span>{t('contacts.trustListMenuBtn', 'Vertrauensliste')}</span>
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="secondary"
                                 onClick={toggleNetworkExpanded}
                                 className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
                                 title={isNetworkExpanded ? t('contacts.wotCollapseOptions', 'Optionen ausblenden') : t('contacts.wotCustomizeOptions', 'Netzwerk-Optionen anpassen')}
@@ -727,10 +760,9 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                         </div>
                     )}
 
-                    {/* Expanded details: Global Reach Selector & File Import/Export */}
+                    {/* Expanded details: Segmented Reach Selector with Live Sentence */}
                     {isNetworkExpanded && (
                         <div className="pt-4 border-t border-theme-subtle/50 space-y-4 animate-in fade-in duration-200" data-testid="expanded-network-options">
-                            {/* Global Reach Selector (1..4 Hops) */}
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                                 <div className="space-y-0.5">
                                     <div className="flex items-center gap-1.5">
@@ -750,7 +782,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                         { hops: 3, labelKey: 'contacts.wotHops3' },
                                         { hops: 4, labelKey: 'contacts.wotHops4' }
                                     ].map(({ hops, labelKey }) => {
-                                        const currentMaxHops = wotSummary?.ownListMaxHops ?? 3;
                                         const isSelected = currentMaxHops === hops;
                                         return (
                                             <button
@@ -771,125 +802,133 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                 </div>
                             </div>
 
-                            {/* Import / Export .wot files */}
-                            <div className="pt-3 border-t border-theme-subtle/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                <div className="space-y-0.5">
-                                    <span className="text-xs font-bold text-theme-secondary">
-                                        {t('contacts.wotManualFileExchange', 'Manuelle Dateiübertragung (.wot)')}
+                            {/* Live sentence & InfoHint */}
+                            <div className="p-3 bg-theme-primary/5 border border-theme-primary/10 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                                <div className="text-theme-secondary leading-relaxed">
+                                    <span className="font-bold text-theme-primary mr-1">
+                                        {t('contacts.wotReachAudienceLabel', 'Deine Einstufungen sehen:')}
                                     </span>
-                                    <p className="text-[11px] text-theme-light">
-                                        {t('contacts.wotManualFileExchangeDesc', 'Vertrauenslisten offline via Datei mit Kontakten teilen oder importieren')}
-                                    </p>
+                                    <span data-testid="reach-live-sentence">{reachAudienceExplanation}</span>
                                 </div>
-                                <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
-                                    <Button
-                                        type="button"
-                                        variant="secondary"
-                                        onClick={handleImportWot}
-                                        disabled={isImportingWot}
-                                        className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
-                                    >
-                                        <Upload size={14} />
-                                        {isImportingWot ? t('common.loading') : t('contacts.importWotButton')}
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        variant="secondary"
-                                        onClick={() => {
-                                            setExportMode((wotSummary?.ratedContactsCount ?? 0) > 0 ? 'contacts' : 'password');
-                                            setExportPassword('');
-                                            setIsExportModalOpen(true);
-                                        }}
-                                        className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
-                                    >
-                                        <Share2 size={14} />
-                                        {t('contacts.exportWotButton')}
-                                    </Button>
-                                </div>
+                                <InfoHint topic="wotReach" />
                             </div>
                         </div>
                     )}
                 </div>
 
-                {/* Incoming Pending WoT Handshakes (§6.4.2) */}
+                {/* Incoming Pending Handshakes */}
                 {pendingHandshakes.length > 0 && (
-                    <div className="space-y-3 p-5 bg-sky-50/70 border border-sky-200 rounded-3xl" data-testid="pending-handshakes-section">
-                        <div className="flex items-center gap-2 text-sky-950 font-bold text-sm">
-                            <Handshake size={20} className="text-sky-600 shrink-0" />
-                            <span>{t('contacts.incomingHandshakesTitle', 'Eingehende Vertrauensbestätigungen (WoT Handshake)')}</span>
-                        </div>
-                        <p className="text-xs text-sky-900/80 leading-relaxed">
-                            {t('contacts.incomingHandshakesDesc', 'Kontakte haben dir nach einem persönlichen Treffen eine Vertrauensbestätigung über einen Sync-Dienst gesendet.')}
-                        </p>
-                        <div className="space-y-3 pt-1">
-                            {pendingHandshakes.map(h => {
-                                const name = h.senderName || truncateUserId(h.senderDid);
-                                const currentLevel = handshakeAcceptedLevels[h.msgId] ?? (h.proposedLevel <= 3 ? h.proposedLevel : 1);
-                                const returnChecked = handshakeReturnFlags[h.msgId] ?? h.replyRequested ?? true;
-                                const isAccepting = isAcceptingHandshake === h.msgId;
-
-                                return (
-                                    <div key={h.msgId} className="p-4 bg-white rounded-2xl border border-sky-100 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-                                        <div className="min-w-0">
-                                            <p className="font-bold text-sm text-theme-primary">{name}</p>
-                                            <p className="text-[11px] font-mono text-theme-light truncate" title={h.senderDid}>{h.senderDid}</p>
-                                            <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-sky-100 text-sky-800">
-                                                {t('contacts.proposedLevelBadge', 'Vorgeschlagene Stufe: {{level}}', { level: h.proposedLevel })}
-                                            </span>
-                                        </div>
-
-                                        <div className="flex flex-wrap items-center gap-3">
-                                            <div className="flex items-center gap-1.5 text-xs">
-                                                <label className="text-[11px] font-semibold text-theme-secondary">{t('contacts.acceptAsLevel', 'Stufe:')}</label>
-                                                <select
-                                                    value={currentLevel}
-                                                    onChange={(e) => setHandshakeAcceptedLevels(prev => ({ ...prev, [h.msgId]: Number(e.target.value) }))}
-                                                    className="px-2 py-1 text-xs font-bold rounded-lg border border-theme-subtle bg-bg-app"
-                                                >
-                                                    <option value={0}>0 - {t('contacts.trustLevel0', 'F2F Existenz')}</option>
-                                                    <option value={1}>1 - {t('contacts.trustLevel1', 'Bekannt')}</option>
-                                                    <option value={2}>2 - {t('contacts.trustLevel2', 'Vertrauenswürdig')}</option>
-                                                    <option value={3}>3 - {t('contacts.trustLevel3', 'Voll vertrauenswürdig')}</option>
-                                                </select>
-                                            </div>
-
-                                            <label className="flex items-center gap-1.5 text-xs font-medium text-theme-secondary cursor-pointer">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={returnChecked}
-                                                    onChange={(e) => setHandshakeReturnFlags(prev => ({ ...prev, [h.msgId]: e.target.checked }))}
-                                                    className="rounded accent-sky-600"
-                                                />
-                                                <span>{t('contacts.sendReturnHandshakeLabel', 'Gegenbestätigung zurücksenden')}</span>
-                                            </label>
-
-                                            <div className="flex items-center gap-2">
-                                                <Button
-                                                    size="xs"
-                                                    variant="outline"
-                                                    onClick={() => handleDismissHandshake(h.msgId)}
-                                                    data-testid="dismiss-handshake-button"
-                                                    className="text-theme-light hover:text-rose-600"
-                                                >
-                                                    {t('common.dismiss', 'Verwerfen')}
-                                                </Button>
-                                                <Button
-                                                    size="xs"
-                                                    variant="primary"
-                                                    disabled={isAccepting}
-                                                    onClick={() => handleAcceptHandshake(h)}
-                                                    data-testid="accept-handshake-button"
-                                                    className="bg-sky-600 hover:bg-sky-700 text-white gap-1"
-                                                >
-                                                    {isAccepting ? <RefreshCw size={12} className="animate-spin" /> : <Check size={12} />}
-                                                    <span>{t('common.confirm', 'Bestätigen')}</span>
-                                                </Button>
-                                            </div>
-                                        </div>
+                    <div className="p-4 sm:p-5 bg-sky-50/80 border border-sky-200 rounded-3xl space-y-4" data-testid="pending-handshakes-section">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-2xl bg-sky-100 border border-sky-200 text-sky-700 flex items-center justify-center shrink-0">
+                                    <Handshake size={20} />
+                                </div>
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <h4 className="text-sm font-extrabold text-sky-950">
+                                            {t('contacts.incomingHandshakesTitle', 'Eingehende Vertrauensbestätigungen')}
+                                        </h4>
+                                        <span className="px-2 py-0.5 rounded-full text-xs font-black bg-sky-600 text-white">
+                                            {pendingHandshakes.length}
+                                        </span>
                                     </div>
-                                );
-                            })}
+                                    <p className="text-xs text-sky-900/80 mt-0.5">
+                                        {pendingHandshakes.length === 1
+                                            ? t('contacts.incomingHandshakesBanner', '1 Kontakt möchte dich als vertraut eintragen.')
+                                            : t('contacts.incomingHandshakesBannerPlural', '{{count}} Kontakte möchten dich als vertraut eintragen.', { count: pendingHandshakes.length })}
+                                    </p>
+                                </div>
+                            </div>
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => setIsHandshakesExpanded(!isHandshakesExpanded)}
+                                className="self-start sm:self-auto bg-white border-sky-200 text-sky-900 font-bold"
+                                data-testid="toggle-handshakes-button"
+                            >
+                                <span>{isHandshakesExpanded ? t('contacts.hideHandshakesBtn', 'Ausblenden') : t('contacts.viewHandshakesBtn', 'Ansehen')}</span>
+                                {isHandshakesExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                            </Button>
                         </div>
+
+                        {isHandshakesExpanded && (
+                            <div className="space-y-4 pt-2 border-t border-sky-200/60 animate-in fade-in duration-200">
+                                {pendingHandshakes.map((h) => {
+                                    const name = h.senderName || truncateUserId(h.senderDid);
+                                    const currentLevel = handshakeAcceptedLevels[h.msgId] ?? (h.proposedLevel <= 3 ? h.proposedLevel : 1);
+                                    const returnChecked = handshakeReturnFlags[h.msgId] ?? h.replyRequested ?? true;
+                                    const isAccepting = isAcceptingHandshake === h.msgId;
+
+                                    return (
+                                        <div
+                                            key={h.msgId}
+                                            className="p-5 bg-white rounded-2xl border border-sky-100 shadow-xs space-y-4"
+                                            data-testid={`handshake-item-${h.msgId}`}
+                                        >
+                                            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                                                <div className="space-y-1">
+                                                    <p className="font-extrabold text-sm text-theme-primary">
+                                                        {t('contacts.handshakeProposalPhrase', '{{name}} möchte euch gegenseitig als vertraut eintragen.', { name })}
+                                                    </p>
+                                                    <p className="text-[11px] font-mono text-theme-light truncate" title={h.senderDid}>
+                                                        {h.senderDid}
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <label className="block text-xs font-bold text-theme-secondary">
+                                                    {t('contacts.acceptAsLevel', 'Wie möchtest du diesen Kontakt einstufen?')}
+                                                </label>
+                                                <TrustLevelRadioCards
+                                                    value={currentLevel}
+                                                    onChange={(lvl) => setHandshakeAcceptedLevels((prev) => ({ ...prev, [h.msgId]: lvl ?? 1 }))}
+                                                    allowUnrated={false}
+                                                    idPrefix={`handshake-${h.msgId}`}
+                                                />
+                                            </div>
+
+                                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
+                                                <label className="flex items-center gap-2 text-xs font-medium text-theme-secondary cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={returnChecked}
+                                                        onChange={(e) => setHandshakeReturnFlags((prev) => ({ ...prev, [h.msgId]: e.target.checked }))}
+                                                        className="rounded accent-sky-600"
+                                                    />
+                                                    <span>{t('contacts.sendReturnHandshakeLabel', 'Gegenseitige Vertrauensbestätigung zurücksenden')}</span>
+                                                </label>
+
+                                                <div className="flex items-center gap-2 self-end sm:self-auto">
+                                                    <Button
+                                                        size="xs"
+                                                        variant="outline"
+                                                        onClick={() => handleDismissHandshake(h.msgId)}
+                                                        data-testid="dismiss-handshake-button"
+                                                        className="text-theme-light hover:text-rose-600"
+                                                    >
+                                                        {t('common.dismiss', 'Verwerfen')}
+                                                    </Button>
+                                                    <Button
+                                                        size="xs"
+                                                        variant="primary"
+                                                        disabled={isAccepting}
+                                                        onClick={() => handleAcceptHandshake(h)}
+                                                        data-testid="accept-handshake-button"
+                                                        className="bg-sky-600 hover:bg-sky-700 text-white gap-1"
+                                                    >
+                                                        {isAccepting ? <RefreshCw size={12} className="animate-spin" /> : <Check size={12} />}
+                                                        <span>{t('common.confirm', 'Bestätigen')}</span>
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -914,7 +953,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                         />
                     </div>
                 )}
-
 
                 {activeTab === 'providers' && providers.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -975,7 +1013,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                             )}
                                         </div>
 
-                                        {/* Trust level selector (0, 1, 2, 3) */}
+                                        {/* Trust level selector */}
                                         <div className="space-y-1.5 pt-3 border-t border-theme-subtle/40 mt-auto">
                                             <label className="block text-[10px] font-black uppercase tracking-widest text-theme-light">
                                                 {t('contacts.trustSectionLabel')}
@@ -1066,20 +1104,47 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                         {/* Contact List */}
                         {isLoading ? (
                             <PageLoadingState message={t('contacts.loading')} />
-                        ) : filteredContacts.length === 0 ? (
+                        ) : contacts.length === 0 ? (
+                            /* Empty State 1: No contacts at all */
                             <PageEmptyState
                                 icon={<Users size={32} />}
-                                title={contacts.length === 0 ? t('contacts.emptyTitle') : t('contacts.noContactsFound')}
-                                description={t('contacts.emptyDescription')}
+                                title={t('contacts.emptyNoContactsTitle', 'Noch keine Kontakte')}
+                                description={t('contacts.emptyNoContactsDesc', 'Noch keine Kontakte. Füge die erste Person hinzu, der du vertraust.')}
+                                action={
+                                    <Button
+                                        onClick={() => {
+                                            setInitialAddDid(undefined);
+                                            setInitialAddProfile(undefined);
+                                            setIsAddContactModalOpen(true);
+                                        }}
+                                        className="gap-2"
+                                    >
+                                        <UserPlus size={18} />
+                                        <span>{t('contacts.addContact', 'Kontakt hinzufügen')}</span>
+                                    </Button>
+                                }
+                            />
+                        ) : filteredContacts.length === 0 ? (
+                            /* Empty State 2: Filter/search without match */
+                            <PageEmptyState
+                                icon={<Search size={32} />}
+                                title={t('contacts.emptyNoMatchesTitle', 'Keine Treffer')}
+                                description={
+                                    searchQuery
+                                        ? t('contacts.emptyNoMatchesDesc', { query: searchQuery, defaultValue: `Keine Treffer für „${searchQuery}“.` })
+                                        : t('contacts.emptyNoMatchesFilterDesc', 'Keine Kontakte für diesen Filter gefunden.')
+                                }
                                 action={
                                     <Button
                                         variant="secondary"
                                         onClick={() => {
-                                            setEditingContact(null);
-                                            setIsDialogOpen(true);
+                                            setSearchQuery('');
+                                            setSelectedTag(null);
                                         }}
+                                        className="gap-2"
                                     >
-                                        {t('contacts.addFirstContact')}
+                                        <X size={18} />
+                                        <span>{t('contacts.resetFilterBtn', 'Filter zurücksetzen')}</span>
                                     </Button>
                                 }
                             />
@@ -1112,7 +1177,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                                             setSendHandshakeLevel(lvl >= 1 ? Math.min(lvl, 1) : 1);
                                                         }}
                                                         className="p-2 hover:bg-theme-subtle/20 rounded-xl text-theme-light hover:text-sky-600 transition-all cursor-pointer"
-                                                        title={t('contacts.sendWotHandshakeButton', 'F2F-Bestätigung über Sync-Dienst senden')}
+                                                        title={t('contacts.sendWotHandshakeButton', 'Vertrauensbestätigung über Sync-Dienst senden')}
                                                         data-testid="send-wot-handshake-button"
                                                     >
                                                         <Handshake size={18} />
@@ -1139,7 +1204,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                                                         className="p-2 hover:bg-rose-50 rounded-xl text-theme-light hover:text-rose-500 transition-all cursor-pointer"
                                                         title={t('contacts.removeContact')}
                                                     >
-                                                        <Trash2 size={18} />
+                                                         <Trash2 size={18} />
                                                     </button>
                                                 </div>
                                             </div>
@@ -1287,13 +1352,121 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
 
             </div>
 
-            <ContactDialog
-                isOpen={isDialogOpen}
-                onClose={() => setIsDialogOpen(false)}
-                onSave={handleSaveContact}
-                existingContact={editingContact}
+            {/* Add Contact Modal with 4 tiles */}
+            <AddContactModal
+                isOpen={isAddContactModalOpen}
+                onClose={() => setIsAddContactModalOpen(false)}
+                onOpenManualAdd={(initialDid, initialProfile) => {
+                    setEditingContact(null);
+                    setInitialAddDid(initialDid);
+                    setInitialAddProfile(initialProfile);
+                    setIsDialogOpen(true);
+                }}
+                onContactAdded={loadContacts}
+                onSuccess={(msg) => setFeedbackMsg({ type: 'success', message: msg })}
+                onError={(msg) => setFeedbackMsg({ type: 'error', message: msg })}
             />
 
+            {/* Share Own Business Card Modal */}
+            {ownProfileForShare && (
+                <ShareCardModal
+                    isOpen={isShareCardModalOpen}
+                    onClose={() => setIsShareCardModalOpen(false)}
+                    title={t('contacts.shareMyBusinessCard', 'Meine Visitenkarte teilen')}
+                    subtitle={t('marketplace.shareOwnCardSubtitle', 'Sichere Datei oder QR-Code zum Austausch')}
+                    fileWire={ownProfileForShare.fileWire}
+                    shareUri={ownProfileForShare.shareUri}
+                    qrSvg={ownProfileForShare.qrSvg}
+                    did={ownProfileForShare.profile.id}
+                    qrIsPartial={ownProfileForShare.qrIsPartial}
+                />
+            )}
+
+            {/* Prompt to publish card before sharing */}
+            <ConfirmationModal
+                isOpen={isPublishPromptOpen}
+                onCancel={() => setIsPublishPromptOpen(false)}
+                onConfirm={handleConfirmPublishAndShare}
+                title={t('contacts.publishCardBeforeShareTitle', 'Visitenkarte veröffentlichen?')}
+                description={t('contacts.publishCardBeforeShareDesc', 'Deine Visitenkarte ist aktuell nicht veröffentlicht. Möchtest du sie jetzt veröffentlichen, um sie als Datei oder QR-Code zu teilen?')}
+                confirmText={t('contacts.publishAndShareBtn', 'Veröffentlichen & Teilen')}
+                cancelText={t('common.cancel', 'Abbrechen')}
+            />
+
+            {/* Trust List Menu Modal ("⋯") */}
+            <ModalShell
+                isOpen={isTrustListModalOpen}
+                onClose={() => setIsTrustListModalOpen(false)}
+                maxWidth="md"
+                title={t('contacts.trustListMenuBtn', 'Vertrauensliste')}
+                description={t('contacts.trustListMenuDesc', 'Vertrauenslisten offline teilen oder einlesen')}
+            >
+                <div className="space-y-4 py-2">
+                    <InfoHint topic="wotSharing" variant="banner" />
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setIsTrustListModalOpen(false);
+                                handleImportWot();
+                            }}
+                            className="p-4 rounded-2xl border border-theme-subtle bg-white hover:border-theme-primary/40 hover:bg-theme-primary/5 text-left transition-all flex flex-col gap-2 shadow-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-theme-primary/20"
+                        >
+                            <div className="w-10 h-10 rounded-xl bg-theme-primary/5 text-theme-primary flex items-center justify-center shrink-0">
+                                <Upload size={20} />
+                            </div>
+                            <div>
+                                <h4 className="font-extrabold text-sm text-theme-primary">
+                                    {t('contacts.importWotButton', 'Vertrauensliste einlesen')}
+                                </h4>
+                                <p className="text-xs text-theme-light mt-0.5 leading-relaxed">
+                                    {t('contacts.trustListImportDesc', 'Eine empfangene Vertrauensliste importieren')}
+                                </p>
+                            </div>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setIsTrustListModalOpen(false);
+                                setExportMode((wotSummary?.ratedContactsCount ?? 0) > 0 ? 'contacts' : 'password');
+                                setExportPassword('');
+                                setIsExportModalOpen(true);
+                            }}
+                            className="p-4 rounded-2xl border border-theme-subtle bg-white hover:border-theme-primary/40 hover:bg-theme-primary/5 text-left transition-all flex flex-col gap-2 shadow-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-theme-primary/20"
+                        >
+                            <div className="w-10 h-10 rounded-xl bg-theme-primary/5 text-theme-primary flex items-center justify-center shrink-0">
+                                <Share2 size={20} />
+                            </div>
+                            <div>
+                                <h4 className="font-extrabold text-sm text-theme-primary">
+                                    {t('contacts.exportWotButton', 'Vertrauensliste teilen')}
+                                </h4>
+                                <p className="text-xs text-theme-light mt-0.5 leading-relaxed">
+                                    {t('contacts.trustListExportDesc', 'Deine Vertrauenseinstufungen als Datei exportieren')}
+                                </p>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </ModalShell>
+
+            {/* Manual Add / Edit Contact Dialog */}
+            <ContactDialog
+                isOpen={isDialogOpen}
+                onClose={() => {
+                    setIsDialogOpen(false);
+                    setInitialAddDid(undefined);
+                    setInitialAddProfile(undefined);
+                }}
+                onSave={handleSaveContact}
+                existingContact={editingContact}
+                initialDid={initialAddDid}
+                initialProfile={initialAddProfile}
+            />
+
+            {/* Confirmation: Delete Contact */}
             <ConfirmationModal
                 isOpen={!!deleteRequest}
                 title={t('contacts.deleteTitle')}
@@ -1304,6 +1477,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                 onCancel={() => setDeleteRequest(null)}
             />
 
+            {/* Confirmation: Delete Provider */}
             <ConfirmationModal
                 isOpen={!!deleteProviderRequest}
                 title={t('contacts.deleteProviderTitle')}
@@ -1314,6 +1488,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                 onCancel={() => setDeleteProviderRequest(null)}
             />
 
+            {/* Export Trust List Package Modal */}
             <ModalShell
                 isOpen={isExportModalOpen}
                 onClose={() => {
@@ -1405,7 +1580,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                 </div>
             </ModalShell>
 
-
+            {/* Password Modal for Encrypted Trust Package */}
             <ModalShell
                 isOpen={isWotPasswordModalOpen}
                 onClose={() => {
@@ -1457,33 +1632,32 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery })
                 </div>
             </ModalShell>
 
-            {/* Send WoT Handshake Confirmation Modal */}
+            {/* Send Trust Confirmation Modal */}
             <ConfirmationModal
                 isOpen={!!sendHandshakeContact}
-                title={t('contacts.sendHandshakeModalTitle', 'Vertrauensbestätigung (F2F) über Sync-Dienst')}
+                title={t('contacts.sendHandshakeModalTitle', 'Vertrauensbestätigung senden')}
                 description={
                     <div className="space-y-4 pt-2">
                         <p className="text-xs text-theme-secondary leading-relaxed">
-                            {t('contacts.sendHandshakeModalDesc', 'Sende eine asynchrone Vertrauensbestätigung an {{name}}, wenn dein oder sein Gerät beim persönlichen Treffen offline war.', {
+                            {t('contacts.sendHandshakeModalDesc', 'Bestätige die Vertrauensstufe mit {{name}} direkt über den Sync-Dienst.', {
                                 name: sendHandshakeContact ? ([sendHandshakeContact.profile.firstName, sendHandshakeContact.profile.lastName].filter(Boolean).join(' ') || sendHandshakeContact.profile.organization || truncateUserId(sendHandshakeContact.did)) : ''
                             })}
                         </p>
-                        <div className="space-y-1.5">
+                        <div className="space-y-2">
                             <label className="text-xs font-bold text-theme-secondary">
-                                {t('contacts.chooseProposedLevel', 'Vorgeschlagene Vertrauensstufe:')}
+                                {t('contacts.chooseProposedLevel', 'Zu bestätigende Vertrauensstufe:')}
                             </label>
-                            <select
+                            <TrustLevelRadioCards
                                 value={sendHandshakeLevel}
-                                onChange={(e) => setSendHandshakeLevel(Number(e.target.value))}
-                                className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-theme-subtle bg-bg-app text-theme-primary"
-                            >
-                                <option value={0}>0 - {t('contacts.trustLevel0', 'F2F Existenz')}</option>
-                                <option value={1}>1 - {t('contacts.trustLevel1', 'Bekannt')}</option>
-                            </select>
+                                onChange={(lvl) => setSendHandshakeLevel(lvl ?? 1)}
+                                allowUnrated={false}
+                                allowedLevels={[0, 1]}
+                                idPrefix="send-handshake"
+                            />
                         </div>
                     </div>
                 }
-                confirmText={t('contacts.sendHandshakeConfirm', 'Über Sync-Dienst senden')}
+                confirmText={t('contacts.sendHandshakeConfirm', 'Bestätigung senden')}
                 onConfirm={handleExecuteSendHandshake}
                 onCancel={() => setSendHandshakeContact(null)}
                 isProcessing={isSendingHandshake}

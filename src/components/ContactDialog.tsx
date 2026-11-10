@@ -6,6 +6,7 @@ import { marketService } from '../services/marketService';
 import Avatar from 'boring-avatars';
 import { translateError } from '../utils/errorHelper';
 import { HelpIcon } from './ui/HelpIcon';
+import { TrustLevelRadioCards } from './TrustLevelRadioCards';
 import { readFromClipboard } from '../utils/clipboard';
 import { parseContactCard } from '../utils/humocoUri';
 import { Clipboard, CheckCircle2, AlertCircle, Server, Trash2 } from 'lucide-react';
@@ -308,6 +309,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                 setDid(val);
                             }}
                             disabled={!!existingContact}
+                            data-testid="contact-did-input"
                             placeholder={t('contacts.didPlaceholder')}
                             className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 disabled:opacity-50 font-mono text-sm shadow-sm"
                         />
@@ -320,6 +322,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                 type="text"
                                 value={firstName}
                                 onChange={(e) => setFirstName(e.target.value)}
+                                data-testid="contact-firstname-input"
                                 placeholder={t('contacts.firstNamePlaceholder')}
                                 className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm"
                             />
@@ -492,64 +495,12 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                         <p className="text-[11px] text-theme-light leading-tight">
                             {t('contacts.trustNetworkHint')}
                         </p>
-                        <div className="space-y-1.5 pt-1">
-                            {[
-                                {
-                                    level: null,
-                                    labelKey: 'contacts.trustLevelUnrated',
-                                    descKey: 'contacts.trustLevelUnratedDesc',
-                                    colorClass: 'border-slate-200 hover:border-slate-300',
-                                    activeClass: 'border-slate-400 bg-slate-50 text-slate-800 ring-2 ring-slate-400/20 shadow-sm'
-                                },
-                                {
-                                    level: 0,
-                                    labelKey: 'contacts.trustLevel0',
-                                    descKey: 'contacts.trustLevel0Desc',
-                                    colorClass: 'border-sky-200 hover:border-sky-300',
-                                    activeClass: 'border-sky-500 bg-sky-50/70 text-sky-900 ring-2 ring-sky-400/20 shadow-sm'
-                                },
-                                {
-                                    level: 1,
-                                    labelKey: 'contacts.trustLevel1',
-                                    descKey: 'contacts.trustLevel1Desc',
-                                    colorClass: 'border-amber-200 hover:border-amber-300',
-                                    activeClass: 'border-amber-500 bg-amber-50/70 text-amber-900 ring-2 ring-amber-400/20 shadow-sm'
-                                },
-                                {
-                                    level: 2,
-                                    labelKey: 'contacts.trustLevel2',
-                                    descKey: 'contacts.trustLevel2Desc',
-                                    colorClass: 'border-teal-200 hover:border-teal-300',
-                                    activeClass: 'border-teal-500 bg-teal-50/70 text-teal-900 ring-2 ring-teal-400/20 shadow-sm'
-                                },
-                                {
-                                    level: 3,
-                                    labelKey: 'contacts.trustLevel3',
-                                    descKey: 'contacts.trustLevel3Desc',
-                                    colorClass: 'border-emerald-300 hover:border-emerald-400',
-                                    activeClass: 'border-emerald-600 bg-emerald-50 text-emerald-950 ring-2 ring-emerald-500/20 shadow-sm'
-                                }
-                            ].map((opt) => {
-                                const isSelected = trustLevel === opt.level;
-                                return (
-                                    <button
-                                        key={opt.level ?? 'unrated'}
-                                        type="button"
-                                        onClick={() => setTrustLevel(opt.level)}
-                                        className={`w-full text-left p-2.5 rounded-xl border transition-all text-xs flex flex-col gap-0.5 ${
-                                            isSelected ? opt.activeClass : `bg-white ${opt.colorClass} text-theme-secondary`
-                                        }`}
-                                    >
-                                        <span className="font-bold flex items-center justify-between">
-                                            <span>{t(opt.labelKey)}</span>
-                                            {isSelected && <span className="text-[10px] font-black uppercase tracking-wider opacity-75">✓</span>}
-                                        </span>
-                                        <span className="text-[11px] opacity-80 font-normal">
-                                            {t(opt.descKey)}
-                                        </span>
-                                    </button>
-                                );
-                            })}
+                        <div className="pt-1">
+                            <TrustLevelRadioCards
+                                value={trustLevel}
+                                onChange={(lvl) => setTrustLevel(lvl)}
+                                allowUnrated={true}
+                            />
                         </div>
 
                         {/* Permission Change Preview */}

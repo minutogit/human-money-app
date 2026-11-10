@@ -1,32 +1,15 @@
+// src/components/ui/HelpIcon.tsx
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { HelpCircle } from 'lucide-react';
 import { HelpModal } from './HelpModal';
+import { HELP_TOPICS, HelpTopicId } from '../../help/helpTopics';
 
-export type HelpTopic =
-    | 'mnemonic'
-    | 'passphrase'
-    | 'subaccount'
-    | 'profile'
-    | 'handover'
-    | 'senderName'
-    | 'privacy'
-    | 'voucherMode'
-    | 'voucherCreator'
-    | 'voucherSignatures'
-    | 'signatureRequest'
-    | 'wotNetwork'
-    | 'voucherTrust'
-    | 'wotReach'
-    | 'settingsPrivacy'
-    | 'posMode'
-    | 'exclusiveGateways'
-    | 'gatewayTokens'
-    | 'deviceBinding';
+export type HelpTopic = HelpTopicId;
 
 interface HelpIconProps {
-    topic: HelpTopic;
+    topic: HelpTopicId;
     className?: string;
     size?: number;
 }
@@ -43,127 +26,9 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
     } | null>(null);
     const buttonRef = useRef<HTMLButtonElement>(null);
 
-    // Map topics to their respective i18n keys based on the domains
-    const getKeys = () => {
-        switch (topic) {
-            case 'mnemonic':
-                return {
-                    title: t('profile.helpMnemonicTitle'),
-                    short: t('profile.helpMnemonicShort'),
-                    long: t('profile.helpMnemonicLong')
-                };
-            case 'passphrase':
-                return {
-                    title: t('profile.helpPassphraseTitle'),
-                    short: t('profile.helpPassphraseShort'),
-                    long: t('profile.helpPassphraseLong')
-                };
-            case 'subaccount':
-                return {
-                    title: t('profile.helpSubaccountTitle'),
-                    short: t('profile.helpSubaccountShort'),
-                    long: t('profile.helpSubaccountLong')
-                };
-            case 'profile':
-                return {
-                    title: t('auth.helpProfileTitle'),
-                    short: t('auth.helpProfileShort'),
-                    long: t('auth.helpProfileLong')
-                };
-            case 'handover':
-                return {
-                    title: t('auth.helpHandoverTitle'),
-                    short: t('auth.helpHandoverShort'),
-                    long: t('auth.helpHandoverLong')
-                };
-            case 'senderName':
-                return {
-                    title: t('transfer.helpSenderNameTitle'),
-                    short: t('transfer.helpSenderNameShort'),
-                    long: t('transfer.helpSenderNameLong')
-                };
-            case 'privacy':
-                return {
-                    title: t('transfer.helpPrivacyTitle'),
-                    short: t('transfer.helpPrivacyShort'),
-                    long: t('transfer.helpPrivacyLong')
-                };
-            case 'voucherMode':
-                return {
-                    title: t('voucher.helpModeTitle'),
-                    short: t('voucher.helpModeShort'),
-                    long: t('voucher.helpModeLong')
-                };
-            case 'voucherCreator':
-                return {
-                    title: t('voucher.helpCreatorTitle'),
-                    short: t('voucher.helpCreatorShort'),
-                    long: t('voucher.helpCreatorLong')
-                };
-            case 'voucherSignatures':
-                return {
-                    title: t('voucher.helpSignaturesTitle'),
-                    short: t('voucher.helpSignaturesShort'),
-                    long: t('voucher.helpSignaturesLong')
-                };
-            case 'signatureRequest':
-                return {
-                    title: t('voucher.helpSignRequestTitle'),
-                    short: t('voucher.helpSignRequestShort'),
-                    long: t('voucher.helpSignRequestLong')
-                };
-            case 'wotNetwork':
-                return {
-                    title: t('contacts.helpWotTitle'),
-                    short: t('contacts.helpWotShort'),
-                    long: t('contacts.helpWotLong')
-                };
-            case 'voucherTrust':
-                return {
-                    title: t('voucher.helpTrustTitle'),
-                    short: t('voucher.helpTrustShort'),
-                    long: t('voucher.helpTrustLong')
-                };
-            case 'wotReach':
-                return {
-                    title: t('contacts.helpWotReachTitle'),
-                    short: t('contacts.helpWotReachShort'),
-                    long: t('contacts.helpWotReachLong')
-                };
-            case 'settingsPrivacy':
-                return {
-                    title: t('settings.helpPrivacyTitle'),
-                    short: t('settings.helpPrivacyShort'),
-                    long: t('settings.helpPrivacyLong')
-                };
-            case 'posMode':
-                return {
-                    title: t('settings.helpPosModeTitle'),
-                    short: t('settings.helpPosModeShort'),
-                    long: t('settings.helpPosModeLong')
-                };
-            case 'exclusiveGateways':
-                return {
-                    title: t('settings.helpExclusiveGatewaysTitle'),
-                    short: t('settings.helpExclusiveGatewaysShort'),
-                    long: t('settings.helpExclusiveGatewaysLong')
-                };
-            case 'gatewayTokens':
-                return {
-                    title: t('settings.helpGatewayTokensTitle'),
-                    short: t('settings.helpGatewayTokensShort'),
-                    long: t('settings.helpGatewayTokensLong')
-                };
-            case 'deviceBinding':
-                return {
-                    title: t('settings.helpDeviceBindingTitle'),
-                    short: t('settings.helpDeviceBindingShort'),
-                    long: t('settings.helpDeviceBindingLong')
-                };
-        }
-    };
-
-    const keys = getKeys();
+    const topicDef = HELP_TOPICS[topic];
+    const title = topicDef ? t(topicDef.titleKey) : topic;
+    const short = topicDef ? t(topicDef.shortKey) : '';
 
     const updateCoords = () => {
         if (buttonRef.current) {
@@ -214,14 +79,14 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
                     onMouseLeave={() => setIsHovered(false)}
                     onFocus={() => setIsHovered(true)}
                     onBlur={() => setIsHovered(false)}
-                    aria-label={keys.title}
+                    aria-label={title}
                 >
                     <HelpCircle size={size} />
                 </button>
             </div>
 
             {isHovered && coords && typeof document !== 'undefined' && document.body && createPortal(
-                <div 
+                <div
                     style={{
                         position: 'fixed',
                         top: `${coords.top}px`,
@@ -230,8 +95,8 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
                     }}
                     className="w-72 max-w-[calc(100vw-24px)] bg-slate-900 text-white text-xs rounded-xl p-3 shadow-lg z-[9999] pointer-events-none animate-in fade-in zoom-in-95 duration-200 text-left leading-relaxed"
                 >
-                    <p className="font-semibold mb-1 text-slate-100">{keys.title}</p>
-                    <p className="opacity-90">{keys.short}</p>
+                    <p className="font-semibold mb-1 text-slate-100">{title}</p>
+                    <p className="opacity-90">{short}</p>
                     {coords.placement === 'bottom' ? (
                         <div
                             style={{ left: `calc(50% + ${coords.arrowOffset}px)` }}
@@ -250,9 +115,7 @@ export function HelpIcon({ topic, className = '', size = 16 }: HelpIconProps) {
             <HelpModal
                 isOpen={isModalOpen}
                 onClose={() => setIsModalOpen(false)}
-                title={keys.title}
-                short={keys.short}
-                long={keys.long}
+                topic={topic}
             />
         </>
     );

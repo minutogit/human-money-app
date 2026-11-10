@@ -34,6 +34,7 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { SegmentedTabs } from '../ui/SegmentedTabs';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
+import { InfoHint } from '../ui/InfoHint';
 import { copyToClipboard } from '../../utils/clipboard';
 import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { translateError } from '../../utils/errorHelper';
@@ -83,7 +84,7 @@ const PolicyEditor: React.FC<PolicyEditorProps> = ({ policy, onChange, idPrefix 
             {/* Direct Contacts Selection */}
             <div>
                 <label className="font-bold text-theme-secondary block mb-1.5">
-                    {t('settings.syncHostDirectMinLabel', 'Welche deiner Kontakte dürfen den Dienst nutzen?')}
+                    {t('settings.syncHostDirectMinLabel')}
                 </label>
                 <div className="space-y-1.5">
                     <label className="flex items-center gap-2 cursor-pointer">
@@ -96,7 +97,7 @@ const PolicyEditor: React.FC<PolicyEditorProps> = ({ policy, onChange, idPrefix 
                             className="text-theme-primary focus:ring-theme-primary"
                         />
                         <span className="text-theme-secondary font-medium">
-                            {t('settings.syncHostDirectMinLevel2', 'Ab Vertrauensstufe „Vertraut“ (Stufe 2 – empfohlen)')}
+                            {t('settings.syncHostDirectMinLevel2')}
                         </span>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer">
@@ -109,7 +110,7 @@ const PolicyEditor: React.FC<PolicyEditorProps> = ({ policy, onChange, idPrefix 
                             className="text-theme-primary focus:ring-theme-primary"
                         />
                         <span className="text-theme-secondary font-medium">
-                            {t('settings.syncHostDirectMinLevel1', 'Ab Vertrauensstufe „Bekannt“ (Stufe 1)')}
+                            {t('settings.syncHostDirectMinLevel1')}
                         </span>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer">
@@ -122,13 +123,13 @@ const PolicyEditor: React.FC<PolicyEditorProps> = ({ policy, onChange, idPrefix 
                             className="text-theme-primary focus:ring-theme-primary"
                         />
                         <span className="text-theme-secondary font-medium">
-                            {t('settings.syncHostDirectMinLevel3', 'Nur „Engster Kreis“ (Stufe 3)')}
+                            {t('settings.syncHostDirectMinLevel3')}
                         </span>
                     </label>
                 </div>
             </div>
 
-            {/* Hop-2 Friends of Friends */}
+            {/* Friends of Friends */}
             <div className="pt-2 border-t border-theme-subtle/50 space-y-3">
                 <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -138,7 +139,7 @@ const PolicyEditor: React.FC<PolicyEditorProps> = ({ policy, onChange, idPrefix 
                         className="rounded text-theme-primary focus:ring-theme-primary"
                     />
                     <span className="font-bold text-theme-secondary">
-                        {t('settings.syncHostHop2Label', 'Freunden erlauben, ihren eigenen vertrauten Kreis mitzubringen')}
+                        {t('settings.syncHostHop2Label')}
                     </span>
                 </label>
 
@@ -147,10 +148,10 @@ const PolicyEditor: React.FC<PolicyEditorProps> = ({ policy, onChange, idPrefix 
                         {/* bridgeMin selection */}
                         <div className="space-y-1">
                             <label className="font-medium text-theme-secondary flex items-center">
-                                <span>{t('settings.syncHostBridgeMinLabel', 'Welche deiner Freunde dürfen Personen mitbringen?')}</span>
+                                <span>{t('settings.syncHostBridgeMinLabel')}</span>
                                 <PolicyHelpPopover
-                                    title={t('settings.syncHostBridgeMinTitle', 'Eigene Freunde (Hop 1)')}
-                                    content={t('settings.syncHostBridgeMinDesc', 'Nur Freunde, denen du mindestens mit dieser Stufe vertraust (z. B. Alice), dürfen den Dienst für ihren Kreis freigeben.')}
+                                    title={t('settings.syncHostBridgeMinTitle')}
+                                    content={t('settings.syncHostBridgeMinDesc')}
                                 />
                             </label>
                             <select
@@ -161,19 +162,19 @@ const PolicyEditor: React.FC<PolicyEditorProps> = ({ policy, onChange, idPrefix 
                                 }}
                                 className="w-full sm:w-64 rounded-xl border border-theme-subtle bg-bg-app px-2.5 py-1.5 text-xs text-theme-secondary focus:outline-none focus:ring-1 focus:ring-theme-primary"
                             >
-                                <option value={1}>{t('settings.trustLevel1Short', 'Stufe 1 (Bekannt)')}</option>
-                                <option value={2}>{t('settings.trustLevel2Short', 'Stufe 2 (Vertraut)')}</option>
-                                <option value={3}>{t('settings.trustLevel3Short', 'Stufe 3 (Engster Kreis)')}</option>
+                                <option value={1}>{t('settings.trustLevel1Short')}</option>
+                                <option value={2}>{t('settings.trustLevel2Short')}</option>
+                                <option value={3}>{t('settings.trustLevel3Short')}</option>
                             </select>
                         </div>
 
                         {/* hop2Min selection */}
                         <div className="space-y-1">
                             <label className="font-medium text-theme-secondary flex items-center">
-                                <span>{t('settings.syncHostHop2MinLabel', 'Wie gut muss dein Freund die Person kennen?')}</span>
+                                <span>{t('settings.syncHostHop2MinLabel')}</span>
                                 <PolicyHelpPopover
-                                    title={t('settings.syncHostHop2MinTitle', 'Freunde von Freunden (Hop 2)')}
-                                    content={t('settings.syncHostHop2MinDesc', 'Alice muss Bob mindestens mit dieser Stufe vertrauen, damit Bob deinen Dienst nutzen darf.')}
+                                    title={t('settings.syncHostHop2MinTitle')}
+                                    content={t('settings.syncHostHop2MinDesc')}
                                 />
                             </label>
                             <select
@@ -184,9 +185,9 @@ const PolicyEditor: React.FC<PolicyEditorProps> = ({ policy, onChange, idPrefix 
                                 }}
                                 className="w-full sm:w-64 rounded-xl border border-theme-subtle bg-bg-app px-2.5 py-1.5 text-xs text-theme-secondary focus:outline-none focus:ring-1 focus:ring-theme-primary"
                             >
-                                <option value={1}>{t('settings.trustLevel1Short', 'Stufe 1 (Bekannt)')}</option>
-                                <option value={2}>{t('settings.trustLevel2Short', 'Stufe 2 (Vertraut)')}</option>
-                                <option value={3}>{t('settings.trustLevel3Short', 'Stufe 3 (Engster Kreis)')}</option>
+                                <option value={1}>{t('settings.trustLevel1Short')}</option>
+                                <option value={2}>{t('settings.trustLevel2Short')}</option>
+                                <option value={3}>{t('settings.trustLevel3Short')}</option>
                             </select>
                         </div>
                     </div>
@@ -196,19 +197,23 @@ const PolicyEditor: React.FC<PolicyEditorProps> = ({ policy, onChange, idPrefix 
     );
 };
 
-interface SyncServiceSettingsCardProps {
+export interface SyncServiceSettingsCardProps {
     settings: AppSettings | null;
     onSettingsUpdated?: (newSettings: AppSettings) => void;
+    mode?: 'consumer' | 'host';
 }
 
 export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = ({
     settings,
     onSettingsUpdated,
+    mode,
 }) => {
     const { t } = useTranslation();
     const { protectAction } = useSession();
 
-    const [activeTab, setActiveTab] = useState<'connected' | 'host'>('connected');
+    const [tabState, setTabState] = useState<'connected' | 'host'>('connected');
+    const activeTab = mode === 'consumer' ? 'connected' : mode === 'host' ? 'host' : tabState;
+
     const [isLoading, setIsLoading] = useState(false);
     const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -336,12 +341,12 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 if (hasAuth) {
                     setProbeResult({
                         status: 'success',
-                        message: t('settings.syncProbeSuccess', 'Verbunden & freigeschaltet!'),
+                        message: t('settings.syncProbeSuccess'),
                     });
                 } else {
                     setProbeResult({
                         status: 'unauthorized',
-                        message: t('settings.syncProbeUnauthorized', 'Server erreichbar, aber dein Schlüssel ist noch nicht freigeschaltet. Bitte den Betreiber, dich in seinem Adressbuch als vertrauten Kontakt einzustufen.'),
+                        message: t('settings.syncProbeUnauthorized'),
                     });
                 }
             }
@@ -349,7 +354,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             checkAndTriggerCooldown(err);
             setProbeResult({
                 status: 'error',
-                message: `${t('settings.syncProbeError', 'Verbindung fehlgeschlagen')}: ${translateError(err, t)}`,
+                message: `${t('settings.syncProbeError')}: ${translateError(err, t)}`,
             });
         } finally {
             setIsProbing(false);
@@ -434,7 +439,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 });
                 setFeedback({
                     type: 'success',
-                    message: t('settings.syncZipSaved', 'Installationsarchiv erfolgreich gespeichert! Entpacke die Datei auf deinem Webspace.'),
+                    message: t('settings.syncZipSaved'),
                 });
             }
         } catch (err) {
@@ -460,7 +465,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 notifySyncStatusUpdated();
                 setFeedback({
                     type: 'success',
-                    message: t('settings.syncHostActivatedSuccess', 'Dein Sync-Dienst wurde erfolgreich aktiviert und verifiziert!'),
+                    message: t('settings.syncHostActivatedSuccess'),
                 });
             });
         } catch (err) {
@@ -483,7 +488,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 setAdminStatus(updated);
                 setFeedback({
                     type: 'success',
-                    message: t('settings.syncHostPolicyUpdated', 'Zugriffsregeln wurden erfolgreich auf deinem Server aktualisiert!'),
+                    message: t('settings.syncHostPolicyUpdated'),
                 });
             });
         } catch (err) {
@@ -502,7 +507,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 setAdminStatus(updated);
                 setFeedback({
                     type: 'success',
-                    message: t('settings.syncHostKeyRotated', 'Server-Schlüssel wurde erfolgreich rotiert.'),
+                    message: t('settings.syncHostKeyRotated'),
                 });
             });
         } catch (err) {
@@ -522,7 +527,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 notifySyncStatusUpdated();
                 setFeedback({
                     type: 'success',
-                    message: t('settings.syncHostDeletedSuccess', 'Dein Sync-Dienst wurde getrennt.'),
+                    message: t('settings.syncHostDeletedSuccess'),
                 });
             });
         } catch (err) {
@@ -540,14 +545,17 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         }
     };
 
+    const isConsumerOnly = mode === 'consumer';
+    const isHostOnly = mode === 'host';
+
     return (
         <Card
             header={
                 <div className="flex items-center justify-between gap-3 w-full">
                     <div className="flex items-center gap-2">
-                        <Cloud size={18} className="text-theme-primary" />
+                        {isHostOnly ? <Server size={18} className="text-theme-primary" /> : <Cloud size={18} className="text-theme-primary" />}
                         <span className="font-black text-xs uppercase tracking-widest">
-                            {t('settings.syncServiceCardTitle', 'HuMoCo Sync-Dienst')}
+                            {isHostOnly ? t('settings.ownSyncServiceTitle') : t('settings.syncServiceCardTitle')}
                         </span>
                     </div>
                     {isLoading && <RefreshCw size={14} className="animate-spin text-theme-light" />}
@@ -556,8 +564,12 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         >
             <div className="space-y-6">
                 <p className="text-xs text-theme-light font-medium">
-                    {t('settings.syncServiceCardSubtitle', 'Automatischer Hintergrund-Austausch für Zahlungen, Angebote und Sicherungen.')}
+                    {isHostOnly ? t('settings.ownSyncServiceDesc') : t('settings.syncServiceCardSubtitle')}
                 </p>
+
+                {isConsumerOnly && (
+                    <InfoHint topic="connection" />
+                )}
 
                 {feedback && (
                     <div className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
@@ -570,23 +582,25 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                     </div>
                 )}
 
-                {/* Sub-Tabs: Connected vs Host */}
-                <SegmentedTabs
-                    activeTab={activeTab}
-                    onChange={(id) => setActiveTab(id as 'connected' | 'host')}
-                    tabs={[
-                        {
-                            id: 'connected',
-                            label: t('settings.syncTabConnected', 'Verbundene Dienste & Funktionen'),
-                            icon: <Users size={16} />,
-                        },
-                        {
-                            id: 'host',
-                            label: t('settings.syncTabHost', 'Eigenen Dienst bereitstellen / Admin'),
-                            icon: <Server size={16} />,
-                        },
-                    ]}
-                />
+                {/* Sub-Tabs: only rendered if mode is not fixed to consumer or host */}
+                {!isConsumerOnly && !isHostOnly && (
+                    <SegmentedTabs
+                        activeTab={activeTab}
+                        onChange={(id) => setTabState(id as 'connected' | 'host')}
+                        tabs={[
+                            {
+                                id: 'connected',
+                                label: t('settings.syncTabConnected'),
+                                icon: <Users size={16} />,
+                            },
+                            {
+                                id: 'host',
+                                label: t('settings.syncTabHost'),
+                                icon: <Server size={16} />,
+                            },
+                        ]}
+                    />
+                )}
 
                 {/* TAB 1: Connected Services & Features */}
                 {activeTab === 'connected' && (
@@ -594,7 +608,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                         {/* 1. Feature Comfort Toggles (Channels) */}
                         <div className="p-4 bg-bg-app rounded-2xl border border-theme-subtle space-y-3">
                             <h4 className="text-xs font-bold text-theme-secondary uppercase tracking-wider">
-                                {t('settings.syncChannelsTitle', 'Hintergrund-Funktionen (Kanäle)')}
+                                {t('settings.syncChannelsTitle')}
                             </h4>
 
                             <div className="space-y-2.5 pt-1">
@@ -610,10 +624,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     />
                                     <div>
                                         <span className="text-xs font-bold text-theme-primary group-hover:text-theme-accent">
-                                            {t('settings.syncChannelPostLabel', 'Digitales Postfach aktivieren')}
+                                            {t('settings.syncChannelPostLabel')}
                                         </span>
                                         <p className="text-[11px] text-theme-light mt-0.5">
-                                            {t('settings.syncChannelPostDesc', 'Zahlungen, Rechnungen und Bürgschaftsanfragen automatisch im Hintergrund empfangen.')}
+                                            {t('settings.syncChannelPostDesc')}
                                         </p>
                                     </div>
                                 </label>
@@ -630,10 +644,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     />
                                     <div>
                                         <span className="text-xs font-bold text-theme-primary group-hover:text-theme-accent">
-                                            {t('settings.syncChannelMarketLabel', 'Marktplatz & Angebote synchronisieren')}
+                                            {t('settings.syncChannelMarketLabel')}
                                         </span>
                                         <p className="text-[11px] text-theme-light mt-0.5">
-                                            {t('settings.syncChannelMarketDesc', 'Eigene Angebote und Suchanfragen verschlüsselt mit Kontakten abgleichen.')}
+                                            {t('settings.syncChannelMarketDesc')}
                                         </p>
                                     </div>
                                 </label>
@@ -650,10 +664,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     />
                                     <div>
                                         <span className="text-xs font-bold text-theme-primary group-hover:text-theme-accent">
-                                            {t('settings.syncChannelWotLabel', 'Vertrauenseinstufungen teilen')}
+                                            {t('settings.syncChannelWotLabel')}
                                         </span>
                                         <p className="text-[11px] text-theme-light mt-0.5">
-                                            {t('settings.syncChannelWotDesc', 'Erlaubt befreundeten Kontakten, deine selektiv offengelegten Einstufungen verschlüsselt abzurufen.')}
+                                            {t('settings.syncChannelWotDesc')}
                                         </p>
                                     </div>
                                 </label>
@@ -670,10 +684,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     />
                                     <div>
                                         <span className="text-xs font-bold text-theme-primary group-hover:text-theme-accent">
-                                            {t('settings.syncChannelBackupLabel', 'Backups erlauben')}
+                                            {t('settings.syncChannelBackupLabel')}
                                         </span>
                                         <p className="text-[11px] text-theme-light mt-0.5">
-                                            {t('settings.syncChannelBackupDesc', 'Erlaubt diesem Wallet, verschlüsselte Sicherungen bei freigegebenen Sync-Diensten abzulegen.')}
+                                            {t('settings.syncChannelBackupDesc')}
                                         </p>
                                     </div>
                                 </label>
@@ -684,10 +698,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                         <div className="p-4 bg-white rounded-2xl border border-theme-subtle shadow-xs space-y-3">
                             <div>
                                 <h4 className="text-xs font-bold text-theme-secondary uppercase tracking-wider">
-                                    {t('settings.syncAddTitle', 'Sync-Dienst hinzufügen')}
+                                    {t('settings.syncAddTitle')}
                                 </h4>
                                 <p className="text-[11px] text-theme-light mt-0.5">
-                                    {t('settings.syncAddDesc', 'Gib die Adresse eines Freundes-Webspace oder öffentlichen Sync-Dienstes ein:')}
+                                    {t('settings.syncAddDesc')}
                                 </p>
                             </div>
 
@@ -695,7 +709,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                 <Input
                                     value={inputUrl}
                                     onChange={(e) => setInputUrl(e.target.value)}
-                                    placeholder={t('settings.syncAddPlaceholder', 'https://beispiel.de/sync/sync.php')}
+                                    placeholder={t('settings.syncAddPlaceholder')}
                                     className="text-xs flex-1"
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter') {
@@ -715,10 +729,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     <RefreshCw size={13} className={isProbing ? 'animate-spin' : ''} />
                                     <span>
                                         {isCoolingDown
-                                            ? t('settings.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })
+                                            ? t('settings.syncRateLimitWait', { seconds: cooldownSeconds })
                                             : isProbing
-                                            ? t('common.testing', 'Prüfe...')
-                                            : t('settings.syncAddBtn', 'Verbinden & Prüfen')}
+                                            ? t('common.testing')
+                                            : t('settings.syncAddBtn')}
                                     </span>
                                 </Button>
                             </div>
@@ -745,12 +759,12 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                         <div className="space-y-3">
                             <h4 className="text-xs font-bold text-theme-secondary uppercase tracking-wider flex items-center gap-1.5">
                                 <Users size={14} className="text-theme-primary" />
-                                <span>{t('settings.syncDiscoveredTitle', 'Über Kontakte entdeckte Sync-Dienste')}</span>
+                                <span>{t('settings.syncDiscoveredTitle')}</span>
                             </h4>
 
                             {(discoveredDrops || []).length === 0 ? (
                                 <div className="p-4 bg-bg-app rounded-2xl border border-theme-subtle text-xs text-theme-light text-center leading-relaxed">
-                                    {t('settings.syncDiscoveredEmpty', 'Noch keine Sync-Dienste von Kontakten entdeckt. Tausche Visitenkarten mit Freunden, um deren bereitgestellte Dienste automatisch zu nutzen.')}
+                                    {t('settings.syncDiscoveredEmpty')}
                                 </div>
                             ) : (
                                 <div className="space-y-2">
@@ -771,7 +785,6 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                                     <span className="font-bold text-theme-primary truncate block">
                                                         {t('settings.syncConnectedVia', {
                                                             name: drop.sourceLabel || drop.descriptor.readUrl,
-                                                            defaultValue: `Verbunden über Sync-Dienst von ${drop.sourceLabel || drop.descriptor.readUrl}`,
                                                         })}
                                                     </span>
                                                     <span className="font-mono text-[10px] text-theme-light truncate block">
@@ -793,12 +806,12 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                         <div className="space-y-3 pt-2 border-t border-theme-subtle/50">
                             <h4 className="text-xs font-bold text-theme-secondary uppercase tracking-wider flex items-center gap-1.5">
                                 <Globe size={14} className="text-theme-primary" />
-                                <span>{t('settings.syncPublicTitle', 'Manuell konfigurierte Dienste')}</span>
+                                <span>{t('settings.syncPublicTitle')}</span>
                             </h4>
 
                             {(configuredPublicDrops || []).length === 0 ? (
                                 <p className="text-xs text-theme-light">
-                                    {t('settings.syncPublicEmpty', 'Keine manuellen Dienste eingerichtet.')}
+                                    {t('settings.syncPublicEmpty')}
                                 </p>
                             ) : (
                                 <div className="space-y-2">
@@ -833,7 +846,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                                     type="button"
                                                     onClick={() => handleDeletePublicDrop(drop.writeUrl)}
                                                     className="text-theme-placeholder hover:text-rose-600 p-1 rounded transition-colors"
-                                                    title={t('common.delete', 'Löschen')}
+                                                    title={t('common.delete')}
                                                 >
                                                     <Trash2 size={15} />
                                                 </button>
@@ -856,14 +869,14 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                 <div className="p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/20 space-y-2 text-xs text-theme-secondary">
                                     <h4 className="font-bold text-theme-primary text-sm flex items-center gap-1.5">
                                         <Server size={16} />
-                                        <span>{t('settings.syncHostIntroTitle', 'Eigenen Sync-Dienst für deinen Kreis bereitstellen')}</span>
+                                        <span>{t('settings.syncHostIntroTitle')}</span>
                                     </h4>
                                     <p className="leading-relaxed">
-                                        {t('settings.syncHostIntroDesc', 'Mit deinem eigenen Webspace ermöglichst du deinen Freunden sichere Postfächer, automatischen Marktplatz-Austausch und verschlüsselte Backups.')}
+                                        {t('settings.syncHostIntroDesc')}
                                     </p>
                                     <div className="flex items-center gap-1.5 pt-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
                                         <Shield size={13} />
-                                        <span>{t('settings.syncHostPrivacyNotice', '100 % Ende-zu-Ende-verschlüsselt: Weder du noch dein Webhosting-Anbieter können Zahlungen oder private Angebote einsehen.')}</span>
+                                        <span>{t('settings.syncHostPrivacyNotice')}</span>
                                     </div>
                                 </div>
 
@@ -872,7 +885,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     <div className="flex items-center gap-2">
                                         <span className="w-5 h-5 rounded-full bg-theme-primary text-white text-xs font-bold flex items-center justify-center shrink-0">1</span>
                                         <h4 className="text-xs font-bold text-theme-primary uppercase tracking-wider">
-                                            {t('settings.syncHostSetupStep1', 'Schritt 1: Zugriffsregeln wählen & Installationspaket herunterladen')}
+                                            {t('settings.syncHostSetupStep1')}
                                         </h4>
                                     </div>
 
@@ -892,7 +905,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                             className="gap-2"
                                         >
                                             <FileArchive size={14} className="text-theme-primary" />
-                                            <span>{isDownloadingZip ? t('common.saving', 'Erstelle...') : t('settings.syncHostDownloadZip', 'humoco-sync-setup.zip herunterladen')}</span>
+                                            <span>{isDownloadingZip ? t('common.saving') : t('settings.syncHostDownloadZip')}</span>
                                         </Button>
                                     </div>
                                 </div>
@@ -902,7 +915,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     <div className="flex items-center gap-2">
                                         <span className="w-5 h-5 rounded-full bg-theme-primary text-white text-xs font-bold flex items-center justify-center shrink-0">2</span>
                                         <h4 className="text-xs font-bold text-theme-primary uppercase tracking-wider">
-                                            {t('settings.syncHostSetupStep2', 'Schritt 2: Webspace-Adresse eingeben & aktivieren')}
+                                            {t('settings.syncHostSetupStep2')}
                                         </h4>
                                     </div>
 
@@ -910,7 +923,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         <Input
                                             value={hostWebspaceUrl}
                                             onChange={(e) => setHostWebspaceUrl(e.target.value)}
-                                            placeholder={t('settings.syncHostUrlPlaceholder', 'https://dein-webspace.de/sync/sync.php')}
+                                            placeholder={t('settings.syncHostUrlPlaceholder')}
                                             className="text-xs flex-1"
                                         />
                                         <Button
@@ -922,7 +935,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                             className="gap-1.5 shrink-0"
                                         >
                                             <RefreshCw size={13} className={isTestingHost ? 'animate-spin' : ''} />
-                                            <span>{isTestingHost ? t('common.testing', 'Prüfe...') : t('settings.syncHostTestActivate', 'Verbindung testen & aktivieren')}</span>
+                                            <span>{isTestingHost ? t('common.testing') : t('settings.syncHostTestActivate')}</span>
                                         </Button>
                                     </div>
                                 </div>
@@ -935,7 +948,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         <CheckCircle2 size={18} className="text-emerald-600 mt-0.5 shrink-0" />
                                         <div>
                                             <h4 className="font-bold text-emerald-950 text-sm">
-                                                {t('settings.syncHostActiveTitle', 'Dein eigener Sync-Dienst ist aktiv')}
+                                                {t('settings.syncHostActiveTitle')}
                                             </h4>
                                             <p className="font-mono text-[11px] text-emerald-800 break-all mt-0.5">
                                                 {adminStatus.descriptor.readUrl}
@@ -951,7 +964,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         className="gap-1 text-xs shrink-0 bg-white"
                                     >
                                         {copiedLink ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
-                                        <span>{copiedLink ? t('common.copied', 'Kopiert!') : t('settings.syncHostCopyLink', 'Link kopieren')}</span>
+                                        <span>{copiedLink ? t('common.copied') : t('settings.syncHostCopyLink')}</span>
                                     </Button>
                                 </div>
 
@@ -961,7 +974,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         <div className="flex justify-between items-center text-xs">
                                             <span className="font-bold text-theme-secondary flex items-center gap-1.5">
                                                 <HardDrive size={14} className="text-theme-primary" />
-                                                {t('settings.syncHostStorageUsage', 'Speicherplatzbelegung')}
+                                                {t('settings.syncHostStorageUsage')}
                                             </span>
                                             <span className="font-mono text-theme-light">
                                                 {Math.round((adminStatus.usedBytes || 0) / 1024 / 1024 * 10) / 10} / {adminStatus.maxTotalStorageMb} MB
@@ -985,7 +998,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         <div className="flex justify-between items-center text-xs">
                                             <span className="font-bold text-theme-secondary flex items-center gap-1.5">
                                                 <Users size={14} className="text-theme-primary" />
-                                                {t('settings.syncHostMembers', 'Aktive Mitglieder')}
+                                                {t('settings.syncHostMembers')}
                                             </span>
                                             <span className="font-mono text-theme-light">
                                                 {adminStatus.totalMemberCount || 0} / {adminStatus.maxMembers}
@@ -1006,7 +1019,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                 <div className="p-4 bg-white rounded-2xl border border-theme-subtle space-y-3">
                                     <h4 className="text-xs font-bold text-theme-secondary uppercase tracking-wider flex items-center gap-1.5">
                                         <Shield size={14} className="text-theme-primary" />
-                                        <span>{t('settings.syncHostAccessRulesTitle', 'Zugriffsregeln (Wer darf diesen Dienst nutzen?)')}</span>
+                                        <span>{t('settings.syncHostAccessRulesTitle')}</span>
                                     </h4>
 
                                     <PolicyEditor
@@ -1025,7 +1038,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                             className="gap-1.5 text-xs"
                                         >
                                             <RefreshCw size={13} className={isUpdatingPolicy ? 'animate-spin' : ''} />
-                                            <span>{isUpdatingPolicy ? t('common.updating', 'Aktualisiere...') : t('settings.syncHostUpdatePolicy', 'Zugriffsregeln auf Server aktualisieren')}</span>
+                                            <span>{isUpdatingPolicy ? t('common.updating') : t('settings.syncHostUpdatePolicy')}</span>
                                         </Button>
                                     </div>
                                 </div>
@@ -1041,7 +1054,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         className="gap-1.5 text-xs"
                                     >
                                         <KeyRound size={13} />
-                                        <span>{t('settings.syncHostRotateKey', 'Schlüssel rotieren')}</span>
+                                        <span>{t('settings.syncHostRotateKey')}</span>
                                     </Button>
 
                                     <Button
@@ -1052,7 +1065,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         className="gap-1.5 text-xs ml-auto"
                                     >
                                         <Trash2 size={13} />
-                                        <span>{t('settings.syncHostDelete', 'Dienst löschen')}</span>
+                                        <span>{t('settings.syncHostDelete')}</span>
                                     </Button>
                                 </div>
                             </div>
@@ -1064,10 +1077,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             {/* Confirmation dialog for deleting own drop */}
             <ConfirmationModal
                 isOpen={isDeleteConfirmOpen}
-                title={t('settings.syncHostDeleteConfirmTitle', 'Eigenen Sync-Dienst wirklich trennen?')}
-                description={t('settings.syncHostDeleteConfirmDesc', 'Die Zugangsdaten werden von diesem Gerät entfernt. Auf dem Server verbleibende Daten können manuell gelöscht werden.')}
+                title={t('settings.syncHostDeleteConfirmTitle')}
+                description={t('settings.syncHostDeleteConfirmDesc')}
                 confirmVariant="danger"
-                confirmText={t('common.delete', 'Löschen')}
+                confirmText={t('common.delete')}
                 isProcessing={isDeletingAdmin}
                 onConfirm={handleDeleteHost}
                 onCancel={() => setIsDeleteConfirmOpen(false)}

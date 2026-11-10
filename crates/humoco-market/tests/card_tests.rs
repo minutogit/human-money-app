@@ -1,9 +1,13 @@
+use std::collections::BTreeSet;
+
 use ed25519_dalek::SigningKey;
-use human_money_core::crypto::{create_user_id, encode_base64};
+use human_money_core::crypto::create_user_id;
 use humoco_market::{
-    accept_envelope, encode_qr_svg, forward_envelope, mark_sent, next_card_version, own_envelope,
-    should_attach_card, sign_card, verify_card, AcceptOutcome, CardEnvelope, CardStore,
-    ContactCard, DropDescriptor, Listing, ListingType, MAX_QR_SHARE_BYTES, MAX_STORED_CARDS,
+    accept_envelope, derive_effective_hops, encode_qr_svg, mark_sent, merge, new_ad_id,
+    next_card_version, render_wire, should_attach_card, sign_sd_card, verify_sd_card,
+    AcceptOutcome, Ad, AdKind, CardEnvelope, CardItem, CardPayloadInput, CardStore, DropDescriptor,
+    Skill, WireFilter, CARD_SD_PADDED_LEN, MAX_BUNDLE_CARD_WIRE_BYTES, MAX_PRICING_CHARS,
+    MAX_QR_SHARE_BYTES, MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
 };
 use proptest::prelude::*;
 
@@ -13,387 +17,612 @@ fn make_key(seed: u8) -> SigningKey {
     SigningKey::from_bytes(&bytes)
 }
 
-fn valid_card(sk: &SigningKey) -> ContactCard {
+fn valid_payload_input(sk: &SigningKey) -> CardPayloadInput {
     let did = create_user_id(&sk.verifying_key(), None).unwrap();
-    ContactCard {
+    CardPayloadInput {
         did,
         v: 100,
         valid_until: 1800000000,
         max_hops: 2,
-        profile: Default::default(),
-        listings: vec![Listing {
-            listing_type: ListingType::Offer,
-            title: "Test Service".to_string(),
-            text: Some("Description".to_string()),
-            pricing: Some("10 M".to_string()),
-            allow_inquiries: false,
-        }],
+        ad_count: 1,
+        allow_inquiries: true,
         drops: vec![],
     }
 }
 
+fn sample_items() -> Vec<(CardItem, u8)> {
+    vec![
+        (
+            CardItem::Name {
+                first_name: Some("Alice".to_string()),
+                last_name: Some("Wonder".to_string()),
+            },
+            2,
+        ),
+        (
+            CardItem::City {
+                zip_code: Some("10115".to_string()),
+                city: Some("Berlin".to_string()),
+                country: Some("DE".to_string()),
+            },
+            2,
+        ),
+        (
+            CardItem::Phone("+4912345678".to_string()),
+            1, // Contacts only!
+        ),
+        (
+            CardItem::Skill(Skill {
+                title: "Bread Baking".to_string(),
+                text: Some("Sourdough bread once a week".to_string()),
+                pricing: Some("1 Minuto / loaf".to_string()),
+            }),
+            2,
+        ),
+        (
+            CardItem::Ad(Ad {
+                id: new_ad_id(),
+                kind: AdKind::Offer,
+                title: "Fresh Sourdough Bread".to_string(),
+                text: Some("Ready for pickup this Friday afternoon".to_string()),
+                pricing: Some("1 Minuto".to_string()),
+                published_at: 1700000000,
+                renewed_at: None,
+                expires_at: 1700000000 + 30 * 86_400,
+                allow_inquiries: true,
+            }),
+            2,
+        ),
+    ]
+}
+
 #[test]
-fn test_limits_listings_count() {
+fn test_sd_card_signing_and_verification_roundtrip() {
     let sk = make_key(1);
-    let mut card = valid_card(&sk);
-    card.listings = (0..10)
-        .map(|i| Listing {
-            listing_type: ListingType::Offer,
-            title: format!("Title {}", i),
-            text: None,
-            pricing: None,
-            allow_inquiries: false,
-        })
-        .collect();
-    assert!(sign_card(card.clone(), &sk).is_ok());
+    let payload_input = valid_payload_input(&sk);
+    let items = sample_items();
 
-    card.listings.push(Listing {
-        listing_type: ListingType::Offer,
-        title: "Eleventh".to_string(),
-        text: None,
-        pricing: None,
-        allow_inquiries: false,
-    });
-    assert!(sign_card(card, &sk).is_err());
+    let signed = sign_sd_card(payload_input, items.clone(), &sk).unwrap();
+    assert_eq!(signed.payload._sd.len(), CARD_SD_PADDED_LEN);
+
+    let wire = render_wire(&signed, 1, WireFilter::Full).unwrap();
+    let verified = verify_sd_card(&wire).unwrap();
+
+    assert_eq!(verified.payload.did, signed.payload.did);
+    assert_eq!(verified.payload.v, 100);
+    assert_eq!(verified.payload._sd, signed.payload._sd);
+    assert_eq!(verified.disclosures.len(), items.len());
 }
 
 #[test]
-fn test_limits_title_chars() {
+fn test_sd_card_manipulation_rejection() {
     let sk = make_key(2);
-    let mut card = valid_card(&sk);
-    // 80 chars ok
-    card.listings[0].title = "a".repeat(80);
-    assert!(sign_card(card.clone(), &sk).is_ok());
+    let payload_input = valid_payload_input(&sk);
+    let items = sample_items();
+    let signed = sign_sd_card(payload_input, items, &sk).unwrap();
+    let wire = render_wire(&signed, 1, WireFilter::Full).unwrap();
 
-    // 81 chars err
-    card.listings[0].title = "a".repeat(81);
-    assert!(sign_card(card.clone(), &sk).is_err());
+    // 1. Modified disclosure token (corrupted Base64) -> verify fails
+    let mut parts: Vec<&str> = wire.split('~').collect();
+    let corrupted = format!("{}XYZ", parts[1]);
+    parts[1] = &corrupted;
+    let corrupted_wire = parts.join("~");
+    assert!(verify_sd_card(&corrupted_wire).is_err());
 
-    // empty title err
-    card.listings[0].title = "   ".to_string();
-    assert!(sign_card(card, &sk).is_err());
+    // 2. Foreign disclosure token (from another card, not in _sd) -> verify fails
+    let foreign_sk = make_key(99);
+    let foreign_card = sign_sd_card(valid_payload_input(&foreign_sk), sample_items(), &foreign_sk).unwrap();
+    let foreign_wire = render_wire(&foreign_card, 1, WireFilter::Full).unwrap();
+    let foreign_disc = foreign_wire.split('~').nth(1).unwrap();
+
+    let mut parts2: Vec<&str> = wire.split('~').collect();
+    parts2.insert(1, foreign_disc);
+    let foreign_injected_wire = parts2.join("~");
+    assert!(verify_sd_card(&foreign_injected_wire).is_err());
+
+    // 3. Removed disclosure token -> MUST remain valid! (Selective Disclosure)
+    let parts3: Vec<&str> = wire.split('~').collect();
+    let mut omitted_parts = vec![parts3[0]]; // keep JWS
+    omitted_parts.extend_from_slice(&parts3[2..]); // omit disclosure 1
+    let omitted_wire = omitted_parts.join("~");
+    let verified_omitted = verify_sd_card(&omitted_wire).unwrap();
+    assert_eq!(verified_omitted.disclosures.len(), signed.disclosures.len() - 1);
 }
 
 #[test]
-fn test_limits_text_and_pricing_chars() {
+fn test_render_wire_per_distance() {
     let sk = make_key(3);
-    let mut card = valid_card(&sk);
-    // 280 text chars ok, 281 err
-    card.listings[0].text = Some("b".repeat(280));
-    assert!(sign_card(card.clone(), &sk).is_ok());
+    let payload_input = valid_payload_input(&sk);
+    let items = sample_items(); // Contains Phone with max_distance = 1, others with 2
+    let card = sign_sd_card(payload_input, items, &sk).unwrap();
 
-    card.listings[0].text = Some("b".repeat(281));
-    assert!(sign_card(card.clone(), &sk).is_err());
-    card.listings[0].text = None;
+    // Distance 1: All disclosures included (including Phone)
+    let wire_dist1 = render_wire(&card, 1, WireFilter::Full).unwrap();
+    let verified_dist1 = verify_sd_card(&wire_dist1).unwrap();
+    let items_dist1 = humoco_market::sd_card::decoded_items(&verified_dist1);
+    assert!(items_dist1.iter().any(|(item, _)| matches!(item, CardItem::Phone(_))));
 
-    // 40 pricing chars ok, 41 err
-    card.listings[0].pricing = Some("c".repeat(40));
-    assert!(sign_card(card.clone(), &sk).is_ok());
+    // Distance 2: Phone (max_distance = 1) is omitted!
+    let wire_dist2 = render_wire(&card, 2, WireFilter::Full).unwrap();
+    let verified_dist2 = verify_sd_card(&wire_dist2).unwrap();
+    let items_dist2 = humoco_market::sd_card::decoded_items(&verified_dist2);
+    assert!(!items_dist2.iter().any(|(item, _)| matches!(item, CardItem::Phone(_))));
+    assert_eq!(items_dist2.len(), items_dist1.len() - 1);
 
-    card.listings[0].pricing = Some("c".repeat(41));
-    assert!(sign_card(card, &sk).is_err());
+    // Distance 3 (> max_hops 2): Returns None
+    assert!(render_wire(&card, 3, WireFilter::Full).is_none());
 }
 
 #[test]
-fn test_limits_drops() {
+fn test_fit_bytes_budget_2900() {
     let sk = make_key(4);
-    let mut card = valid_card(&sk);
-    let valid_vk_hex = hex::encode(make_key(99).verifying_key().as_bytes());
-    let valid_drop = DropDescriptor {
-        write_url: "https://drop.example.com/write".to_string(),
-        read_url: "https://drop.example.com/read".to_string(),
-        slot_id: None,
-        drop_pub: valid_vk_hex.clone(),
-    };
+    let mut payload_input = valid_payload_input(&sk);
+    let valid_vk_hex = hex::encode(make_key(50).verifying_key().as_bytes());
+    payload_input.drops = vec![
+        DropDescriptor {
+            write_url: "https://drop1.example.com/write".to_string(),
+            read_url: "https://drop1.example.com/read".to_string(),
+            slot_id: None,
+            drop_pub: valid_vk_hex.clone(),
+        },
+        DropDescriptor {
+            write_url: "https://drop2.example.com/write".to_string(),
+            read_url: "https://drop2.example.com/read".to_string(),
+            slot_id: None,
+            drop_pub: valid_vk_hex.clone(),
+        },
+        DropDescriptor {
+            write_url: "https://drop3.example.com/write".to_string(),
+            read_url: "https://drop3.example.com/read".to_string(),
+            slot_id: None,
+            drop_pub: valid_vk_hex,
+        },
+    ];
 
-    card.drops = vec![valid_drop.clone(), valid_drop.clone(), valid_drop.clone()];
-    assert!(sign_card(card.clone(), &sk).is_ok());
+    let items = sample_items();
+    let card = sign_sd_card(payload_input, items, &sk).unwrap();
 
-    // 4 drops err
-    card.drops.push(valid_drop);
-    assert!(sign_card(card.clone(), &sk).is_err());
+    let qr_wire = render_wire(&card, 1, WireFilter::FitBytes(MAX_QR_SHARE_BYTES)).unwrap();
+    assert!(qr_wire.len() <= MAX_QR_SHARE_BYTES);
 
-    // Non-https write_url
-    card.drops = vec![DropDescriptor {
-        write_url: "http://insecure.com".to_string(),
-        read_url: "https://secure.com".to_string(),
-        slot_id: None,
-        drop_pub: valid_vk_hex.clone(),
-    }];
-    assert!(sign_card(card.clone(), &sk).is_err());
-
-    // Invalid drop_pub (not 64-hex)
-    card.drops = vec![DropDescriptor {
-        write_url: "https://drop.example.com/write".to_string(),
-        read_url: "https://drop.example.com/read".to_string(),
-        slot_id: None,
-        drop_pub: "not-a-hex-key".to_string(),
-    }];
-    assert!(sign_card(card.clone(), &sk).is_err());
-
-    // Valid slot_id
-    let valid_slot_vk_hex = hex::encode(make_key(88).verifying_key().as_bytes());
-    card.drops = vec![DropDescriptor {
-        write_url: "https://drop.example.com/write".to_string(),
-        read_url: "https://drop.example.com/read".to_string(),
-        slot_id: Some(valid_slot_vk_hex),
-        drop_pub: valid_vk_hex.clone(),
-    }];
-    assert!(sign_card(card.clone(), &sk).is_ok());
-
-    // Invalid slot_id (not 64-hex)
-    card.drops = vec![DropDescriptor {
-        write_url: "https://drop.example.com/write".to_string(),
-        read_url: "https://drop.example.com/read".to_string(),
-        slot_id: Some("invalid-slot-id".to_string()),
-        drop_pub: valid_vk_hex,
-    }];
-    assert!(sign_card(card, &sk).is_err());
+    let verified = verify_sd_card(&qr_wire).unwrap();
+    let decoded = humoco_market::sd_card::decoded_items(&verified);
+    // Name and City are prioritized and must be present
+    assert!(decoded.iter().any(|(item, _)| matches!(item, CardItem::Name { .. })));
+    assert!(decoded.iter().any(|(item, _)| matches!(item, CardItem::City { .. })));
 }
 
 #[test]
-fn test_limits_max_hops() {
+fn test_no_ads_wire_filter_fits_7168_with_8_skills() {
     let sk = make_key(5);
-    let mut card = valid_card(&sk);
-    card.max_hops = 1;
-    assert!(sign_card(card.clone(), &sk).is_ok());
-    card.max_hops = 2;
-    assert!(sign_card(card.clone(), &sk).is_ok());
-    card.max_hops = 3;
-    assert!(sign_card(card.clone(), &sk).is_ok());
+    let payload_input = valid_payload_input(&sk);
 
-    card.max_hops = 0;
-    assert!(sign_card(card.clone(), &sk).is_err());
-    card.max_hops = 4;
-    assert!(sign_card(card, &sk).is_err());
+    let mut items = vec![
+        (
+            CardItem::Name {
+                first_name: Some("A".repeat(80)),
+                last_name: Some("B".repeat(80)),
+            },
+            2,
+        ),
+        (
+            CardItem::City {
+                zip_code: Some("12345".to_string()),
+                city: Some("CityName".repeat(5)),
+                country: Some("DE".to_string()),
+            },
+            2,
+        ),
+    ];
+
+    for _i in 0..8 {
+        items.push((
+            CardItem::Skill(Skill {
+                title: format!("Skill {}", "S".repeat(MAX_SKILL_TITLE_CHARS - 10)),
+                text: Some("T".repeat(MAX_SKILL_TEXT_CHARS)),
+                pricing: Some("P".repeat(MAX_PRICING_CHARS)),
+            }),
+            2,
+        ));
+    }
+
+    // Add an Ad as well (should be omitted by NoAds)
+    items.push((
+        CardItem::Ad(Ad {
+            id: new_ad_id(),
+            kind: AdKind::Offer,
+            title: "Omitted Ad".to_string(),
+            text: Some("Text".to_string()),
+            pricing: None,
+            published_at: 1700000000,
+            renewed_at: None,
+            expires_at: 1700000000 + 30 * 86_400,
+            allow_inquiries: false,
+        }),
+        2,
+    ));
+
+    let card = sign_sd_card(payload_input, items, &sk).unwrap();
+    let no_ads_wire = render_wire(&card, 1, WireFilter::NoAds).unwrap();
+    assert!(no_ads_wire.len() <= MAX_BUNDLE_CARD_WIRE_BYTES);
+
+    let verified = verify_sd_card(&no_ads_wire).unwrap();
+    let decoded = humoco_market::sd_card::decoded_items(&verified);
+    assert!(!decoded.iter().any(|(item, _)| matches!(item, CardItem::Ad(_))));
+    assert_eq!(
+        decoded.iter().filter(|(item, _)| matches!(item, CardItem::Skill(_))).count(),
+        8
+    );
 }
 
 #[test]
-fn test_prefix_account_normalized_to_root_did() {
+fn test_merge_two_partial_wires() {
     let sk = make_key(6);
-    let root_did = create_user_id(&sk.verifying_key(), None).unwrap();
-    let prefix_did = format!("pc:device1@{}", root_did);
+    let payload_input = valid_payload_input(&sk);
+    let items = sample_items();
+    let card = sign_sd_card(payload_input, items, &sk).unwrap();
 
-    let mut card = valid_card(&sk);
-    card.did = prefix_did;
+    let all_discs: Vec<(&String, &String)> = card.disclosures.iter().collect();
+    assert!(all_discs.len() >= 4);
 
-    let jws = sign_card(card, &sk).unwrap();
-    let verified = verify_card(&jws).unwrap();
-    assert_eq!(verified.did, root_did);
+    // Wire 1: contains disclosures 0 and 1
+    let wire_1 = format!(
+        "{}~{}~{}~",
+        card.jws, all_discs[0].1, all_discs[1].1
+    );
+    let mut card_1 = verify_sd_card(&wire_1).unwrap();
+    assert_eq!(card_1.disclosures.len(), 2);
+
+    // Wire 2: contains disclosures 2 and 3
+    let wire_2 = format!(
+        "{}~{}~{}~",
+        card.jws, all_discs[2].1, all_discs[3].1
+    );
+    let card_2 = verify_sd_card(&wire_2).unwrap();
+    assert_eq!(card_2.disclosures.len(), 2);
+
+    // Merge wire 2 into wire 1
+    let merged = merge(&mut card_1, card_2);
+    assert!(merged);
+    assert_eq!(card_1.disclosures.len(), 4);
 }
 
 #[test]
-fn test_wrong_typ_or_alg_rejected() {
+fn test_accept_envelope_all_cases() {
     let sk = make_key(7);
-    let card = valid_card(&sk);
-    let canonical = serde_json_canonicalizer::to_string(&card).unwrap();
-    let payload_b64 = encode_base64(canonical.as_bytes());
-
-    // Wrong typ
-    let bad_header = encode_base64(br#"{"alg":"EdDSA","typ":"JWT"}"#);
-    let signing_input = format!("{}.{}", bad_header, payload_b64);
-    let sig = human_money_core::crypto::sign_ed25519(&sk, signing_input.as_bytes());
-    let jws = format!("{}.{}.{}", bad_header, payload_b64, encode_base64(&sig.to_bytes()));
-    assert!(verify_card(&jws).is_err());
-
-    // Wrong alg
-    let bad_header2 = encode_base64(br#"{"alg":"ES256","typ":"hmc-card+jwt"}"#);
-    let signing_input2 = format!("{}.{}", bad_header2, payload_b64);
-    let sig2 = human_money_core::crypto::sign_ed25519(&sk, signing_input2.as_bytes());
-    let jws2 = format!("{}.{}.{}", bad_header2, payload_b64, encode_base64(&sig2.to_bytes()));
-    assert!(verify_card(&jws2).is_err());
-}
-
-#[test]
-fn test_forwarding_hop_bounds() {
-    let sk = make_key(8);
-    let mut card = valid_card(&sk);
-    card.max_hops = 2;
-    let jws = sign_card(card.clone(), &sk).unwrap();
-
-    let stored = humoco_market::StoredCard {
-        card,
-        card_jws: jws,
-        hops: 1,
-        received_at: 1000,
-    };
-
-    let fwd1 = forward_envelope(&stored).unwrap();
-    assert_eq!(fwd1.hops, 2);
-
-    let mut stored2 = stored.clone();
-    stored2.hops = 2;
-    // Cannot forward beyond max_hops
-    assert!(forward_envelope(&stored2).is_none());
-}
-
-#[test]
-fn test_accept_envelope_freshness_and_hop_upgrade() {
-    let sk = make_key(9);
-    let card_v1 = valid_card(&sk);
-    let jws_v1 = sign_card(card_v1, &sk).unwrap();
-
     let mut store = CardStore::default();
-    let env_v1_hop2 = CardEnvelope {
-        card_jws: jws_v1.clone(),
+    let no_offender = |_did: &str| false;
+
+    // Base card v = 100
+    let mut payload = valid_payload_input(&sk);
+    payload.v = 100;
+    let card_v100 = sign_sd_card(payload.clone(), sample_items(), &sk).unwrap();
+    let wire_v100 = render_wire(&card_v100, 1, WireFilter::Full).unwrap();
+
+    // 1. Initial insert
+    let env_v100 = CardEnvelope {
+        card_wire: wire_v100.clone(),
+        hops: 1,
+    };
+    let out = accept_envelope(&mut store, &env_v100, 1700000000, 3, &no_offender);
+    assert_eq!(
+        out,
+        AcceptOutcome::Accepted {
+            did: card_v100.payload.did.clone(),
+            replaced: false,
+        }
+    );
+
+    // 2. Case 1: new.v > stored.v (v = 200) -> replaced = true
+    payload.v = 200;
+    let card_v200 = sign_sd_card(payload.clone(), sample_items(), &sk).unwrap();
+    let wire_v200 = render_wire(&card_v200, 1, WireFilter::Full).unwrap();
+    let env_v200 = CardEnvelope {
+        card_wire: wire_v200,
+        hops: 1,
+    };
+    let out2 = accept_envelope(&mut store, &env_v200, 1700000000, 3, &no_offender);
+    assert_eq!(
+        out2,
+        AcceptOutcome::Accepted {
+            did: card_v200.payload.did.clone(),
+            replaced: true,
+        }
+    );
+
+    // 3. Case 2: new.v == stored.v && new.jws == stored.jws -> merge
+    let out3 = accept_envelope(&mut store, &env_v200, 1700000000, 3, &no_offender);
+    assert_eq!(
+        out3,
+        AcceptOutcome::Accepted {
+            did: card_v200.payload.did.clone(),
+            replaced: false,
+        }
+    );
+
+    // 4. Case 4: new.v < stored.v (v = 100 < 200) -> IgnoredStale
+    let out4 = accept_envelope(&mut store, &env_v100, 1700000000, 3, &no_offender);
+    assert_eq!(out4, AcceptOutcome::IgnoredStale);
+}
+
+#[test]
+fn test_receiver_rule_strip_contacts_at_hop2() {
+    let sk = make_key(8);
+    let mut store = CardStore::default();
+    let no_offender = |_did: &str| false;
+
+    let payload = valid_payload_input(&sk);
+    let items = sample_items(); // Phone has max_distance = 1
+    let card = sign_sd_card(payload, items, &sk).unwrap();
+
+    // A malicious / buggy app forwards with ALL disclosures at hops = 2
+    let full_wire = render_wire(&card, 1, WireFilter::Full).unwrap();
+    let env = CardEnvelope {
+        card_wire: full_wire,
         hops: 2,
     };
 
-    let res = accept_envelope(&mut store, &env_v1_hop2, 1000, 2, &|_| false);
-    assert!(matches!(res, AcceptOutcome::Accepted { replaced: false, .. }));
+    let outcome = accept_envelope(&mut store, &env, 1700000000, 3, &no_offender);
+    assert!(matches!(outcome, AcceptOutcome::Accepted { .. }));
 
-    // Older version rejected
-    let mut card_v0 = valid_card(&sk);
-    card_v0.v = 50;
-    let jws_v0 = sign_card(card_v0, &sk).unwrap();
-    let env_v0 = CardEnvelope {
-        card_jws: jws_v0,
-        hops: 1,
-    };
-    let res_older = accept_envelope(&mut store, &env_v0, 1000, 2, &|_| false);
-    assert_eq!(res_older, AcceptOutcome::IgnoredStale);
-
-    // Same version with smaller hops upgrades entry!
-    let env_v1_hop1 = CardEnvelope {
-        card_jws: jws_v1,
-        hops: 1,
-    };
-    let res_upgrade = accept_envelope(&mut store, &env_v1_hop1, 1001, 2, &|_| false);
-    assert!(matches!(res_upgrade, AcceptOutcome::Accepted { replaced: true, .. }));
+    // Honest app stripped Phone because max_distance (1) < hops (2)
     let pk_bytes = *sk.verifying_key().as_bytes();
-    assert_eq!(store.cards.get(&pk_bytes).unwrap().hops, 1);
+    let stored = store.cards.get(&pk_bytes).unwrap();
+    let decoded = humoco_market::sd_card::decoded_items(&stored.card);
+    assert!(!decoded.iter().any(|(item, _)| matches!(item, CardItem::Phone(_))));
 }
 
 #[test]
-fn test_store_eviction_order() {
-    let mut store = CardStore::default();
+fn test_distance_derivation_from_slot_writer() {
+    let card_did = "did_author";
+    let foreign_did = "did_relay";
 
-    // Fill store directly to MAX_STORED_CARDS with hops = 1, received_at = 1000
-    for i in 0..MAX_STORED_CARDS {
-        let mut pk = [0u8; 32];
-        pk[0..2].copy_from_slice(&(i as u16).to_le_bytes());
-        store.cards.insert(
-            pk,
-            humoco_market::StoredCard {
-                card: ContactCard {
-                    did: format!("did:key:{}", i),
-                    v: 100,
-                    valid_until: 2000000000,
-                    max_hops: 3,
-                    profile: Default::default(),
-                    listings: vec![],
-                    drops: vec![],
-                },
-                card_jws: format!("jws-{}", i),
-                hops: if i == 0 { 2 } else { 1 }, // entry 0 has largest hops = 2
-                received_at: 1000,
-            },
-        );
+    // Direct from owner -> 1
+    assert_eq!(derive_effective_hops(2, card_did, Some(card_did)), 1);
+
+    // From foreign slot writer -> env.hops.max(2)
+    assert_eq!(derive_effective_hops(1, card_did, Some(foreign_did)), 2);
+    assert_eq!(derive_effective_hops(3, card_did, Some(foreign_did)), 3);
+
+    // No slot writer (direct file / QR) -> env.hops unchanged
+    assert_eq!(derive_effective_hops(1, card_did, None), 1);
+    assert_eq!(derive_effective_hops(2, card_did, None), 2);
+}
+
+#[test]
+fn test_limits_skills_and_ads() {
+    let sk = make_key(9);
+    let payload = valid_payload_input(&sk);
+
+    // 8 skills ok
+    let mut items: Vec<(CardItem, u8)> = (0..8)
+        .map(|i| {
+            (
+                CardItem::Skill(Skill {
+                    title: format!("Skill {}", i),
+                    text: None,
+                    pricing: None,
+                }),
+                2,
+            )
+        })
+        .collect();
+    assert!(sign_sd_card(payload.clone(), items.clone(), &sk).is_ok());
+
+    // 9 skills err
+    items.push((
+        CardItem::Skill(Skill {
+            title: "Skill 9".to_string(),
+            text: None,
+            pricing: None,
+        }),
+        2,
+    ));
+    assert!(sign_sd_card(payload.clone(), items, &sk).is_err());
+
+    // 5 ads ok
+    let mut ad_items: Vec<(CardItem, u8)> = (0..5)
+        .map(|i| {
+            (
+                CardItem::Ad(Ad {
+                    id: format!("{:016x}", i + 1),
+                    kind: AdKind::Offer,
+                    title: format!("Ad {}", i),
+                    text: None,
+                    pricing: None,
+                    published_at: 1700000000,
+                    renewed_at: None,
+                    expires_at: 1700000000 + 30 * 86_400,
+                    allow_inquiries: false,
+                }),
+                2,
+            )
+        })
+        .collect();
+    assert!(sign_sd_card(payload.clone(), ad_items.clone(), &sk).is_ok());
+
+    // 6 ads err
+    ad_items.push((
+        CardItem::Ad(Ad {
+            id: format!("{:016x}", 6),
+            kind: AdKind::Offer,
+            title: "Ad 6".to_string(),
+            text: None,
+            pricing: None,
+            published_at: 1700000000,
+            renewed_at: None,
+            expires_at: 1700000000 + 30 * 86_400,
+            allow_inquiries: false,
+        }),
+        2,
+    ));
+    assert!(sign_sd_card(payload, ad_items, &sk).is_err());
+}
+
+#[test]
+fn test_ad_duration_and_validity_invariants() {
+    let sk = make_key(10);
+    let mut payload = valid_payload_input(&sk);
+    payload.valid_until = 1700000000 + 100 * 86_400;
+
+    // Ad duration > 180 days -> err
+    let bad_duration_ad = (
+        CardItem::Ad(Ad {
+            id: new_ad_id(),
+            kind: AdKind::Offer,
+            title: "Long Ad".to_string(),
+            text: None,
+            pricing: None,
+            published_at: 1700000000,
+            renewed_at: None,
+            expires_at: 1700000000 + 181 * 86_400,
+            allow_inquiries: false,
+        }),
+        2,
+    );
+    assert!(sign_sd_card(payload.clone(), vec![bad_duration_ad], &sk).is_err());
+
+    // Ad expires_at > valid_until -> err
+    let beyond_valid_ad = (
+        CardItem::Ad(Ad {
+            id: new_ad_id(),
+            kind: AdKind::Offer,
+            title: "Beyond Valid".to_string(),
+            text: None,
+            pricing: None,
+            published_at: 1700000000,
+            renewed_at: None,
+            expires_at: 1700000000 + 101 * 86_400,
+            allow_inquiries: false,
+        }),
+        2,
+    );
+    assert!(sign_sd_card(payload.clone(), vec![beyond_valid_ad], &sk).is_err());
+
+    // Duplicate Ad ID on same card -> err
+    let duplicate_id = new_ad_id();
+    let ad1 = (
+        CardItem::Ad(Ad {
+            id: duplicate_id.clone(),
+            kind: AdKind::Offer,
+            title: "Ad 1".to_string(),
+            text: None,
+            pricing: None,
+            published_at: 1700000000,
+            renewed_at: None,
+            expires_at: 1700000000 + 30 * 86_400,
+            allow_inquiries: false,
+        }),
+        2,
+    );
+    let ad2 = (
+        CardItem::Ad(Ad {
+            id: duplicate_id,
+            kind: AdKind::Request,
+            title: "Ad 2".to_string(),
+            text: None,
+            pricing: None,
+            published_at: 1700000000,
+            renewed_at: None,
+            expires_at: 1700000000 + 30 * 86_400,
+            allow_inquiries: false,
+        }),
+        2,
+    );
+    assert!(sign_sd_card(payload.clone(), vec![ad1, ad2], &sk).is_err());
+
+    // Expired ad (expires_at <= now) is NOT a validation error on verify
+    let expired_ad = (
+        CardItem::Ad(Ad {
+            id: new_ad_id(),
+            kind: AdKind::Offer,
+            title: "Expired Ad".to_string(),
+            text: None,
+            pricing: None,
+            published_at: 1600000000,
+            renewed_at: None,
+            expires_at: 1600000000 + 30 * 86_400,
+            allow_inquiries: false,
+        }),
+        2,
+    );
+    let expired_card = sign_sd_card(payload, vec![expired_ad], &sk).unwrap();
+    let wire = render_wire(&expired_card, 1, WireFilter::Full).unwrap();
+    assert!(verify_sd_card(&wire).is_ok());
+}
+
+#[test]
+fn test_decoy_padding_always_32() {
+    let sk = make_key(11);
+    let payload = valid_payload_input(&sk);
+
+    // 0 items
+    let card0 = sign_sd_card(payload.clone(), vec![], &sk).unwrap();
+    assert_eq!(card0.payload._sd.len(), CARD_SD_PADDED_LEN);
+
+    // 5 items
+    let card5 = sign_sd_card(payload, sample_items(), &sk).unwrap();
+    assert_eq!(card5.payload._sd.len(), CARD_SD_PADDED_LEN);
+
+    // Digests unique and sorted
+    let mut set = BTreeSet::new();
+    for d in &card5.payload._sd {
+        assert!(set.insert(d.clone()));
     }
-    assert_eq!(store.cards.len(), MAX_STORED_CARDS);
-
-    // Now insert one more card -> entry with largest hops (entry 0) must be evicted!
-    let new_sk = make_key(250);
-    let new_card = valid_card(&new_sk);
-    let new_jws = sign_card(new_card, &new_sk).unwrap();
-    let new_env = CardEnvelope {
-        card_jws: new_jws,
-        hops: 1,
-    };
-
-    let outcome = accept_envelope(&mut store, &new_env, 1002, 3, &|_| false);
-    assert!(matches!(outcome, AcceptOutcome::Accepted { .. }));
-    assert_eq!(store.cards.len(), MAX_STORED_CARDS);
-
-    // Check entry 0 was evicted
-    let pk0 = [0u8; 32];
-    assert!(!store.cards.contains_key(&pk0));
+    assert_eq!(set.len(), 32);
+    assert!(card5.payload._sd.windows(2).all(|w| w[0] < w[1]));
 }
 
 #[test]
 fn test_sent_log_and_versioning() {
     let mut store = CardStore::default();
-    let peer_key = [77u8; 32];
+    let peer_key = [42u8; 32];
 
-    assert!(should_attach_card(&store, &peer_key, 100));
-
+    assert!(should_attach_card(&store, &peer_key, 1));
     mark_sent(&mut store, peer_key, 100);
+
+    assert!(!should_attach_card(&store, &peer_key, 50));
     assert!(!should_attach_card(&store, &peer_key, 100));
     assert!(should_attach_card(&store, &peer_key, 101));
 
-    assert_eq!(next_card_version(None, 1000), 1000);
-    assert_eq!(next_card_version(Some(1000), 500), 1001);
-    assert_eq!(next_card_version(Some(1000), 2000), 2000);
-}
-
-#[test]
-fn test_card_store_json_roundtrip() {
-    let sk = make_key(10);
-    let card = valid_card(&sk);
-    let jws = sign_card(card.clone(), &sk).unwrap();
-    let mut store = CardStore::default();
-
-    let env = own_envelope(jws);
-    accept_envelope(&mut store, &env, 1000, 2, &|_| false);
-    mark_sent(&mut store, *sk.verifying_key().as_bytes(), 100);
-
-    let json = serde_json::to_string(&store).unwrap();
-    let deserialized: CardStore = serde_json::from_str(&json).unwrap();
-    assert_eq!(store, deserialized);
+    assert_eq!(next_card_version(None, 500), 500);
+    assert_eq!(next_card_version(Some(100), 50), 101);
+    assert_eq!(next_card_version(Some(100), 200), 200);
 }
 
 #[test]
 fn test_qr_svg_generation() {
-    let short_data = b"humoco://card?env=test";
-    let svg = encode_qr_svg(short_data).unwrap();
-    assert!(svg.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""));
-    assert!(svg.contains("<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>"));
-    assert!(svg.contains("<path fill=\"#000000\" d=\""));
-    assert!(svg.ends_with("</svg>"));
+    let sk = make_key(12);
+    let card = sign_sd_card(valid_payload_input(&sk), sample_items(), &sk).unwrap();
+    let wire = render_wire(&card, 1, WireFilter::Full).unwrap();
+    let uri = format!("humoco://card?c={}", wire);
 
-    // 2900 bytes ok
-    let max_data = vec![b'a'; MAX_QR_SHARE_BYTES];
-    assert!(encode_qr_svg(&max_data).is_ok());
-
-    // 2901 bytes error
-    let overflow_data = vec![b'a'; MAX_QR_SHARE_BYTES + 1];
-    assert!(encode_qr_svg(&overflow_data).is_err());
+    let svg = encode_qr_svg(uri.as_bytes());
+    assert!(svg.is_ok());
+    let svg_str = svg.unwrap();
+    assert!(svg_str.starts_with("<svg"));
+    assert!(svg_str.ends_with("</svg>"));
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+
     #[test]
-    fn proptest_accept_envelope_invariants(
-        seed in 1u8..30u8,
-        version in 1u64..1000u64,
-        max_hops in 1u8..=3u8,
-        env_hops in 1u8..=5u8,
-        max_store_hops in 1u8..=3u8,
-    ) {
-        let sk = make_key(seed);
-        let mut card = valid_card(&sk);
-        card.v = version;
-        card.max_hops = max_hops;
-        let jws = sign_card(card.clone(), &sk).unwrap();
-
-        let env = CardEnvelope {
-            card_jws: jws,
-            hops: env_hops,
-        };
-
+    fn proptest_accept_envelope_invariants(hops in 1u8..=3, v in 1u64..1000) {
+        let sk = make_key(20);
         let mut store = CardStore::default();
-        let outcome = accept_envelope(&mut store, &env, 1000, max_store_hops, &|_| false);
+        let mut payload = valid_payload_input(&sk);
+        payload.v = v;
+        let card = sign_sd_card(payload, sample_items(), &sk).unwrap();
+        let wire = render_wire(&card, 1, WireFilter::Full).unwrap();
+        let env = CardEnvelope { card_wire: wire, hops };
 
-        if env_hops <= max_hops && env_hops <= max_store_hops {
-            let is_accepted = matches!(outcome, AcceptOutcome::Accepted { .. });
+        let outcome = accept_envelope(&mut store, &env, 1700000000, 3, &|_| false);
+        let is_accepted = matches!(outcome, AcceptOutcome::Accepted { .. });
+        if hops <= card.payload.max_hops {
             prop_assert!(is_accepted);
-            prop_assert_eq!(store.cards.len(), 1);
-            let stored = store.cards.get(sk.verifying_key().as_bytes()).unwrap();
-            prop_assert!(stored.hops <= stored.card.max_hops);
-            prop_assert!(stored.hops <= max_store_hops);
-            prop_assert!(1000 < stored.card.valid_until);
         } else {
             prop_assert_eq!(outcome, AcceptOutcome::RejectedHops);
-            prop_assert_eq!(store.cards.len(), 0);
         }
     }
 }

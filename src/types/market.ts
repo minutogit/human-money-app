@@ -2,18 +2,105 @@
 
 import { FrontendUserProfile } from './profile';
 
-export type FrontendListingType = 'offer' | 'request';
-export type FrontendListingOrigin = 'voucher' | 'card';
-export type FrontendTrustTier = 'trusted' | 'unknown' | 'hidden';
+export type FieldAudience = 'everyone' | 'contacts' | 'nobody';
 
-export interface FrontendMarketListing {
-    listingId: string;
-    listingType: FrontendListingType;
+export interface CardFieldVisibility {
+    name: FieldAudience;
+    organization: FieldAudience;
+    community: FieldAudience;
+    city: FieldAudience;
+    url: FieldAudience;
+    picture: FieldAudience;
+    street: FieldAudience;
+    email: FieldAudience;
+    phone: FieldAudience;
+    coordinates: FieldAudience;
+    gender: FieldAudience;
+}
+
+export interface Skill {
     title: string;
     text?: string | null;
     pricing?: string | null;
-    origin: FrontendListingOrigin;
+}
+
+export type AdKind = 'offer' | 'request';
+
+export interface Ad {
+    id: string;
+    kind: AdKind;
+    title: string;
+    text?: string | null;
+    pricing?: string | null;
+    published_at: number;
+    renewed_at?: number | null;
+    expires_at: number;
+    allow_inquiries: boolean;
+}
+
+export interface FrontendMyAd {
+    id: string;
+    kind: AdKind;
+    title: string;
+    text?: string | null;
+    pricing?: string | null;
+    publishedAt: number;
+    renewedAt?: number | null;
+    expiresAt: number;
     allowInquiries: boolean;
+    status: 'active' | 'expired' | string;
+    daysLeft: number;
+}
+
+export interface FrontendMyMarketProfile {
+    profile: FrontendUserProfile;
+    visibility: CardFieldVisibility;
+    skills: Skill[];
+    ads: FrontendMyAd[];
+    maxHops: number;
+    allowInquiries: boolean;
+    published: boolean;
+    shareUri?: string | null;
+    fileWire?: string | null;
+    qrSvg?: string | null;
+    qrIsPartial: boolean;
+}
+
+export interface FrontendSaveMyMarketProfileRequest {
+    profile: FrontendUserProfile;
+    visibility: CardFieldVisibility;
+    skills: Skill[];
+    maxHops: number;
+    allowInquiries: boolean;
+}
+
+export interface FrontendAdInput {
+    id?: string;
+    kind: AdKind;
+    title: string;
+    text?: string | null;
+    pricing?: string | null;
+    durationDays: number;
+    allowInquiries: boolean;
+}
+
+export type FrontendTrustTier = 'trusted' | 'unknown' | 'hidden';
+
+export interface FrontendBoardItem {
+    ownerDid: string;
+    ownerName: string;
+    trust: FrontendTrustTier;
+    ad: Ad;
+    daysLeft: number;
+}
+
+export type FrontendSkillOrigin = 'card' | 'voucher';
+
+export interface FrontendMarketSkill {
+    title: string;
+    text?: string | null;
+    pricing?: string | null;
+    origin: FrontendSkillOrigin;
 }
 
 export type FrontendEntrySource =
@@ -39,7 +126,10 @@ export interface FrontendSyncDescriptor {
 export interface FrontendMarketPerson {
     did: string;
     profile: FrontendUserProfile;
-    listings: FrontendMarketListing[];
+    skills: FrontendMarketSkill[];
+    activeAds: Ad[];
+    adsPending: number;
+    allowInquiries: boolean;
     sources: FrontendEntrySource[];
     asOf: number; // unix seconds
     standards: FrontendStandardRef[];
@@ -48,39 +138,10 @@ export interface FrontendMarketPerson {
     cardSyncs: FrontendSyncDescriptor[];
 }
 
-export interface FrontendCardListingInput {
-    listingType: FrontendListingType;
-    title: string;
-    text?: string | null;
-    pricing?: string | null;
-    allowInquiries?: boolean;
-}
-
-export interface FrontendContactCardDto {
-    did: string;
-    v: number;
-    validUntil: number;
-    maxHops: number;
-    profile: FrontendUserProfile;
-    listings: FrontendCardListingInput[];
-    syncs: FrontendSyncDescriptor[];
-}
-
-export interface FrontendOwnContactCard {
-    card: FrontendContactCardDto;
-    cardJws: string;
-    qrSvg?: string | null;
-    shareUri: string;
-    envelopeJson: string;
-    qrJws?: string | null;
-    isCompactQr?: boolean;
-}
-
-export interface FrontendSaveOwnCardRequest {
-    profile: FrontendUserProfile;
-    listings: FrontendCardListingInput[];
-    maxHops: number;
-    validityDays?: number | null;
+export interface FrontendMarketSnapshot {
+    board: FrontendBoardItem[];
+    people: FrontendMarketPerson[];
+    now: number;
 }
 
 export interface FrontendForwardCardExport {
@@ -234,9 +295,12 @@ export interface FrontendPendingWotHandshake {
     createdAt: number;
 }
 
+export type InquiryTarget =
+    | { kind: 'ad'; ad_id: string; ad_title: string }
+    | { kind: 'person'; skill_title?: string };
+
 export interface FrontendMarketInquiryReplyDto {
     inquiryId: string;
-    listingId: string;
     decision: 'confirm' | 'decline' | string;
     note?: string | null;
     paymentUri?: string | null;
@@ -247,8 +311,7 @@ export interface FrontendMarketInquiryReplyDto {
 
 export interface FrontendMarketInquiryItem {
     inquiryId: string;
-    listingId: string;
-    listingTitle: string;
+    target: InquiryTarget;
     counterpartyDid: string;
     counterpartyName?: string | null;
     message: string;

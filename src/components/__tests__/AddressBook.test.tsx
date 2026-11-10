@@ -84,7 +84,7 @@ describe('AddressBook Component', () => {
     render(<AddressBook onBack={mockOnBack} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Address Book/i)).toBeInTheDocument();
+      expect(screen.getByText(/Contacts & Trust|Kontakte & Vertrauen/i)).toBeInTheDocument();
     });
 
     await waitFor(() => {
@@ -117,8 +117,11 @@ describe('AddressBook Component', () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('get_contacts'));
     (invoke as Mock).mockClear(); // Clear the initial 'get_contacts' call
     
-    const newBtn = screen.getByText(/New Contact/i);
-    fireEvent.click(newBtn);
+    const addBtn = screen.getByRole('button', { name: /contacts\.addContact|Add Contact|Kontakt hinzufügen/i });
+    fireEvent.click(addBtn);
+
+    const manualTile = await screen.findByTestId('add-tile-manual');
+    fireEvent.click(manualTile);
     
     await screen.findByTestId('contact-dialog');
     const saveBtn = screen.getByRole('button', { name: /Save/i });
@@ -263,7 +266,7 @@ describe('AddressBook Component', () => {
     // Expand options
     fireEvent.click(toggleBtn);
     expect(screen.getByTestId('expanded-network-options')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops|\+ their contacts|\+ deren Kontakte/i })).toBeInTheDocument();
 
     // Collapse options again
     fireEvent.click(toggleBtn);
@@ -294,7 +297,7 @@ describe('AddressBook Component', () => {
 
     // When 0 contacts rated, options are expanded by default
     expect(screen.getByTestId('expanded-network-options')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops|\+ their contacts|\+ deren Kontakte/i })).toBeInTheDocument();
   });
 
   it('displays sync service recommendation card when no sync service is connected and navigates to sync settings on click', async () => {
@@ -434,11 +437,26 @@ describe('AddressBook Component', () => {
     });
   });
 
-  it('copies contact card with sync URLs included from settings', async () => {
+  it('shares business card and copies link with sync URLs included from settings', async () => {
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_user_id') return Promise.resolve('did:key:zMe12345');
       if (cmd === 'get_user_profile') return Promise.resolve({ firstName: 'Alice', lastName: 'Sender' });
+      if (cmd === 'get_my_market_profile') {
+        return Promise.resolve({
+          profile: { id: 'did:key:zMe12345', firstName: 'Alice', lastName: 'Sender' },
+          visibility: { firstName: 'all', lastName: 'all' },
+          skills: [],
+          ads: [],
+          maxHops: 2,
+          allowInquiries: true,
+          published: true,
+          shareUri: 'humoco://card?env=test&did=did%3Akey%3AzMe12345&sync=https%3A%2F%2Fsync1.domain.org%2Fsync.php',
+          fileWire: '{"card_jws":"test"}',
+          qrSvg: '<svg></svg>',
+          qrIsPartial: false,
+        });
+      }
       if (cmd === 'get_app_settings') {
         return Promise.resolve({
           marketSelectedSyncs: [
@@ -459,12 +477,146 @@ describe('AddressBook Component', () => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
     });
 
-    const copyBtn = screen.getByRole('button', { name: /contacts\.copyContactCard|Copy Contact Card|Meine Kontaktkarte kopieren/i });
+    const shareBtn = screen.getByRole('button', { name: /contacts\.shareMyBusinessCard|Share My Business Card|Meine Visitenkarte teilen/i });
+    fireEvent.click(shareBtn);
+
+    const copyBtn = await screen.findByRole('button', { name: /marketplace\.copyUri|Copy Link|Link kopieren/i });
     fireEvent.click(copyBtn);
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(expect.stringContaining('did%3Akey%3AzMe12345'));
       expect(writeText).toHaveBeenCalledWith(expect.stringContaining('sync=https%3A%2F%2Fsync1.domain.org%2Fsync.php'));
     });
+  });
+
+  it('renders 4-tile Add Contact modal when clicking primary button', async () => {
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
+    });
+
+    const addBtn = screen.getByRole('button', { name: /contacts\.addContact|Add Contact|Kontakt hinzufügen/i });
+    fireEvent.click(addBtn);
+
+    expect(await screen.findByTestId('add-contact-tiles')).toBeInTheDocument();
+    expect(screen.getByTestId('add-tile-qr')).toBeInTheDocument();
+    expect(screen.getByTestId('add-tile-clipboard')).toBeInTheDocument();
+    expect(screen.getByTestId('add-tile-file')).toBeInTheDocument();
+    expect(screen.getByTestId('add-tile-manual')).toBeInTheDocument();
+  });
+
+  it('displays segmented reach control and live explanatory sentence', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_wot_summary') {
+        return Promise.resolve({
+          ratedContactsCount: 3,
+          verifiedHumansCount: 1,
+          closeConfidantsCount: 2,
+          importedPeerListsCount: 1,
+          ownListVersion: 1,
+          ownListMaxHops: 2,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
+    });
+
+    const toggleBtn = screen.getByTestId('toggle-network-options-button');
+    fireEvent.click(toggleBtn);
+
+    expect(screen.getByTestId('expanded-network-options')).toBeInTheDocument();
+    expect(screen.getByTestId('reach-live-sentence')).toBeInTheDocument();
+    expect(screen.getByText(/Deine Kontakte und deren direkte Kontakte|Your contacts and their direct contacts/i)).toBeInTheDocument();
+  });
+
+  it('separates empty states: no contacts vs search without match', async () => {
+    // 1. Completely empty contacts
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+
+    const { unmount } = render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /contacts\.emptyNoContactsTitle|No contacts yet|Noch keine Kontakte/i })).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Füge die erste Person hinzu, der du vertraust|Add the first person you trust/i)).toBeInTheDocument();
+    unmount();
+
+    // 2. Contacts exist, but filter/search has no match
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
+    });
+
+    const searchInput = screen.getByPlaceholderText(/search/i);
+    fireEvent.change(searchInput, { target: { value: 'NonExistentPersonXYZ' } });
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /contacts\.emptyNoMatchesTitle|No matches|Keine Treffer/i })).toBeInTheDocument();
+      expect(screen.getByText(/Keine Treffer für „NonExistentPersonXYZ“|No matches for “NonExistentPersonXYZ”/i)).toBeInTheDocument();
+    });
+
+    const resetBtn = screen.getByRole('button', { name: /contacts\.resetFilterBtn|Reset filter|Filter zurücksetzen/i });
+    expect(resetBtn).toBeInTheDocument();
+    fireEvent.click(resetBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
+    });
+  });
+
+  it('displays incoming handshakes with counter badge, toggle button, and human phrasing', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_post_inbox_summary') {
+        return Promise.resolve({
+          pendingWotHandshakes: [
+            {
+              msgId: 'msg-123',
+              senderDid: 'did:key:zAlice999',
+              senderName: 'Alice Wunder',
+              proposedLevel: 2,
+              replyRequested: true,
+              receivedAt: 1700000000,
+            },
+          ],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pending-handshakes-section')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Incoming Trust Confirmations|Eingehende Vertrauensbestätigungen|contacts\.incomingHandshakesTitle/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 Kontakt möchte dich|1 contact would like to add you/i)).toBeInTheDocument();
+
+    const viewBtn = screen.getByTestId('toggle-handshakes-button');
+    expect(viewBtn).toHaveTextContent(/contacts\.viewHandshakesBtn|View|Ansehen/i);
+    fireEvent.click(viewBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Alice Wunder möchte euch gegenseitig als vertraut eintragen|Alice Wunder would like to add each other as trusted contacts/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('handshake-item-msg-123')).toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { standardsService } from "../services/standardsService";
 import { profileService } from "../services/profileService";
+import { marketService } from "../services/marketService";
 import { logger } from "../utils/log";
 import { stringifyError } from "../utils/errorHelper";
 import { 
@@ -84,6 +85,18 @@ export function useVoucherCreation() {
     const handleLoadProfile = useCallback(async () => {
         try {
             const profile = await profileService.getProfile();
+            let serviceOffer = profile.serviceOffer;
+            if (!serviceOffer || serviceOffer.trim() === '') {
+                try {
+                    const myMarket = await marketService.getMyMarketProfile();
+                    if (myMarket.skills && myMarket.skills.length > 0) {
+                        serviceOffer = myMarket.skills.map(s => s.title.trim()).filter(Boolean).join(', ');
+                    }
+                } catch {
+                    // Ignore if market profile cannot be loaded
+                }
+            }
+
             setIdentity(prev => ({
                 ...prev,
                 firstName: profile.firstName || prev.firstName,
@@ -95,7 +108,7 @@ export function useVoucherCreation() {
                 phone: profile.phone || prev.phone,
                 url: profile.url || prev.url,
                 coordinates: profile.coordinates || prev.coordinates,
-                serviceOffer: profile.serviceOffer || prev.serviceOffer,
+                serviceOffer: serviceOffer || prev.serviceOffer,
                 needs: profile.needs || prev.needs,
                 pictureUrl: profile.pictureUrl || prev.pictureUrl,
                 address: profile.address ? {

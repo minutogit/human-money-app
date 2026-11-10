@@ -83,7 +83,7 @@ describe('RestoreBackupView', () => {
             />
         );
 
-        expect(screen.getByText('Restore Wallet from Backup')).toBeInTheDocument();
+        expect(screen.getByText(/Restore (Profile|Wallet) from Backup/i)).toBeInTheDocument();
         expect(screen.getByText('Select Backup Source')).toBeInTheDocument();
         expect(screen.getByText('Select .hmcbackup File')).toBeInTheDocument();
         expect(screen.getByText('Select Backup Sync Folder')).toBeInTheDocument();
@@ -219,12 +219,12 @@ describe('RestoreBackupView', () => {
                 newPassword: 'devicePassword123',
                 localInstanceId: 'device-uuid-123',
             });
-            expect(screen.getByText('Wallet Successfully Restored!')).toBeInTheDocument();
+            expect(screen.getByText(/(Profile|Wallet) Successfully Restored!/i)).toBeInTheDocument();
             expect(screen.getByText('Restored offline. No L2 reconciliation servers are configured yet.')).toBeInTheDocument();
         });
 
         // 4. Open Wallet button
-        fireEvent.click(screen.getByRole('button', { name: /Open Wallet/i }));
+        fireEvent.click(screen.getByRole('button', { name: /Open (Profile|Wallet)|Go to My Vouchers/i }));
         expect(onRestoreSuccess).toHaveBeenCalledWith(
             expect.objectContaining({
                 folderName: 'profile_alice',

@@ -13,7 +13,7 @@ import { readFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../../utils/log';
 import { stringifyError } from '../../utils/errorHelper';
 import { truncateUserId } from '../../utils/userIdHelper';
-import { Contact, FrontendOwnContactCard } from '../../types';
+import { Contact, FrontendMyMarketProfile } from '../../types';
 
 export interface ImportCardModalProps {
     isOpen: boolean;
@@ -34,7 +34,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
         did?: string | null;
     } | null>(null);
 
-    const [ownCard, setOwnCard] = useState<FrontendOwnContactCard | null>(null);
+    const [myProfile, setMyProfile] = useState<FrontendMyMarketProfile | null>(null);
     const [partnerName, setPartnerName] = useState<string | null>(null);
     const [selectedTrustLevel, setSelectedTrustLevel] = useState<number | null>(null);
     const [isSavingTrust, setIsSavingTrust] = useState(false);
@@ -43,7 +43,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
 
     useEffect(() => {
         if (isOpen) {
-            marketService.getOwnContactCard().then(setOwnCard).catch(() => {});
+            marketService.getMyMarketProfile().then(setMyProfile).catch(() => {});
         }
     }, [isOpen]);
 
@@ -73,8 +73,9 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 let profile = existing?.profile;
                 let syncs = existing?.syncs;
                 if (!profile) {
-                    const list = await marketService.getMarketView().catch(() => []);
-                    const p = (list || []).find(x => x.did === did);
+                    const snap = await marketService.getMarketView().catch(() => null);
+                    const people = snap ? (Array.isArray(snap) ? (snap as any) : snap.people) : [];
+                    const p = (people || []).find((x: any) => x.did === did);
                     profile = p?.profile;
                     syncs = p?.cardSyncs;
                 }
@@ -137,8 +138,9 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 onImportSuccess(res.did);
 
                 if (res.did) {
-                    marketService.getMarketView().then(list => {
-                        const p = (list || []).find(x => x.did === res.did);
+                    marketService.getMarketView().then(snap => {
+                        const people = snap ? (Array.isArray(snap) ? (snap as any) : snap.people) : [];
+                        const p = (people || []).find((x: any) => x.did === res.did);
                         if (p) {
                             const name = [p.profile.firstName, p.profile.lastName].filter(Boolean).join(' ') || p.profile.organization || p.profile.community;
                             if (name) setPartnerName(name);
@@ -327,7 +329,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                         </div>
 
                         {/* Counter-Scan QR Section */}
-                        {ownCard?.qrSvg && (
+                        {myProfile?.published && myProfile?.qrSvg && (
                             <div className="p-4 bg-bg-app rounded-2xl border border-theme-subtle text-center space-y-2">
                                 <span className="text-xs font-bold text-theme-secondary block">
                                     {t('marketplace.counterScanTitle', {
@@ -339,7 +341,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                                     {t('marketplace.counterScanHint', 'Sobald dein Gegenüber deinen Code scannt, ist die Verbindung vollständig.')}
                                 </p>
                                 <img
-                                    src={`data:image/svg+xml;utf8,${encodeURIComponent(ownCard.qrSvg)}`}
+                                    src={`data:image/svg+xml;utf8,${encodeURIComponent(myProfile.qrSvg)}`}
                                     alt="HuMoCo Counter QR Code"
                                     className="w-48 h-48 mx-auto rounded-xl p-2 bg-white shadow-xs border border-theme-subtle object-contain"
                                 />

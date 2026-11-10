@@ -112,7 +112,7 @@ describe('Login Component', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/\[\+\] CREATE NEW WALLET/i)).toBeInTheDocument();
+      expect(screen.getByText(/\[\+\] CREATE NEW (PROFILE|WALLET)/i)).toBeInTheDocument();
       expect(screen.getByText(/\[→\] RESTORE FROM BACKUP/i)).toBeInTheDocument();
       expect(screen.getByText(/Forgot password\?/i)).toBeInTheDocument();
     });
@@ -177,7 +177,7 @@ describe('Login Component', () => {
     fireEvent.click(trashButton);
 
     // Modal is open, find the password input and the submit button
-    const passwordInput = await screen.findByLabelText(/Wallet Password/i);
+    const passwordInput = await screen.findByLabelText(/(Profile|Wallet) Password/i);
     const verifyButton = screen.getByRole('button', { name: /Verify/i });
 
     // Enter incorrect password and click verify
@@ -225,7 +225,7 @@ describe('Login Component', () => {
     fireEvent.click(loginButton);
 
     await waitFor(() => {
-      expect(screen.getByText(/Wallet Active on Another Device/i)).toBeInTheDocument();
+      expect(screen.getByText(/(Profile|Wallet) Active on Another Device/i)).toBeInTheDocument();
       expect(screen.getByText(/Epoch 3/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Switch Profile/i })).toBeInTheDocument();
     });
@@ -266,7 +266,7 @@ describe('Login Component', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Security Alert: Concurrent Clone Detected/i)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Recover Wallet with Seed Phrase/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Recover (Profile|Wallet) with (Seed Phrase|Recovery Words)/i })).toBeInTheDocument();
     });
   });
 });

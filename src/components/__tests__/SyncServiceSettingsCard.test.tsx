@@ -110,7 +110,7 @@ describe('SyncServiceSettingsCard Component', () => {
         // Check channel labels
         expect(screen.getByText(/Postfach aktivieren|mailbox/i)).toBeInTheDocument();
         expect(screen.getByText(/Marktplatz.*synchronisieren|marketplace/i)).toBeInTheDocument();
-        expect(screen.getByText(/Vertrauens(liste|einstufungen).*teilen|web of trust|trust ratings/i)).toBeInTheDocument();
+        expect(screen.getAllByText(/Vertrauens(liste|einstufungen).*teilen|web of trust|trust ratings/i).length).toBeGreaterThan(0);
         expect(screen.getByText(/Backups erlauben|Cloud-Sicherung nutzen|Allow Backups|Use Cloud Backup/i)).toBeInTheDocument();
     });
 

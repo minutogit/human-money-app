@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { UserCircle, Mail, Phone, Globe, Briefcase, Heart, Store } from "lucide-react";
+import { UserCircle, Mail, Phone, Globe, Briefcase, Heart, ChevronDown, ChevronUp, Info } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
 import { Button } from "../ui/Button";
@@ -35,6 +35,7 @@ export function CreatorIdentityForm({
     const [isGeocoding, setIsGeocoding] = useState(false);
     const [geoFeedback, setGeoFeedback] = useState("");
     const [geoFeedbackError, setGeoFeedbackError] = useState(false);
+    const [isNeedsExpanded, setIsNeedsExpanded] = useState(false);
 
     const handleUseGPS = async () => {
         setIsLocating(true);
@@ -219,21 +220,40 @@ export function CreatorIdentityForm({
                         </div>
                     </div>
                     <div className="space-y-6">
-                        <div className="p-3 bg-theme-primary/5 border border-theme-primary/10 rounded-2xl flex items-start gap-2.5">
-                            <Store size={16} className="text-theme-primary shrink-0 mt-0.5" />
-                            <p className="text-[11px] text-theme-secondary leading-relaxed">
-                                {t('marketplace.creatorNotice')}
-                            </p>
-                        </div>
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Briefcase size={10}/> {t('profile.serviceOffer')}</label>
                             <textarea value={identity.serviceOffer || ""} onChange={(e) => handleChange('serviceOffer', e.target.value)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[140px]" placeholder={t('voucher.creator.serviceOfferPlaceholder')} />
                         </div>
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Heart size={10}/> {t('profile.needs')}</label>
-                            <textarea value={identity.needs || ""} onChange={(e) => handleChange('needs', e.target.value)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[140px]" placeholder={t('voucher.creator.needsPlaceholder')} />
+                        <div className="border border-theme-subtle rounded-2xl p-4 bg-bg-app/40 space-y-3">
+                            <button
+                                type="button"
+                                onClick={() => setIsNeedsExpanded(!isNeedsExpanded)}
+                                className="w-full flex items-center justify-between text-left text-xs font-bold text-theme-secondary hover:text-theme-primary transition-colors"
+                            >
+                                <span className="flex items-center gap-1.5">
+                                    <Heart size={14} className="text-theme-primary" />
+                                    <span>{t('voucher.creator.needsLabel', 'Was ich im Gegenzug gebrauchen kann (optional)')}</span>
+                                </span>
+                                {isNeedsExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                            </button>
+                            {isNeedsExpanded && (
+                                <div className="pt-2 animate-in fade-in duration-200">
+                                    <textarea
+                                        value={identity.needs || ""}
+                                        onChange={(e) => handleChange('needs', e.target.value)}
+                                        className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[100px]"
+                                        placeholder={t('voucher.creator.needsPlaceholder')}
+                                    />
+                                </div>
+                            )}
                         </div>
                     </div>
+                </div>
+
+                {/* Bottom hint for profile unification */}
+                <div className="mt-6 pt-4 border-t border-theme-subtle/50 flex items-center gap-2 text-xs text-theme-light">
+                    <Info size={15} className="shrink-0 text-theme-primary" />
+                    <span>{t('voucher.creator.voucherOnlyHint', 'Änderungen hier gelten nur für diesen Gutschein. Dein Profil bearbeitest du im Marktplatz.')}</span>
                 </div>
             </div>
         </Card>

@@ -63,7 +63,7 @@ describe('ForkLockOverlay Component', () => {
     render(<ForkLockOverlay onStartRecovery={mockOnStartRecovery} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Wallet Active on Another Device/i)).toBeInTheDocument();
+      expect(screen.getByText(/(Profile|Wallet) Active on Another Device/i)).toBeInTheDocument();
       expect(screen.getByText(/Epoch 5/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Switch Profile \/ Log Out/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Remove Local Profile from This Device/i })).toBeInTheDocument();
@@ -87,13 +87,13 @@ describe('ForkLockOverlay Component', () => {
     render(<ForkLockOverlay onStartRecovery={mockOnStartRecovery} />);
 
     // Toggle reclaim section
-    const toggleBtn = screen.getByText(/Reactivate Wallet on This Device/i);
+    const toggleBtn = screen.getByText(/Reactivate (Profile|Wallet) on This Device/i);
     fireEvent.click(toggleBtn);
 
     const passwordInput = await screen.findByPlaceholderText(/Password/i);
     fireEvent.change(passwordInput, { target: { value: 'secret' } });
 
-    const reclaimSubmitBtn = screen.getByRole('button', { name: /Reclaim Wallet on This Device/i });
+    const reclaimSubmitBtn = screen.getByRole('button', { name: /Reclaim (Profile|Wallet) on This Device/i });
     fireEvent.click(reclaimSubmitBtn);
 
     await waitFor(() => {
@@ -116,7 +116,7 @@ describe('ForkLockOverlay Component', () => {
     await waitFor(() => {
       expect(screen.getByText(/Security Alert: Concurrent Clone Detected/i)).toBeInTheDocument();
     });
-    const recoverBtn = screen.getByRole('button', { name: /Recover Wallet with Seed Phrase/i });
+    const recoverBtn = screen.getByRole('button', { name: /Recover (Profile|Wallet) with (Seed Phrase|Recovery Words)/i });
     expect(recoverBtn).toBeInTheDocument();
 
     fireEvent.click(recoverBtn);

@@ -11,7 +11,7 @@ return [
     'disable_rate_limit'   => false,
 
     'channels' => [
-        'card'   => ['max_bytes' => 65536,   'ttl_days' => 30],
+        'card'   => ['max_bytes' => 131072,  'ttl_days' => 30],
         'wot'    => ['max_bytes' => 131072,  'ttl_days' => 30],
         'backup' => ['max_bytes' => 5242880, 'ttl_days' => 180],
         'post'   => ['max_bytes' => 524288,  'ttl_days' => 21],

@@ -10,10 +10,10 @@ use human_money_core::models::profile::UserIdentity;
 use humoco_market::{
     is_own_dummy_post_box, merge_post_slot, seal_post_box, try_open_post_box_any_sender,
     validate_market_inquiry, validate_market_inquiry_reply, validate_post_delivery_receipt,
-    validate_wot_handshake_assertion, MarketInquiry, MarketInquiryDecision, MarketInquiryReply,
-    PostDeliveryReceipt, PostEnvelope, WotHandshakeAssertion, DROP_POST_MAX_BYTES,
-    PAYLOAD_MARKET_INQUIRY_REPLY_V1, PAYLOAD_MARKET_INQUIRY_V1, PAYLOAD_POST_RECEIPT_V1,
-    POST_SLOT_MAGIC, POST_TTL_SECS,
+    validate_wot_handshake_assertion, InquiryTarget, MarketInquiry, MarketInquiryDecision,
+    MarketInquiryReply, PostDeliveryReceipt, PostEnvelope, WotHandshakeAssertion,
+    DROP_POST_MAX_BYTES, PAYLOAD_MARKET_INQUIRY_REPLY_V1, PAYLOAD_MARKET_INQUIRY_V1,
+    PAYLOAD_POST_RECEIPT_V1, POST_SLOT_MAGIC, POST_TTL_SECS,
 };
 use log::warn;
 use tauri::State;
@@ -193,22 +193,21 @@ pub(crate) fn get_contact_name(state: &AppState, did: &str, password: Option<&st
     None
 }
 
-pub(crate) fn check_has_valid_listing_for_inquiry(
+pub(crate) fn check_inquiry_target(
     state: &AppState,
-    listing_id: &str,
+    target: &humoco_market::InquiryTarget,
+    now_secs: u64,
     password: Option<&str>,
 ) -> bool {
     let mut service = state.service.lock().unwrap();
-    let my_did = match service.with_wallet(|w| w.get_user_id().to_string()) {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
-    if let Ok(bytes) = service.load_encrypted_data(crate::state::MARKET_OWN_CARD_KEY, password) {
-        if let Ok(oc) = serde_json::from_slice::<crate::state::StoredOwnCard>(&bytes) {
-            for l in oc.card.listings {
-                let id = humoco_market::compute_listing_id(&my_did, l.listing_type, &l.title);
-                if id == listing_id && l.allow_inquiries {
-                    return true;
+    if let Ok(bytes) = service.load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password) {
+        if let Ok(stored) = serde_json::from_slice::<crate::models::market::StoredOwnMarketProfile>(&bytes) {
+            match target {
+                humoco_market::InquiryTarget::Ad { ad_id, .. } => {
+                    return stored.ads.iter().any(|a| &a.id == ad_id && a.expires_at > now_secs && a.allow_inquiries);
+                }
+                humoco_market::InquiryTarget::Person { .. } => {
+                    return stored.published && stored.allow_inquiries;
                 }
             }
         }
@@ -1050,8 +1049,7 @@ pub async fn accept_wot_handshake(
 
 pub async fn send_market_inquiry_via_post_impl(
     recipient_did: String,
-    listing_id: String,
-    listing_title: String,
+    target: humoco_market::InquiryTarget,
     message: String,
     recipient_syncs: Vec<FrontendSyncDescriptor>,
     password: Option<String>,
@@ -1062,8 +1060,7 @@ pub async fn send_market_inquiry_via_post_impl(
 
     let inquiry = MarketInquiry {
         inquiry_id: inquiry_id.clone(),
-        listing_id: listing_id.clone(),
-        listing_title: listing_title.clone(),
+        target: target.clone(),
         message: message.clone(),
         created_at: now_secs,
     };
@@ -1142,8 +1139,7 @@ pub async fn send_market_inquiry_via_post_impl(
 
     let item = FrontendMarketInquiryItem {
         inquiry_id,
-        listing_id,
-        listing_title,
+        target,
         counterparty_did: recipient_did,
         counterparty_name: None,
         message,
@@ -1160,14 +1156,13 @@ pub async fn send_market_inquiry_via_post_impl(
 #[tauri::command]
 pub async fn send_market_inquiry_via_post(
     recipient_did: String,
-    listing_id: String,
-    listing_title: String,
+    target: humoco_market::InquiryTarget,
     message: String,
     recipient_syncs: Vec<FrontendSyncDescriptor>,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
-    send_market_inquiry_via_post_impl(recipient_did, listing_id, listing_title, message, recipient_syncs, password, &state).await
+    send_market_inquiry_via_post_impl(recipient_did, target, message, recipient_syncs, password, &state).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1190,7 +1185,7 @@ pub async fn reply_market_inquiry_via_post_impl(
     let now_secs = sync_client::current_unix_timestamp();
     let mut post_state = load_post_state(state, password.as_deref())?;
 
-    let (item_idx, counterparty_did, listing_id) = {
+    let (item_idx, counterparty_did, target) = {
         let (idx, item) = post_state
             .seller_inquiries
             .iter()
@@ -1205,12 +1200,11 @@ pub async fn reply_market_inquiry_via_post_impl(
                 "Inquiry has already been replied to (one-step cycle only)".to_string(),
             ));
         }
-        (idx, item.counterparty_did.clone(), item.listing_id.clone())
+        (idx, item.counterparty_did.clone(), item.target.clone())
     };
 
     let reply_payload = MarketInquiryReply {
         inquiry_id: inquiry_id.clone(),
-        listing_id: listing_id.clone(),
         decision: dec,
         note: note.clone(),
         payment_uri: payment_uri.clone(),
@@ -1223,7 +1217,7 @@ pub async fn reply_market_inquiry_via_post_impl(
     if let Ok(sender_vk) = get_pubkey_from_user_id(&counterparty_did) {
         post_state
             .inquiry_rate_tracker
-            .resolve_inquiry(&hex::encode(sender_vk.as_bytes()), &listing_id);
+            .resolve_inquiry(&hex::encode(sender_vk.as_bytes()), &target.target_key());
     }
 
     let recipient_ed_pk = get_pubkey_from_user_id(&counterparty_did).map_err(FrontendError::from)?;
@@ -1282,7 +1276,6 @@ pub async fn reply_market_inquiry_via_post_impl(
 
     let reply_dto = FrontendMarketInquiryReplyDto {
         inquiry_id,
-        listing_id,
         decision,
         note,
         payment_uri,
@@ -1495,7 +1488,7 @@ pub async fn sync_post_channels_impl(
         if let Ok(bytes) = service.load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref()) {
             if let Ok(store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
                 for sc in store.cards.values() {
-                    for d in &sc.card.drops {
+                    for d in &sc.card.payload.drops {
                         if !d.read_url.is_empty() {
                             if let Some(ref sid) = d.slot_id {
                                 direct.push((d.read_url.clone(), sid.clone()));
@@ -1595,18 +1588,18 @@ pub async fn sync_post_channels_impl(
         }
 
         let has_inquiry_listing = service
-            .load_encrypted_data(crate::state::MARKET_OWN_CARD_KEY, password.as_deref())
+            .load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password.as_deref())
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<crate::state::StoredOwnCard>(&bytes).ok())
-            .map(|oc| oc.card.valid_until > now_secs && oc.card.listings.iter().any(|l| l.allow_inquiries))
+            .and_then(|bytes| serde_json::from_slice::<crate::models::market::StoredOwnMarketProfile>(&bytes).ok())
+            .map(|stored| stored.published && (stored.allow_inquiries || stored.ads.iter().any(|a| a.expires_at > now_secs && a.allow_inquiries)))
             .unwrap_or(false);
 
         if has_inquiry_listing {
             if let Ok(bytes) = service.load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref()) {
                 if let Ok(cs) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
                     for sc in cs.cards.values() {
-                        if let Ok(vk) = get_pubkey_from_user_id(&sc.card.did) {
-                            inquiry.push((sc.card.did.clone(), vk));
+                        if let Ok(vk) = get_pubkey_from_user_id(&sc.card.payload.did) {
+                            inquiry.push((sc.card.payload.did.clone(), vk));
                         }
                     }
                 }
@@ -2002,31 +1995,90 @@ pub async fn sync_post_channels_impl(
                             if let Err(e) = validate_market_inquiry(&inquiry) {
                                 errors.push(format!("Invalid market inquiry: {}", e));
                             } else {
-                                let has_valid_listing = check_has_valid_listing_for_inquiry(
+                                let is_target_valid = check_inquiry_target(
                                     state,
-                                    &inquiry.listing_id,
+                                    &inquiry.target,
+                                    now_secs,
                                     password.as_deref(),
                                 );
-                                if !has_valid_listing {
-                                    errors.push(format!(
-                                        "Inquiry for unknown or inquiries-disabled listing {}",
-                                        inquiry.listing_id
-                                    ));
+                                if !is_target_valid {
+                                    match &inquiry.target {
+                                        InquiryTarget::Ad { ad_id, .. } => {
+                                            if let Ok(sender_ed_pk) = get_pubkey_from_user_id(&sender_did) {
+                                                let decline_reply = MarketInquiryReply {
+                                                    inquiry_id: inquiry.inquiry_id.clone(),
+                                                    decision: MarketInquiryDecision::Decline,
+                                                    note: Some("Inserat nicht mehr verfügbar".to_string()),
+                                                    payment_uri: None,
+                                                    amount_hint: None,
+                                                    standard_uuid: None,
+                                                    replied_at: now_secs,
+                                                };
+                                                if let Ok(reply_bytes) = serde_json::to_vec(&decline_reply) {
+                                                    if let Ok(container) = SecureContainer::seal(
+                                                        &my_identity,
+                                                        &ContainerConfig::TargetDid(sender_did.clone(), PrivacyMode::HashedRouting),
+                                                        &reply_bytes,
+                                                        PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_REPLY_V1.to_string()),
+                                                    ) {
+                                                        if let Ok(container_bytes) = serde_json::to_vec(&container) {
+                                                            let auto_msg_id = uuid::Uuid::new_v4().to_string();
+                                                            let env = PostEnvelope::new(
+                                                                auto_msg_id.clone(),
+                                                                now_secs,
+                                                                own_reply_syncs.iter().cloned().map(Into::into).collect(),
+                                                                container_bytes,
+                                                            );
+                                                            if let Ok(auto_box) = seal_post_box(&my_ed_sk, &sender_ed_pk, &env) {
+                                                                post_state.processed_msg_ids.insert(auto_msg_id.clone());
+                                                                post_state.outbox_entries.push(PostOutboxEntry {
+                                                                    msg_id: auto_msg_id,
+                                                                    recipient_did: sender_did.clone(),
+                                                                    tag16_hex: hex::encode(auto_box.tag16),
+                                                                    bundle_id: None,
+                                                                    entry: auto_box,
+                                                                    created_at: now_secs,
+                                                                });
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                queue_receipt(
+                                                    &mut post_state,
+                                                    &my_identity,
+                                                    &my_ed_sk,
+                                                    &sender_did,
+                                                    &envelope.msg_id,
+                                                    &box_entry.tag16,
+                                                    None,
+                                                    &own_reply_syncs,
+                                                    now_secs,
+                                                );
+                                            }
+                                            errors.push(format!(
+                                                "Inquiry for unknown or inquiries-disabled ad {}",
+                                                ad_id
+                                            ));
+                                        }
+                                        InquiryTarget::Person { .. } => {
+                                            errors.push("Inquiry for person profile rejected (profile unpublished or inquiries disabled)".to_string());
+                                        }
+                                    }
                                 } else {
                                     let sender_pk_hex = get_pubkey_from_user_id(&sender_did)
                                         .map(|pk| hex::encode(pk.as_bytes()))
                                         .unwrap_or_default();
+                                    let target_key = inquiry.target.target_key();
                                     match post_state
                                         .inquiry_rate_tracker
-                                        .record_inquiry(&sender_pk_hex, &inquiry.listing_id)
+                                        .record_inquiry(&sender_pk_hex, &target_key)
                                     {
                                         Ok(()) => {
                                             let sender_name =
                                                 get_contact_name(state, &sender_did, password.as_deref());
                                             post_state.seller_inquiries.push(FrontendMarketInquiryItem {
                                                 inquiry_id: inquiry.inquiry_id.clone(),
-                                                listing_id: inquiry.listing_id.clone(),
-                                                listing_title: inquiry.listing_title.clone(),
+                                                target: inquiry.target.clone(),
                                                 counterparty_did: sender_did.clone(),
                                                 counterparty_name: sender_name,
                                                 message: inquiry.message.clone(),
@@ -2083,7 +2135,6 @@ pub async fn sync_post_channels_impl(
                                 };
                                 item.reply = Some(FrontendMarketInquiryReplyDto {
                                     inquiry_id: reply.inquiry_id.clone(),
-                                    listing_id: reply.listing_id.clone(),
                                     decision: decision_str,
                                     note: reply.note.clone(),
                                     payment_uri: reply.payment_uri.clone(),
@@ -2170,10 +2221,12 @@ mod tests {
         create_test_state, setup_test_app, temp_test_dir, MockSyncServer, ALICE_PHRASE, BOB_PHRASE,
     };
     use crate::commands::sync::{probe_public_sync_impl, save_public_sync_impl};
-    use crate::commands::market::save_own_contact_card_impl;
+    use crate::commands::market::{
+        save_my_market_profile_impl, set_card_published_impl, upsert_ad_impl,
+    };
     use crate::models::{
-        FrontendCardListingInput, FrontendContact, FrontendListingType,
-        FrontendSaveOwnCardRequest, FrontendUserProfile,
+        FrontendAdInput, FrontendContact, FrontendSaveMyMarketProfileRequest,
+        FrontendUserProfile,
     };
 
     const DROP_PUB_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -3012,31 +3065,43 @@ mod tests {
         assert_eq!(alice_sync_1.new_wot_handshakes, 1);
 
         // Part B: 1-Step Marketplace Inquiry
-        // Bob creates and saves card with allow_inquiries: true
-        let save_req = FrontendSaveOwnCardRequest {
+        // Bob creates and saves profile with allow_inquiries: true and adds an ad
+        let save_req = FrontendSaveMyMarketProfileRequest {
             profile: FrontendUserProfile {
                 first_name: Some("Bob".to_string()),
-                service_offer: Some("Honey".to_string()),
                 ..Default::default()
             },
-            listings: vec![FrontendCardListingInput {
-                listing_type: FrontendListingType::Offer,
-                title: "Forest Honey".to_string(),
-                text: Some("500g Jar".to_string()),
-                pricing: Some("10 Minuto".to_string()),
-                allow_inquiries: true,
+            visibility: Default::default(),
+            skills: vec![humoco_market::Skill {
+                title: "Honey".to_string(),
+                text: None,
+                pricing: None,
             }],
             max_hops: 2,
-            validity_days: Some(30),
+            allow_inquiries: true,
         };
-        save_own_contact_card_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
-        let listing_id = humoco_market::compute_listing_id(&bob_did, humoco_market::ListingType::Offer, "Forest Honey");
+        save_my_market_profile_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
+        set_card_published_impl(true, false, Some(password.to_string()), &bob_state).await.unwrap();
+
+        let ad_input = FrontendAdInput {
+            id: None,
+            kind: humoco_market::AdKind::Offer,
+            title: "Forest Honey".to_string(),
+            text: Some("500g Jar".to_string()),
+            pricing: Some("10 Minuto".to_string()),
+            duration_days: 30,
+            allow_inquiries: true,
+        };
+        let updated_bob_profile = upsert_ad_impl(ad_input, Some(password.to_string()), &bob_state).unwrap();
+        let ad_id = updated_bob_profile.ads[0].id.clone();
 
         // Alice sends inquiry
         let inq_item = send_market_inquiry_via_post_impl(
             bob_did.clone(),
-            listing_id.clone(),
-            "Forest Honey".to_string(),
+            InquiryTarget::Ad {
+                ad_id,
+                ad_title: "Forest Honey".to_string(),
+            },
             "Do you have 2 jars available?".to_string(),
             bob_syncs.clone(),
             Some(password.to_string()),

@@ -1,4 +1,4 @@
-use crate::{models::{FrontendUserProfile, SealUploadData, FrontendError, FrontendRollbackReconciliationDto, FrontendVoucherL2StatusDto}, AppState, settings::AppSettings};
+use crate::{models::{SealUploadData, FrontendError, FrontendRollbackReconciliationDto, FrontendVoucherL2StatusDto}, AppState, settings::AppSettings};
 use log::{info, error};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -38,43 +38,6 @@ pub async fn save_app_settings(
     }
     if let Err(error)=crate::checkout::refresh_views(state.inner()).await {log::debug!("Proactive regional view refresh failed: {}",error.message);}
     Ok(())
-}
-
-#[tauri::command]
-pub fn update_user_profile(
-    profile: FrontendUserProfile,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<(), FrontendError> {
-    info!("Updating user profile...");
-    let mut service = state.service.lock().unwrap();
-    
-    let core_profile = human_money_core::models::profile::PublicProfile {
-        protocol_version: profile.protocol_version,
-        id: profile.id,
-        first_name: profile.first_name,
-        last_name: profile.last_name,
-        organization: profile.organization,
-        community: profile.community,
-        address: profile.address.map(|a| human_money_core::models::voucher::Address {
-            street: a.street,
-            house_number: a.house_number,
-            zip_code: a.zip_code,
-            city: a.city,
-            country: a.country,
-            full_address: a.full_address,
-        }),
-        gender: profile.gender,
-        email: profile.email,
-        phone: profile.phone,
-        coordinates: profile.coordinates,
-        url: profile.url,
-        service_offer: profile.service_offer,
-        needs: profile.needs,
-        picture_url: profile.picture_url,
-    };
-    
-    service.update_public_profile(core_profile, password.as_deref()).map_err(FrontendError::from)
 }
 
 #[tauri::command]

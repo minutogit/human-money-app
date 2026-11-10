@@ -13,7 +13,7 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
 use crate::error::MarketError;
-use crate::model::{DropDescriptor, MAX_LISTING_TITLE_CHARS};
+use crate::model::{DropDescriptor, MAX_AD_TITLE_CHARS, MAX_SKILL_TITLE_CHARS};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -531,12 +531,37 @@ pub fn validate_wot_handshake_assertion(
     Ok(())
 }
 
+/// Target of a 1-step marketplace inquiry (§6.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InquiryTarget {
+    Ad {
+        ad_id: String,
+        ad_title: String,
+    },
+    Person {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        skill_title: Option<String>,
+    },
+}
+
+impl InquiryTarget {
+    pub fn target_key(&self) -> String {
+        match self {
+            InquiryTarget::Ad { ad_id, .. } => format!("ad:{}", ad_id),
+            InquiryTarget::Person { skill_title } => match skill_title {
+                Some(title) => format!("person:{}", title.trim().to_lowercase()),
+                None => "person".to_string(),
+            },
+        }
+    }
+}
+
 /// 1-Step Marketplace Inquiry payload (§6.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarketInquiry {
     pub inquiry_id: String,
-    pub listing_id: String,
-    pub listing_title: String,
+    pub target: InquiryTarget,
     pub message: String, // strictly validated: 1..=280 chars!
     pub created_at: u64,
 }
@@ -547,23 +572,37 @@ pub fn validate_market_inquiry(inquiry: &MarketInquiry) -> Result<(), MarketErro
             "inquiry_id cannot be empty".to_string(),
         ));
     }
-    if inquiry.listing_id.trim().is_empty() {
-        return Err(MarketError::Validation(
-            "listing_id cannot be empty".to_string(),
-        ));
-    }
-    let title_trimmed = inquiry.listing_title.trim();
-    if title_trimmed.is_empty() {
-        return Err(MarketError::Validation(
-            "listing_title cannot be empty".to_string(),
-        ));
-    }
-    if title_trimmed.chars().count() > MAX_LISTING_TITLE_CHARS {
-        return Err(MarketError::Validation(format!(
-            "listing_title length {} exceeds MAX_LISTING_TITLE_CHARS ({})",
-            title_trimmed.chars().count(),
-            MAX_LISTING_TITLE_CHARS
-        )));
+    match &inquiry.target {
+        InquiryTarget::Ad { ad_id, ad_title } => {
+            if ad_id.len() != 16
+                || !ad_id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+            {
+                return Err(MarketError::Validation(format!(
+                    "ad_id must be exactly 16 lowercase hex chars, got {}",
+                    ad_id
+                )));
+            }
+            let title_trimmed = ad_title.trim();
+            let title_count = title_trimmed.chars().count();
+            if title_count == 0 || title_count > MAX_AD_TITLE_CHARS {
+                return Err(MarketError::Validation(format!(
+                    "ad_title length {} must be between 1 and {}",
+                    title_count, MAX_AD_TITLE_CHARS
+                )));
+            }
+        }
+        InquiryTarget::Person { skill_title } => {
+            if let Some(ref title) = skill_title {
+                let title_trimmed = title.trim();
+                let title_count = title_trimmed.chars().count();
+                if title_count == 0 || title_count > MAX_SKILL_TITLE_CHARS {
+                    return Err(MarketError::Validation(format!(
+                        "skill_title length {} must be between 1 and {}",
+                        title_count, MAX_SKILL_TITLE_CHARS
+                    )));
+                }
+            }
+        }
     }
     let msg_chars = inquiry.message.trim().chars().count();
     if msg_chars == 0 {
@@ -592,7 +631,6 @@ pub enum MarketInquiryDecision {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarketInquiryReply {
     pub inquiry_id: String,
-    pub listing_id: String,
     pub decision: MarketInquiryDecision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>, // optional <= 280 chars
@@ -611,11 +649,6 @@ pub fn validate_market_inquiry_reply(reply: &MarketInquiryReply) -> Result<(), M
             "inquiry_id cannot be empty".to_string(),
         ));
     }
-    if reply.listing_id.trim().is_empty() {
-        return Err(MarketError::Validation(
-            "listing_id cannot be empty".to_string(),
-        ));
-    }
     if let Some(ref note) = reply.note {
         let note_chars = note.trim().chars().count();
         if note_chars > MAX_INQUIRY_CHARS {
@@ -628,32 +661,32 @@ pub fn validate_market_inquiry_reply(reply: &MarketInquiryReply) -> Result<(), M
     Ok(())
 }
 
-/// Rate-limit tracker for marketplace inquiries per listing (§6.4).
+/// Rate-limit tracker for marketplace inquiries per target key (§6.4).
 ///
-/// Prevents spam by restricting open inquiries to at most 1 per `(sender_pubkey_hex, listing_id)`
-/// and at most `max_per_listing` (default 20) total open inquiries per `listing_id`.
+/// Prevents spam by restricting open inquiries to at most 1 per `(sender_pubkey_hex, target_key)`
+/// and at most `max_per_target` (default 20) total open inquiries per `target_key`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InquiryRateTracker {
-    pub max_per_listing: usize,
+    pub max_per_target: usize,
     pub inquiries: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Default for InquiryRateTracker {
     fn default() -> Self {
         Self {
-            max_per_listing: DEFAULT_MAX_OPEN_INQUIRIES_PER_LISTING,
+            max_per_target: DEFAULT_MAX_OPEN_INQUIRIES_PER_LISTING,
             inquiries: BTreeMap::new(),
         }
     }
 }
 
 impl InquiryRateTracker {
-    pub fn new(max_per_listing: usize) -> Self {
+    pub fn new(max_per_target: usize) -> Self {
         Self {
-            max_per_listing: if max_per_listing == 0 {
+            max_per_target: if max_per_target == 0 {
                 DEFAULT_MAX_OPEN_INQUIRIES_PER_LISTING
             } else {
-                max_per_listing
+                max_per_target
             },
             inquiries: BTreeMap::new(),
         }
@@ -662,24 +695,24 @@ impl InquiryRateTracker {
     pub fn record_inquiry(
         &mut self,
         sender_pubkey_hex: &str,
-        listing_id: &str,
+        target_key: &str,
     ) -> Result<(), MarketError> {
         let sender = sender_pubkey_hex.trim().to_ascii_lowercase();
-        let listing = listing_id.trim().to_string();
+        let target = target_key.trim().to_string();
 
-        let entry = self.inquiries.entry(listing.clone()).or_default();
+        let entry = self.inquiries.entry(target.clone()).or_default();
 
         if entry.contains(&sender) {
             return Err(MarketError::Validation(format!(
-                "Sender {} already has an open inquiry for listing {}",
-                sender, listing
+                "Sender {} already has an open inquiry for target {}",
+                sender, target
             )));
         }
 
-        if entry.len() >= self.max_per_listing {
+        if entry.len() >= self.max_per_target {
             return Err(MarketError::Validation(format!(
-                "Listing {} reached maximum open inquiries ({})",
-                listing, self.max_per_listing
+                "Target {} reached maximum open inquiries ({})",
+                target, self.max_per_target
             )));
         }
 
@@ -687,14 +720,14 @@ impl InquiryRateTracker {
         Ok(())
     }
 
-    pub fn resolve_inquiry(&mut self, sender_pubkey_hex: &str, listing_id: &str) -> bool {
+    pub fn resolve_inquiry(&mut self, sender_pubkey_hex: &str, target_key: &str) -> bool {
         let sender = sender_pubkey_hex.trim().to_ascii_lowercase();
-        let listing = listing_id.trim();
+        let target = target_key.trim();
 
-        if let Some(set) = self.inquiries.get_mut(listing) {
+        if let Some(set) = self.inquiries.get_mut(target) {
             let removed = set.remove(&sender);
             if set.is_empty() {
-                self.inquiries.remove(listing);
+                self.inquiries.remove(target);
             }
             removed
         } else {
@@ -702,17 +735,17 @@ impl InquiryRateTracker {
         }
     }
 
-    pub fn open_count(&self, listing_id: &str) -> usize {
+    pub fn open_count(&self, target_key: &str) -> usize {
         self.inquiries
-            .get(listing_id.trim())
+            .get(target_key.trim())
             .map(|s| s.len())
             .unwrap_or(0)
     }
 
-    pub fn has_open_inquiry(&self, sender_pubkey_hex: &str, listing_id: &str) -> bool {
+    pub fn has_open_inquiry(&self, sender_pubkey_hex: &str, target_key: &str) -> bool {
         let sender = sender_pubkey_hex.trim().to_ascii_lowercase();
         self.inquiries
-            .get(listing_id.trim())
+            .get(target_key.trim())
             .map(|s| s.contains(&sender))
             .unwrap_or(false)
     }

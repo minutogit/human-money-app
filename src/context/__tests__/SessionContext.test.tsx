@@ -200,7 +200,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     // Sidebar should be rendered with Alice
     await waitFor(() => {
       expect(screen.getByText('Alice')).toBeInTheDocument();
-      expect(screen.getByText(/Active Wallet/i)).toBeInTheDocument();
+      expect(screen.getByText(/Active Profile/i)).toBeInTheDocument();
     });
   });
 

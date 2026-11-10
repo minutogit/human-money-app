@@ -29,16 +29,16 @@ pub struct CardBundle {
 }
 
 pub fn build_card_bundle(
-    own_card_jws: Option<&str>,
+    own_card_wire: Option<&str>,
     store: &CardStore,
     trust_level_of: &dyn Fn(&str) -> u8,
     max_bytes: usize,
 ) -> CardBundle {
     let mut envelopes = Vec::new();
 
-    if let Some(jws) = own_card_jws {
+    if let Some(wire) = own_card_wire {
         envelopes.push(CardEnvelope {
-            card_jws: jws.to_string(),
+            card_wire: wire.to_string(),
             hops: 1,
         });
     }
@@ -53,11 +53,11 @@ pub fn build_card_bundle(
 
     // Sort by trust_level desc, then v desc, then did asc
     forwardable.sort_by(|(s1, _), (s2, _)| {
-        let t1 = trust_level_of(&s1.card.did);
-        let t2 = trust_level_of(&s2.card.did);
+        let t1 = trust_level_of(&s1.card.payload.did);
+        let t2 = trust_level_of(&s2.card.payload.did);
         t2.cmp(&t1)
-            .then_with(|| s2.card.v.cmp(&s1.card.v))
-            .then_with(|| s1.card.did.cmp(&s2.card.did))
+            .then_with(|| s2.card.payload.v.cmp(&s1.card.payload.v))
+            .then_with(|| s1.card.payload.did.cmp(&s2.card.payload.did))
     });
 
     for (_, env) in forwardable.into_iter().take(MAX_FORWARDED_CARDS) {

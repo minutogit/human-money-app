@@ -113,7 +113,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       );
 
       // Find trust level 0 option
-      const level0Btn = screen.getByText(/contacts\.trustLevel0|Real Person/i).closest('button');
+      const level0Btn = screen.getByText(/contacts\.trustLevel0|Real Person|Verified as human|Als Mensch bestätigt/i).closest('button');
       expect(level0Btn).toBeInTheDocument();
       fireEvent.click(level0Btn!);
 
@@ -181,7 +181,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       );
 
       // Click Trust Level 2 (Good Contact / Guter Kontakt)
-      const level2Btn = screen.getByText(/contacts\.trustLevel2|Good Contact/i).closest('button');
+      const level2Btn = screen.getAllByText(/contacts\.trustLevel2|Good Contact|Friend|Freund/i).find(el => el.closest('button'))?.closest('button');
       expect(level2Btn).toBeInTheDocument();
       fireEvent.click(level2Btn!);
 
@@ -233,7 +233,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       );
 
       // Downgrade to Level 0
-      const level0Btn = screen.getByText(/contacts\.trustLevel0|Real Person/i).closest('button');
+      const level0Btn = screen.getByText(/contacts\.trustLevel0|Real Person|Verified as human|Als Mensch bestätigt/i).closest('button');
       expect(level0Btn).toBeInTheDocument();
       fireEvent.click(level0Btn!);
 
@@ -299,7 +299,7 @@ describe('WoT Contacts & Trust Ratings', () => {
 
       // Contact trust pills should display
       expect(screen.getByText(/contacts\.trustLevel3|Close Confidant/i)).toBeInTheDocument();
-      expect(screen.getByText(/contacts\.trustLevel0|Real Person/i)).toBeInTheDocument();
+      expect(screen.getByText(/contacts\.trustLevel0|Real Person|Verified as human/i)).toBeInTheDocument();
 
       // Synced peer list badge should display for Alice
       expect(screen.getByText(/contacts\.peerListSynced|Recommendations synced|Trust ratings synced|Vertrauenseinstufungen synchronisiert/i)).toBeInTheDocument();
@@ -325,7 +325,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       });
 
       // Click the share button for Alice
-      const shareButtons = screen.getAllByTitle(/contacts\.shareWotForContact|Create encrypted trust file for this contact/i);
+      const shareButtons = screen.getAllByTitle(/contacts\.shareWotForContact|Create encrypted trust (file|list) for this contact/i);
       expect(shareButtons.length).toBeGreaterThan(0);
       fireEvent.click(shareButtons[0]);
 
@@ -362,7 +362,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       }
 
       // Find the "2 Hops" button
-      const hop2Btn = screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops/i });
+      const hop2Btn = screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops|\+ their contacts|\+ deren Kontakte/i });
       expect(hop2Btn).toBeInTheDocument();
       fireEvent.click(hop2Btn);
 
@@ -392,15 +392,12 @@ describe('WoT Contacts & Trust Ratings', () => {
         expect(screen.getByText('Alice')).toBeInTheDocument();
       });
 
-      // Expand network options if collapsed in compact mode
-      const toggleBtn = screen.queryByTestId('toggle-network-options-button');
-      if (toggleBtn) {
-        fireEvent.click(toggleBtn);
-      }
+      // Open Trust List menu modal, then export modal
+      const trustListMenuBtn = screen.getByTestId('trust-list-menu-button');
+      fireEvent.click(trustListMenuBtn);
 
-      // Open export modal
-      const exportBtn = screen.getByRole('button', { name: /contacts\.exportWotButton|Share Trust File/i });
-      fireEvent.click(exportBtn);
+      const openExportBtn = screen.getByText(/contacts\.trustListExportDesc|Deine Vertrauenseinstufungen als Datei exportieren|Export your trust ratings as a file/i).closest('button')!;
+      fireEvent.click(openExportBtn);
 
       // Verify modal is open and shows "all contacts" option
       await waitFor(() => {
@@ -408,7 +405,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       });
 
       // Confirm export button inside modal footer
-      const confirmExportBtn = screen.getAllByRole('button', { name: /contacts\.exportWotButton|Share Trust File/i })[1];
+      const confirmExportBtn = screen.getByRole('button', { name: /contacts\.exportWotButton|Share Trust (File|List)|Vertrauens(datei|liste) teilen/i });
       fireEvent.click(confirmExportBtn);
 
       await waitFor(() => {
@@ -477,7 +474,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       });
 
       // Click trust level 2 button for provider
-      const trustLevel2Btn = screen.getByRole('button', { name: /contacts\.trustLevel2|Good Contact/i });
+      const trustLevel2Btn = screen.getByRole('button', { name: /contacts\.trustLevel2|Good Contact|Friend|Freund/i });
       fireEvent.click(trustLevel2Btn);
 
       await waitFor(() => {

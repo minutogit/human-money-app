@@ -1,44 +1,56 @@
 // src/components/marketplace/MarketPersonView.tsx
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import Avatar from 'boring-avatars';
-import { 
-    Send, 
-    UserPlus, 
-    UserCheck, 
-    CheckCircle2, 
-    HelpCircle, 
-    Ticket, 
-    CreditCard, 
-    Box, 
-    MapPin, 
-    Mail, 
-    Phone, 
-    Globe, 
-    Building2, 
-    Users, 
-    Copy, 
-    Check, 
-    Tag, 
-    Store,
+import {
+    Send,
+    UserPlus,
+    UserCheck,
+    CheckCircle2,
+    HelpCircle,
+    Ticket,
+    CreditCard,
+    Box,
+    MapPin,
+    Mail,
+    Phone,
+    Globe,
+    Building2,
+    Users,
+    Copy,
+    Check,
+    Tag,
+    Briefcase,
     Calendar,
     ArrowLeft,
     Share2,
-    RefreshCw
+    RefreshCw,
+    Heart,
+    MessageSquare,
+    Clock,
 } from 'lucide-react';
-import { FrontendMarketPerson, Contact, FrontendMarketListing, FrontendForwardCardExport } from '../../types';
+import {
+    FrontendMarketPerson,
+    Contact,
+    FrontendForwardCardExport,
+    Ad,
+    InquiryTarget,
+} from '../../types';
 import { useNavigation } from '../../context/NavigationContext';
 import { useSession } from '../../context/SessionContext';
 import { contactService } from '../../services/contactService';
 import { marketService } from '../../services/marketService';
+import { postService } from '../../services/postService';
 import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
 import ContactDialog from '../ContactDialog';
 import { ShareCardModal } from './ShareCardModal';
+import { AdCard } from './AdCard';
 import { copyToClipboard } from '../../utils/clipboard';
 import { truncateUserId } from '../../utils/userIdHelper';
 import { translateError } from '../../utils/errorHelper';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
+import { ModalShell } from '../ui/ModalShell';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
 export interface MarketPersonViewProps {
@@ -46,21 +58,30 @@ export interface MarketPersonViewProps {
     onBack: () => void;
 }
 
-export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
+export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBack }) => {
     const { t } = useTranslation();
     const { navigate } = useNavigation();
     const { protectAction } = useSession();
 
     const [currentPerson, setCurrentPerson] = useState<FrontendMarketPerson>(person);
     const [isManualSyncing, setIsManualSyncing] = useState(false);
-    const { cooldownSeconds, isCoolingDown, checkAndTriggerCooldown } = useRateLimitCooldown();
+    const { isCoolingDown, checkAndTriggerCooldown } = useRateLimitCooldown();
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [isContactDialogOpen, setIsContactDialogOpen] = useState(false);
     const [copiedDid, setCopiedDid] = useState(false);
+
+    // Forwarding
     const [isForwarding, setIsForwarding] = useState(false);
     const [forwardCardData, setForwardCardData] = useState<FrontendForwardCardExport | null>(null);
     const [isShareModalOpen, setIsShareModalOpen] = useState(false);
     const [forwardError, setForwardError] = useState<string | null>(null);
+
+    // Inquiries
+    const [inquiryModalOpen, setInquiryModalOpen] = useState(false);
+    const [inquiryTarget, setInquiryTarget] = useState<InquiryTarget>({ kind: 'person' });
+    const [inquiryMessage, setInquiryMessage] = useState('');
+    const [isSendingInquiry, setIsSendingInquiry] = useState(false);
+    const [inquiryFeedback, setInquiryFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
     useEffect(() => {
         setCurrentPerson(person);
@@ -74,8 +95,8 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
             if (res) {
                 checkAndTriggerCooldown(res);
             }
-            const list = await marketService.getMarketView();
-            const updated = (list || []).find(p => p.did === currentPerson.did);
+            const snapshot = await marketService.getMarketView();
+            const updated = (snapshot.people || []).find((p) => p.did === currentPerson.did);
             if (updated) {
                 setCurrentPerson(updated);
             }
@@ -91,7 +112,7 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
             const list = await contactService.getContacts();
             setContacts(list || []);
         } catch {
-            // Contacts might not be available if not unlocked
+            // Contacts might not be available
         }
     }, []);
 
@@ -99,7 +120,9 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
         loadContacts();
     }, [loadContacts]);
 
-    const existingContact = contacts.find(c => c.did === currentPerson.did);
+    const existingContact = Array.isArray(contacts)
+        ? contacts.find((c) => c.did === currentPerson.did)
+        : undefined;
 
     const handleCopyDid = async () => {
         const success = await copyToClipboard(currentPerson.did);
@@ -109,18 +132,11 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
         }
     };
 
-    const handleSaveContact = async (saved: Contact) => {
-        await protectAction(async (pwd) => {
-            await contactService.saveContact(saved, pwd || undefined);
-        });
-        await loadContacts();
-    };
-
     const handlePay = () => {
         navigate({ view: 'send_vouchers', initialRecipientId: currentPerson.did });
     };
 
-    const hasCardSource = currentPerson.sources.some(s => s.kind === 'card');
+    const hasCardSource = currentPerson.sources.some((s) => s.kind === 'card');
 
     const handleForwardCard = async () => {
         setIsForwarding(true);
@@ -145,27 +161,64 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
             const fullUrl = url.startsWith('http://') || url.startsWith('https://') ? url : `https://${url}`;
             await openUrl(fullUrl);
         } catch {
-            // Open fallback
+            // fallback
+        }
+    };
+
+    // Inquiry flow
+    const openInquiryForPerson = (skillTitle?: string) => {
+        setInquiryTarget({ kind: 'person', skill_title: skillTitle });
+        setInquiryMessage('');
+        setInquiryFeedback(null);
+        setInquiryModalOpen(true);
+    };
+
+    const openInquiryForAd = (ad: Ad) => {
+        setInquiryTarget({ kind: 'ad', ad_id: ad.id, ad_title: ad.title });
+        setInquiryMessage('');
+        setInquiryFeedback(null);
+        setInquiryModalOpen(true);
+    };
+
+    const handleSendInquiry = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!inquiryMessage.trim()) return;
+
+        setIsSendingInquiry(true);
+        setInquiryFeedback(null);
+        try {
+            await protectAction(async (pwd) => {
+                return await postService.sendMarketInquiryViaPost(
+                    currentPerson.did,
+                    inquiryTarget,
+                    inquiryMessage.trim(),
+                    currentPerson.cardSyncs,
+                    pwd || undefined
+                );
+            });
+            setInquiryFeedback({
+                type: 'success',
+                message: t('marketplace.inquirySentSuccess', 'Anfrage erfolgreich gesendet!'),
+            });
+            setTimeout(() => {
+                setInquiryModalOpen(false);
+            }, 1500);
+        } catch (err) {
+            setInquiryFeedback({
+                type: 'error',
+                message: translateError(err, t),
+            });
+        } finally {
+            setIsSendingInquiry(false);
         }
     };
 
     const fullName = [currentPerson.profile.firstName, currentPerson.profile.lastName].filter(Boolean).join(' ');
-    const displayName = fullName || currentPerson.profile.organization || currentPerson.profile.community || truncateUserId(currentPerson.did);
-
-    const hasCardListings = currentPerson.listings.some(l => l.origin === 'card');
-    const hasVoucherListings = currentPerson.listings.some(l => l.origin === 'voucher');
-    const hasBothOrigins = hasCardListings && hasVoucherListings;
-
-    const sortListings = (list: FrontendMarketListing[]) => {
-        return [...list].sort((a, b) => {
-            if (a.origin === 'card' && b.origin === 'voucher') return -1;
-            if (a.origin === 'voucher' && b.origin === 'card') return 1;
-            return 0;
-        });
-    };
-
-    const offers = sortListings(currentPerson.listings.filter(l => l.listingType === 'offer'));
-    const requests = sortListings(currentPerson.listings.filter(l => l.listingType === 'request'));
+    const displayName =
+        fullName ||
+        currentPerson.profile.organization ||
+        currentPerson.profile.community ||
+        truncateUserId(currentPerson.did);
 
     const formattedDate = currentPerson.asOf ? new Date(currentPerson.asOf * 1000).toLocaleDateString() : '';
 
@@ -176,61 +229,74 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
 
     return (
         <div className="max-w-4xl mx-auto space-y-6">
-            {/* Header with Back button */}
+            {/* Header row with navigation & primary actions */}
             <div className="flex items-center justify-between gap-4">
-                <Button 
-                    variant="outline" 
-                    size="sm" 
+                <Button
+                    variant="outline"
+                    size="sm"
                     onClick={onBack}
                     className="gap-2 text-theme-light hover:text-theme-secondary"
                 >
                     <ArrowLeft size={16} />
-                    <span>{t('common.back')}</span>
+                    <span>{t('common.back', 'Zurück')}</span>
                 </Button>
 
                 <div className="flex items-center gap-2">
-                    {/* Primary Pay Action */}
-                    <Button 
-                        onClick={handlePay} 
-                        size="sm" 
-                        className="gap-2 shadow-sm font-semibold"
-                    >
+                    {/* Send Payment */}
+                    <Button onClick={handlePay} size="sm" className="gap-2 shadow-sm font-semibold">
                         <Send size={15} />
-                        <span>{t('marketplace.pay')}</span>
+                        <span>{t('marketplace.pay', 'Bezahlen')}</span>
                     </Button>
 
                     {/* Contact Action */}
-                    <Button 
-                        variant={existingContact ? "secondary" : "outline"} 
-                        size="sm" 
+                    <Button
+                        variant={existingContact ? 'secondary' : 'outline'}
+                        size="sm"
                         onClick={() => setIsContactDialogOpen(true)}
                         className="gap-2 shadow-sm"
                     >
                         {existingContact ? (
                             <>
                                 <UserCheck size={15} className="text-theme-success" />
-                                <span>{t('marketplace.editContact')}</span>
+                                <span>{t('marketplace.editContact', 'Kontakt bearbeiten')}</span>
                             </>
                         ) : (
                             <>
                                 <UserPlus size={15} />
-                                <span>{t('marketplace.addToContacts')}</span>
+                                <span>{t('marketplace.addToContacts', 'Ins Adressbuch')}</span>
                             </>
                         )}
                     </Button>
 
+                    {/* General Inquiry Action */}
+                    {currentPerson.allowInquiries && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openInquiryForPerson()}
+                            className="gap-2 shadow-sm"
+                        >
+                            <MessageSquare size={15} />
+                            <span>{t('marketplace.sendInquiryBtn', 'Anfrage senden')}</span>
+                        </Button>
+                    )}
+
                     {/* Recommend / Forward Action */}
                     {(currentPerson.canForward || hasCardSource) && (
-                        <Button 
-                            variant="outline" 
-                            size="sm" 
+                        <Button
+                            variant="outline"
+                            size="sm"
                             disabled={!currentPerson.canForward || isForwarding}
                             onClick={handleForwardCard}
-                            title={!currentPerson.canForward ? t('marketplace.forwardMaxHopsReached') : t('marketplace.forwardCardBtn')}
+                            title={
+                                !currentPerson.canForward
+                                    ? t('marketplace.forwardMaxHopsReached', 'Maximale Weiterempfehlungsstufen erreicht')
+                                    : t('marketplace.forwardCardBtn', 'Weiterempfehlen')
+                            }
                             className="gap-2 shadow-sm"
                         >
                             <Share2 size={15} />
-                            <span>{t('marketplace.forwardCardBtn')}</span>
+                            <span>{t('marketplace.forwardCardBtn', 'Weiterempfehlen')}</span>
                         </Button>
                     )}
                 </div>
@@ -244,15 +310,23 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
             )}
 
             {/* Profile Overview Card */}
-            <Card className="p-6 sm:p-8 bg-white border border-theme-subtle rounded-3xl shadow-soft">
+            <Card className="p-6 sm:p-8 bg-white border border-theme-subtle rounded-3xl shadow-soft space-y-6">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-6">
-                    <div className="ring-4 ring-theme-primary/10 rounded-full p-1 shrink-0 bg-white shadow-sm">
-                        <Avatar
-                            size={72}
-                            name={displayName}
-                            variant="beam"
-                            colors={["#E63946", "#F4A261", "#E76F51", "#2A9D8F", "#2B1B17"]}
-                        />
+                    <div className="ring-4 ring-theme-primary/10 rounded-full p-1 shrink-0 bg-white shadow-sm overflow-hidden w-20 h-20 flex items-center justify-center">
+                        {currentPerson.profile.pictureUrl ? (
+                            <img
+                                src={currentPerson.profile.pictureUrl}
+                                alt={displayName}
+                                className="w-full h-full object-cover rounded-full"
+                            />
+                        ) : (
+                            <Avatar
+                                size={72}
+                                name={displayName}
+                                variant="beam"
+                                colors={['#E63946', '#F4A261', '#E76F51', '#2A9D8F', '#2B1B17']}
+                            />
+                        )}
                     </div>
 
                     <div className="space-y-2 flex-1 min-w-0">
@@ -265,12 +339,12 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                             {currentPerson.trust === 'trusted' ? (
                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-xs">
                                     <CheckCircle2 size={13} className="text-emerald-600" />
-                                    {t('marketplace.trustTrusted')}
+                                    {t('marketplace.trustTrusted', 'Aus deinem Vertrauensnetz')}
                                 </span>
                             ) : (
                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 shadow-xs">
                                     <HelpCircle size={13} className="text-slate-500" />
-                                    {t('marketplace.trustUnknown')}
+                                    {t('marketplace.trustUnknown', 'Unbekannter Kontakt')}
                                 </span>
                             )}
                         </div>
@@ -293,7 +367,7 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                             </div>
                         )}
 
-                        {/* DID and Metadata */}
+                        {/* Metadata row */}
                         <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-theme-light">
                             <button
                                 type="button"
@@ -308,7 +382,7 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                             {formattedDate && (
                                 <span className="flex items-center gap-1 opacity-75">
                                     <Calendar size={12} />
-                                    {t('marketplace.asOf', { date: formattedDate })}
+                                    {t('marketplace.asOf', { date: formattedDate, defaultValue: `Stand: ${formattedDate}` })}
                                 </span>
                             )}
 
@@ -317,35 +391,35 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                                 {currentPerson.sources.map((src, i) => {
                                     if (src.kind === 'voucher') {
                                         return (
-                                            <span 
-                                                key={i} 
-                                                title={t('marketplace.sourceVoucher')}
+                                            <span
+                                                key={i}
                                                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold"
                                             >
                                                 <Ticket size={11} />
-                                                {t('marketplace.sourceVoucher')}
+                                                {t('marketplace.sourceVoucher', 'Aus Gutschein-Profil')}
                                             </span>
                                         );
                                     } else if (src.kind === 'card') {
                                         return (
-                                            <span 
-                                                key={i} 
-                                                title={t('marketplace.sourceCard', { hops: src.hops })}
+                                            <span
+                                                key={i}
                                                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200 text-[10px] font-semibold"
                                             >
                                                 <CreditCard size={11} />
-                                                {t('marketplace.sourceCard', { hops: src.hops })}
+                                                {t('marketplace.sourceCard', {
+                                                    hops: src.hops,
+                                                    defaultValue: `Visitenkarte (Stufe ${src.hops})`,
+                                                })}
                                             </span>
                                         );
                                     } else if (src.kind === 'sync') {
                                         return (
-                                            <span 
-                                                key={i} 
-                                                title={t('marketplace.sourceSync')}
+                                            <span
+                                                key={i}
                                                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 text-sky-800 border border-sky-200 text-[10px] font-semibold"
                                             >
                                                 <Box size={11} />
-                                                {t('marketplace.sourceSync')}
+                                                {t('marketplace.sourceSync', 'Sync-Dienst')}
                                             </span>
                                         );
                                     }
@@ -356,12 +430,93 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                     </div>
                 </div>
 
-                {/* Issued / Accepted Voucher Standards */}
+                {/* Maintainer Decision 7: Subtle note if person.profile.needs is present and non-empty */}
+                {currentPerson.profile.needs && currentPerson.profile.needs.trim() !== '' && (
+                    <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/70 flex items-start gap-2.5 text-xs text-amber-900">
+                        <Heart size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                            <span className="font-bold">
+                                {t('marketplace.personNeedsNote', 'Laut Gutschein gesucht:')}{' '}
+                            </span>
+                            <span>{currentPerson.profile.needs}</span>
+                        </div>
+                    </div>
+                )}
+
+                {/* Pending ads hint */}
+                {currentPerson.adsPending > 0 && (
+                    <div className="p-3.5 rounded-2xl bg-sky-50 border border-sky-200 text-xs text-sky-850 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                            <Clock size={16} className="text-sky-600 shrink-0" />
+                            <span>
+                                {t('marketplace.adsPendingHint', '{{count}} Inserate werden über den Sync-Dienst nachgeladen.', {
+                                    count: currentPerson.adsPending,
+                                })}
+                            </span>
+                        </div>
+                        <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={handleManualSync}
+                            disabled={isManualSyncing || isCoolingDown}
+                            className="shrink-0 flex items-center gap-1"
+                        >
+                            <RefreshCw size={12} className={isManualSyncing ? 'animate-spin' : ''} />
+                            <span>{t('marketplace.fetchNowBtn', 'Jetzt abrufen')}</span>
+                        </Button>
+                    </div>
+                )}
+
+                {/* Disclosed Address & Contact Details */}
+                {(hasAddress || currentPerson.profile.email || currentPerson.profile.phone || currentPerson.profile.url) && (
+                    <div className="pt-4 border-t border-theme-subtle/50 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-theme-light">
+                        {hasAddress && (
+                            <div className="flex items-start gap-2">
+                                <MapPin size={15} className="shrink-0 text-theme-primary mt-0.5" />
+                                <div>
+                                    {addressLine1 && <div>{addressLine1}</div>}
+                                    {addressLine2 && <div>{addressLine2}</div>}
+                                    {address?.country && <div>{address.country}</div>}
+                                </div>
+                            </div>
+                        )}
+                        {currentPerson.profile.email && (
+                            <div className="flex items-center gap-2">
+                                <Mail size={15} className="shrink-0 text-theme-primary" />
+                                <a href={`mailto:${currentPerson.profile.email}`} className="hover:underline truncate">
+                                    {currentPerson.profile.email}
+                                </a>
+                            </div>
+                        )}
+                        {currentPerson.profile.phone && (
+                            <div className="flex items-center gap-2">
+                                <Phone size={15} className="shrink-0 text-theme-primary" />
+                                <a href={`tel:${currentPerson.profile.phone}`} className="hover:underline truncate">
+                                    {currentPerson.profile.phone}
+                                </a>
+                            </div>
+                        )}
+                        {currentPerson.profile.url && (
+                            <div className="flex items-center gap-2">
+                                <Globe size={15} className="shrink-0 text-theme-primary" />
+                                <button
+                                    type="button"
+                                    onClick={() => handleOpenWebsite(currentPerson.profile.url!)}
+                                    className="hover:underline truncate text-theme-primary text-left"
+                                >
+                                    {currentPerson.profile.url}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Accepted Standards */}
                 {currentPerson.standards.length > 0 && (
-                    <div className="mt-6 pt-5 border-t border-theme-subtle/50">
+                    <div className="pt-4 border-t border-theme-subtle/50">
                         <h4 className="text-[11px] font-black text-theme-light uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
                             <Ticket size={12} />
-                            {t('marketplace.standardsIssued')}
+                            {t('marketplace.standardsIssued', 'Angenommene Gutschein-Standards')}
                         </h4>
                         <div className="flex flex-wrap gap-2">
                             {currentPerson.standards.map((std) => (
@@ -378,239 +533,240 @@ export function MarketPersonView({ person, onBack }: MarketPersonViewProps) {
                 )}
             </Card>
 
-            {/* Inserate / Listings Section */}
+            {/* ======================================================== */}
+            {/* Fähigkeiten (Skills)                                    */}
+            {/* ======================================================== */}
             <div className="space-y-4">
-                {currentPerson.listings.length === 0 ? (
-                    <Card className="p-8 text-center bg-white border border-theme-subtle rounded-3xl">
-                        {Array.isArray(currentPerson.cardSyncs) && currentPerson.cardSyncs.length > 0 ? (
-                            <div className="max-w-md mx-auto space-y-3">
-                                <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center mx-auto">
-                                    <RefreshCw size={24} className={isManualSyncing ? 'animate-spin' : ''} />
-                                </div>
-                                <h3 className="text-base font-bold text-theme-secondary">
-                                    {t('marketplace.waitingForMutualHandshakeTitle', 'Kontakt gespeichert – Freischaltung ausstehend')}
-                                </h3>
-                                <p className="text-xs text-theme-light leading-relaxed">
-                                    {t('marketplace.waitingForMutualHandshakeDesc', 'Inserate werden geladen, sobald euch eure Adressbücher gegenseitig freigeschaltet haben.')}
-                                </p>
-                                <div className="pt-2">
-                                    <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={handleManualSync}
-                                        disabled={isManualSyncing || isCoolingDown}
-                                        className="gap-1.5 text-xs mx-auto"
-                                    >
-                                        <RefreshCw size={13} className={isManualSyncing ? 'animate-spin' : ''} />
-                                        <span>
-                                            {isCoolingDown
-                                                ? t('marketplace.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })
-                                                : isManualSyncing
-                                                ? t('common.syncing', 'Synchronisiere...')
-                                                : t('marketplace.fetchNowBtn', 'Jetzt abrufen')}
-                                        </span>
-                                    </Button>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="max-w-md mx-auto space-y-3">
-                                <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center mx-auto">
-                                    <Store size={24} />
-                                </div>
-                                <h3 className="text-base font-bold text-theme-secondary">
-                                    {t('marketplace.acceptsOwnVouchers')}
-                                </h3>
-                                <p className="text-xs text-theme-light leading-relaxed">
-                                    {t('marketplace.noListings')}
-                                </p>
-                            </div>
-                        )}
-                    </Card>
-                ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* Biete / Offers */}
-                        <div className="space-y-3">
-                            <h3 className="text-xs font-black text-theme-light uppercase tracking-widest flex items-center gap-2 px-1">
-                                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                                {t('marketplace.tabOffers')} ({offers.length})
-                            </h3>
-                            {offers.length === 0 ? (
-                                <p className="text-xs text-theme-light/60 italic p-4 bg-white border border-theme-subtle rounded-2xl">
-                                    {t('marketplace.noListings')}
-                                </p>
-                            ) : (
-                                <div className="space-y-3">
-                                    {offers.map((listing, idx) => (
-                                        <Card key={idx} className="p-4 bg-white border border-theme-subtle rounded-2xl shadow-xs space-y-2.5">
-                                            <div className="flex items-start justify-between gap-3">
-                                                <h4 className="text-sm font-bold text-theme-secondary leading-snug">
-                                                    {listing.title}
-                                                </h4>
-                                                {listing.pricing && (
-                                                    <span className="shrink-0 px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold">
-                                                        {listing.pricing}
-                                                    </span>
-                                                )}
-                                            </div>
-                                            {listing.text && (
-                                                <p className="text-xs text-theme-secondary/80 leading-relaxed whitespace-pre-wrap">
-                                                    {listing.text}
-                                                </p>
-                                            )}
-                                            <div className="pt-2 border-t border-theme-subtle/30 flex items-center justify-between text-[10px] text-theme-light">
-                                                <span className="flex items-center gap-1 font-medium">
-                                                    {listing.origin === 'card'
-                                                        ? t('marketplace.originCard')
-                                                        : hasBothOrigins
-                                                        ? t('marketplace.originFromVoucher')
-                                                        : t('marketplace.originVoucher')}
-                                                </span>
-                                            </div>
-                                        </Card>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
+                <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-theme-secondary flex items-center gap-2">
+                        <Briefcase size={14} className="text-theme-primary" />
+                        <span>{t('marketplace.sectionSkills', 'Fähigkeiten & Angebote')}</span>
+                        <span className="text-theme-light font-normal">({(currentPerson.skills || []).length})</span>
+                    </h3>
+                </div>
 
-                        {/* Suche / Requests */}
-                        <div className="space-y-3">
-                            <h3 className="text-xs font-black text-theme-light uppercase tracking-widest flex items-center gap-2 px-1">
-                                <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                                {t('marketplace.tabRequests')} ({requests.length})
-                            </h3>
-                            {requests.length === 0 ? (
-                                <p className="text-xs text-theme-light/60 italic p-4 bg-white border border-theme-subtle rounded-2xl">
-                                    {t('marketplace.noListings')}
-                                </p>
-                            ) : (
-                                <div className="space-y-3">
-                                    {requests.map((listing, idx) => (
-                                        <Card key={idx} className="p-4 bg-white border border-theme-subtle rounded-2xl shadow-xs space-y-2.5">
-                                            <div className="flex items-start justify-between gap-3">
-                                                <h4 className="text-sm font-bold text-theme-secondary leading-snug">
-                                                    {listing.title}
-                                                </h4>
-                                                {listing.pricing && (
-                                                    <span className="shrink-0 px-2 py-0.5 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 text-xs font-bold">
-                                                        {listing.pricing}
-                                                    </span>
-                                                )}
-                                            </div>
-                                            {listing.text && (
-                                                <p className="text-xs text-theme-secondary/80 leading-relaxed whitespace-pre-wrap">
-                                                    {listing.text}
-                                                </p>
-                                            )}
-                                            <div className="pt-2 border-t border-theme-subtle/30 flex items-center justify-between text-[10px] text-theme-light">
-                                                <span className="flex items-center gap-1 font-medium">
-                                                    {listing.origin === 'card'
-                                                        ? t('marketplace.originCard')
-                                                        : hasBothOrigins
-                                                        ? t('marketplace.originFromVoucher')
-                                                        : t('marketplace.originVoucher')}
-                                                </span>
-                                            </div>
-                                        </Card>
-                                    ))}
+                {(currentPerson.skills || []).length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {(currentPerson.skills || []).map((skill, idx) => (
+                            <div
+                                key={idx}
+                                className="p-4 rounded-2xl bg-white border border-theme-subtle space-y-2 shadow-xs flex flex-col justify-between"
+                            >
+                                <div className="space-y-1.5">
+                                    <div className="flex items-start justify-between gap-2">
+                                        <h4 className="text-sm font-bold text-theme-secondary leading-snug">
+                                            {skill.title}
+                                        </h4>
+                                        {skill.origin === 'voucher' ? (
+                                            <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md shrink-0">
+                                                {t('marketplace.originFromVoucher', 'laut Gutschein')}
+                                            </span>
+                                        ) : (
+                                            <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md shrink-0">
+                                                {t('marketplace.originCard', 'Aus Visitenkarte')}
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    {skill.text && (
+                                        <p className="text-xs text-theme-light leading-relaxed">{skill.text}</p>
+                                    )}
+
+                                    {skill.pricing && (
+                                        <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-theme-primary/5 text-theme-primary text-xs font-semibold">
+                                            <Tag size={11} />
+                                            <span>{skill.pricing}</span>
+                                        </div>
+                                    )}
                                 </div>
-                            )}
-                        </div>
+
+                                {currentPerson.allowInquiries && (
+                                    <div className="pt-2 flex justify-end">
+                                        <Button
+                                            size="xs"
+                                            variant="outline"
+                                            onClick={() => openInquiryForPerson(skill.title)}
+                                            className="flex items-center gap-1.5"
+                                        >
+                                            <MessageSquare size={12} />
+                                            <span>{t('marketplace.inquireBtn', 'Anfragen')}</span>
+                                        </Button>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="p-6 rounded-2xl bg-bg-app border border-theme-subtle text-center text-xs text-theme-light">
+                        {t('marketplace.noSkillsListed', 'Keine Fähigkeiten angegeben.')}
                     </div>
                 )}
             </div>
 
-            {/* Contact Details Card */}
-            {(currentPerson.profile.email || currentPerson.profile.phone || currentPerson.profile.url || hasAddress || currentPerson.profile.coordinates) && (
-                <Card className="p-6 bg-white border border-theme-subtle rounded-3xl shadow-soft space-y-4">
-                    <h3 className="text-xs font-black text-theme-light uppercase tracking-widest flex items-center gap-2">
-                        {t('marketplace.contactDetails')}
+            {/* ======================================================== */}
+            {/* Aktive Inserate (Active Ads)                            */}
+            {/* ======================================================== */}
+            <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-theme-secondary flex items-center gap-2">
+                        <Tag size={14} className="text-theme-primary" />
+                        <span>{t('marketplace.activeAdsSectionTitle', 'Aktuelle Inserate')}</span>
+                        <span className="text-theme-light font-normal">({(currentPerson.activeAds || []).length})</span>
                     </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                        {currentPerson.profile.email && (
-                            <a 
-                                href={`mailto:${currentPerson.profile.email}`} 
-                                className="flex items-center gap-2.5 p-3 rounded-2xl bg-bg-app border border-theme-subtle/40 text-theme-secondary hover:text-theme-primary transition-colors"
-                            >
-                                <Mail size={15} className="text-theme-light shrink-0" />
-                                <span className="truncate">{currentPerson.profile.email}</span>
-                            </a>
-                        )}
+                </div>
 
-                        {currentPerson.profile.phone && (
-                            <a 
-                                href={`tel:${currentPerson.profile.phone}`} 
-                                className="flex items-center gap-2.5 p-3 rounded-2xl bg-bg-app border border-theme-subtle/40 text-theme-secondary hover:text-theme-primary transition-colors"
-                            >
-                                <Phone size={15} className="text-theme-light shrink-0" />
-                                <span className="truncate">{currentPerson.profile.phone}</span>
-                            </a>
-                        )}
+                {(currentPerson.activeAds || []).length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {(currentPerson.activeAds || []).map((ad) => {
+                            const nowSecs = Math.floor(Date.now() / 1000);
+                            const daysLeft =
+                                ad.expires_at > nowSecs ? Math.ceil((ad.expires_at - nowSecs) / 86400) : 0;
 
-                        {currentPerson.profile.url && (
-                            <button 
-                                type="button"
-                                onClick={() => handleOpenWebsite(currentPerson.profile.url || '')}
-                                className="flex items-center gap-2.5 p-3 rounded-2xl bg-bg-app border border-theme-subtle/40 text-theme-secondary hover:text-theme-primary transition-colors text-left cursor-pointer"
-                            >
-                                <Globe size={15} className="text-theme-light shrink-0" />
-                                <span className="truncate">{currentPerson.profile.url}</span>
-                            </button>
-                        )}
-
-                        {hasAddress && (
-                            <div className="flex items-start gap-2.5 p-3 rounded-2xl bg-bg-app border border-theme-subtle/40 text-theme-secondary">
-                                <MapPin size={15} className="text-theme-light shrink-0 mt-0.5" />
-                                <div className="space-y-0.5">
-                                    {address?.fullAddress ? (
-                                        <p>{address.fullAddress}</p>
-                                    ) : (
-                                        <>
-                                            {addressLine1 && <p>{addressLine1}</p>}
-                                            {addressLine2 && <p>{addressLine2}</p>}
-                                            {address?.country && <p>{address.country}</p>}
-                                        </>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-
-                        {currentPerson.profile.coordinates && (
-                            <div className="flex items-center gap-2.5 p-3 rounded-2xl bg-bg-app border border-theme-subtle/40 text-theme-secondary font-mono text-[11px]">
-                                <MapPin size={15} className="text-theme-light shrink-0" />
-                                <span className="truncate">{currentPerson.profile.coordinates}</span>
-                            </div>
-                        )}
+                            return (
+                                <AdCard
+                                    key={ad.id}
+                                    ad={ad}
+                                    ownerDid={currentPerson.did}
+                                    ownerName={displayName}
+                                    trust={currentPerson.trust}
+                                    daysLeft={daysLeft}
+                                    onInquire={() => openInquiryForAd(ad)}
+                                    onPay={() => handlePay()}
+                                />
+                            );
+                        })}
                     </div>
-                </Card>
-            )}
+                ) : (
+                    <div className="p-6 rounded-2xl bg-bg-app border border-theme-subtle text-center text-xs text-theme-light">
+                        {currentPerson.adsPending > 0
+                            ? t('marketplace.adsLoadingFromSync', 'Inserate werden noch synchronisiert...')
+                            : t('marketplace.noActiveAdsForPerson', 'Aktuell keine Inserate auf der Pinnwand.')}
+                    </div>
+                )}
+            </div>
 
-            {/* Contact Dialog */}
+            {/* Dialogs */}
             <ContactDialog
                 isOpen={isContactDialogOpen}
                 onClose={() => setIsContactDialogOpen(false)}
-                onSave={handleSaveContact}
                 existingContact={existingContact}
                 initialDid={currentPerson.did}
                 initialProfile={currentPerson.profile}
+                onSave={async (saved) => {
+                    await protectAction(async (pwd) => {
+                        await contactService.saveContact(saved, pwd || undefined);
+                    });
+                    await loadContacts();
+                }}
             />
 
-            {/* Share / Forward Modal */}
+            {/* Forward Share Modal */}
             {forwardCardData && (
                 <ShareCardModal
                     isOpen={isShareModalOpen}
-                    onClose={() => {
-                        setIsShareModalOpen(false);
-                        setForwardCardData(null);
-                    }}
-                    title={t('marketplace.forwardCardTitle')}
-                    subtitle={t('marketplace.forwardCardSubtitle', { name: displayName })}
-                    envelopeJson={forwardCardData.envelopeJson}
+                    onClose={() => setIsShareModalOpen(false)}
+                    title={t('marketplace.forwardCardTitle', 'Visitenkarte weiterempfehlen')}
+                    subtitle={t('marketplace.forwardCardSubtitle', {
+                        name: displayName,
+                        defaultValue: `Empfiehl die Visitenkarte von ${displayName} an deine Kontakte weiter`,
+                    })}
+                    fileWire={forwardCardData.envelopeJson}
                     shareUri={forwardCardData.shareUri}
                     qrSvg={forwardCardData.qrSvg}
                     did={forwardCardData.did}
                 />
             )}
+
+            {/* Inquiry Modal */}
+            <ModalShell
+                isOpen={inquiryModalOpen}
+                onClose={() => setInquiryModalOpen(false)}
+                maxWidth="md"
+                title={
+                    <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded-xl bg-theme-primary/10 text-theme-primary flex items-center justify-center">
+                            <MessageSquare size={18} />
+                        </div>
+                        <div>
+                            <h2 className="text-base font-bold text-theme-secondary">
+                                {t('marketplace.inquiryModalTitle', 'Anfrage senden')}
+                            </h2>
+                            <p className="text-xs text-theme-light truncate">
+                                {t('marketplace.inquiryTo', { name: displayName, defaultValue: `An: ${displayName}` })}
+                            </p>
+                        </div>
+                    </div>
+                }
+            >
+                <form onSubmit={handleSendInquiry} className="space-y-4 pt-2">
+                    {inquiryFeedback && (
+                        <div
+                            className={`p-3 rounded-xl text-xs border ${
+                                inquiryFeedback.type === 'success'
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    : 'bg-rose-50 text-rose-800 border-rose-200'
+                            }`}
+                        >
+                            {inquiryFeedback.message}
+                        </div>
+                    )}
+
+                    <div className="p-3 rounded-xl bg-bg-app border border-theme-subtle text-xs text-theme-secondary space-y-1">
+                        <span className="text-[10px] uppercase font-bold text-theme-light tracking-wider block">
+                            {t('marketplace.inquiryTargetLabel', 'Betrifft')}
+                        </span>
+                        <p className="font-semibold">
+                            {inquiryTarget.kind === 'ad'
+                                ? `Inserat: ${inquiryTarget.ad_title}`
+                                : inquiryTarget.skill_title
+                                ? `Fähigkeit: ${inquiryTarget.skill_title}`
+                                : t('marketplace.generalInquiry', 'Allgemeine Anfrage')}
+                        </p>
+                    </div>
+
+                    <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                            <label className="text-[11px] font-bold text-theme-secondary">
+                                {t('marketplace.inquiryMessageLabel', 'Nachricht (max. 280 Zeichen)')}
+                            </label>
+                            <span className="text-[10px] text-theme-light">
+                                {inquiryMessage.trim().length} / 280
+                            </span>
+                        </div>
+                        <textarea
+                            value={inquiryMessage}
+                            onChange={(e) => setInquiryMessage(e.target.value)}
+                            placeholder={t(
+                                'marketplace.inquiryMessagePlaceholder',
+                                'Kurze Notiz, z. B. gewünschter Abholzeitpunkt...'
+                            )}
+                            className="w-full bg-white border border-theme-subtle rounded-2xl p-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none min-h-[100px] resize-y"
+                            maxLength={280}
+                            required
+                        />
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-theme-subtle/50">
+                        <Button
+                            variant="secondary"
+                            type="button"
+                            onClick={() => setInquiryModalOpen(false)}
+                            disabled={isSendingInquiry}
+                        >
+                            {t('common.cancel', 'Abbrechen')}
+                        </Button>
+                        <Button
+                            variant="primary"
+                            type="submit"
+                            disabled={isSendingInquiry || !inquiryMessage.trim()}
+                        >
+                            {isSendingInquiry
+                                ? t('marketplace.sendingInquiry', 'Wird gesendet...')
+                                : t('marketplace.sendInquiryBtn', 'Anfrage senden')}
+                        </Button>
+                    </div>
+                </form>
+            </ModalShell>
         </div>
     );
-}
+};

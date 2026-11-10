@@ -3,6 +3,7 @@
 import { ReceiveSuccessPayload, IntentDispatchObservation } from './transaction';
 import { VoucherDetails } from './voucher';
 import { FrontendSyncDescriptor, StoredPublicSync } from './market';
+import type { HelpTopicId } from '../help/helpTopics';
 
 export interface ReceiveBundleArgs {
     bundleData: number[];
@@ -146,7 +147,7 @@ export type AppState =
     | { view: "recreate_profile" }
     | { view: "restore_backup"; previousView?: AppState }
     | { view: "needs_recovery" }
-    | { view: "settings"; initialSection?: 'sync' | 'backup' | 'network' | 'profile' | 'standards' }
+    | { view: "settings"; initialSection?: 'sync' | 'backup' | 'network' | 'profile' | 'standards' | 'security' | 'connection' | 'advanced' }
     | { view: "support" }
     | { view: "bug_report" }
     | { view: "create_voucher"; previousView?: AppState }
@@ -157,10 +158,10 @@ export type AppState =
     | { view: "activities"; previousView?: AppState }
     | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string; l2Dispatch?: IntentDispatchObservation[]; bundleId?: string; depositedTo?: number; depositError?: string }
     | { view: "receive_success"; payload: ReceiveSuccessPayload }
-    | { view: "address_book"; initialSearchQuery?: string; previousView?: AppState }
+    | { view: "address_book"; initialSearchQuery?: string; initialOpenAddModal?: boolean; previousView?: AppState }
     | { view: "sign_request"; voucherData: VoucherDetails; requestMsgId?: string; senderDid?: string }
     | { view: "conflict_details"; proofId: string; previousView?: AppState }
     | { view: "conflict_list" }
     | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string; initialFilter?: 'all' | 'received' | 'own' | 'expiringSoon' }
-    | { view: "marketplace"; selectedDid?: string }
-    | { view: "concept"; previousView?: AppState };
+    | { view: "marketplace"; selectedDid?: string; initialTab?: 'board' | 'people' | 'mine'; initialOpenEditor?: boolean }
+    | { view: "help_center"; topic?: HelpTopicId; previousView?: AppState };

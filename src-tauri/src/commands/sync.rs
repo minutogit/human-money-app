@@ -12,8 +12,8 @@ use crate::models::{
 };
 use crate::settings::{StoredPublicSync, SYNC_CARD_MAX_BYTES, SYNC_HEARTBEAT_SECS, MAX_POLLED_SYNCS};
 use crate::state::{
-    canonicalize_did, AppState, StoredSyncAdmin, StoredSyncState, StoredOwnCard,
-    MARKET_CARD_STORE_KEY, MARKET_SYNC_ADMIN_KEY, MARKET_SYNC_KEY, MARKET_OWN_CARD_KEY,
+    canonicalize_did, AppState, StoredSyncAdmin, StoredSyncState,
+    MARKET_CARD_STORE_KEY, MARKET_SYNC_ADMIN_KEY, MARKET_SYNC_KEY,
 };
 use human_money_core::app_service::AppService;
 use sha2::Digest;
@@ -965,8 +965,9 @@ pub async fn discover_available_syncs_impl(
         {
             if let Ok(store) = serde_json::from_slice::<humoco_market::CardStore>(&store_bytes) {
                 for sc in store.cards.values() {
-                    let author = sc.card.profile.first_name.as_deref().unwrap_or("Kontakt-Karte");
-                    for d in &sc.card.drops {
+                    let profile = humoco_market::extract_public_profile(&sc.card);
+                    let author = profile.first_name.as_deref().unwrap_or("Visitenkarte");
+                    for d in &sc.card.payload.drops {
                         descriptors.push((d.clone().into(), author.to_string()));
                     }
                 }
@@ -1066,31 +1067,21 @@ pub async fn set_selected_upload_syncs_impl(
             .save_settings(&mut service, settings, password.as_deref())
             .map_err(FrontendError::from)?;
 
-        // Update drops on StoredOwnCard & re-sign if present
-        let existing_opt: Option<StoredOwnCard> = service
-            .load_encrypted_data(MARKET_OWN_CARD_KEY, password.as_deref())
+        let existing_opt: Option<crate::models::StoredOwnMarketProfile> = service
+            .load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password.as_deref())
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
         if let Some(mut existing) = existing_opt {
-            let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
-            let v = humoco_market::next_card_version(Some(existing.card.v), now_unix);
-            existing.card.v = v;
-            existing.card.drops = syncs.iter().cloned().map(Into::into).collect();
-
-            let card_jws = service
-                .with_wallet_and_identity(|_wallet, identity| {
-                    humoco_market::sign_card(existing.card.clone(), &identity.signing_key)
-                        .map_err(|e| human_money_core::app_service::AppFacadeError::Generic(e.to_string()))
-                })
-                .map_err(FrontendError::from)??;
-
-            let stored_own = StoredOwnCard {
-                card: existing.card,
-                card_jws,
-            };
-            if let Ok(bytes) = serde_json::to_vec(&stored_own) {
-                let _ = service.save_encrypted_data(MARKET_OWN_CARD_KEY, &bytes, password.as_deref());
+            if existing.published {
+                let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
+                if let Some(ref mut last_card) = existing.last_card {
+                    last_card.payload.drops = syncs.iter().cloned().map(Into::into).collect();
+                }
+                let _ = crate::commands::market::rebuild_and_sign_own_card(&mut service, &mut existing, now_unix);
+                if let Ok(bytes) = serde_json::to_vec(&existing) {
+                    let _ = service.save_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, &bytes, password.as_deref());
+                }
             }
         }
     }
@@ -1188,10 +1179,11 @@ pub async fn sync_market_channels_impl(
             .map_err(FrontendError::from)?;
         let master_seed = my_ed_sk.to_bytes();
 
-        let own_card: Option<StoredOwnCard> = service
-            .load_encrypted_data(MARKET_OWN_CARD_KEY, password.as_deref())
+        let own_profile: Option<crate::models::StoredOwnMarketProfile> = service
+            .load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password.as_deref())
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let own_card = own_profile.and_then(|p| if p.published { p.last_card } else { None });
 
         let reg = state.get_or_load_wot_register(&mut service, password.as_deref()).ok();
 
@@ -1246,13 +1238,14 @@ pub async fn sync_market_channels_impl(
     }
 
     if let Some(ref own_card) = own_card_opt {
-        if now_secs < own_card.card.valid_until && !upload_targets.is_empty() {
+        if now_secs < own_card.payload.valid_until && !upload_targets.is_empty() {
             let needs_upload = force_upload == Some(true)
-                || sync_state.last_uploaded_card_v != Some(own_card.card.v)
+                || sync_state.last_uploaded_card_v != Some(own_card.payload.v)
                 || sync_state.last_readers_hash.as_deref() != Some(&readers_hash)
                 || now_secs.saturating_sub(sync_state.last_upload_at.unwrap_or(0)) >= SYNC_HEARTBEAT_SECS;
 
             if needs_upload {
+                let own_wire = humoco_market::render_wire(own_card, 1, humoco_market::WireFilter::Full);
                 let bundle = {
                     let mut service = state.service.lock().unwrap();
                     let store: humoco_market::CardStore = service
@@ -1270,7 +1263,7 @@ pub async fn sync_market_channels_impl(
                         }
                     };
                     humoco_market::build_card_bundle(
-                        Some(&own_card.card_jws),
+                        own_wire.as_deref(),
                         &store,
                         &trust_level_of,
                         SYNC_CARD_MAX_BYTES,
@@ -1359,7 +1352,7 @@ pub async fn sync_market_channels_impl(
                         if uploaded_to > 0 {
                             sync_state.last_upload_at = Some(now_secs);
                             sync_state.last_readers_hash = Some(readers_hash);
-                            sync_state.last_uploaded_card_v = Some(own_card.card.v);
+                            sync_state.last_uploaded_card_v = Some(own_card.payload.v);
                         }
                     }
                     Err(e) => {
@@ -1631,14 +1624,14 @@ pub async fn sync_market_channels_impl(
         // Stored cards drops where author has level >= share_min_level
         if let Some(ref store) = card_store {
             for sc in store.cards.values() {
-                let author_can = canonicalize_did(&sc.card.did).unwrap_or_else(|_| sc.card.did.clone());
+                let author_can = canonicalize_did(&sc.card.payload.did).unwrap_or_else(|_| sc.card.payload.did.clone());
                 let lvl = if let Some(ref r) = reg {
                     r.own_contacts.get(&author_can).map(|e| e.level).unwrap_or(0)
                 } else {
                     0
                 };
                 if lvl >= settings.share_min_level {
-                    for d in &sc.card.drops {
+                    for d in &sc.card.payload.drops {
                         if !d.read_url.is_empty() {
                             if let Some(ref sid) = d.slot_id {
                                 direct_fetches.push((d.read_url.clone(), sid.clone()));
@@ -1718,9 +1711,10 @@ pub async fn sync_market_channels_impl(
                                 let can_did = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
                                 sync_state.sync_sources_by_did.insert(can_did, read_url.clone());
 
-                                if let Some(stored) = store.cards.values().find(|sc| sc.card.did == did) {
+                                if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
                                     let card_syncs: Vec<FrontendSyncDescriptor> = stored
                                         .card
+                                        .payload
                                         .drops
                                         .iter()
                                         .cloned()
@@ -1862,9 +1856,10 @@ pub async fn sync_market_channels_impl(
                                                 let can_did = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
                                                 sync_state.sync_sources_by_did.insert(can_did, read_url.clone());
 
-                                                if let Some(stored) = store.cards.values().find(|sc| sc.card.did == did) {
+                                                if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
                                                     let card_syncs: Vec<FrontendSyncDescriptor> = stored
                                                         .card
+                                                        .payload
                                                         .drops
                                                         .iter()
                                                         .cloned()
@@ -2584,10 +2579,11 @@ pub(crate) mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
     use crate::models::{
-        FrontendCardListingInput, FrontendContact, FrontendListingType,
-        FrontendSaveOwnCardRequest, FrontendUserProfile,
+        FrontendContact, FrontendSaveMyMarketProfileRequest, FrontendUserProfile,
     };
-    use crate::commands::market::{get_market_view_impl, save_own_contact_card_impl};
+    use crate::commands::market::{
+        get_market_view_impl, save_my_market_profile_impl, set_card_published_impl,
+    };
 
     pub(crate) const ALICE_PHRASE: &str =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -3170,25 +3166,24 @@ pub(crate) mod tests {
             bob_state.save_contact(&mut s, l1_contact, Some(password)).unwrap();
         }
 
-        // Bob creates and saves his own contact card with a listing
-        let save_req = FrontendSaveOwnCardRequest {
+        // Bob creates and saves his own market profile and publishes it
+        let save_req = FrontendSaveMyMarketProfileRequest {
             profile: FrontendUserProfile {
                 first_name: Some("Bob".to_string()),
                 last_name: Some("Baker".to_string()),
-                service_offer: Some("Fresh Bread".to_string()),
                 ..Default::default()
             },
-            listings: vec![FrontendCardListingInput {
-                listing_type: FrontendListingType::Offer,
-                title: "Sourdough Bread".to_string(),
+            visibility: Default::default(),
+            skills: vec![humoco_market::Skill {
+                title: "Fresh Bread".to_string(),
                 text: Some("Warm and crispy".to_string()),
                 pricing: Some("5 M".to_string()),
-                allow_inquiries: true,
             }],
             max_hops: 2,
-            validity_days: Some(30),
+            allow_inquiries: true,
         };
-        save_own_contact_card_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
+        save_my_market_profile_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
+        set_card_published_impl(true, false, Some(password.to_string()), &bob_state).await.unwrap();
 
         // Bob uploads redundantly to Drop A (selected) and Drop E (active public drop)
         let bob_sync = sync_market_channels_impl(
@@ -3239,10 +3234,10 @@ pub(crate) mod tests {
         // Verify Bob's card appears in L1's market view with Drop entry source
         let l1_market = get_market_view_impl(Some(password.to_string()), &l1_state).unwrap();
         let can_bob_did = canonicalize_did(&bob_did).unwrap();
-        let bob_person = l1_market.iter().find(|p| p.did == can_bob_did);
+        let bob_person = l1_market.people.iter().find(|p| p.did == can_bob_did);
         assert!(bob_person.is_some(), "Bob should be in L1 market view");
         let has_sync_source = bob_person.unwrap().sources.iter().any(|s| {
-            matches!(s, crate::models::FrontendEntrySource::Sync { read_url } if read_url == &finalize_status.descriptor.read_url)
+            matches!(s, crate::models::FrontendEntrySource::Sync { read_url } if *read_url == finalize_status.descriptor.read_url)
         });
         assert!(has_sync_source, "Bob's market person should have Drop entry source!");
 

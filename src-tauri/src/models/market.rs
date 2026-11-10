@@ -1,70 +1,238 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum FrontendListingType {
-    Offer,
-    Request,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldAudience {
+    Everyone,
+    Contacts,
+    Nobody,
 }
 
-impl From<humoco_market::ListingType> for FrontendListingType {
-    fn from(t: humoco_market::ListingType) -> Self {
-        match t {
-            humoco_market::ListingType::Offer => Self::Offer,
-            humoco_market::ListingType::Request => Self::Request,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardFieldVisibility {
+    pub name: FieldAudience,
+    pub organization: FieldAudience,
+    pub community: FieldAudience,
+    pub city: FieldAudience,
+    pub url: FieldAudience,
+    pub picture: FieldAudience,
+    pub street: FieldAudience,
+    pub email: FieldAudience,
+    pub phone: FieldAudience,
+    pub coordinates: FieldAudience,
+    pub gender: FieldAudience,
+}
+
+impl Default for CardFieldVisibility {
+    fn default() -> Self {
+        Self {
+            name: FieldAudience::Everyone,
+            organization: FieldAudience::Everyone,
+            community: FieldAudience::Everyone,
+            city: FieldAudience::Everyone,
+            url: FieldAudience::Everyone,
+            picture: FieldAudience::Everyone,
+            street: FieldAudience::Contacts,
+            email: FieldAudience::Contacts,
+            phone: FieldAudience::Contacts,
+            coordinates: FieldAudience::Nobody,
+            gender: FieldAudience::Nobody,
         }
     }
 }
 
-impl From<FrontendListingType> for humoco_market::ListingType {
-    fn from(t: FrontendListingType) -> Self {
-        match t {
-            FrontendListingType::Offer => Self::Offer,
-            FrontendListingType::Request => Self::Request,
+fn default_max_hops() -> u8 {
+    humoco_market::DEFAULT_MAX_HOPS
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredOwnMarketProfile {
+    #[serde(default)]
+    pub visibility: CardFieldVisibility,
+    #[serde(default)]
+    pub skills: Vec<humoco_market::Skill>,
+    #[serde(default)]
+    pub ads: Vec<humoco_market::Ad>,
+    #[serde(default = "default_max_hops")]
+    pub max_hops: u8,
+    #[serde(default = "default_true")]
+    pub allow_inquiries: bool,
+    #[serde(default)]
+    pub published: bool,
+    #[serde(default)]
+    pub last_card: Option<humoco_market::SdCard>,
+}
+
+impl Default for StoredOwnMarketProfile {
+    fn default() -> Self {
+        Self {
+            visibility: CardFieldVisibility::default(),
+            skills: Vec::new(),
+            ads: Vec::new(),
+            max_hops: humoco_market::DEFAULT_MAX_HOPS,
+            allow_inquiries: true,
+            published: false,
+            last_card: None,
         }
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub enum FrontendListingOrigin {
-    Voucher,
+pub enum FrontendSkillOrigin {
     Card,
+    Voucher,
 }
 
-impl From<humoco_market::ListingOrigin> for FrontendListingOrigin {
-    fn from(o: humoco_market::ListingOrigin) -> Self {
+impl From<humoco_market::SkillOrigin> for FrontendSkillOrigin {
+    fn from(o: humoco_market::SkillOrigin) -> Self {
         match o {
-            humoco_market::ListingOrigin::Voucher => Self::Voucher,
-            humoco_market::ListingOrigin::Card => Self::Card,
+            humoco_market::SkillOrigin::Card => Self::Card,
+            humoco_market::SkillOrigin::Voucher => Self::Voucher,
         }
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendMarketListing {
-    #[serde(default)]
-    pub listing_id: String,
-    pub listing_type: FrontendListingType,
+pub struct FrontendMarketSkill {
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<String>,
-    pub origin: FrontendListingOrigin,
+    pub origin: FrontendSkillOrigin,
+}
+
+impl From<humoco_market::MarketSkill> for FrontendMarketSkill {
+    fn from(s: humoco_market::MarketSkill) -> Self {
+        Self {
+            title: s.title,
+            text: s.text,
+            pricing: s.pricing,
+            origin: s.origin.into(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendMyAd {
+    pub id: String,
+    pub kind: humoco_market::AdKind,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<String>,
+    pub published_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renewed_at: Option<u64>,
+    pub expires_at: u64,
+    pub allow_inquiries: bool,
+    pub status: String,
+    pub days_left: u64,
+}
+
+impl FrontendMyAd {
+    pub fn from_ad(ad: &humoco_market::Ad, now: u64) -> Self {
+        let (status, days_left) = if ad.expires_at > now {
+            let diff = ad.expires_at - now;
+            let days = diff.div_ceil(86_400);
+            ("active".to_string(), days)
+        } else {
+            ("expired".to_string(), 0)
+        };
+
+        Self {
+            id: ad.id.clone(),
+            kind: ad.kind,
+            title: ad.title.clone(),
+            text: ad.text.clone(),
+            pricing: ad.pricing.clone(),
+            published_at: ad.published_at,
+            renewed_at: ad.renewed_at,
+            expires_at: ad.expires_at,
+            allow_inquiries: ad.allow_inquiries,
+            status,
+            days_left,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendMyMarketProfile {
+    pub profile: crate::models::FrontendUserProfile,
+    pub visibility: CardFieldVisibility,
+    pub skills: Vec<humoco_market::Skill>,
+    pub ads: Vec<FrontendMyAd>,
+    pub max_hops: u8,
+    pub allow_inquiries: bool,
+    pub published: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_wire: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qr_svg: Option<String>,
     #[serde(default)]
+    pub qr_is_partial: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendSaveMyMarketProfileRequest {
+    pub profile: crate::models::FrontendUserProfile,
+    pub visibility: CardFieldVisibility,
+    pub skills: Vec<humoco_market::Skill>,
+    pub max_hops: u8,
     pub allow_inquiries: bool,
 }
 
-impl From<humoco_market::MarketListing> for FrontendMarketListing {
-    fn from(l: humoco_market::MarketListing) -> Self {
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendAdInput {
+    pub id: Option<String>,
+    pub kind: humoco_market::AdKind,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<String>,
+    pub duration_days: u64,
+    pub allow_inquiries: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendBoardItem {
+    pub owner_did: String,
+    pub owner_name: String,
+    pub trust: FrontendTrustTier,
+    pub ad: humoco_market::Ad,
+    pub days_left: u64,
+}
+
+impl FrontendBoardItem {
+    pub fn from_board_item(bi: humoco_market::BoardItem, now: u64) -> Self {
+        let days_left = if bi.ad.expires_at > now {
+            (bi.ad.expires_at - now).div_ceil(86_400)
+        } else {
+            0
+        };
         Self {
-            listing_id: String::new(),
-            listing_type: l.listing_type.into(),
-            title: l.title,
-            text: l.text,
-            pricing: l.pricing,
-            origin: l.origin.into(),
-            allow_inquiries: l.allow_inquiries,
+            owner_did: bi.owner_did,
+            owner_name: bi.owner_name,
+            trust: bi.trust.into(),
+            ad: bi.ad,
+            days_left,
         }
     }
 }
@@ -165,90 +333,6 @@ impl From<FrontendSyncDescriptor> for humoco_market::DropDescriptor {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendCardListingInput {
-    pub listing_type: FrontendListingType,
-    pub title: String,
-    pub text: Option<String>,
-    pub pricing: Option<String>,
-    #[serde(default)]
-    pub allow_inquiries: bool,
-}
-
-impl From<humoco_market::Listing> for FrontendCardListingInput {
-    fn from(l: humoco_market::Listing) -> Self {
-        Self {
-            listing_type: l.listing_type.into(),
-            title: l.title,
-            text: l.text,
-            pricing: l.pricing,
-            allow_inquiries: l.allow_inquiries,
-        }
-    }
-}
-
-impl From<FrontendCardListingInput> for humoco_market::Listing {
-    fn from(l: FrontendCardListingInput) -> Self {
-        Self {
-            listing_type: l.listing_type.into(),
-            title: l.title,
-            text: l.text,
-            pricing: l.pricing,
-            allow_inquiries: l.allow_inquiries,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendContactCardDto {
-    pub did: String,
-    pub v: u64,
-    pub valid_until: u64,
-    pub max_hops: u8,
-    pub profile: crate::models::FrontendUserProfile,
-    pub listings: Vec<FrontendCardListingInput>,
-    pub syncs: Vec<FrontendSyncDescriptor>,
-}
-
-impl From<humoco_market::ContactCard> for FrontendContactCardDto {
-    fn from(c: humoco_market::ContactCard) -> Self {
-        Self {
-            did: c.did,
-            v: c.v,
-            valid_until: c.valid_until,
-            max_hops: c.max_hops,
-            profile: c.profile.into(),
-            listings: c.listings.into_iter().map(Into::into).collect(),
-            syncs: c.drops.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendOwnContactCard {
-    pub card: FrontendContactCardDto,
-    pub card_jws: String,
-    pub qr_svg: Option<String>,
-    pub share_uri: String,
-    pub envelope_json: String,
-    #[serde(default)]
-    pub qr_jws: Option<String>,
-    #[serde(default)]
-    pub is_compact_qr: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendSaveOwnCardRequest {
-    pub profile: crate::models::FrontendUserProfile,
-    pub listings: Vec<FrontendCardListingInput>,
-    pub max_hops: u8,
-    pub validity_days: Option<u32>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub struct FrontendForwardCardExport {
     pub did: String,
     pub envelope_json: String,
@@ -269,7 +353,10 @@ pub struct FrontendImportCardResult {
 pub struct FrontendMarketPerson {
     pub did: String,
     pub profile: crate::models::FrontendUserProfile,
-    pub listings: Vec<FrontendMarketListing>,
+    pub skills: Vec<FrontendMarketSkill>,
+    pub active_ads: Vec<humoco_market::Ad>,
+    pub ads_pending: u8,
+    pub allow_inquiries: bool,
     pub sources: Vec<FrontendEntrySource>,
     pub as_of: u64,
     pub standards: Vec<FrontendStandardRef>,
@@ -280,27 +367,13 @@ pub struct FrontendMarketPerson {
 
 impl From<humoco_market::MarketPerson> for FrontendMarketPerson {
     fn from(p: humoco_market::MarketPerson) -> Self {
-        let did = p.did.clone();
         Self {
             did: p.did,
             profile: p.profile.into(),
-            listings: p
-                .listings
-                .into_iter()
-                .map(|l| {
-                    let listing_id =
-                        humoco_market::compute_listing_id(&did, l.listing_type, &l.title);
-                    FrontendMarketListing {
-                        listing_id,
-                        listing_type: l.listing_type.into(),
-                        title: l.title,
-                        text: l.text,
-                        pricing: l.pricing,
-                        origin: l.origin.into(),
-                        allow_inquiries: l.allow_inquiries,
-                    }
-                })
-                .collect(),
+            skills: p.skills.into_iter().map(Into::into).collect(),
+            active_ads: p.active_ads,
+            ads_pending: p.ads_pending,
+            allow_inquiries: p.allow_inquiries,
             sources: p.sources.into_iter().map(Into::into).collect(),
             as_of: p.as_of,
             standards: p.standards.into_iter().map(Into::into).collect(),
@@ -309,6 +382,14 @@ impl From<humoco_market::MarketPerson> for FrontendMarketPerson {
             card_syncs: p.card_drops.into_iter().map(Into::into).collect(),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendMarketSnapshot {
+    pub board: Vec<FrontendBoardItem>,
+    pub people: Vec<FrontendMarketPerson>,
+    pub now: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -404,7 +485,7 @@ pub struct FrontendPublicSyncInfo {
     pub read_url: String,
     pub drop_pub: String,
     pub register_url: Option<String>,
-    pub access_pubkey: String, // R_hex64
+    pub access_pubkey: String,
     pub authorized_channels: Vec<String>,
 }
 

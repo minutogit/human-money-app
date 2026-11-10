@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { PublicProfile, TrustStatus } from "../types";
+import { marketService } from "./marketService";
 
 export interface CreateProfileArgs {
     profileName: string;
@@ -26,7 +27,17 @@ export const profileService = {
     },
 
     saveProfile: async (profile: PublicProfile, password?: string) => {
-        return await invoke<void>("update_user_profile", { profile, password });
+        const current = await marketService.getMyMarketProfile(password);
+        await marketService.saveMyMarketProfile({
+            profile: {
+                ...current.profile,
+                ...profile,
+            },
+            visibility: current.visibility,
+            skills: current.skills,
+            maxHops: current.maxHops,
+            allowInquiries: current.allowInquiries,
+        }, password);
     },
 
     getUserId: async () => {

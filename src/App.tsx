@@ -16,6 +16,7 @@ import { AppRouter } from "./components/AppRouter";
 import { GlobalFileDropZone } from "./components/GlobalFileDropZone";
 import { parseCardUri } from "./utils/humocoUri";
 import { marketService } from "./services/marketService";
+import type { HelpTopicId } from "./help/helpTopics";
 
 function AppContent() {
     const { t } = useTranslation();
@@ -68,12 +69,21 @@ function AppContent() {
     }, [isForkLocked, isRecoveryRequired]);
 
     useEffect(() => {
-        const PUBLIC_VIEWS = ['loading', 'needs_profile', 'needs_login', 'recreate_profile', 'restore_backup', 'needs_recovery', 'concept'];
+        const PUBLIC_VIEWS = ['loading', 'needs_profile', 'needs_login', 'recreate_profile', 'restore_backup', 'needs_recovery', 'help_center'];
         if (!isLoggedIn && !PUBLIC_VIEWS.includes(appState.view)) {
             logger.warn(`Session is inactive but view is "${appState.view}". Redirecting to "needs_login".`);
             navigate({ view: 'needs_login' });
         }
     }, [isLoggedIn, appState.view, navigate]);
+
+    useEffect(() => {
+        const handleHelpCenterNav = (e: Event) => {
+            const customEvent = e as CustomEvent<{ topic?: HelpTopicId }>;
+            navigate({ view: 'help_center', topic: customEvent.detail?.topic, previousView: appState });
+        };
+        window.addEventListener('humoco:navigate-help-center', handleHelpCenterNav);
+        return () => window.removeEventListener('humoco:navigate-help-center', handleHelpCenterNav);
+    }, [navigate, appState]);
 
     return (
         <div className="flex h-screen w-full bg-bg-app font-sans text-theme-secondary overflow-hidden">

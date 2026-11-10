@@ -43,10 +43,13 @@ describe('MarketPersonView Component', () => {
       community: 'Builders',
     },
     trust: 'trusted',
-    cardSyncs: [],
+    skills: [],
+    activeAds: [],
+    adsPending: 0,
+    allowInquiries: true,
     sources: [{ kind: 'card', hops: 1 }],
     standards: [],
-    listings: [],
+    cardSyncs: [],
     asOf: 1700000000,
     canForward: true,
   };
@@ -55,9 +58,10 @@ describe('MarketPersonView Component', () => {
     vi.clearAllMocks();
   });
 
-  it('renders waiting for mutual handshake notice when listings are empty but cardSyncs exist', () => {
-    const personWithDrops: FrontendMarketPerson = {
+  it('renders pending sync notice when adsPending > 0 and triggers sync when clicked', async () => {
+    const personPending: FrontendMarketPerson = {
       ...basePerson,
+      adsPending: 3,
       cardSyncs: [
         {
           readUrl: 'https://bob-sync.org/sync.php',
@@ -67,69 +71,82 @@ describe('MarketPersonView Component', () => {
       ],
     };
 
-    render(<MarketPersonView person={personWithDrops} onBack={vi.fn()} />);
+    vi.mocked(marketService.getMarketView).mockResolvedValue({
+      board: [],
+      people: [personPending],
+      now: 123456,
+    });
 
-    expect(screen.getByText(/Kontakt gespeichert – Freischaltung ausstehend|Contact saved – pending mutual unlock/i)).toBeInTheDocument();
-    expect(screen.getByText(/Inserate werden geladen, sobald euch eure Adressbücher gegenseitig freigeschaltet haben|Listings will load as soon as both address books/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Jetzt abrufen|Fetch now/i })).toBeInTheDocument();
-  });
+    render(<MarketPersonView person={personPending} onBack={vi.fn()} />);
 
-  it('triggers syncMarketChannels when clicking [Jetzt abrufen]', async () => {
-    const personWithDrops: FrontendMarketPerson = {
-      ...basePerson,
-      cardSyncs: [
-        {
-          readUrl: 'https://bob-sync.org/sync.php',
-          writeUrl: 'https://bob-sync.org/sync.php',
-          dropPub: 'bob-drop-pub',
-        },
-      ],
-    };
-
-    vi.mocked(marketService.getMarketView).mockResolvedValue([personWithDrops]);
-
-    render(<MarketPersonView person={personWithDrops} onBack={vi.fn()} />);
-
+    expect(screen.getByText(/3 Inserate werden über den Sync-Dienst nachgeladen|3 ads will be loaded via sync service/i)).toBeInTheDocument();
     const fetchBtn = screen.getByRole('button', { name: /Jetzt abrufen|Fetch now/i });
-    fireEvent.click(fetchBtn);
+    expect(fetchBtn).toBeInTheDocument();
 
+    fireEvent.click(fetchBtn);
     await waitFor(() => {
       expect(marketService.syncMarketChannels).toHaveBeenCalled();
       expect(marketService.getMarketView).toHaveBeenCalled();
     });
   });
 
-  it('renders default acceptsOwnVouchers when listings are empty and no cardSyncs exist', () => {
-    const personWithoutDrops: FrontendMarketPerson = {
+  it('renders skills when person has skills', () => {
+    const personWithSkills: FrontendMarketPerson = {
       ...basePerson,
-      cardSyncs: [],
-    };
-
-    render(<MarketPersonView person={personWithoutDrops} onBack={vi.fn()} />);
-
-    expect(screen.queryByText(/Freischaltung ausstehend|pending mutual unlock/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/Nimmt eigene Gutscheine an|Accepts own vouchers/i)).toBeInTheDocument();
-  });
-
-  it('renders listings when person has offers or requests', () => {
-    const personWithListings: FrontendMarketPerson = {
-      ...basePerson,
-      listings: [
+      skills: [
         {
-          listingId: 'listing-1',
-          listingType: 'offer',
-          title: 'Frisches Holz',
-          text: 'Eichenholz getrocknet',
-          pricing: '50 Minuto',
+          title: 'Holzarbeiten',
+          text: 'Tische, Bänke und Regale aus Vollholz',
+          pricing: '45 Minuto / Std',
           origin: 'card',
-          allowInquiries: true,
         },
       ],
     };
 
-    render(<MarketPersonView person={personWithListings} onBack={vi.fn()} />);
+    render(<MarketPersonView person={personWithSkills} onBack={vi.fn()} />);
 
-    expect(screen.getByText('Frisches Holz')).toBeInTheDocument();
-    expect(screen.getByText('50 Minuto')).toBeInTheDocument();
+    expect(screen.getByText('Holzarbeiten')).toBeInTheDocument();
+    expect(screen.getByText('Tische, Bänke und Regale aus Vollholz')).toBeInTheDocument();
+    expect(screen.getByText('45 Minuto / Std')).toBeInTheDocument();
+  });
+
+  it('renders active ads with AdCard when person has active ads', () => {
+    const nowSecs = Math.floor(Date.now() / 1000);
+    const personWithAds: FrontendMarketPerson = {
+      ...basePerson,
+      activeAds: [
+        {
+          id: 'ad-1',
+          kind: 'offer',
+          title: 'Frisches Eichenbrennholz',
+          text: '2 Ster trockenes Holz',
+          pricing: '120 Minuto',
+          published_at: nowSecs - 3600,
+          expires_at: nowSecs + 86400 * 30,
+          allow_inquiries: true,
+        },
+      ],
+    };
+
+    render(<MarketPersonView person={personWithAds} onBack={vi.fn()} />);
+
+    expect(screen.getByText('Frisches Eichenbrennholz')).toBeInTheDocument();
+    expect(screen.getByText('2 Ster trockenes Holz')).toBeInTheDocument();
+    expect(screen.getByText('120 Minuto')).toBeInTheDocument();
+  });
+
+  it('renders subtle note when person.profile.needs is present (Maintainer Decision 7)', () => {
+    const personWithNeeds: FrontendMarketPerson = {
+      ...basePerson,
+      profile: {
+        ...basePerson.profile,
+        needs: 'Hilfe bei der Obsternte im Herbst',
+      },
+    };
+
+    render(<MarketPersonView person={personWithNeeds} onBack={vi.fn()} />);
+
+    expect(screen.getByText(/(Laut Gutschein gesucht:|Sought according to voucher:)/i)).toBeInTheDocument();
+    expect(screen.getByText('Hilfe bei der Obsternte im Herbst')).toBeInTheDocument();
   });
 });

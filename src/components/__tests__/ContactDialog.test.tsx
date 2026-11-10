@@ -79,7 +79,7 @@ describe('ContactDialog Component', () => {
       />
     );
 
-    const didInput = screen.getByPlaceholderText(/did:key:z\.\.\./i);
+    const didInput = screen.getByPlaceholderText(/did:key:z\.\.\.|Enter User ID|Benutzer-ID/i);
     fireEvent.change(didInput, { target: { value: 'did:key:zNewContact' } });
 
     const syncInput = screen.getByPlaceholderText(/https:\/\/sync-server\./i);
@@ -199,7 +199,7 @@ describe('ContactDialog Component', () => {
     const probeBtn = screen.getByRole('button', { name: /contacts\.syncProbeAndAdd|Prüfen & Hinzufügen|Probe & Add/i });
     fireEvent.click(probeBtn);
 
-    expect(screen.getByText(/contacts\.syncAlreadyAdded|already added|bereits vorhanden/i)).toBeInTheDocument();
+    expect(screen.getByText(/contacts\.syncAlreadyAdded|already.*added|bereits vorhanden/i)).toBeInTheDocument();
     expect(marketService.probePublicSync).not.toHaveBeenCalled();
   });
 

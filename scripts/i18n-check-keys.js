@@ -25,7 +25,11 @@ const VALID_DOMAINS = [
   'standards',
   'error',
   'gender',
-  'marketplace'
+  'marketplace',
+  'help',
+  'helpCenter',
+  'statusChip',
+  'sidebar'
 ];
 
 let enContent;

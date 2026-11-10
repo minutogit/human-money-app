@@ -274,7 +274,7 @@ uuid = "minuto-uuid-123"`,
         expect.any(Array),
         'test-password'
       );
-      expect(screen.getAllByText(/Signature Sent via Post/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Signature Sent via (Post|sync service)/i).length).toBeGreaterThan(0);
       expect(screen.getByRole('button', { name: /Done/i })).toBeInTheDocument();
     });
   });
