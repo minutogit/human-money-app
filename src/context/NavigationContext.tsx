@@ -8,6 +8,7 @@ import { logger } from "../utils/log";
 import { useSession } from './SessionContext';
 import { error } from "@tauri-apps/plugin-log";
 import { stringifyError } from '../utils/errorHelper';
+import { tourBridge } from '../utils/tourBridge';
 
 export interface NavigationContextType {
     appState: AppState;
@@ -114,6 +115,16 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
         getVersion().then(setAppVersion);
         checkProfile();
     }, [checkProfile]);
+
+    useEffect(() => {
+        return tourBridge.subscribe((partial) => {
+            if (partial.appState) {
+                historyRef.current = [];
+                appStateRef.current = partial.appState;
+                setAppState(partial.appState);
+            }
+        });
+    }, []);
 
     return (
         <NavigationContext.Provider value={{ 

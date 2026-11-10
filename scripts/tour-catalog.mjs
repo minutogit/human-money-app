@@ -1,0 +1,956 @@
+// scripts/tour-catalog.mjs
+// Canonical tour steps and Tauri mock initialization script for HuMoCo UI Tour & Audit.
+
+export const MOCK_USER_DID = 'did:key:z6MkuSLmPtN3yDiCuPebk3Y7Y4YtK8m5eALICE';
+export const MOCK_RECIPIENT_DID = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doKBOB';
+export const MOCK_CAROL_DID = 'did:key:z6MktfW8w21oXgD9z5mNuZ2gR5c7bW5vE9k1mP4jL8yQCAROL';
+export const MOCK_OFFENDER_DID = 'did:key:z6MkeEvilSpenderDeterministic1234567890OFFENDER';
+
+export const MOCK_VOUCHER_ID = 'v_sample_minuto_01';
+export const MOCK_PROOF_ID = 'proof_sample_sstv4_01';
+
+export const TOUR_STEPS = [
+    // --- Chapter 1: Onboarding & Authentifizierung ---
+    {
+        id: '1.1',
+        chapter: 1,
+        title: 'Login & Profilauswahl',
+        file: 'src/components/Login.tsx',
+        description: 'Auswahl eines lokalen Profils, Passworteingabe und Schnellzugriff auf Wiederherstellung.',
+        auth: false,
+        appState: { view: 'needs_login' }
+    },
+    {
+        id: '1.2',
+        chapter: 1,
+        title: 'Neues Profil erstellen',
+        file: 'src/components/CreateNewProfile.tsx',
+        description: 'Erstellung einer neuen Identität mit Mnemonic BIP-39 Seed-Phrase, Passwort und Profildaten.',
+        auth: false,
+        appState: { view: 'needs_profile' }
+    },
+    {
+        id: '1.3',
+        chapter: 1,
+        title: 'Profil aus Seed wiederherstellen',
+        file: 'src/components/RecreateProfile.tsx',
+        description: 'Wiederherstellung einer bestehenden Identität über 12/24 Wörter BIP-39 Mnemonic.',
+        auth: false,
+        appState: { view: 'recreate_profile' }
+    },
+    {
+        id: '1.4',
+        chapter: 1,
+        title: 'Backup-Datei wiederherstellen',
+        file: 'src/components/RestoreBackupView.tsx',
+        description: 'Prüfung und Import eines verschlüsselten Wallet-Backups mit L2 Reconcile.',
+        auth: false,
+        appState: { view: 'restore_backup' }
+    },
+    {
+        id: '1.5',
+        chapter: 1,
+        title: 'Passwort vergessen / Wallet-Recovery',
+        file: 'src/components/WalletRecovery.tsx',
+        description: 'Notfall-Rettung eines Profils mit Mnemonic bei vergessenem Passwort.',
+        auth: false,
+        appState: { view: 'needs_recovery' }
+    },
+
+    // --- Chapter 2: Kernfunktionen & Gutschein-Transaktionen ---
+    {
+        id: '2.1',
+        chapter: 2,
+        title: 'Dashboard & Startübersicht',
+        file: 'src/components/Dashboard.tsx',
+        description: 'Aggregierte Guthaben nach Standards, Schnellaktionen und Status-Badges.',
+        auth: true,
+        appState: { view: 'logged_in' }
+    },
+    {
+        id: '2.2',
+        chapter: 2,
+        title: 'Wallet & Gutscheinliste',
+        file: 'src/components/WalletView.tsx',
+        description: 'Vollständige Liste aller Gutscheine mit Filterung, Status und Standards.',
+        auth: true,
+        appState: { view: 'wallet' }
+    },
+    {
+        id: '2.3',
+        chapter: 2,
+        title: 'Gutschein-Details & Timeline',
+        file: 'src/components/VoucherDetailsView.tsx',
+        description: 'Audit-Trail, kryptographische ProofChain, Bürgenliste und L2 Quorum Status.',
+        auth: true,
+        appState: { view: 'voucher_details', voucherId: MOCK_VOUCHER_ID }
+    },
+    {
+        id: '2.4',
+        chapter: 2,
+        title: 'Neuen Gutschein ausstellen',
+        file: 'src/components/CreateVoucher.tsx',
+        description: 'Erstellung eines werthaltigen L1 Gutscheins basierend auf Standard, Wert und Frist.',
+        auth: true,
+        appState: { view: 'create_voucher' }
+    },
+    {
+        id: '2.5',
+        chapter: 2,
+        title: 'Gutschein senden',
+        file: 'src/components/SendView.tsx',
+        description: 'Multi-Transfer, Empfängerauswahl aus Adressbuch und SST V4 Trap-Vorbereitung.',
+        auth: true,
+        appState: { view: 'send_vouchers' }
+    },
+    {
+        id: '2.6',
+        chapter: 2,
+        title: 'Gutschein-Versand erfolgreich',
+        file: 'src/components/TransferSuccessView.tsx',
+        description: 'Erfolgsmeldung nach Transfer mit L2 Shard-Quorum Bestätigung und Export-Option.',
+        auth: true,
+        appState: {
+            view: 'transfer_success',
+            bundleData: [104, 117, 109, 111, 99, 111],
+            recipientId: MOCK_RECIPIENT_DID,
+            summary: '60 Minuto an Bob übertragen',
+            bundleId: 'bundle_tour_tx_001',
+            depositedTo: 1
+        }
+    },
+    {
+        id: '2.7',
+        chapter: 2,
+        title: 'Gutschein / Bundle empfangen',
+        file: 'src/components/ReceiveView.tsx',
+        description: 'Import von Gutschein-Dateien, QR-Codes oder BLE/NFC Payloads.',
+        auth: true,
+        appState: { view: 'receive_bundle' }
+    },
+    {
+        id: '2.8',
+        chapter: 2,
+        title: 'Empfang erfolgreich',
+        file: 'src/components/ReceiveSuccessView.tsx',
+        description: 'Bestätigung des importierten Gutscheins und Verbuchung im L1 Speicher.',
+        auth: true,
+        appState: {
+            view: 'receive_success',
+            payload: {
+                count: 1,
+                totalValue: 60,
+                currency: 'Minuto',
+                issuer: MOCK_USER_DID,
+                sender: MOCK_CAROL_DID
+            }
+        }
+    },
+    {
+        id: '2.9',
+        chapter: 2,
+        title: 'Bürgschafts- / Signaturanfrage',
+        file: 'src/components/SignRequestView.tsx',
+        description: 'Prüfung und Unterzeichnung einer Bürgschaftsanfrage für einen Mitmenschen.',
+        auth: true,
+        appState: {
+            view: 'sign_request',
+            voucherData: {
+                localInstanceId: 'inst_sign_req_01',
+                status: 'incomplete',
+                displayCurrency: 'Minuto',
+                displayStandardName: 'Minuto Standard',
+                isTestVoucher: false,
+                voucher: {
+                    voucherStandard: {
+                        name: 'Minuto',
+                        uuid: 'standard_minuto_de',
+                        standardDefinitionHash: 'hash_minuto_std_def',
+                        template: {
+                            description: '1 Stunde Lebenszeit für Arbeit oder Hilfe',
+                            allowPartialTransfers: true
+                        }
+                    },
+                    voucherId: 'v_minuto_sign_pending_01',
+                    voucherNonce: 'nonce_req_123',
+                    creationDate: '2026-11-10T08:00:00Z',
+                    validUntil: '2027-11-10T08:00:00Z',
+                    nonRedeemableTestVoucher: false,
+                    nominalValue: { amount: '60', unit: 'Minuto' },
+                    creator: {
+                        id: MOCK_RECIPIENT_DID,
+                        firstName: 'Bob',
+                        lastName: 'Baumeister',
+                        city: 'Freiburg'
+                    },
+                    signatures: [],
+                    transactions: []
+                }
+            },
+            senderDid: MOCK_RECIPIENT_DID
+        }
+    },
+    {
+        id: '2.10',
+        chapter: 2,
+        title: 'Aktivitäten & Verlauf',
+        file: 'src/components/Activities.tsx',
+        description: 'Echtzeit-Chronik aller Wallet-Ereignisse, Bürgschaften und Übertragungen.',
+        auth: true,
+        appState: { view: 'activities' }
+    },
+    {
+        id: '2.11',
+        chapter: 2,
+        title: 'Transaktionshistorie',
+        file: 'src/components/TransactionHistoryView.tsx',
+        description: 'Detaillierter Audit-Trail über alle Transaktionen mit CSV-Export.',
+        auth: true,
+        appState: { view: 'transaction_history' }
+    },
+
+    // --- Chapter 3: Vertrauensnetzwerk & Marktplatz ---
+    {
+        id: '3.1',
+        chapter: 3,
+        title: 'Adressbuch & Kontakte (WoT)',
+        file: 'src/components/AddressBook.tsx',
+        description: 'Subjektives Vertrauensnetzwerk mit Trust-Levels (0–3), SD-JWT Sync und DIDs.',
+        auth: true,
+        appState: { view: 'address_book' }
+    },
+    {
+        id: '3.2',
+        chapter: 3,
+        title: 'Marktplatz & Kontaktkarten',
+        file: 'src/components/marketplace/MarketplaceView.tsx',
+        description: 'Lokale Angebote, Gesuche und dezentral synchronisierte Visitenkarten.',
+        auth: true,
+        appState: { view: 'marketplace' }
+    },
+
+    // --- Chapter 4: Einstellungen & Systemkonfiguration ---
+    {
+        id: '4.1',
+        chapter: 4,
+        title: 'Einstellungen: Profil & Allgemein',
+        file: 'src/components/SettingsView.tsx',
+        description: 'Eigene Identitätsdaten, Visitenkarte, Sprachen und Auto-Lock Timeout.',
+        auth: true,
+        appState: { view: 'settings', initialSection: 'profile' },
+        settingsTab: 'profile'
+    },
+    {
+        id: '4.2',
+        chapter: 4,
+        title: 'Einstellungen: Sync Service & Kanäle',
+        file: 'src/components/settings/SyncServiceSettingsCard.tsx',
+        description: 'Zero-Knowledge Relays, Postbox-Slots, Mesh-Verbindungen und Sync-Status.',
+        auth: true,
+        appState: { view: 'settings', initialSection: 'sync' },
+        settingsTab: 'sync_network'
+    },
+    {
+        id: '4.3',
+        chapter: 4,
+        title: 'Einstellungen: Backup & Export',
+        file: 'src/components/BackupSettingsCard.tsx',
+        description: 'Vollverschlüsselte automatische Datensicherung, Export-Pfade und Privatsphäre.',
+        auth: true,
+        appState: { view: 'settings', initialSection: 'backup' },
+        settingsTab: 'security_backup'
+    },
+    {
+        id: '4.4',
+        chapter: 4,
+        title: 'Einstellungen: Netzwerk & Standards',
+        file: 'src/components/SettingsView.tsx',
+        description: 'L2 Collision Lock Registry Shards, Quorum-Benchmarks und CEL Standards Manager.',
+        auth: true,
+        appState: { view: 'settings', initialSection: 'network' },
+        settingsTab: 'sync_network'
+    },
+
+    // --- Chapter 5: Sicherheit, Konflikte & Hilfe ---
+    {
+        id: '5.1',
+        chapter: 5,
+        title: 'Konflikt-Übersicht',
+        file: 'src/components/ConflictListView.tsx',
+        description: 'Erkannte Double-Spend Versuche und Shared-Signature Trap (SST V4) Meldungen.',
+        auth: true,
+        appState: { view: 'conflict_list' }
+    },
+    {
+        id: '5.2',
+        chapter: 5,
+        title: 'Konflikt-Details',
+        file: 'src/components/ConflictDetailsView.tsx',
+        description: 'Kryptographischer Beweis des Double-Spend Betrugs mit Offender-Enttarnung.',
+        auth: true,
+        appState: { view: 'conflict_details', proofId: MOCK_PROOF_ID }
+    },
+    {
+        id: '5.3',
+        chapter: 5,
+        title: 'Fork-Lock Sicherheits-Sperre',
+        file: 'src/components/ForkLockOverlay.tsx',
+        description: 'Sofortige Wallet-Sperre bei gleichzeitiger Fork-/Klon-Nutzung auf mehreren Geräten.',
+        auth: true,
+        appState: { view: 'logged_in' },
+        sessionOverrides: { isForkLocked: true }
+    },
+    {
+        id: '5.4',
+        chapter: 5,
+        title: 'Konzept & Hilfe',
+        file: 'src/components/ConceptView.tsx',
+        description: 'Interaktive Erklärung der HuMoCo Philosophie: Kein Blockchain, vertraue Menschen, prüfe Mathe.',
+        auth: false,
+        appState: { view: 'concept' }
+    },
+    {
+        id: '5.5',
+        chapter: 5,
+        title: 'Support & Spenden',
+        file: 'src/components/SupportView.tsx',
+        description: 'Hilfskanäle, Projektbeitrag, Feedback und Spendenmöglichkeiten für die Entwickler.',
+        auth: true,
+        appState: { view: 'support' }
+    },
+    {
+        id: '5.6',
+        chapter: 5,
+        title: 'Bug-Report & Diagnose',
+        file: 'src/components/BugReportView.tsx',
+        description: 'Systemdiagnose, anonymisierte Fehler-Logs und GitHub-Issue Vorbereitung.',
+        auth: true,
+        appState: { view: 'bug_report' }
+    }
+];
+
+export function getTauriMockInitScript(initialScenario = 'normal') {
+    return `
+(function() {
+    if (window.__TAURI_MOCK_INITIALIZED__) return;
+    window.__TAURI_MOCK_INITIALIZED__ = true;
+    window.__HUMOCO_SCENARIO__ = "${initialScenario}"; // 'normal' | 'empty' | 'error'
+
+    console.info('[HuMoCo Tour] Tauri IPC Mock initialized (scenario: ' + window.__HUMOCO_SCENARIO__ + ')');
+
+    const MOCK_USER_DID = "${MOCK_USER_DID}";
+    const MOCK_RECIPIENT_DID = "${MOCK_RECIPIENT_DID}";
+    const MOCK_CAROL_DID = "${MOCK_CAROL_DID}";
+    const MOCK_OFFENDER_DID = "${MOCK_OFFENDER_DID}";
+    const MOCK_VOUCHER_ID = "${MOCK_VOUCHER_ID}";
+    const MOCK_PROOF_ID = "${MOCK_PROOF_ID}";
+
+    const MOCK_PROFILE = {
+        id: MOCK_USER_DID,
+        firstName: "Alice",
+        lastName: "Musterfrau",
+        organization: "HuMoCo Community Freiburg",
+        community: "Dreisamtal",
+        email: "alice@humoco.example.org",
+        phone: "+49 761 123456",
+        coordinates: "47.9959,7.8522",
+        serviceOffer: "Gartenarbeit, Permakultur-Beratung, Holzhandwerk",
+        needs: "Fahrradreparatur, Bio-Äpfel",
+        address: {
+            street: "Musterstraße",
+            houseNumber: "42",
+            zipCode: "79098",
+            city: "Freiburg",
+            country: "Deutschland",
+            fullAddress: "Musterstraße 42, 79098 Freiburg, Deutschland"
+        }
+    };
+
+    const MOCK_SETTINGS = {
+        autoLockMinutes: 15,
+        sessionTimeoutSeconds: 300,
+        devModeUnlocked: true,
+        privacyDefault: "ask",
+        preferredLanguage: "de",
+        customServers: [
+            { url: "https://l2-node1.humoco.org", name: "Frankfurt Shard #1", isActive: true },
+            { url: "https://l2-node2.humoco.org", name: "Zürich Shard #2", isActive: true },
+            { url: "https://l2-node3.humoco.org", name: "Wien Shard #3", isActive: true }
+        ],
+        regionalMeshSources: []
+    };
+
+    const MOCK_STANDARDS = [
+        {
+            id: "minuto_de",
+            displayName: "Minuto (1 Std. Lebenszeit)",
+            content: "name = \\"Minuto\\"\\nunit = \\"Minuto\\"\\nabbreviation = \\"MIN\\"\\nnominal_minutes = 60"
+        },
+        {
+            id: "freetaler_v1",
+            displayName: "FreeTaler (Gemeinwohl)",
+            content: "name = \\"FreeTaler\\"\\nunit = \\"FreeTaler\\"\\nabbreviation = \\"FT\\""
+        }
+    ];
+
+    const MOCK_VOUCHERS = [
+        {
+            localInstanceId: "inst_sample_01",
+            status: "active",
+            validUntil: "2027-12-31T23:59:59Z",
+            creatorId: MOCK_USER_DID,
+            description: "1 Stunde Gartenarbeit oder Handwerkshilfe",
+            currentAmount: "60",
+            unit: "Minuto",
+            rawStandardName: "Minuto",
+            voucherStandardUuid: "std_minuto_de",
+            transactionCount: 2,
+            signaturesCount: 2,
+            hasCollateral: true,
+            creatorFirstName: "Alice",
+            creatorLastName: "Musterfrau",
+            creatorCoordinates: "47.9959,7.8522",
+            isTestVoucher: false,
+            displayCurrency: "Minuto",
+            displayStandardName: "Minuto Standard",
+            allowPartialTransfers: true,
+            trust: { trustScore: 0.85, level: 3, directEndorsements: 3 }
+        },
+        {
+            localInstanceId: "inst_sample_02",
+            status: "active",
+            validUntil: "2027-06-30T18:00:00Z",
+            creatorId: MOCK_RECIPIENT_DID,
+            description: "Bio-Gemüsekiste & Honig aus eigener Imkerei",
+            currentAmount: "120",
+            unit: "FreeTaler",
+            rawStandardName: "FreeTaler",
+            voucherStandardUuid: "std_freetaler_v1",
+            transactionCount: 1,
+            signaturesCount: 3,
+            hasCollateral: false,
+            creatorFirstName: "Bob",
+            creatorLastName: "Baumeister",
+            isTestVoucher: false,
+            displayCurrency: "FreeTaler",
+            displayStandardName: "FreeTaler Standard",
+            allowPartialTransfers: true,
+            trust: { trustScore: 0.60, level: 2, directEndorsements: 2 }
+        }
+    ];
+
+    const MOCK_VOUCHER_DETAILS = {
+        localInstanceId: "inst_sample_01",
+        status: "active",
+        displayCurrency: "Minuto",
+        displayStandardName: "Minuto Standard",
+        isTestVoucher: false,
+        trust: { trustScore: 0.85, level: 3, directEndorsements: 3 },
+        voucher: {
+            voucherStandard: {
+                name: "Minuto",
+                uuid: "std_minuto_de",
+                standardDefinitionHash: "b3_minuto_hash_standard_verification_ok",
+                template: {
+                    description: "1 Stunde Lebenszeit für Arbeit oder Hilfe",
+                    allowPartialTransfers: true
+                }
+            },
+            voucherId: MOCK_VOUCHER_ID,
+            voucherNonce: "nonce_sec_89374928174",
+            creationDate: "2026-01-15T10:00:00Z",
+            validUntil: "2027-12-31T23:59:59Z",
+            nonRedeemableTestVoucher: false,
+            nominalValue: { amount: "60", unit: "Minuto" },
+            collateral: {
+                amount: "60",
+                unit: "Minuto",
+                type: "personalGuarantee",
+                redeemCondition: "Vor-Ort Einlösung im Raum Freiburg"
+            },
+            creator: MOCK_PROFILE,
+            signatures: [
+                {
+                    voucherId: MOCK_VOUCHER_ID,
+                    signatureId: "sig_buerge_carol_01",
+                    signerId: MOCK_CAROL_DID,
+                    signature: "ed25519_sig_carol_trust_valid_sample",
+                    signatureTime: "2026-01-15T12:00:00Z",
+                    role: "guarantor",
+                    details: {
+                        id: MOCK_CAROL_DID,
+                        firstName: "Carol",
+                        lastName: "Kranz",
+                        city: "Freiburg"
+                    }
+                }
+            ],
+            transactions: [
+                {
+                    tId: "tx_01_init",
+                    tType: "creation",
+                    tTime: "2026-01-15T10:00:00Z",
+                    senderId: MOCK_USER_DID,
+                    recipientId: MOCK_USER_DID,
+                    amount: "60"
+                }
+            ]
+        }
+    };
+
+    const MOCK_CONTACTS = [
+        {
+            did: MOCK_RECIPIENT_DID,
+            profile: {
+                id: MOCK_RECIPIENT_DID,
+                firstName: "Bob",
+                lastName: "Baumeister",
+                organization: "Bau & Handwerk",
+                city: "Freiburg",
+                serviceOffer: "Holzarbeiten, Dämmung, Reparaturen",
+                needs: "Minuto-Gutscheine, Buchhaltung"
+            },
+            tags: ["Handwerk", "Freiburg", "Freund"],
+            addedAt: "2026-02-01T14:00:00Z",
+            trustLevel: 2,
+            desiredHops: 2,
+            hasPeerList: true
+        },
+        {
+            did: MOCK_CAROL_DID,
+            profile: {
+                id: MOCK_CAROL_DID,
+                firstName: "Carol",
+                lastName: "Kranz",
+                organization: "Bio-Imkerei",
+                city: "Waldkirch",
+                serviceOffer: "Regionaler Bio-Honig, Wachskerzen",
+                needs: "Gartenhilfe"
+            },
+            tags: ["Bio", "Imkerei", "Bürgin"],
+            addedAt: "2026-03-10T09:30:00Z",
+            trustLevel: 3,
+            desiredHops: 3,
+            hasPeerList: true
+        }
+    ];
+
+    const MOCK_MARKET_PERSONS = [
+        {
+            did: MOCK_RECIPIENT_DID,
+            profile: MOCK_CONTACTS[0].profile,
+            listings: [
+                {
+                    listingId: "list_bob_01",
+                    listingType: "offer",
+                    title: "Holzreparaturen & Möbelbau",
+                    text: "Ich helfe gerne bei Reparaturen von Holzmöbeln oder beim Terrassenbau.",
+                    pricing: "60 Minuto / Std.",
+                    origin: "card",
+                    allowInquiries: true
+                }
+            ],
+            sources: [{ kind: "card", hops: 1 }],
+            asOf: Math.floor(Date.now() / 1000) - 3600,
+            standards: [{ name: "Minuto", uuid: "std_minuto_de" }]
+        },
+        {
+            did: MOCK_CAROL_DID,
+            profile: MOCK_CONTACTS[1].profile,
+            listings: [
+                {
+                    listingId: "list_carol_01",
+                    listingType: "offer",
+                    title: "Regionaler Bio-Honig (500g Glas)",
+                    text: "Kalt geschleuderter Frühlingsblütenhonig aus dem Schwarzwald.",
+                    pricing: "10 FreeTaler / Glas",
+                    origin: "card",
+                    allowInquiries: true
+                }
+            ],
+            sources: [{ kind: "card", hops: 1 }],
+            asOf: Math.floor(Date.now() / 1000) - 7200,
+            standards: [{ name: "FreeTaler", uuid: "std_freetaler_v1" }]
+        }
+    ];
+
+    const MOCK_CONFLICT_PROOF = {
+        proofId: MOCK_PROOF_ID,
+        offenderId: MOCK_OFFENDER_DID,
+        forkPointPrevHash: "blake3_prev_tx_hash_098234710928347",
+        reportTimestamp: "2026-11-09T16:20:00Z",
+        isResolved: false,
+        hasL2Verdict: true,
+        localOverride: false,
+        conflictRole: "victim",
+        affectedVoucherName: "Minuto Gutschein #892",
+        voucherStandardUuid: "std_minuto_de",
+        isTestVoucher: false,
+        isCryptographicallyAttributed: true,
+        conflictingTransactions: [
+            {
+                tId: "tx_double_spend_a",
+                tType: "transfer",
+                tTime: "2026-11-09T16:15:00Z",
+                senderId: MOCK_OFFENDER_DID,
+                recipientId: MOCK_USER_DID,
+                amount: "60"
+            },
+            {
+                tId: "tx_double_spend_b",
+                tType: "transfer",
+                tTime: "2026-11-09T16:15:10Z",
+                senderId: MOCK_OFFENDER_DID,
+                recipientId: MOCK_RECIPIENT_DID,
+                amount: "60"
+            }
+        ],
+        deletableAt: "2027-12-31T23:59:59Z",
+        reporterId: MOCK_USER_DID,
+        reporterSignature: "ed25519_reporter_signature_valid"
+    };
+
+    const handlers = {
+        // --- Auth & Profiles ---
+        "list_profiles": () => {
+            if (window.__HUMOCO_SCENARIO__ === 'empty') return [];
+            return [
+                {
+                    folderName: "alice_wallet",
+                    profileName: "Alice Musterfrau",
+                    userId: MOCK_USER_DID,
+                    createdAt: "2026-01-15T10:00:00Z",
+                    isPasswordProtected: true
+                }
+            ];
+        },
+        "get_user_profile": () => {
+            if (window.__HUMOCO_SCENARIO__ === 'empty') return null;
+            if (window.__HUMOCO_TOUR__) {
+                const s = window.__HUMOCO_TOUR__.getState();
+                if (s.isAuthenticated === false) {
+                    throw new Error("No active profile session");
+                }
+            }
+            return MOCK_PROFILE;
+        },
+        "get_user_id": () => MOCK_USER_DID,
+        "get_local_instance_id": () => "inst_alice_local_dev_node",
+        "is_session_active": () => {
+            if (window.__HUMOCO_SCENARIO__ === 'empty') return false;
+            if (window.__HUMOCO_TOUR__) {
+                const s = window.__HUMOCO_TOUR__.getState();
+                if (s.isSessionActive !== undefined) return s.isSessionActive;
+                if (s.isAuthenticated !== undefined) return s.isAuthenticated;
+            }
+            return true;
+        },
+        "login": () => null,
+        "logout": () => null,
+        "unlock_session": () => null,
+        "lock_session": () => null,
+        "refresh_session_activity": () => null,
+        "update_user_profile": () => null,
+        "create_profile": () => null,
+        "delete_profile": () => null,
+        "generate_mnemonic": () => "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "get_bip39_wordlist": () => ["abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract"],
+        "validate_mnemonic": () => null,
+        "recover_wallet_and_set_new_password": () => null,
+        "check_reputation": () => "clean",
+        "handover_to_this_device": () => null,
+
+        // --- Settings ---
+        "get_settings": () => MOCK_SETTINGS,
+        "save_settings": () => null,
+        "benchmark_l2_servers": () => [
+            { url: "https://l2-node1.humoco.org", latencyMs: 14, reachable: true },
+            { url: "https://l2-node2.humoco.org", latencyMs: 22, reachable: true },
+            { url: "https://l2-node3.humoco.org", latencyMs: 28, reachable: true }
+        ],
+        "refresh_regional_mesh_views": () => true,
+        "check_voucher_l2_status": () => ({ status: "unspent", archived: false }),
+
+        // --- Vouchers & Standards ---
+        "get_vouchers": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_VOUCHERS,
+        "get_voucher_list": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_VOUCHERS,
+        "get_voucher_details": () => MOCK_VOUCHER_DETAILS,
+        "get_voucher_standards": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_STANDARDS,
+        "parse_standard_toml": () => ({
+            immutable: {
+                identity: { uuid: "std_minuto_de", name: "Minuto", abbreviation: "MIN" },
+                blueprint: { unit: "Minuto", primaryRedemptionType: "time", collateralType: "personalGuarantee" },
+                features: { allowPartialTransfers: true, balancesAreSummable: true, amountDecimalPlaces: 0, privacyMode: "flexible", allowedTTypes: ["creation", "transfer"] },
+                issuance: { validityDurationRange: ["1y", "3y"], issuanceMinimumValidityDuration: "1m", additionalSignaturesRange: [0, 5], allowedSignatureRoles: ["guarantor"] },
+                customRules: {}
+            },
+            mutable: {
+                metadata: { issuerName: "Minuto Deutschland e.V.", keywords: ["zeit", "hilfe"] },
+                appConfig: { defaultValidityDuration: "1y" },
+                i18n: { descriptions: {}, footnotes: {}, collateralDescriptions: {} }
+            }
+        }),
+        "evaluate_signature_suitability": () => ({
+            isAllowedRole: true,
+            fatalConflicts: [],
+            resolvedRules: ["Standard rule verified"],
+            gentleHints: ["Empfohlene Bürgenanzahl erreicht"]
+        }),
+        "export_voucher_standard": () => [1, 2, 3, 4],
+        "inspect_voucher_standard_file": () => ({}),
+        "install_voucher_standard": () => null,
+
+        // --- Transactions & Activities ---
+        "get_transactions": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
+            {
+                tId: "tx_transfer_001",
+                tType: "transferSent",
+                tTime: "2026-11-08T14:30:00Z",
+                senderId: MOCK_USER_DID,
+                recipientId: MOCK_RECIPIENT_DID,
+                amount: "60",
+                displayCurrency: "Minuto"
+            },
+            {
+                tId: "tx_transfer_002",
+                tType: "transferReceived",
+                tTime: "2026-11-07T11:15:00Z",
+                senderId: MOCK_CAROL_DID,
+                recipientId: MOCK_USER_DID,
+                amount: "10",
+                displayCurrency: "FreeTaler"
+            }
+        ],
+        "get_transaction_history": () => handlers["get_transactions"](),
+        "get_events": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
+            {
+                eventId: "ev_01",
+                localInstanceId: "inst_sample_01",
+                voucherId: MOCK_VOUCHER_ID,
+                timestamp: "2026-11-08T14:30:00Z",
+                eventType: "transferSent",
+                bffData: {
+                    displayCurrency: "Minuto",
+                    amount: "60",
+                    isTestVoucher: false,
+                    counterpartyName: "Bob Baumeister"
+                }
+            }
+        ],
+
+        // --- Contacts & Marketplace ---
+        "get_contacts": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_CONTACTS,
+        "save_contact": () => null,
+        "delete_contact": () => null,
+        "get_market_view": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_MARKET_PERSONS,
+        "get_own_contact_card": () => ({
+            did: MOCK_USER_DID,
+            profile: MOCK_PROFILE,
+            listings: [
+                {
+                    listingId: "list_alice_01",
+                    listingType: "offer",
+                    title: "Permakultur & Gartenhilfe",
+                    text: "Biete Gartenarbeit, Baumrückschnitt und Permakultur-Beratung im Dreisamtal.",
+                    pricing: "60 Minuto / Std.",
+                    origin: "card",
+                    allowInquiries: true
+                }
+            ],
+            asOf: Math.floor(Date.now() / 1000)
+        }),
+        "save_own_contact_card": (args) => args?.request || null,
+        "delete_own_contact_card": () => null,
+        "export_forward_card": () => ({ exportPayload: "humoco://card/alice_payload", targetDid: MOCK_USER_DID }),
+        "import_contact_card": () => ({ did: MOCK_CAROL_DID, importedCount: 1 }),
+        "preview_contact_trust_change": () => ({ scoreDelta: 0.25, newLevel: 3, bottlenecks: [] }),
+        "sync_channel_members": () => 2,
+        "delete_own_sync_slots": () => 1,
+
+        // --- Sync Services & Relays ---
+        "get_sync_overview_status": () => ({
+            configuredCount: 2,
+            activeCount: 2,
+            pendingItemsCount: 0,
+            lastSyncTimestamp: "2026-11-10T08:15:00Z"
+        }),
+        "get_sync_admin_status": () => ({
+            serviceUrl: "https://sync.humoco.org",
+            adminKeyId: "key_admin_alice_01",
+            activeSlots: 2,
+            maxSlots: 10,
+            bandwidthUsedKb: 128
+        }),
+        "prepare_sync_setup": () => ({ token: "setup_token_demo" }),
+        "save_sync_setup_zip": () => null,
+        "finalize_sync_setup": () => handlers["get_sync_admin_status"](),
+        "test_sync_connection": () => ({ success: true, latencyMs: 18, message: "Sync Relay OK" }),
+        "update_sync_admin_config": () => handlers["get_sync_admin_status"](),
+        "block_sync_slot": () => handlers["get_sync_admin_status"](),
+        "probe_public_sync": () => ({ name: "Public HuMoCo Relay Frankfurt", url: "https://sync.humoco.org", latencyMs: 18 }),
+        "save_public_sync": () => ({ name: "Public HuMoCo Relay Frankfurt", url: "https://sync.humoco.org" }),
+        "remove_public_sync": () => null,
+        "rotate_sync_admin_key": () => handlers["get_sync_admin_status"](),
+        "delete_sync_admin": () => null,
+        "discover_available_syncs": () => [
+            { name: "Freiburg Mesh Relay", url: "https://sync-freiburg.humoco.org", trustScore: 0.9 }
+        ],
+        "set_selected_upload_syncs": () => [],
+        "sync_market_channels": () => ({ syncedProfilesCount: 2, newOffersCount: 1 }),
+
+        // --- Backup & Integrity ---
+        "get_backup_status": () => ({
+            lastBackupTimestamp: "2026-11-10T07:00:00Z",
+            autoBackupEnabled: true,
+            storagePath: "/home/user/.local/share/humoco/backups",
+            totalBlobs: 42,
+            backupSizeKb: 256
+        }),
+        "probe_wallet_backup": () => ({
+            sourceKind: "file",
+            protectionMode: "password",
+            supportsPasswordRestore: true,
+            supportsMnemonicRestore: true,
+            blobCount: 42,
+            customStandardCount: 2
+        }),
+        "inspect_wallet_backup": () => ({
+            profileName: "Alice Musterfrau",
+            userId: MOCK_USER_DID,
+            epoch: 4,
+            txNonce: 18,
+            sealTimestamp: "2026-11-10T07:00:00Z",
+            blobCount: 42,
+            customStandardCount: 2,
+            protectionMode: "password"
+        }),
+        "restore_wallet_backup": () => ({
+            folderName: "alice_wallet",
+            profileName: "Alice Musterfrau",
+            activeVoucherQueriesCount: 2,
+            reconciledSpentCount: 0,
+            restoredStandardsCount: 2,
+            l2ReconciliationStatus: "reconciled"
+        }),
+        "run_auto_backup_sync": () => handlers["get_backup_status"](),
+        "sync_backup": () => ({ uploadedTo: 1, authorizedTargets: 1, paddedBytes: 4096, errors: [] }),
+        "fetch_and_inspect_backup": () => ({
+            stagedPath: "/tmp/staged_backup",
+            matchedKeyKind: "password",
+            sourceUrl: "https://sync.humoco.org",
+            inspection: handlers["inspect_wallet_backup"]()
+        }),
+        "reconcile_restored_wallet_l2": () => ({
+            activeVoucherQueriesCount: 2,
+            reconciledSpentCount: 0,
+            l2ReconciliationStatus: "reconciled",
+            pendingRestoreL2Reconciliation: false
+        }),
+        "check_wallet_integrity": () => ({ isHealthy: true, issues: [] }),
+        "get_double_spend_conflicts": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
+            {
+                proofId: MOCK_PROOF_ID,
+                offenderId: MOCK_OFFENDER_DID,
+                forkPointPrevHash: "blake3_prev_tx_hash_098234710928347",
+                reportTimestamp: "2026-11-09T16:20:00Z",
+                isResolved: false,
+                hasL2Verdict: true,
+                localOverride: false,
+                conflictRole: "victim",
+                affectedVoucherName: "Minuto Gutschein #892",
+                voucherStandardUuid: "std_minuto_de",
+                isTestVoucher: false,
+                isCryptographicallyAttributed: true
+            }
+        ],
+        "get_proof_of_double_spend": () => ({
+            proof: MOCK_CONFLICT_PROOF,
+            localOverride: false,
+            conflictRole: "victim"
+        }),
+        "set_conflict_local_override": () => null,
+        "repair_wallet_integrity": () => null,
+        "export_double_spend_proof": () => [1, 2, 3, 4],
+        "import_double_spend_proof": () => MOCK_PROOF_ID,
+
+        // --- Postbox & Messaging ---
+        "get_post_inbox_summary": () => ({
+            totalPending: 1,
+            signingRequests: 1,
+            signaturesToAttach: 0,
+            wotHandshakes: 0,
+            marketInquiries: 0
+        }),
+        "sync_post_channels": () => ({ fetchedItems: 1, processedItems: 1, errors: [] }),
+        "send_signing_request_via_post": () => ({ success: true }),
+        "reply_detached_signature_via_post": () => ({ success: true }),
+        "send_wot_handshake_via_post": () => ({ success: true }),
+        "accept_wot_handshake": () => ({ success: true }),
+        "send_market_inquiry_via_post": () => ({ inquiryId: "inq_01", status: "sent" }),
+        "reply_market_inquiry_via_post": () => ({ inquiryId: "inq_01", status: "replied" }),
+        "dismiss_pending_post_item": () => null,
+
+        // --- Logs & Diagnostics ---
+        "get_latest_logs": () => [
+            "[INFO] HuMoCo Core v0.5.1 initialized with strict L1 autonomy",
+            "[INFO] SST V4 Trap verification: deterministic double-spend protection armed",
+            "[INFO] Connected to 3/3 configured L2 Collision Lock nodes (14/20 mesh quorum ready)",
+            "[DEBUG] Background PostBox poll: 1 pending item retrieved (latency 22ms)",
+            "[DEBUG] Web of Trust SD-JWT sync completed: 2 contacts verified (depth=3)"
+        ].join("\\n"),
+        "log_to_backend": () => null,
+
+        // --- Tauri Plugins ---
+        "plugin:app|version": () => "0.5.1",
+        "plugin:app|name": () => "HuMoCo Wallet",
+        "plugin:app|tauri_version": () => "2.11.0",
+        "plugin:log|log": () => null,
+        "plugin:dialog|open": () => null,
+        "plugin:dialog|save": () => null,
+        "plugin:dialog|message": () => null,
+        "plugin:clipboard-manager|write_text": () => null,
+        "plugin:clipboard-manager|read_text": () => "",
+        "plugin:opener|open_url": () => null,
+        "plugin:opener|open_path": () => null
+    };
+
+    window.__TAURI_INTERNALS__ = {
+        invoke: async function(cmd, args, options) {
+            if (window.__HUMOCO_SCENARIO__ === 'error') {
+                const errorCommands = ['get_vouchers', 'get_voucher_details', 'get_contacts', 'get_market_view', 'save_settings'];
+                if (errorCommands.includes(cmd)) {
+                    const err = new Error("Simulated Backend Error in Scenario 'error'");
+                    err.code = "error.mock.simulated";
+                    err.details = { command: cmd };
+                    throw err;
+                }
+            }
+
+            if (Object.prototype.hasOwnProperty.call(handlers, cmd)) {
+                try {
+                    return await handlers[cmd](args, options);
+                } catch (err) {
+                    console.error('[Tauri Mock] Error executing ' + cmd + ':', err);
+                    throw err;
+                }
+            }
+
+            console.warn('[UNMOCKED IPC] ' + cmd, args);
+            if (cmd.startsWith('get_') || cmd.startsWith('list_')) {
+                return [];
+            }
+            return null;
+        }
+    };
+
+    window.__HUMOCO_SET_SCENARIO__ = function(sc) {
+        window.__HUMOCO_SCENARIO__ = sc;
+        console.info('[HuMoCo Tour] Scenario switched to: ' + sc);
+        if (window.__HUMOCO_TOUR__) {
+            const cur = window.__HUMOCO_TOUR__.getState();
+            window.__HUMOCO_TOUR__.setState({ ...cur });
+        }
+    };
+})();
+`;
+}

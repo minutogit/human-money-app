@@ -13,6 +13,7 @@ import { useWindowTitleSync } from '../hooks/useWindowTitleSync';
 import { useIntegrityCheck } from '../hooks/useIntegrityCheck';
 import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
 import { isBackendError, stringifyError } from '../utils/errorHelper';
+import { tourBridge } from '../utils/tourBridge';
 
 export type SecurityLockdownKind = 'handover' | 'clone' | 'fork' | null;
 
@@ -287,6 +288,28 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setIsRecoveryRequired(false);
         setLockdownKind(null);
         setLockdownDetails(null);
+    }, []);
+
+    useEffect(() => {
+        return tourBridge.subscribe((partial) => {
+            if (partial.isAuthenticated !== undefined) {
+                setIsAuthenticated(partial.isAuthenticated);
+            }
+            if (partial.isSessionActive !== undefined) {
+                setIsSessionActive(partial.isSessionActive);
+                isSessionActiveRef.current = partial.isSessionActive;
+            }
+            if (partial.isForkLocked !== undefined) {
+                setIsForkLocked(partial.isForkLocked);
+                setLockdownKind(partial.isForkLocked ? 'fork' : null);
+            }
+            if (partial.isRecoveryRequired !== undefined) {
+                setIsRecoveryRequired(partial.isRecoveryRequired);
+            }
+            if (partial.profileName !== undefined) {
+                setProfileName(partial.profileName);
+            }
+        });
     }, []);
 
     return (

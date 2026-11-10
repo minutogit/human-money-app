@@ -16,7 +16,9 @@
     "i18n:prep": "node scripts/i18n-prep.js",
     "i18n:merge": "node scripts/i18n-merge.js",
     "i18n:status": "node scripts/i18n-prep.js --dry-run",
-    "i18n:check": "node scripts/i18n-check-keys.js"
+    "i18n:check": "node scripts/i18n-check-keys.js",
+    "tour": "node scripts/ui-tour.mjs",
+    "tour:auto": "node scripts/ui-tour.mjs --auto"
   },
   "dependencies": {
     "@tauri-apps/api": "~2.11.0",

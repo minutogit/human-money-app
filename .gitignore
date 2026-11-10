@@ -36,3 +36,4 @@ target/
 i18n-task.json
 i18n-result.json
 /temp/
+test-results/

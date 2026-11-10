@@ -11,6 +11,7 @@ import { useSession } from '../context/SessionContext';
 import { useOptionalNavigation } from '../context/NavigationContext';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { copyToClipboard } from '../utils/clipboard';
+import { tourBridge, SettingsTabId } from '../utils/tourBridge';
 
 import { ProfileSettings } from './ProfileSettings';
 import { BackupSettingsCard } from './BackupSettingsCard';
@@ -86,7 +87,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         if (nav?.appState.view === 'settings') {
             const state = nav.appState as {
                 view: 'settings';
-                initialSection?: 'sync' | 'backup' | 'network';
+                initialSection?: 'sync' | 'backup' | 'network' | 'profile' | 'standards';
             };
             if (state.initialSection) {
                 if (state.initialSection === 'backup') {
@@ -96,6 +97,11 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     if (state.initialSection === 'network') {
                         setIsAdvancedNetworkOpen(true);
                     }
+                } else if (state.initialSection === 'standards') {
+                    setActiveTab('standards_general');
+                    setIsStandardsOpen(true);
+                } else if (state.initialSection === 'profile') {
+                    setActiveTab('profile');
                 }
                 setTimeout(() => {
                     const el = document.getElementById(`settings-${state.initialSection}-section`);
@@ -106,6 +112,20 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             }
         }
     }, [nav?.appState]);
+
+    useEffect(() => {
+        tourBridge.registerSettingsTabSetter((tab: SettingsTabId) => {
+            setActiveTab(tab);
+            if (tab === 'standards_general') {
+                setIsStandardsOpen(true);
+            } else if (tab === 'sync_network') {
+                setIsAdvancedNetworkOpen(true);
+            }
+        });
+        return () => {
+            tourBridge.registerSettingsTabSetter(null);
+        };
+    }, []);
 
     useEffect(() => {
         async function fetchSettings() {
