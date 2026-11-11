@@ -21,6 +21,27 @@ describe('imageCompression utils', () => {
     expect(estimateDecodedByteSize(uriWithoutPadding)).toBe(6);
   });
 
+  it('detects WebP canvas support accurately', () => {
+    const mockToDataURL = vi.fn().mockReturnValue('data:image/webp;base64,dummy');
+    const spy = vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      if (tagName === 'canvas') {
+        return {
+          width: 0,
+          height: 0,
+          toDataURL: mockToDataURL,
+        } as unknown as HTMLCanvasElement;
+      }
+      return document.createElement(tagName);
+    });
+
+    expect(isWebpCanvasSupported()).toBe(true);
+
+    mockToDataURL.mockReturnValue('data:image/png;base64,dummy');
+    expect(isWebpCanvasSupported()).toBe(false);
+
+    spy.mockRestore();
+  });
+
   it('compresses avatar to 96x96 WebP and limits length <= 4096', async () => {
     const mockDrawImage = vi.fn();
     const mockToDataURL = vi.fn().mockReturnValue('data:image/webp;base64,mockavataruri');
