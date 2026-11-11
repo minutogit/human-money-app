@@ -34,6 +34,7 @@ export function ConfirmationModal({
         <ModalShell
             isOpen={isOpen}
             onClose={isProcessing ? undefined : onCancel}
+            closeOnBackdrop={false}
             maxWidth="md"
             title={<h2 className="text-xl font-bold text-theme-primary mb-2">{title}</h2>}
             description={description}

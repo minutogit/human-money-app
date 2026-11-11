@@ -44,6 +44,15 @@ describe('helpTopics Registry', () => {
             expect(de[topic.longKey].trim().length).toBeGreaterThan(0);
             expect(en[topic.longKey], `Missing EN for ${topic.longKey}`).toBeDefined();
             expect(en[topic.longKey].trim().length).toBeGreaterThan(0);
+
+            // deepDiveKey (optional)
+            if (topic.deepDiveKey) {
+                expect(topic.deepDiveKey).toBe(`help.${id}.deepDive`);
+                expect(de[topic.deepDiveKey], `Missing DE for ${topic.deepDiveKey}`).toBeDefined();
+                expect(de[topic.deepDiveKey].trim().length).toBeGreaterThan(0);
+                expect(en[topic.deepDiveKey], `Missing EN for ${topic.deepDiveKey}`).toBeDefined();
+                expect(en[topic.deepDiveKey].trim().length).toBeGreaterThan(0);
+            }
         }
     });
 
@@ -82,6 +91,7 @@ describe('helpTopics Registry', () => {
             'helpCenter.backToTopics',
             'helpCenter.backToLogin',
             'helpCenter.selectTopicPrompt',
+            'helpCenter.deepDiveTitle',
         ];
 
         for (const k of expectedUiKeys) {

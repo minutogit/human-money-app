@@ -91,6 +91,7 @@ describe('BackupSettingsCard', () => {
         backupSyncFolder: null,
         autoBackupEnabled: true,
         backupDirty: false,
+        marketSyncEnabled: true,
     };
 
     beforeEach(() => {

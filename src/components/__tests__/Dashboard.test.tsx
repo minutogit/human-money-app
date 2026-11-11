@@ -96,6 +96,7 @@ const mockSettings: AppSettings = {
     sessionTimeoutSeconds: 600,
     privacyDefault: 'ask',
     balanceViewMode: 'spendable',
+    marketSyncEnabled: true,
 };
 
 describe('Dashboard Component', () => {

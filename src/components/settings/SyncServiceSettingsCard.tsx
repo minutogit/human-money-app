@@ -17,6 +17,7 @@ import {
     KeyRound,
     FileArchive,
     HelpCircle,
+    HeartHandshake,
 } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
 import {
@@ -227,9 +228,11 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
 
     // Feature toggles
     const [postAcceptFromContacts, setPostAcceptFromContacts] = useState<boolean>(settings?.postAcceptFromContacts ?? true);
-    const [marketSendCardOnPayment, setMarketSendCardOnPayment] = useState<boolean>(settings?.marketSendCardOnPayment ?? true);
+    const [marketSyncEnabled, setMarketSyncEnabled] = useState<boolean>(settings?.marketSyncEnabled ?? true);
     const [wotShareViaSync, setWotShareViaDrop] = useState<boolean>(settings?.wotShareViaSync ?? true);
     const [syncBackupEnabled, setDropBackupEnabled] = useState<boolean>(settings?.syncBackupEnabled ?? true);
+    const [shareMinLevel, setShareMinLevel] = useState<number>(settings?.shareMinLevel ?? 1);
+    const [marketPollWifiOnly, setMarketPollWifiOnly] = useState<boolean>(settings?.marketPollWifiOnly ?? false);
 
     // Tab 2 state: Host / Own Sync Service
     const [adminStatus, setAdminStatus] = useState<FrontendSyncAdminStatus | null>(null);
@@ -254,9 +257,11 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
     useEffect(() => {
         if (settings) {
             setPostAcceptFromContacts(settings.postAcceptFromContacts ?? true);
-            setMarketSendCardOnPayment(settings.marketSendCardOnPayment ?? true);
+            setMarketSyncEnabled(settings.marketSyncEnabled ?? true);
             setWotShareViaDrop(settings.wotShareViaSync ?? true);
             setDropBackupEnabled(settings.syncBackupEnabled ?? true);
+            setShareMinLevel(settings.shareMinLevel ?? 1);
+            setMarketPollWifiOnly(settings.marketPollWifiOnly ?? false);
             if (Array.isArray(settings.publicSyncs)) {
                 setConfiguredPublicDrops(settings.publicSyncs);
             }
@@ -293,6 +298,23 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
     }, [loadData]);
 
     const updateFeatureToggle = async (key: keyof AppSettings, value: boolean) => {
+        try {
+            const current = settings || await settingsService.getSettings();
+            const updated: AppSettings = {
+                ...current,
+                [key]: value,
+            };
+            await settingsService.saveSettings(updated);
+            if (onSettingsUpdated) {
+                onSettingsUpdated(updated);
+            }
+            notifySyncStatusUpdated();
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        }
+    };
+
+    const updateSettingNumber = async (key: keyof AppSettings, value: number) => {
         try {
             const current = settings || await settingsService.getSettings();
             const updated: AppSettings = {
@@ -635,10 +657,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                 <label className="flex items-start gap-3 cursor-pointer group pt-1 border-t border-theme-subtle/50">
                                     <input
                                         type="checkbox"
-                                        checked={marketSendCardOnPayment}
+                                        checked={marketSyncEnabled}
                                         onChange={(e) => {
-                                            setMarketSendCardOnPayment(e.target.checked);
-                                            updateFeatureToggle('marketSendCardOnPayment', e.target.checked);
+                                            setMarketSyncEnabled(e.target.checked);
+                                            updateFeatureToggle('marketSyncEnabled', e.target.checked);
                                         }}
                                         className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
                                     />
@@ -688,6 +710,54 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         </span>
                                         <p className="text-[11px] text-theme-light mt-0.5">
                                             {t('settings.syncChannelBackupDesc')}
+                                        </p>
+                                    </div>
+                                </label>
+
+                                {/* Share Min Level for Card / Offers */}
+                                <div className="pt-3 border-t border-theme-subtle/50 flex flex-col gap-1.5">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <label htmlFor="shareMinLevel" className="text-xs font-bold text-theme-primary cursor-pointer">
+                                            {t('settings.shareMinLevel')}
+                                        </label>
+                                        <select
+                                            id="shareMinLevel"
+                                            value={shareMinLevel}
+                                            onChange={(e) => {
+                                                const val = Number(e.target.value);
+                                                setShareMinLevel(val);
+                                                updateSettingNumber('shareMinLevel', val);
+                                            }}
+                                            className="h-8 px-2.5 bg-bg-app border border-theme-subtle rounded-lg text-xs font-semibold text-theme-secondary outline-none focus:ring-2 focus:ring-theme-primary/20 cursor-pointer"
+                                        >
+                                            <option value={0}>{t('contacts.trustLevel0')}</option>
+                                            <option value={1}>{t('contacts.trustLevel1')}</option>
+                                            <option value={2}>{t('contacts.trustLevel2')}</option>
+                                            <option value={3}>{t('contacts.trustLevel3')}</option>
+                                        </select>
+                                    </div>
+                                    <p className="text-[11px] text-theme-light">
+                                        {t('settings.shareMinLevelDesc')}
+                                    </p>
+                                </div>
+
+                                {/* Sync Services Poll Wifi Only */}
+                                <label className="flex items-start gap-3 cursor-pointer group pt-3 border-t border-theme-subtle/50">
+                                    <input
+                                        type="checkbox"
+                                        checked={marketPollWifiOnly}
+                                        onChange={(e) => {
+                                            setMarketPollWifiOnly(e.target.checked);
+                                            updateFeatureToggle('marketPollWifiOnly', e.target.checked);
+                                        }}
+                                        className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                                    />
+                                    <div>
+                                        <span className="text-xs font-bold text-theme-primary group-hover:text-theme-accent">
+                                            {t('settings.marketPollWifiOnly')}
+                                        </span>
+                                        <p className="text-[11px] text-theme-light mt-0.5">
+                                            {t('settings.marketPollWifiOnlyDesc')}
                                         </p>
                                     </div>
                                 </label>
@@ -862,6 +932,17 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 {/* TAB 2: Host / Own Sync Service */}
                 {activeTab === 'host' && (
                     <div className="space-y-6 animate-in fade-in duration-200">
+                        {/* Community Service Banner */}
+                        <div className="p-4 bg-emerald-500/10 dark:bg-emerald-950/20 rounded-2xl border border-emerald-500/20 space-y-1.5 text-xs text-theme-secondary">
+                            <h4 className="font-bold text-emerald-800 dark:text-emerald-300 text-sm flex items-center gap-1.5">
+                                <HeartHandshake size={16} />
+                                <span>{t('settings.syncHostCommunityTitle')}</span>
+                            </h4>
+                            <p className="leading-relaxed text-emerald-900/90 dark:text-emerald-200/90 font-medium">
+                                {t('settings.syncHostCommunityDesc')}
+                            </p>
+                        </div>
+
                         {adminStatus == null ? (
                             /* Setup Wizard for new Own Drop */
                             <div className="space-y-6">

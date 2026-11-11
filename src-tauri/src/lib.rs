@@ -26,7 +26,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*, market::*, sync::*, post::*};
+use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*, market::*, sync::*, post::*, profile::*};
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
 
@@ -159,7 +159,7 @@ pub fn run() {
             get_event_history,
             parse_standard_toml, export_voucher_standard, inspect_voucher_standard_file, import_voucher_standard, delete_voucher_standard,
             // Address Book
-            get_contacts, save_contact, delete_contact,
+            get_contacts, save_contact, delete_contact, get_my_quick_contact,
             // WalletSeal / Sync
             get_seal_sync_status, get_seal_for_upload, acknowledge_seal_sync,
             check_anchor_sync, reconcile_rollback, flush_pending_anchor_sync,

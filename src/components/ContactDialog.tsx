@@ -18,6 +18,7 @@ interface ContactDialogProps {
     existingContact?: Contact | null;
     initialProfile?: Partial<PublicProfile> | null;
     initialDid?: string;
+    initialSyncUrls?: string[];
 }
 
 const ContactDialog: React.FC<ContactDialogProps> = ({
@@ -26,7 +27,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     onSave,
     existingContact,
     initialProfile,
-    initialDid
+    initialDid,
+    initialSyncUrls,
 }) => {
     const { t } = useTranslation();
     const [did, setDid] = useState(initialDid || '');
@@ -80,30 +82,38 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setNotes(existingContact.notes || '');
             setTrustLevel(existingContact.trustLevel ?? null);
             setSyncs(existingContact.syncs ? [...existingContact.syncs].slice(0, 2) : []);
-        } else if (initialProfile) {
-            setFirstName(initialProfile.firstName || '');
-            setLastName(initialProfile.lastName || '');
-            setOrganization(initialProfile.organization || '');
-            if (initialDid) setDid(initialDid);
-            setTags([]);
-            setNotes('');
-            setTrustLevel(null);
-            setSyncs([]);
         } else {
-            // Reset for new contact
-            setDid(initialDid || '');
-            setFirstName('');
-            setLastName('');
-            setOrganization('');
-            setTags([]);
-            setNotes('');
-            setTrustLevel(null);
-            setSyncs([]);
+            const initSyncs: FrontendSyncDescriptor[] = (initialSyncUrls || []).slice(0, 2).map(url => ({
+                writeUrl: url,
+                readUrl: url,
+                dropPub: '',
+                failCount: 0,
+            }));
+            if (initialProfile) {
+                setFirstName(initialProfile.firstName || '');
+                setLastName(initialProfile.lastName || '');
+                setOrganization(initialProfile.organization || '');
+                if (initialDid) setDid(initialDid);
+                setTags([]);
+                setNotes('');
+                setTrustLevel(null);
+                setSyncs(initSyncs);
+            } else {
+                // Reset for new contact
+                setDid(initialDid || '');
+                setFirstName('');
+                setLastName('');
+                setOrganization('');
+                setTags([]);
+                setNotes('');
+                setTrustLevel(null);
+                setSyncs(initSyncs);
+            }
         }
         setSyncInputUrl('');
         setSyncError(null);
         setConfirmDeleteUrl(null);
-    }, [existingContact, initialProfile, initialDid, isOpen]);
+    }, [existingContact, initialProfile, initialDid, initialSyncUrls, isOpen]);
 
     const applyContactCard = async (rawText: string) => {
         const parsed = parseContactCard(rawText);
@@ -119,27 +129,20 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 }
             }
             if (parsed.syncUrls && parsed.syncUrls.length > 0) {
-                for (const url of parsed.syncUrls.slice(0, 2)) {
-                    try {
-                        const info = await marketService.probePublicSync(url);
-                        if (info) {
-                            setSyncs(prev => {
-                                if (prev.length >= 2 || prev.some(d => d.writeUrl === info.writeUrl)) {
-                                    return prev;
-                                }
-                                return [...prev, {
-                                    writeUrl: info.writeUrl,
-                                    readUrl: info.readUrl,
-                                    dropPub: info.dropPub,
-                                    lastSeenAt: Math.floor(Date.now() / 1000),
-                                    failCount: 0,
-                                }];
+                setSyncs(prev => {
+                    const newSyncs = [...prev];
+                    for (const url of parsed.syncUrls!.slice(0, 2)) {
+                        if (newSyncs.length < 2 && !newSyncs.some(d => d.writeUrl === url || d.readUrl === url)) {
+                            newSyncs.push({
+                                writeUrl: url,
+                                readUrl: url,
+                                dropPub: '',
+                                failCount: 0,
                             });
                         }
-                    } catch (e) {
-                        console.warn("Could not probe sync url from contact card:", url, e);
                     }
-                }
+                    return newSyncs;
+                });
             }
         }
     };

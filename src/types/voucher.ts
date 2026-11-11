@@ -48,20 +48,10 @@ export interface VoucherStandardInfo {
     content: string;
 }
 
-export interface VoucherTemplateData {
-    description: string;
-    primaryRedemptionType?: string;
-    allowPartialTransfers: boolean;
-    standardMinimumIssuanceValidity?: string;
-    signatureRequirementsDescription?: string;
-    footnote?: string;
-}
-
 export interface VoucherStandardData {
     name: string;
     uuid: string;
     standardDefinitionHash: string;
-    template: VoucherTemplateData;
 }
 
 export interface DynamicRule {

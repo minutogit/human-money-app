@@ -1,5 +1,5 @@
 // src/components/AddContactModal.tsx
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { 
     QrCode, 
@@ -25,7 +25,7 @@ import { stringifyError } from '../utils/errorHelper';
 export interface AddContactModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onOpenManualAdd: (initialDid?: string, initialProfile?: any) => void;
+    onOpenManualAdd: (initialDid?: string, initialProfile?: any, initialSyncUrls?: string[]) => void;
     onContactAdded: () => Promise<void> | void;
     onSuccess: (message: string) => void;
     onError: (message: string) => void;
@@ -50,36 +50,14 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
     const videoRef = useRef<HTMLVideoElement>(null);
     const streamRef = useRef<MediaStream | null>(null);
 
-    // Reset view whenever modal opens or closes
-    useEffect(() => {
-        if (!isOpen) {
-            stopCamera();
-            setView('tiles');
-            setPasteText('');
-            setCameraError(null);
-            setIsProcessing(false);
-        }
-    }, [isOpen]);
-
-    const stopCamera = () => {
+    const stopCamera = useCallback(() => {
         if (streamRef.current) {
             streamRef.current.getTracks().forEach((track) => track.stop());
             streamRef.current = null;
         }
-    };
+    }, []);
 
-    useEffect(() => {
-        if (view === 'qr_scanner') {
-            startCamera();
-        } else {
-            stopCamera();
-        }
-        return () => {
-            stopCamera();
-        };
-    }, [view]);
-
-    const startCamera = async () => {
+    const startCamera = useCallback(async () => {
         setCameraError(null);
         if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
             setCameraError(t('contacts.cameraNotSupported', 'Kamera auf diesem Gerät nicht verfügbar.'));
@@ -99,7 +77,29 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
             logger.info(`Camera access not available or denied: ${stringifyError(err)}`);
             setCameraError(t('contacts.cameraAccessDenied', 'Kamera konnte nicht gestartet werden. Bitte erlaube den Kamerazugriff oder nutze eine andere Methode.'));
         }
-    };
+    }, [t]);
+
+    // Reset view whenever modal opens or closes
+    useEffect(() => {
+        if (!isOpen) {
+            stopCamera();
+            setView('tiles');
+            setPasteText('');
+            setCameraError(null);
+            setIsProcessing(false);
+        }
+    }, [isOpen, stopCamera]);
+
+    useEffect(() => {
+        if (view === 'qr_scanner') {
+            startCamera();
+        } else {
+            stopCamera();
+        }
+        return () => {
+            stopCamera();
+        };
+    }, [view, startCamera, stopCamera]);
 
     const handleImportPayload = async (rawPayload: string) => {
         const trimmed = rawPayload.trim();
@@ -119,8 +119,20 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
         if (trimmed.startsWith('humoco://contact') || trimmed.includes('did%3Akey%3A')) {
             const parsed = parseContactCard(trimmed);
             if (parsed && parsed.did) {
+                let initialProfile: { firstName?: string; lastName?: string } | undefined;
+                if (parsed.name) {
+                    const parts = parsed.name.trim().split(/\s+/);
+                    if (parts.length > 1) {
+                        initialProfile = {
+                            firstName: parts.slice(0, -1).join(' '),
+                            lastName: parts[parts.length - 1],
+                        };
+                    } else if (parts.length === 1 && parts[0]) {
+                        initialProfile = { firstName: parts[0] };
+                    }
+                }
                 onClose();
-                onOpenManualAdd(parsed.did, parsed.name ? { firstName: parsed.name } : undefined);
+                onOpenManualAdd(parsed.did, initialProfile, parsed.syncUrls);
                 return;
             }
         }
@@ -171,7 +183,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
                 return;
             }
             await handleImportPayload(text);
-        } catch (e) {
+        } catch {
             setView('paste_input');
         }
     };

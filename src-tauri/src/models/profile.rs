@@ -132,3 +132,13 @@ pub struct FrontendContact {
 pub struct FrontendAddressBook {
     pub contacts: std::collections::HashMap<String, FrontendContact>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQuickContact {
+    pub did: String,
+    pub name: String,
+    pub sync_urls: Vec<String>,
+    pub uri: String,
+    pub qr_svg: Option<String>,
+}

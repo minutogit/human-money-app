@@ -8,6 +8,7 @@ import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
 import { contactService } from "../services/contactService";
 import { postService } from "../services/postService";
+import { marketService } from "../services/marketService";
 import { runPostSyncPass } from "../utils/postSync";
 import { logger } from "../utils/log";
 import { translateError, stringifyError } from "../utils/errorHelper";
@@ -41,7 +42,6 @@ import {
     BookOpen,
     UserCheck,
     Search,
-    X,
     Clipboard,
     AlertTriangle,
     RefreshCw
@@ -174,6 +174,8 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
     const [uuidToPrecisionMap, setUuidToPrecisionMap] = useState<Map<string, number>>(new Map());
     const [standardsDict, setStandardsDict] = useState<Record<string, VoucherStandardDefinition>>({});
     const [isReconcilingL2, setIsReconcilingL2] = useState(false);
+    const [hasPublishedCard, setHasPublishedCard] = useState(false);
+    const [sendCardOverride, setSendCardOverride] = useState<boolean | null>(null);
 
     const { selectedMap, toggleVoucher, setVoucherAmount, selectAmount, selectionStats, currentPlan, autoSelectGravitational } = useVoucherSelection(availableVouchers);
     const detectedPrivacy = usePrivacyDetection(
@@ -194,6 +196,12 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     contactService.getContacts(),
                     transferService.getActiveAssetClasses()
                 ]);
+
+                marketService.getMyMarketProfile().then(p => {
+                    setHasPublishedCard(!!p?.published);
+                }).catch(() => {
+                    setHasPublishedCard(false);
+                });
 
                 const activeVouchers = summaries.filter((v: VoucherSummary) => {
                     const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
@@ -479,6 +487,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     senderProfileName: senderName,
                     standardDefinitionsToml,
                     usePrivacyMode: state.privacyMode === 'stealth',
+                    sendCardOverride: sendCardOverride ?? undefined,
                     password
                 });
             }) as CreateBundleResult;
@@ -725,6 +734,38 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                             privacyRules={{ mode: detectedPrivacy, forced: detectedPrivacy !== 'flexible' }}
                             privacyError={state.privacyError}
                         />
+
+                        {/* Visitenkarte mitsenden */}
+                        {hasPublishedCard ? (
+                            <div className="flex items-start gap-3 p-4 bg-white border border-theme-subtle rounded-2xl">
+                                <input
+                                    type="checkbox"
+                                    id="sendCardToggle"
+                                    checked={sendCardOverride !== null ? sendCardOverride : (appSettings?.marketSendCardOnPayment ?? false)}
+                                    onChange={(e) => setSendCardOverride(e.target.checked)}
+                                    className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                                />
+                                <div className="flex-1">
+                                    <label htmlFor="sendCardToggle" className="text-xs font-bold text-theme-secondary block cursor-pointer">
+                                        {t('transfer.sendCardTitle')}
+                                    </label>
+                                    <p className="text-[11px] text-theme-light mt-0.5">
+                                        {t('transfer.sendCardDesc')}
+                                    </p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="p-3 bg-slate-50 border border-theme-subtle/60 rounded-2xl text-[11px] text-theme-light flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <span>{t('transfer.sendCardNoCardNotice')}</span>
+                                <button
+                                    type="button"
+                                    onClick={() => navigate({ view: 'marketplace', initialTab: 'mine', initialOpenEditor: true })}
+                                    className="text-xs text-theme-primary hover:underline shrink-0 self-start sm:self-auto p-0 h-auto font-medium"
+                                >
+                                    {t('transfer.openMarketplace')}
+                                </button>
+                            </div>
+                        )}
                     </div>
 
                     <div className="lg:col-span-5 space-y-8">
@@ -876,19 +917,10 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                 onClose={() => { setShowContactPicker(false); setContactSearchQuery(""); }}
                 maxWidth="md"
                 title={
-                    <div className="flex items-center justify-between pb-2 border-b border-theme-subtle">
+                    <div className="pb-2 border-b border-theme-subtle">
                         <h3 className="text-base font-black text-theme-secondary uppercase tracking-wider">
                             {t('contacts.selectContactTitle')}
                         </h3>
-                        <button
-                            type="button"
-                            onClick={() => { setShowContactPicker(false); setContactSearchQuery(""); }}
-                            title={t('common.close')}
-                            aria-label={t('common.close')}
-                            className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-                        >
-                            <X size={20} />
-                        </button>
                     </div>
                 }
             >

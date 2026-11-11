@@ -273,7 +273,7 @@ describe('AddressBook Component', () => {
     expect(screen.queryByTestId('expanded-network-options')).not.toBeInTheDocument();
   });
 
-  it('adaptive trust network banner defaults to expanded when 0 contacts are rated', async () => {
+  it('adaptive trust network banner shows slim status bar and allows opening network options modal', async () => {
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_wot_summary') {
@@ -295,7 +295,10 @@ describe('AddressBook Component', () => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
     });
 
-    // When 0 contacts rated, options are expanded by default
+    // Options start closed in slim status bar mode
+    expect(screen.queryByTestId('expanded-network-options')).not.toBeInTheDocument();
+    const toggleBtn = screen.getByTestId('toggle-network-options-button');
+    fireEvent.click(toggleBtn);
     expect(screen.getByTestId('expanded-network-options')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops|\+ their contacts|\+ deren Kontakte/i })).toBeInTheDocument();
   });
@@ -457,6 +460,15 @@ describe('AddressBook Component', () => {
           qrIsPartial: false,
         });
       }
+      if (cmd === 'get_my_quick_contact') {
+        return Promise.resolve({
+          did: 'did:key:zMe12345',
+          name: 'Alice Sender',
+          syncUrls: ['https://sync1.domain.org/sync.php'],
+          uri: 'humoco://contact?did=did%3Akey%3AzMe12345&sync=https%3A%2F%2Fsync1.domain.org%2Fsync.php',
+          qrSvg: '<svg></svg>',
+        });
+      }
       if (cmd === 'get_app_settings') {
         return Promise.resolve({
           marketSelectedSyncs: [
@@ -477,10 +489,10 @@ describe('AddressBook Component', () => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
     });
 
-    const shareBtn = screen.getByRole('button', { name: /contacts\.shareMyBusinessCard|Share My Business Card|Meine Visitenkarte teilen/i });
-    fireEvent.click(shareBtn);
+    const qrBtn = screen.getByTestId('my-quick-contact-button');
+    fireEvent.click(qrBtn);
 
-    const copyBtn = await screen.findByRole('button', { name: /marketplace\.copyUri|Copy Link|Link kopieren/i });
+    const copyBtn = await screen.findByTestId('quick-contact-copy-button');
     fireEvent.click(copyBtn);
 
     await waitFor(() => {

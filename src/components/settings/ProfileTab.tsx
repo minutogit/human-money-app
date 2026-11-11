@@ -1,5 +1,5 @@
 // src/components/settings/ProfileTab.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Fingerprint, Globe, User, Copy, CheckCircle2 } from 'lucide-react';
 import { Card } from '../ui/Card';
@@ -9,15 +9,32 @@ import { LanguageSelector } from '../ui/LanguageSelector';
 import { InfoHint } from '../ui/InfoHint';
 import { useOptionalNavigation } from '../../context/NavigationContext';
 import { copyToClipboard } from '../../utils/clipboard';
+import { AppSettings } from '../../types';
+import { settingsService } from '../../services/settingsService';
+import { logger } from '../../utils/log';
+import { stringifyError } from '../../utils/errorHelper';
 
 export interface ProfileTabProps {
     userId: string;
+    settings?: AppSettings | null;
+    onSettingsUpdated?: (newSettings: AppSettings) => void;
 }
 
-export const ProfileTab: React.FC<ProfileTabProps> = ({ userId }) => {
+export const ProfileTab: React.FC<ProfileTabProps> = ({ 
+    userId,
+    settings,
+    onSettingsUpdated,
+}) => {
     const { t } = useTranslation();
     const nav = useOptionalNavigation();
     const [copiedUserId, setCopiedUserId] = useState(false);
+    const [marketSendCardOnPayment, setMarketSendCardOnPayment] = useState<boolean>(settings?.marketSendCardOnPayment ?? false);
+
+    useEffect(() => {
+        if (settings) {
+            setMarketSendCardOnPayment(settings.marketSendCardOnPayment ?? false);
+        }
+    }, [settings]);
 
     const handleCopyUserId = async () => {
         if (!userId) return;
@@ -25,6 +42,18 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userId }) => {
         if (ok) {
             setCopiedUserId(true);
             setTimeout(() => setCopiedUserId(false), 2000);
+        }
+    };
+
+    const handleSaveSendCardToggle = async (val: boolean) => {
+        setMarketSendCardOnPayment(val);
+        try {
+            const current = settings || await settingsService.getSettings();
+            const updated: AppSettings = { ...current, marketSendCardOnPayment: val };
+            await settingsService.saveSettings(updated);
+            if (onSettingsUpdated) onSettingsUpdated(updated);
+        } catch (err) {
+            logger.error(`Failed to save marketSendCardOnPayment: ${stringifyError(err)}`);
         }
     };
 
@@ -101,6 +130,28 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userId }) => {
                     >
                         <span>{t('profile.openInMarketplaceBtn')}</span>
                     </Button>
+
+                    {/* Marketplace Send Card On Payment Toggle */}
+                    <div className="flex items-start gap-3 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors pt-3">
+                        <input
+                            type="checkbox"
+                            id="profileSendCardOnPayment"
+                            checked={marketSendCardOnPayment}
+                            onChange={(e) => handleSaveSendCardToggle(e.target.checked)}
+                            className="mt-0.5 accent-theme-primary cursor-pointer"
+                        />
+                        <div className="flex-1">
+                            <label htmlFor="profileSendCardOnPayment" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
+                                {t('settings.marketSendCardOnPayment')}
+                            </label>
+                            <label htmlFor="profileSendCardOnPayment" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
+                                {t('settings.marketSendCardOnPaymentDesc')}
+                            </label>
+                            <p className="mt-1 text-[10px] text-amber-700 bg-amber-50/70 p-2 rounded-lg border border-amber-200/60 leading-relaxed">
+                                {t('settings.marketSendCardOnPaymentPrivacyNote')}
+                            </p>
+                        </div>
+                    </div>
                 </div>
             </Card>
         </div>

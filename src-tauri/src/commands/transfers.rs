@@ -63,6 +63,7 @@ pub async fn create_transfer_bundle(
     sender_profile_name: Option<String>,
     standard_definitions_toml: HashMap<String, String>,
     use_privacy_mode: Option<bool>,
+    send_card_override: Option<bool>,
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<CreateBundleResult, FrontendError> {
@@ -102,7 +103,8 @@ pub async fn create_transfer_bundle(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
 
-        if settings.market_send_card_on_payment {
+        let should_send_card = send_card_override.unwrap_or(settings.market_send_card_on_payment);
+        if should_send_card {
             let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
             let own_profile_opt: Option<crate::models::StoredOwnMarketProfile> = service
                 .load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password.as_deref())

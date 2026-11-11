@@ -94,6 +94,8 @@ pub struct AppSettings {
     pub max_store_hops: u8,
     #[serde(default)]
     pub market_send_card_on_payment: bool,
+    #[serde(default = "default_true")]
+    pub market_sync_enabled: bool,
     #[serde(default = "default_share_min_level")]
     pub share_min_level: u8,
     #[serde(default)]
@@ -181,6 +183,7 @@ impl Default for AppSettings {
             market_show_unknown: true,
             max_store_hops: 2,
             market_send_card_on_payment: false,
+            market_sync_enabled: true,
             share_min_level: default_share_min_level(),
             market_poll_wifi_only: false,
             market_selected_syncs: Vec::new(),

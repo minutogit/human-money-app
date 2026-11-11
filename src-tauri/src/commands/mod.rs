@@ -12,8 +12,10 @@ pub mod wot;
 pub mod market;
 pub mod sync;
 pub mod post;
+pub mod profile;
 
 pub use wot::*;
 pub use market::*;
 pub use sync::*;
 pub use post::*;
+pub use profile::*;

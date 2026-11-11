@@ -789,7 +789,6 @@ export function Dashboard() {
                                                             }, 200);
                                                         }}
                                                         className="p-1 rounded-full bg-white/20 hover:bg-white/30 text-white transition-colors"
-                                                        title={t('dashboard.balanceDetailsTooltip')}
                                                         aria-label={t('dashboard.balanceDetailsTooltip')}
                                                     >
                                                         <Info size={14} />

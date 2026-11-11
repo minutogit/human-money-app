@@ -143,6 +143,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
             regionalMeshSources: [],
             backupSyncFolder: '/home/user/Backups',
             backupFrequency: 'after_mutation',
+            marketSyncEnabled: true,
         };
 
         (backupService.getBackupStatus as any).mockResolvedValue({

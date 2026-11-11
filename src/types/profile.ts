@@ -77,3 +77,11 @@ export interface CreatorData {
     coordinates: string;
     pictureUrl?: string;
 }
+
+export interface FrontendQuickContact {
+    did: string;
+    name: string;
+    syncUrls: string[];
+    uri: string;
+    qrSvg?: string | null;
+}

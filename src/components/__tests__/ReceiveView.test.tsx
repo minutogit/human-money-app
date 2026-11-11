@@ -106,6 +106,7 @@ amount_decimal_places = 4`,
     sessionTimeoutSeconds: 300,
     privacyDefault: 'public',
     enablePosMode: true,
+    marketSyncEnabled: true,
   };
 
   const mockOnBack = vi.fn();

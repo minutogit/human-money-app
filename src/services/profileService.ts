@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { PublicProfile, TrustStatus } from "../types";
+import { PublicProfile, TrustStatus, FrontendQuickContact } from "../types";
 import { marketService } from "./marketService";
 
 export interface CreateProfileArgs {
@@ -42,6 +42,10 @@ export const profileService = {
 
     getUserId: async () => {
         return await invoke<string>("get_user_id");
+    },
+
+    getMyQuickContact: async (): Promise<FrontendQuickContact> => {
+        return await invoke<FrontendQuickContact>("get_my_quick_contact");
     },
 
     generateMnemonic: async (wordCount: number, language: string) => {

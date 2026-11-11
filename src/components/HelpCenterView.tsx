@@ -20,6 +20,7 @@ import {
     X,
     BookOpen,
     ChevronRight,
+    ChevronDown,
     ArrowLeft,
     Compass,
 } from 'lucide-react';
@@ -260,6 +261,19 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
                                 <div className="border-t border-theme-subtle/40 pt-5">
                                     <HelpContentRenderer content={t(activeTopic.longKey)} />
                                 </div>
+
+                                {/* Deep dive collapsible (Mehr erfahren / Technischer Hintergrund) */}
+                                {activeTopic.deepDiveKey && (
+                                    <details className="p-4 bg-slate-50 border border-theme-subtle rounded-2xl group cursor-pointer mt-4" data-testid="help-center-deep-dive">
+                                        <summary className="text-xs font-bold text-theme-primary flex items-center justify-between select-none">
+                                            <span>{t('helpCenter.deepDiveTitle', 'Mehr erfahren / Technischer Hintergrund')}</span>
+                                            <ChevronDown size={14} className="group-open:rotate-180 transition-transform" />
+                                        </summary>
+                                        <div className="pt-3 border-t border-theme-subtle/50 mt-3 text-xs text-theme-secondary leading-relaxed">
+                                            <HelpContentRenderer content={t(activeTopic.deepDiveKey)} />
+                                        </div>
+                                    </details>
+                                )}
 
                                 {/* Clickable Related Topics Chips */}
                                 {activeTopic.related && activeTopic.related.length > 0 && (

@@ -42,7 +42,8 @@ export type HelpTopicId =
     | 'connection'
     | 'posMode'
     | 'exclusiveGateways'
-    | 'gatewayTokens';
+    | 'gatewayTokens'
+    | 'l2Protection';
 
 export interface HelpTopic {
     id: HelpTopicId;
@@ -50,6 +51,7 @@ export interface HelpTopic {
     titleKey: string;   // help.<id>.title
     shortKey: string;   // help.<id>.short  – max. 1 sentence, ~120 chars
     longKey: string;    // help.<id>.long   – Markdown-light: paragraphs (\n\n), "• " bullet lists, **bold**
+    deepDiveKey?: string; // help.<id>.deepDive - Collapsible "Mehr erfahren / Technischer Hintergrund" section
     related?: HelpTopicId[];
 }
 
@@ -210,6 +212,7 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
         titleKey: 'help.wotSharing.title',
         shortKey: 'help.wotSharing.short',
         longKey: 'help.wotSharing.long',
+        deepDiveKey: 'help.wotSharing.deepDive',
         related: ['wotNetwork', 'wotReach', 'trustLevels'],
     },
 
@@ -353,5 +356,14 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
         shortKey: 'help.gatewayTokens.short',
         longKey: 'help.gatewayTokens.long',
         related: ['exclusiveGateways'],
+    },
+    l2Protection: {
+        id: 'l2Protection',
+        category: 'connection',
+        titleKey: 'help.l2Protection.title',
+        shortKey: 'help.l2Protection.short',
+        longKey: 'help.l2Protection.long',
+        deepDiveKey: 'help.l2Protection.deepDive',
+        related: ['connection', 'offlineProtection', 'posMode'],
     },
 };

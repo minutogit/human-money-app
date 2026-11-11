@@ -48,7 +48,7 @@ import { SignatureRequestBanner } from "./voucher/SignatureRequestBanner";
 import { useNavigation } from "../context/NavigationContext";
 
 export function VoucherDetailsView() {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const { navigate, goBack, appState } = useNavigation();
     
     // Extract voucherId from appState
@@ -212,19 +212,27 @@ export function VoucherDetailsView() {
         );
     }
 
+    const matchedStandard = (() => {
+        if (!voucher) return undefined;
+        const targetUuid = voucher.voucherStandard.uuid;
+        return parsedStandards[targetUuid] || Object.values(parsedStandards).find(s => s.immutable.identity.uuid === targetUuid);
+    })();
+
+    const currentLang = i18n.language ? i18n.language.split('-')[0] : 'de';
+    const standardDescriptions = matchedStandard?.mutable?.i18n?.descriptions || {};
+    const standardDescription = standardDescriptions[currentLang] || standardDescriptions['de'] || standardDescriptions['en'] || Object.values(standardDescriptions)[0] || '';
+    const standardFootnotes = matchedStandard?.mutable?.i18n?.footnotes || {};
+    const standardFootnote = standardFootnotes[currentLang] || standardFootnotes['de'] || standardFootnotes['en'] || Object.values(standardFootnotes)[0] || '';
+    const allowPartialTransfers = matchedStandard?.immutable?.features?.allowPartialTransfers ?? false;
+
     const signatureHint = statusInfo?.id === 'incomplete' && userProfile
-        ? (() => {
-            const targetUuid = voucher.voucherStandard.uuid;
-            const standard = parsedStandards[targetUuid] || Object.values(parsedStandards).find(s => s.immutable.identity.uuid === targetUuid);
-            return standard ? getMissingProfileHint(standard, userProfile, t) : null;
-        })() : null;
+        ? (matchedStandard ? getMissingProfileHint(matchedStandard, userProfile, t) : null)
+        : null;
 
     const guarantorProgress = (() => {
         if (statusInfo?.id !== 'incomplete' || !voucher) return null;
-        const targetUuid = voucher.voucherStandard.uuid;
-        const standard = parsedStandards[targetUuid] || Object.values(parsedStandards).find(s => s.immutable.identity.uuid === targetUuid);
-        const minRequired = standard?.immutable?.issuance?.additionalSignaturesRange?.[0] ?? 0;
-        const customRules = standard?.immutable?.customRules || {};
+        const minRequired = matchedStandard?.immutable?.issuance?.additionalSignaturesRange?.[0] ?? 0;
+        const customRules = matchedStandard?.immutable?.customRules || {};
         const hasGenderMale = Object.values(customRules).some(r => r.expression?.includes("gender == '1'"));
         const hasGenderFemale = Object.values(customRules).some(r => r.expression?.includes("gender == '2'"));
 
@@ -534,8 +542,8 @@ export function VoucherDetailsView() {
                             />
 
                             <PolicySection 
-                                description={voucher.voucherStandard.template.description}
-                                footnote={voucher.voucherStandard.template.footnote}
+                                description={standardDescription}
+                                footnote={standardFootnote}
                             />
 
                             <TimelineSection 
@@ -597,7 +605,7 @@ export function VoucherDetailsView() {
                                     <div className="pt-4 border-t border-theme-subtle/30 grid grid-cols-2 gap-4">
                                         <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
                                             <p className="text-[9px] font-black uppercase text-theme-light mb-1">{t('voucher.divisibleLabel')}</p>
-                                            <p className="text-xs font-bold">{voucher.voucherStandard.template.allowPartialTransfers ? t('voucher.divisibleYes') : t('voucher.divisibleNo')}</p>
+                                            <p className="text-xs font-bold">{allowPartialTransfers ? t('voucher.divisibleYes') : t('voucher.divisibleNo')}</p>
                                         </div>
                                         <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
                                             <p className="text-[9px] font-black uppercase text-theme-light mb-1">{t('voucher.collateralLabel')}</p>

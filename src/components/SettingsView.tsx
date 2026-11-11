@@ -13,14 +13,15 @@ import { tourBridge, SettingsTabId } from '../utils/tourBridge';
 import { PageLayout } from './ui/PageLayout';
 import { SegmentedTabs } from './ui/SegmentedTabs';
 import { ProfileTab } from './settings/ProfileTab';
+import { MarketplaceSettingsTab } from './settings/MarketplaceSettingsTab';
 import { SecurityBackupTab } from './settings/SecurityBackupTab';
 import { ConnectionTab } from './settings/ConnectionTab';
 import { AdvancedTab } from './settings/AdvancedTab';
 import { AppSettings } from '../types';
 
-import { User, Shield, Cloud, Settings as SettingsIcon } from 'lucide-react';
+import { User, Store, Shield, Cloud, Settings as SettingsIcon } from 'lucide-react';
 
-export type SettingsActiveTab = 'profile' | 'security' | 'connection' | 'advanced';
+export type SettingsActiveTab = 'profile' | 'marketplace' | 'security' | 'connection' | 'advanced';
 
 interface SettingsViewProps {
     onBack: () => void;
@@ -49,12 +50,14 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         if (nav?.appState.view === 'settings') {
             const state = nav.appState as {
                 view: 'settings';
-                initialSection?: 'sync' | 'backup' | 'network' | 'profile' | 'standards' | 'security' | 'connection' | 'advanced';
+                initialSection?: 'sync' | 'backup' | 'network' | 'profile' | 'marketplace' | 'standards' | 'security' | 'connection' | 'advanced';
             };
             if (state.initialSection) {
                 const sec = state.initialSection;
                 if (sec === 'profile') {
                     setActiveTab('profile');
+                } else if (sec === 'marketplace') {
+                    setActiveTab('marketplace');
                 } else if (sec === 'security' || sec === 'backup') {
                     setActiveTab('security');
                 } else if (sec === 'connection' || sec === 'sync') {
@@ -82,6 +85,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         tourBridge.registerSettingsTabSetter((tab: SettingsTabId) => {
             if (tab === 'profile') {
                 setActiveTab('profile');
+            } else if (tab === 'marketplace') {
+                setActiveTab('marketplace');
             } else if (tab === 'security') {
                 setActiveTab('security');
             } else if (tab === 'connection') {
@@ -194,6 +199,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     onChange={setActiveTab}
                     tabs={[
                         { id: 'profile', label: t('settings.tabProfile'), icon: <User size={14} /> },
+                        { id: 'marketplace', label: t('settings.tabMarketplace'), icon: <Store size={14} /> },
                         { id: 'security', label: t('settings.tabSecurityBackup'), icon: <Shield size={14} /> },
                         { id: 'connection', label: t('settings.tabConnection'), icon: <Cloud size={14} /> },
                         { id: 'advanced', label: t('settings.tabAdvanced'), icon: <SettingsIcon size={14} /> }
@@ -201,7 +207,18 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 />
 
                 {activeTab === 'profile' && (
-                    <ProfileTab userId={userId} />
+                    <ProfileTab 
+                        userId={userId} 
+                        settings={settings}
+                        onSettingsUpdated={setSettings}
+                    />
+                )}
+
+                {activeTab === 'marketplace' && (
+                    <MarketplaceSettingsTab
+                        settings={settings}
+                        onSettingsUpdated={setSettings}
+                    />
                 )}
 
                 {activeTab === 'security' && (

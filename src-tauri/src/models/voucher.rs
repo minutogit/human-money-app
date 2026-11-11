@@ -144,6 +144,8 @@ impl From<human_money_core::wallet::types::VoucherSummary> for FrontendVoucherSu
             is_test_voucher: s.is_test_voucher,
             display_currency: s.display_currency,
             display_standard_name: s.display_standard_name,
+            // L1 Core VoucherSummary does not carry standard definition features.
+            // Full divisibility is resolved from parsed standards in the frontend.
             allow_partial_transfers: true,
             trust: super::wot::FrontendVoucherTrustDto::default(),
         }
@@ -226,7 +228,6 @@ pub struct FrontendVoucherStandard {
     pub name: String,
     pub uuid: String,
     pub standard_definition_hash: String,
-    pub template: FrontendVoucherTemplateData,
 }
 
 impl From<human_money_core::models::voucher::VoucherStandard> for FrontendVoucherStandard {
@@ -235,19 +236,8 @@ impl From<human_money_core::models::voucher::VoucherStandard> for FrontendVouche
             name: s.name,
             uuid: s.uuid,
             standard_definition_hash: s.standard_definition_hash,
-            template: FrontendVoucherTemplateData::default(),
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendVoucherTemplateData {
-    pub description: String,
-    pub primary_redemption_type: String,
-    pub allow_partial_transfers: bool,
-    pub issuance_minimum_validity_duration: String,
-    pub footnote: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

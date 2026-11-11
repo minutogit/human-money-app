@@ -55,10 +55,6 @@ describe('SignRequestView Component (Minuto Standard)', () => {
         name: 'Minuto Standard',
         uuid: 'minuto-uuid-123',
         standardDefinitionHash: 'hash-123',
-        template: {
-          description: 'Minuto test voucher',
-          allowPartialTransfers: true,
-        },
       },
       voucherId: 'voucher-id-123',
       voucherNonce: 'nonce-123',
@@ -95,6 +91,7 @@ uuid = "minuto-uuid-123"`,
   const mockSettings: AppSettings = {
     sessionTimeoutSeconds: 300,
     privacyDefault: 'public',
+    marketSyncEnabled: true,
   };
 
   const mockSignatureImpact: SignatureImpact = {

@@ -82,6 +82,7 @@ amount_decimal_places = 4`,
   const mockSettings: AppSettings = {
     sessionTimeoutSeconds: 300,
     privacyDefault: 'public',
+    marketSyncEnabled: true,
   };
 
 

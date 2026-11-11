@@ -89,6 +89,7 @@ export interface AppSettings {
     marketShowUnknown?: boolean;
     maxStoreHops?: number;
     marketSendCardOnPayment?: boolean;
+    marketSyncEnabled?: boolean;
     shareMinLevel?: number;
     marketPollWifiOnly?: boolean;
     marketSelectedSyncs?: FrontendSyncDescriptor[];

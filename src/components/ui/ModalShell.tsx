@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { X } from 'lucide-react';
 
 export interface ModalShellProps {
     isOpen: boolean;
@@ -32,7 +33,7 @@ export function ModalShell({
     maxWidth = 'md',
     children,
     closeOnEscape = true,
-    closeOnBackdrop = false,
+    closeOnBackdrop = true,
     className = '',
     zIndexClass = 'z-[100]',
 }: ModalShellProps) {
@@ -67,10 +68,21 @@ export function ModalShell({
             <div
                 role="dialog"
                 aria-modal="true"
-                className={`w-full ${maxWidthClass} max-h-[90vh] flex flex-col rounded-3xl bg-bg-card border border-theme-subtle shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 ${className}`}
+                className={`relative w-full ${maxWidthClass} max-h-[90vh] flex flex-col rounded-3xl bg-bg-card border border-theme-subtle shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 ${className}`}
             >
+                {onClose && (
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        aria-label="Close dialog"
+                        className="absolute top-5 right-5 p-1.5 rounded-full text-theme-light hover:text-theme-primary hover:bg-theme-subtle/30 transition-colors z-10 cursor-pointer"
+                    >
+                        <X size={20} />
+                    </button>
+                )}
+
                 {(title || description) && (
-                    <div className="px-6 pt-6 pb-3">
+                    <div className="px-6 pt-6 pb-3 pr-14">
                         {title && (
                             typeof title === 'string' ? (
                                 <h2 className="text-xl font-bold text-theme-primary mb-2">{title}</h2>

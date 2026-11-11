@@ -59,8 +59,11 @@ import {
     CloudOff,
     Settings,
     MoreHorizontal,
-    Check
+    Check,
+    QrCode,
+    SlidersHorizontal,
 } from 'lucide-react';
+import { QuickContactModal } from './profile/QuickContactModal';
 
 interface AddressBookProps {
     onBack: () => void;
@@ -68,7 +71,7 @@ interface AddressBookProps {
     initialOpenAddModal?: boolean;
 }
 
-const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, initialOpenAddModal }) => {
+const AddressBook: React.FC<AddressBookProps> = ({ onBack: _onBack, initialSearchQuery, initialOpenAddModal }) => {
     const { t } = useTranslation();
     const { protectAction } = useSession();
     const navigation = useOptionalNavigation();
@@ -76,7 +79,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
     const [wotSummary, setWotSummary] = useState<WotSummaryDto | null>(null);
     const [providers, setProviders] = useState<WotProviderDto[]>([]);
     const [syncOverview, setSyncOverview] = useState<FrontendSyncOverviewStatus | null>(null);
-    const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
     const [activeTab, setActiveTab] = useState<'contacts' | 'providers'>('contacts');
     const [isUpdatingHops, setIsUpdatingHops] = useState(false);
     const [searchQuery, setSearchQuery] = useState(initialSearchQuery || '');
@@ -85,7 +87,10 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
     const [editingContact, setEditingContact] = useState<Contact | null>(null);
     const [initialAddDid, setInitialAddDid] = useState<string | undefined>(undefined);
     const [initialAddProfile, setInitialAddProfile] = useState<Partial<PublicProfile> | undefined>(undefined);
+    const [initialAddSyncUrls, setInitialAddSyncUrls] = useState<string[] | undefined>(undefined);
     const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(initialOpenAddModal || false);
+    const [isQuickContactModalOpen, setIsQuickContactModalOpen] = useState(false);
+    const [isNetworkOptionsModalOpen, setIsNetworkOptionsModalOpen] = useState(false);
     const [isShareCardModalOpen, setIsShareCardModalOpen] = useState(false);
     const [ownProfileForShare, setOwnProfileForShare] = useState<FrontendMyMarketProfile | null>(null);
     const [isPublishPromptOpen, setIsPublishPromptOpen] = useState(false);
@@ -115,14 +120,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
     const [sendHandshakeContact, setSendHandshakeContact] = useState<Contact | null>(null);
     const [sendHandshakeLevel, setSendHandshakeLevel] = useState<number>(1);
     const [isSendingHandshake, setIsSendingHandshake] = useState(false);
-
-    // Adaptive banner expansion: default to false if >0 rated contacts, true if 0 rated contacts
-    const isNetworkExpanded = userExpanded !== null
-        ? userExpanded
-        : ((wotSummary?.ratedContactsCount ?? 0) === 0);
-    const toggleNetworkExpanded = () => {
-        setUserExpanded(!isNetworkExpanded);
-    };
 
     const hasSyncService = (syncOverview?.connectedCount ?? 0) > 0;
 
@@ -631,19 +628,19 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                     <InfoHint topic="wotNetwork" />
                 </div>
             } 
-            onBack={onBack}
             actions={
                 <>
                     <Button
                         variant="secondary"
                         size="sm"
-                        onClick={handleOpenShareCard}
+                        onClick={() => setIsQuickContactModalOpen(true)}
                         className="gap-2"
-                        title={t('contacts.shareMyBusinessCard')}
+                        title={t('contacts.quickContactBtn', 'Mein QR-Code')}
+                        data-testid="my-quick-contact-button"
                     >
-                        <Share2 size={18} />
-                        <span className="hidden sm:inline">
-                            {t('contacts.shareMyBusinessCard')}
+                        <QrCode size={18} />
+                        <span>
+                            {t('contacts.quickContactBtn', 'Mein QR-Code')}
                         </span>
                     </Button>
                     <Button
@@ -651,6 +648,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                         onClick={() => {
                             setInitialAddDid(undefined);
                             setInitialAddProfile(undefined);
+                            setInitialAddSyncUrls(undefined);
                             setIsAddContactModalOpen(true);
                         }}
                         className="gap-2"
@@ -672,24 +670,22 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                     </AlertBanner>
                 )}
 
-                {/* Trust Network Banner */}
-                <div className="bg-white/60 backdrop-blur-sm border border-theme-subtle rounded-3xl p-5 shadow-sm space-y-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                                <h4 className="text-sm font-black text-theme-secondary tracking-tight">
-                                    {t('contacts.wotBannerTitle')}
-                                </h4>
-                                <HelpIcon topic="wotNetwork" size={15} />
-                            </div>
-                            <p className="text-xs text-theme-light font-medium">
+                {/* Slim 1-Line Trust Network Status Bar */}
+                <div className="bg-white/60 backdrop-blur-sm border border-theme-subtle rounded-2xl p-4 shadow-sm space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                            <h4 className="text-sm font-black text-theme-secondary tracking-tight">
+                                {t('contacts.wotBannerTitle')}
+                            </h4>
+                            <HelpIcon topic="wotNetwork" size={15} />
+                            <span className="text-xs text-theme-light font-medium ml-1">
                                 {wotSummary && (wotSummary.ratedContactsCount > 0 || wotSummary.importedPeerListsCount > 0)
                                     ? t('contacts.wotBannerStats', {
                                           rated: wotSummary.ratedContactsCount,
                                           lists: wotSummary.importedPeerListsCount
                                       })
                                     : t('contacts.wotBannerEmpty')}
-                            </p>
+                            </span>
                         </div>
                         <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
                             <Button
@@ -697,37 +693,39 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                 variant="secondary"
                                 onClick={handleSyncServices}
                                 disabled={isSyncingServices || isCoolingDown}
-                                className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
+                                className="rounded-xl text-xs py-1.5 px-3 gap-1.5 whitespace-nowrap"
                                 title={t('contacts.syncServicesTooltip', 'Vertrauenseinstufungen und Angebote über konfigurierte Sync-Dienste abgleichen')}
                             >
-                                <RefreshCw size={14} className={isSyncingServices ? 'animate-spin' : ''} />
-                                {isCoolingDown
-                                    ? t('contacts.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })
-                                    : isSyncingServices
-                                    ? t('settings.syncing', 'Synchronisiere...')
-                                    : t('contacts.syncServicesButton', 'Über Sync-Dienste synchronisieren')}
+                                <RefreshCw size={13} className={isSyncingServices ? 'animate-spin' : ''} />
+                                <span>
+                                    {isCoolingDown
+                                        ? t('contacts.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })
+                                        : isSyncingServices
+                                        ? t('settings.syncing', 'Synchronisiere...')
+                                        : t('contacts.syncServicesButton', 'Über Sync-Dienste synchronisieren')}
+                                </span>
                             </Button>
                             <Button
                                 type="button"
                                 variant="secondary"
                                 onClick={() => setIsTrustListModalOpen(true)}
-                                className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
+                                className="rounded-xl text-xs py-1.5 px-3 gap-1.5 whitespace-nowrap"
                                 title={t('contacts.trustListMenuDesc', 'Vertrauenslisten offline teilen oder einlesen')}
                                 data-testid="trust-list-menu-button"
                             >
-                                <MoreHorizontal size={14} />
+                                <MoreHorizontal size={13} />
                                 <span>{t('contacts.trustListMenuBtn', 'Vertrauensliste')}</span>
                             </Button>
                             <Button
                                 type="button"
                                 variant="secondary"
-                                onClick={toggleNetworkExpanded}
-                                className="rounded-xl text-xs py-2 px-3 gap-1.5 whitespace-nowrap"
-                                title={isNetworkExpanded ? t('contacts.wotCollapseOptions', 'Optionen ausblenden') : t('contacts.wotCustomizeOptions', 'Netzwerk-Optionen anpassen')}
+                                onClick={() => setIsNetworkOptionsModalOpen(prev => !prev)}
+                                className="rounded-xl text-xs py-1.5 px-3 gap-1.5 whitespace-nowrap"
+                                title={t('contacts.wotCustomizeOptions', 'Netzwerk-Optionen anpassen')}
                                 data-testid="toggle-network-options-button"
                             >
-                                <span>{isNetworkExpanded ? t('contacts.wotCollapseOptions', 'Optionen ausblenden') : t('contacts.wotCustomizeOptions', 'Netzwerk-Optionen anpassen')}</span>
-                                {isNetworkExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                <SlidersHorizontal size={13} />
+                                <span>{t('contacts.wotCustomizeOptions', 'Netzwerk-Optionen anpassen')}</span>
                             </Button>
                         </div>
                     </div>
@@ -736,10 +734,10 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                     {!hasSyncService && (
                         <div
                             data-testid="sync-service-recommendation"
-                            className="p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-950"
+                            className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-950"
                         >
                             <div className="flex items-start sm:items-center gap-2.5">
-                                <CloudOff size={18} className="text-amber-600 shrink-0 mt-0.5 sm:mt-0" />
+                                <CloudOff size={16} className="text-amber-600 shrink-0 mt-0.5 sm:mt-0" />
                                 <p className="text-xs font-medium text-amber-900 leading-relaxed">
                                     <span className="font-bold text-amber-950">
                                         {t('contacts.syncRecommendationTitle', 'Empfohlen')}:
@@ -757,61 +755,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                 <Settings size={13} />
                                 <span>{t('contacts.connectSyncServiceBtn', 'Sync-Dienst verbinden')}</span>
                             </Button>
-                        </div>
-                    )}
-
-                    {/* Expanded details: Segmented Reach Selector with Live Sentence */}
-                    {isNetworkExpanded && (
-                        <div className="pt-4 border-t border-theme-subtle/50 space-y-4 animate-in fade-in duration-200" data-testid="expanded-network-options">
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                <div className="space-y-0.5">
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="text-xs font-bold text-theme-secondary">
-                                            {t('contacts.wotReachLabel', 'Netzwerk-Reichweite deiner Vertrauenseinstufungen')}
-                                        </span>
-                                        <HelpIcon topic="wotReach" size={14} />
-                                    </div>
-                                    <p className="text-[11px] text-theme-light">
-                                        {t('contacts.wotReachSubtitle')}
-                                    </p>
-                                </div>
-                                <div className="inline-flex p-1 bg-white/70 rounded-xl border border-theme-subtle/60 gap-1 self-start sm:self-auto">
-                                    {[
-                                        { hops: 1, labelKey: 'contacts.wotHops1' },
-                                        { hops: 2, labelKey: 'contacts.wotHops2' },
-                                        { hops: 3, labelKey: 'contacts.wotHops3' },
-                                        { hops: 4, labelKey: 'contacts.wotHops4' }
-                                    ].map(({ hops, labelKey }) => {
-                                        const isSelected = currentMaxHops === hops;
-                                        return (
-                                            <button
-                                                key={hops}
-                                                type="button"
-                                                disabled={isUpdatingHops}
-                                                onClick={() => handleSetMaxHops(hops)}
-                                                className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer disabled:opacity-50 ${
-                                                    isSelected
-                                                        ? 'bg-theme-secondary text-white shadow-sm'
-                                                        : 'text-theme-light hover:text-theme-secondary hover:bg-white/60'
-                                                }`}
-                                            >
-                                                {t(labelKey)}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-
-                            {/* Live sentence & InfoHint */}
-                            <div className="p-3 bg-theme-primary/5 border border-theme-primary/10 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                                <div className="text-theme-secondary leading-relaxed">
-                                    <span className="font-bold text-theme-primary mr-1">
-                                        {t('contacts.wotReachAudienceLabel', 'Deine Einstufungen sehen:')}
-                                    </span>
-                                    <span data-testid="reach-live-sentence">{reachAudienceExplanation}</span>
-                                </div>
-                                <InfoHint topic="wotReach" />
-                            </div>
                         </div>
                     )}
                 </div>
@@ -1356,16 +1299,80 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
             <AddContactModal
                 isOpen={isAddContactModalOpen}
                 onClose={() => setIsAddContactModalOpen(false)}
-                onOpenManualAdd={(initialDid, initialProfile) => {
+                onOpenManualAdd={(initialDid, initialProfile, initialSyncUrls) => {
                     setEditingContact(null);
                     setInitialAddDid(initialDid);
                     setInitialAddProfile(initialProfile);
+                    setInitialAddSyncUrls(initialSyncUrls);
                     setIsDialogOpen(true);
                 }}
                 onContactAdded={loadContacts}
                 onSuccess={(msg) => setFeedbackMsg({ type: 'success', message: msg })}
                 onError={(msg) => setFeedbackMsg({ type: 'error', message: msg })}
             />
+
+            {/* Quick Contact Modal ("Mein QR-Code") */}
+            <QuickContactModal
+                isOpen={isQuickContactModalOpen}
+                onClose={() => setIsQuickContactModalOpen(false)}
+                onOpenFullShare={handleOpenShareCard}
+            />
+
+            {/* Network / Reach Options Modal */}
+            <ModalShell
+                isOpen={isNetworkOptionsModalOpen}
+                onClose={() => setIsNetworkOptionsModalOpen(false)}
+                maxWidth="md"
+                title={t('contacts.networkOptionsModalTitle', 'Netzwerk-Optionen & Reichweite')}
+                description={t('contacts.wotReachSubtitle', 'Bestimme, wie weit deine Vertrauenseinstufungen im Netzwerk weitergegeben werden.')}
+            >
+                <div className="space-y-5 py-2" data-testid="expanded-network-options">
+                    <div className="space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-bold text-theme-secondary">
+                                {t('contacts.wotReachLabel', 'Netzwerk-Reichweite deiner Vertrauenseinstufungen')}
+                            </span>
+                            <HelpIcon topic="wotReach" size={14} />
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            {[
+                                { hops: 1, labelKey: 'contacts.wotHops1' },
+                                { hops: 2, labelKey: 'contacts.wotHops2' },
+                                { hops: 3, labelKey: 'contacts.wotHops3' },
+                                { hops: 4, labelKey: 'contacts.wotHops4' }
+                            ].map(({ hops, labelKey }) => {
+                                const isSelected = currentMaxHops === hops;
+                                return (
+                                    <button
+                                        key={hops}
+                                        type="button"
+                                        disabled={isUpdatingHops}
+                                        onClick={() => handleSetMaxHops(hops)}
+                                        className={`px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50 text-center border ${
+                                            isSelected
+                                                ? 'bg-theme-primary text-white border-theme-primary shadow-sm'
+                                                : 'bg-white border-theme-subtle text-theme-secondary hover:border-theme-primary/40'
+                                        }`}
+                                    >
+                                        {t(labelKey)}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Live sentence & InfoHint */}
+                    <div className="p-3.5 bg-theme-primary/5 border border-theme-primary/10 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                        <div className="text-theme-secondary leading-relaxed">
+                            <span className="font-bold text-theme-primary mr-1">
+                                {t('contacts.wotReachAudienceLabel', 'Deine Einstufungen sehen:')}
+                            </span>
+                            <span data-testid="reach-live-sentence">{reachAudienceExplanation}</span>
+                        </div>
+                        <InfoHint topic="wotReach" />
+                    </div>
+                </div>
+            </ModalShell>
 
             {/* Share Own Business Card Modal */}
             {ownProfileForShare && (
@@ -1459,11 +1466,13 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                     setIsDialogOpen(false);
                     setInitialAddDid(undefined);
                     setInitialAddProfile(undefined);
+                    setInitialAddSyncUrls(undefined);
                 }}
                 onSave={handleSaveContact}
                 existingContact={editingContact}
                 initialDid={initialAddDid}
                 initialProfile={initialAddProfile}
+                initialSyncUrls={initialAddSyncUrls}
             />
 
             {/* Confirmation: Delete Contact */}

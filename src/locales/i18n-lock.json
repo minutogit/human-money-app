@@ -2652,15 +2652,15 @@
     "ai_hint": "Title of the confirmation modal for deleting a contact."
   },
   "contacts.description": {
-    "source_text": "Manage your verified identities and local address book.",
+    "source_text": "People and trust levels in your network",
+    "ai_hint": "Subtitle for the Contacts & Trust view",
     "status": {
       "de": "ai-translated",
-      "fr": "ai-translated",
       "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated",
       "en": "ai-translated"
-    },
-    "ai_hint": "Subtitle of the Address Book view page."
+    }
   },
   "contacts.didPlaceholder": {
     "source_text": "did:key:z...",
@@ -3049,6 +3049,17 @@
     },
     "ai_hint": "Spinner text when loading contacts."
   },
+  "contacts.networkOptionsModalTitle": {
+    "source_text": "Network Options & Reach",
+    "ai_hint": "Title for the network and reach options modal",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
   "contacts.newContact": {
     "source_text": "New Contact",
     "status": {
@@ -3254,6 +3265,72 @@
       "en": "ai-translated"
     }
   },
+  "contacts.quickContactBtn": {
+    "source_text": "My QR code",
+    "ai_hint": "Header button to open your quick contact QR modal",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "contacts.quickContactCopyBtn": {
+    "source_text": "Copy contact link",
+    "ai_hint": "Button to copy the humoco://contact URI to clipboard",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "contacts.quickContactFullShareLink": {
+    "source_text": "Share full business card (.hmcard) with offers/requests →",
+    "ai_hint": "Link in quick contact modal to open full card export modal",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "contacts.quickContactModalDesc": {
+    "source_text": "Share your contact details directly for quick offline adding.",
+    "ai_hint": "Description explaining the purpose of the quick contact QR modal",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "contacts.quickContactModalTitle": {
+    "source_text": "My Contact QR Code",
+    "ai_hint": "Title for the quick contact modal dialog",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "contacts.quickContactScanHint": {
+    "source_text": "Scan this code with the HuMoCo app to connect directly.",
+    "ai_hint": "Instruction under the quick contact QR code",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
   "contacts.reachDirect": {
     "source_text": "Direct contacts only",
     "status": {
@@ -3405,6 +3482,17 @@
   },
   "contacts.shareWotForContact": {
     "source_text": "Create encrypted trust file for this contact",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "contacts.syncAvailable": {
+    "source_text": "Sync available",
+    "ai_hint": "Badge showing that contact has active sync services configured",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -3685,6 +3773,17 @@
   },
   "contacts.trustSectionLabel": {
     "source_text": "Personal Trust Rating",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "contacts.unnamedContact": {
+    "source_text": "Unnamed user",
+    "ai_hint": "Fallback text when user has not set a public name",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -4848,6 +4947,72 @@
       "de": "ai-translated",
       "fr": "ai-translated",
       "es": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "help.l2Protection.deepDive": {
+    "source_text": "Collision Lock Registry Architecture:\n\n• Deterministic Sharding: Rendezvous-Hashing (HRW) maps voucher roots to 20 candidate nodes.\n• Quorum Consensus: 14 out of 20 nodes must confirm the atomic lock transition in under 800 ms.\n• Cryptographic Penalty: Attempting a double-spend produces mathematical collision proof that permanently bans the offending node or key from the network.\n• Privacy Preservation: Because locks are blind SHA-256/BLAKE3 digests, relay operators cannot reconstruct payment graphs or user balances.",
+    "ai_hint": "Technical deep dive on Layer-2 collision lock registry architecture",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "help.l2Protection.long": {
+    "source_text": "Layer-2 protects online checkouts against instant double-spending.\n\n• Nodes only store blind cryptographic collision hashes (parent_lock -> child_lock).\n• Nodes know zero amounts, currencies, sender identities, or recipient identities.\n• Locks are purged automatically once the voucher expires, preventing any state bloat.\n• Checkouts query a decentralized shard quorum directly without gossiping or mining.",
+    "ai_hint": "Long description for Layer-2 protection",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "help.l2Protection.short": {
+    "source_text": "Online double-spending protection via blind collision locks without accounts, balances, or global ledgers.",
+    "ai_hint": "Short help summary for Layer-2 protection",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "help.l2Protection.title": {
+    "source_text": "Layer-2 Online Protection",
+    "ai_hint": "Help topic title for Layer-2 protection",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "help.wotSharing.deepDive": {
+    "source_text": "Selective Disclosure & Cryptographic Routing Details:\n\n• 128-Bit CSPRNG Salting: Each trust claim has a fresh 128-bit salt to prevent correlation across peer exchanges.\n• Distance Redaction: Ratings beyond your configured reach are cryptographically redacted before forwarding, preserving the issuer's Ed25519 signature.\n• Transport Neutrality: Trust packages sync seamlessly via QR, BLE, NFC, USB, payment piggybacking, or zero-knowledge relay servers.\n• Reciprocal Routing: Sync peers only receive updates proportional to their mutual trust and shared degrees.",
+    "ai_hint": "Technical deep dive on SD-JWT selective disclosure and reciprocal routing",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "helpCenter.deepDiveTitle": {
+    "source_text": "Learn more / Technical background",
+    "ai_hint": "Collapsible section summary title in help modal and help center",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated",
       "en": "ai-translated"
     }
@@ -7464,6 +7629,17 @@
   },
   "marketplace.publicDropUrlPlaceholder": {
     "source_text": "e.g. drop.example.com or https://drop.example.com",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "marketplace.qrLargeRecommendation": {
+    "source_text": "Tip: For mobile devices and extensive notices, file transfer via .hmcard is recommended.",
+    "ai_hint": "Helpful hint in marketplace share card modal under QR code",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -12323,6 +12499,28 @@
       "en": "ai-translated"
     }
   },
+  "settings.syncHostCommunityDesc": {
+    "source_text": "Offer encrypted sync storage for your community and friends so they can exchange trust ratings and business cards without commercial cloud servers.",
+    "ai_hint": "Description of running an encrypted sync drop as community service",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "settings.syncHostCommunityTitle": {
+    "source_text": "Run as Community Service",
+    "ai_hint": "Header for community sync host announcement card",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
   "settings.syncNow": {
     "source_text": "Sync Now",
     "status": {
@@ -12385,6 +12583,17 @@
       "en": "ai-translated"
     },
     "ai_hint": "Text or status label in settings."
+  },
+  "settings.tabMarketplace": {
+    "source_text": "Marketplace",
+    "ai_hint": "Tab title for marketplace settings in SettingsView",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
   },
   "settings.tabSecurityOps": {
     "source_text": "Security & Ops",
@@ -14240,6 +14449,17 @@
     },
     "ai_hint": "Placeholder for the transaction note textarea."
   },
+  "transfer.openMarketplace": {
+    "source_text": "Create business card →",
+    "ai_hint": "Action button in send view to navigate to marketplace editor",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
   "transfer.partialSend": {
     "source_text": "Partial Send",
     "status": {
@@ -15019,6 +15239,39 @@
   },
   "transfer.sendAnonymously": {
     "source_text": "Send anonymously",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "transfer.sendCardDesc": {
+    "source_text": "Send your public business card with current offers and contact details alongside this payment.",
+    "ai_hint": "Description under send business card toggle in transfer view",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "transfer.sendCardNoCardNotice": {
+    "source_text": "No published business card yet. Create offers to send your card with payments.",
+    "ai_hint": "Notice shown in send view when user has no active business card to attach",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "transfer.sendCardTitle": {
+    "source_text": "Attach Business Card",
+    "ai_hint": "Toggle label in send voucher view to attach sender business card",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",

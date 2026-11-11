@@ -201,9 +201,25 @@ describe('ModalShell', () => {
     expect(handleClose).not.toHaveBeenCalled();
   });
 
-  it('respects closeOnBackdrop setting', () => {
+  it('closes on backdrop click by default when onClose is provided', () => {
     const handleClose = vi.fn();
-    const { rerender } = render(
+    render(
+      <ModalShell isOpen={true} onClose={handleClose} title="Default Backdrop Test">
+        <div data-testid="dialog-inner">Dialog Content</div>
+      </ModalShell>
+    );
+
+    const backdrop = screen.getByRole('dialog').parentElement as HTMLDivElement;
+    expect(backdrop).not.toBeNull();
+
+    // Clicking the outer backdrop itself SHOULD trigger close by default
+    fireEvent.click(backdrop);
+    expect(handleClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('respects closeOnBackdrop=false setting', () => {
+    const handleClose = vi.fn();
+    render(
       <ModalShell
         isOpen={true}
         onClose={handleClose}
@@ -221,27 +237,34 @@ describe('ModalShell', () => {
     fireEvent.click(backdrop);
     expect(handleClose).not.toHaveBeenCalled();
 
-    // Enable closeOnBackdrop
-    rerender(
-      <ModalShell
-        isOpen={true}
-        onClose={handleClose}
-        closeOnBackdrop={true}
-        title="Backdrop Test"
-      >
-        <div data-testid="dialog-inner">Dialog Content</div>
-      </ModalShell>
-    );
-
-    // Clicking inside the dialog content should NOT trigger close
+    // Clicking inside dialog should NOT trigger close
     const innerContent = screen.getByTestId('dialog-inner');
     fireEvent.click(innerContent);
     expect(handleClose).not.toHaveBeenCalled();
+  });
 
-    // Clicking the outer backdrop itself SHOULD trigger close
-    const updatedBackdrop = screen.getByRole('dialog').parentElement as HTMLDivElement;
-    fireEvent.click(updatedBackdrop);
+  it('renders built-in close button when onClose is provided and invokes it on click', () => {
+    const handleClose = vi.fn();
+    render(
+      <ModalShell isOpen={true} onClose={handleClose} title="Close Button Test">
+        <div>Content</div>
+      </ModalShell>
+    );
+
+    const closeBtn = screen.getByRole('button', { name: /close dialog/i });
+    expect(closeBtn).toBeInTheDocument();
+    fireEvent.click(closeBtn);
     expect(handleClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT render close button when onClose is not provided', () => {
+    render(
+      <ModalShell isOpen={true} title="No Close Button">
+        <div>Content</div>
+      </ModalShell>
+    );
+
+    expect(screen.queryByRole('button', { name: /close dialog/i })).not.toBeInTheDocument();
   });
 
   it('applies maxWidth classes properly', () => {

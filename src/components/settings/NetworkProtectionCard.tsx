@@ -170,6 +170,7 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                 <div className="flex items-center gap-2">
                     <Network size={18} className="text-theme-primary" />
                     <span className="font-black text-xs uppercase tracking-widest">{t('settings.l2ProtectionTitle')}</span>
+                    <HelpIcon topic="l2Protection" size={14} />
                     {isDevUnlocked && (
                         <span className="ml-2 text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">DEV</span>
                     )}
@@ -244,111 +245,6 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                                         </div>
                                         <label htmlFor="enablePosMode" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
                                             {t('settings.enablePosModeDesc')}
-                                        </label>
-                                    </div>
-                                </div>
-
-                                {/* Marketplace Show Unknown Creators Toggle */}
-                                <div className="flex items-start gap-3 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
-                                    <input
-                                        type="checkbox"
-                                        id="marketShowUnknown"
-                                        checked={settings?.marketShowUnknown ?? true}
-                                        onChange={(e) => onSettingsUpdated(s => s ? { ...s, marketShowUnknown: e.target.checked } : null)}
-                                        className="mt-0.5 accent-theme-primary"
-                                    />
-                                    <div className="flex-1">
-                                        <label htmlFor="marketShowUnknown" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
-                                            {t('settings.marketShowUnknown')}
-                                        </label>
-                                        <label htmlFor="marketShowUnknown" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
-                                            {t('settings.marketShowUnknownDesc')}
-                                        </label>
-                                    </div>
-                                </div>
-
-                                {/* Marketplace Max Store Hops */}
-                                <div className="flex flex-col gap-1.5 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <label htmlFor="maxStoreHops" className="text-xs font-medium text-theme-secondary cursor-pointer">
-                                            {t('settings.maxStoreHops')}
-                                        </label>
-                                        <select
-                                            id="maxStoreHops"
-                                            value={settings?.maxStoreHops ?? 2}
-                                            onChange={(e) => onSettingsUpdated(s => s ? { ...s, maxStoreHops: Number(e.target.value) } : null)}
-                                            className="h-8 px-2.5 bg-bg-app border border-theme-subtle rounded-lg text-xs font-semibold text-theme-secondary outline-none focus:ring-2 focus:ring-theme-primary/20 cursor-pointer"
-                                        >
-                                            <option value={1}>{t('settings.maxStoreHops1')}</option>
-                                            <option value={2}>{t('settings.maxStoreHops2')}</option>
-                                            <option value={3}>{t('settings.maxStoreHops3')}</option>
-                                        </select>
-                                    </div>
-                                    <label htmlFor="maxStoreHops" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
-                                        {t('settings.maxStoreHopsDesc')}
-                                    </label>
-                                </div>
-
-                                {/* Marketplace Send Card On Payment Toggle */}
-                                <div className="flex items-start gap-3 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
-                                    <input
-                                        type="checkbox"
-                                        id="marketSendCardOnPayment"
-                                        checked={settings?.marketSendCardOnPayment ?? false}
-                                        onChange={(e) => onSettingsUpdated(s => s ? { ...s, marketSendCardOnPayment: e.target.checked } : null)}
-                                        className="mt-0.5 accent-theme-primary"
-                                    />
-                                    <div className="flex-1">
-                                        <label htmlFor="marketSendCardOnPayment" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
-                                            {t('settings.marketSendCardOnPayment')}
-                                        </label>
-                                        <label htmlFor="marketSendCardOnPayment" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
-                                            {t('settings.marketSendCardOnPaymentDesc')}
-                                        </label>
-                                        <p className="mt-1 text-[10px] text-amber-700 bg-amber-50/70 p-2 rounded-lg border border-amber-200/60 leading-relaxed">
-                                            {t('settings.marketSendCardOnPaymentPrivacyNote')}
-                                        </p>
-                                    </div>
-                                </div>
-
-                                {/* Marketplace Share Min Level */}
-                                <div className="flex flex-col gap-1.5 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <label htmlFor="shareMinLevel" className="text-xs font-medium text-theme-secondary cursor-pointer">
-                                            {t('settings.shareMinLevel')}
-                                        </label>
-                                        <select
-                                            id="shareMinLevel"
-                                            value={settings?.shareMinLevel ?? 1}
-                                            onChange={(e) => onSettingsUpdated(s => s ? { ...s, shareMinLevel: Number(e.target.value) } : null)}
-                                            className="h-8 px-2.5 bg-bg-app border border-theme-subtle rounded-lg text-xs font-semibold text-theme-secondary outline-none focus:ring-2 focus:ring-theme-primary/20 cursor-pointer"
-                                        >
-                                            <option value={0}>{t('contacts.trustLevel0')}</option>
-                                            <option value={1}>{t('contacts.trustLevel1')}</option>
-                                            <option value={2}>{t('contacts.trustLevel2')}</option>
-                                            <option value={3}>{t('contacts.trustLevel3')}</option>
-                                        </select>
-                                    </div>
-                                    <label htmlFor="shareMinLevel" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
-                                        {t('settings.shareMinLevelDesc')}
-                                    </label>
-                                </div>
-
-                                {/* Marketplace Poll Wifi Only Toggle */}
-                                <div className="flex items-start gap-3 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
-                                    <input
-                                        type="checkbox"
-                                        id="marketPollWifiOnly"
-                                        checked={settings?.marketPollWifiOnly ?? false}
-                                        onChange={(e) => onSettingsUpdated(s => s ? { ...s, marketPollWifiOnly: e.target.checked } : null)}
-                                        className="mt-0.5 accent-theme-primary"
-                                    />
-                                    <div className="flex-1">
-                                        <label htmlFor="marketPollWifiOnly" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
-                                            {t('settings.marketPollWifiOnly')}
-                                        </label>
-                                        <label htmlFor="marketPollWifiOnly" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
-                                            {t('settings.marketPollWifiOnlyDesc')}
                                         </label>
                                     </div>
                                 </div>
@@ -475,79 +371,81 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                                     </div>
                                 </div>
 
-                                {/* Regional Mesh */}
-                                <div className="space-y-3 pt-4 border-t border-theme-subtle">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
-                                            <ShieldCheck size={12} /> {t('settings.regionalMeshTitle')}
-                                        </label>
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            onClick={handleRefreshMeshViews}
-                                            disabled={isRefreshingMesh}
-                                            className="text-[10px] px-2.5 py-1 gap-1"
-                                        >
-                                            {isRefreshingMesh ? <Clock className="animate-spin" size={12} /> : <Globe size={12} />}
-                                            {isRefreshingMesh ? t('common.processing') : t('settings.coldRefreshButton')}
-                                        </Button>
-                                    </div>
-                                    {meshRefreshFeedback && (
-                                        <p className={`text-xs font-medium ${meshRefreshFeedback.includes('Fehler') || meshRefreshFeedback.includes('error') ? 'text-rose-600' : 'text-emerald-600'}`}>
-                                            {meshRefreshFeedback}
-                                        </p>
-                                    )}
-                                    {(settings?.regionalMeshSources || []).length > 0 ? (
-                                        <div className="space-y-2">
-                                            {(settings?.regionalMeshSources || []).map((src, idx) => (
-                                                <div key={`${src.url}-${idx}`} className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800 border border-theme-subtle rounded-xl">
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="text-xs font-bold text-theme-secondary truncate">{src.url}</div>
-                                                        <div className="text-[10px] font-mono text-theme-light truncate">Key: {src.publicKey}</div>
-                                                    </div>
-                                                    <Button
-                                                        type="button"
-                                                        variant="outline"
-                                                        onClick={() => handleRemoveRegionalSource(idx)}
-                                                        className="px-2 py-1 text-xs shrink-0"
-                                                        title={t('common.remove')}
-                                                    >
-                                                        <Trash2 size={14} />
-                                                    </Button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <p className="text-xs text-theme-light/60 italic">{t('settings.noRegionalMesh')}</p>
-                                    )}
-
-                                    {/* Add regional source */}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-white dark:bg-slate-900 border border-dashed border-theme-subtle rounded-xl">
-                                        <Input
-                                            placeholder={t('settings.serverUrlPlaceholder')}
-                                            value={newRegionalUrl}
-                                            onChange={(e) => setNewRegionalUrl(e.target.value)}
-                                            className="text-xs font-mono"
-                                        />
-                                        <Input
-                                            placeholder="Public Key (Ed25519 Hex / Base58)"
-                                            value={newRegionalPublicKey}
-                                            onChange={(e) => setNewRegionalPublicKey(e.target.value)}
-                                            className="text-xs font-mono"
-                                        />
-                                        <div className="md:col-span-2">
+                                {/* Regional Mesh (Dev-only) */}
+                                {isDevUnlocked && (
+                                    <div className="space-y-3 pt-4 border-t border-theme-subtle">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
+                                                <ShieldCheck size={12} /> {t('settings.regionalMeshTitle')}
+                                            </label>
                                             <Button
                                                 type="button"
                                                 variant="outline"
-                                                onClick={handleAddRegionalSource}
-                                                disabled={!newRegionalUrl.trim() || !newRegionalPublicKey.trim()}
-                                                className="w-full gap-2"
+                                                onClick={handleRefreshMeshViews}
+                                                disabled={isRefreshingMesh}
+                                                className="text-[10px] px-2.5 py-1 gap-1"
                                             >
-                                                <Plus size={14} /> {t('settings.addRegionalSourceButton')}
+                                                {isRefreshingMesh ? <Clock className="animate-spin" size={12} /> : <Globe size={12} />}
+                                                {isRefreshingMesh ? t('common.processing') : t('settings.coldRefreshButton')}
                                             </Button>
                                         </div>
+                                        {meshRefreshFeedback && (
+                                            <p className={`text-xs font-medium ${meshRefreshFeedback.includes('Fehler') || meshRefreshFeedback.includes('error') ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                                {meshRefreshFeedback}
+                                            </p>
+                                        )}
+                                        {(settings?.regionalMeshSources || []).length > 0 ? (
+                                            <div className="space-y-2">
+                                                {(settings?.regionalMeshSources || []).map((src, idx) => (
+                                                    <div key={`${src.url}-${idx}`} className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800 border border-theme-subtle rounded-xl">
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="text-xs font-bold text-theme-secondary truncate">{src.url}</div>
+                                                            <div className="text-[10px] font-mono text-theme-light truncate">Key: {src.publicKey}</div>
+                                                        </div>
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            onClick={() => handleRemoveRegionalSource(idx)}
+                                                            className="px-2 py-1 text-xs shrink-0"
+                                                            title={t('common.remove')}
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </Button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <p className="text-xs text-theme-light/60 italic">{t('settings.noRegionalMesh')}</p>
+                                        )}
+
+                                        {/* Add regional source */}
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-white dark:bg-slate-900 border border-dashed border-theme-subtle rounded-xl">
+                                            <Input
+                                                placeholder={t('settings.serverUrlPlaceholder')}
+                                                value={newRegionalUrl}
+                                                onChange={(e) => setNewRegionalUrl(e.target.value)}
+                                                className="text-xs font-mono"
+                                            />
+                                            <Input
+                                                placeholder="Public Key (Ed25519 Hex / Base58)"
+                                                value={newRegionalPublicKey}
+                                                onChange={(e) => setNewRegionalPublicKey(e.target.value)}
+                                                className="text-xs font-mono"
+                                            />
+                                            <div className="md:col-span-2">
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    onClick={handleAddRegionalSource}
+                                                    disabled={!newRegionalUrl.trim() || !newRegionalPublicKey.trim()}
+                                                    className="w-full gap-2"
+                                                >
+                                                    <Plus size={14} /> {t('settings.addRegionalSourceButton')}
+                                                </Button>
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
+                                )}
 
                                 {/* Benchmark */}
                                 <div className="space-y-3">

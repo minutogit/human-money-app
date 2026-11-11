@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
-import { HelpCircle, ExternalLink } from 'lucide-react';
+import { HelpCircle, ExternalLink, ChevronDown } from 'lucide-react';
 import { HELP_TOPICS, HelpTopicId, HELP_CATEGORIES } from '../../help/helpTopics';
 import { HelpContentRenderer } from '../../help/HelpContentRenderer';
 
@@ -101,6 +101,19 @@ export function HelpModal({ isOpen, onClose, topic, onNavigateToHelpCenter }: He
 
                     {/* Detailed long description */}
                     <HelpContentRenderer content={long} />
+
+                    {/* Deep dive collapsible (Mehr erfahren / Technischer Hintergrund) */}
+                    {currentTopic.deepDiveKey && (
+                        <details className="p-4 bg-slate-50 border border-theme-subtle rounded-2xl group cursor-pointer" data-testid="help-deep-dive">
+                            <summary className="text-xs font-bold text-theme-primary flex items-center justify-between select-none">
+                                <span>{t('helpCenter.deepDiveTitle', 'Mehr erfahren / Technischer Hintergrund')}</span>
+                                <ChevronDown size={14} className="group-open:rotate-180 transition-transform" />
+                            </summary>
+                            <div className="pt-3 border-t border-theme-subtle/50 mt-3 text-xs text-theme-secondary leading-relaxed">
+                                <HelpContentRenderer content={t(currentTopic.deepDiveKey)} />
+                            </div>
+                        </details>
+                    )}
 
                     {/* Related topics chips */}
                     {relatedTopics.length > 0 && (

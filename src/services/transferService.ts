@@ -16,6 +16,7 @@ export interface CreateBundleArgs {
     senderProfileName: string | null;
     standardDefinitionsToml: Record<string, string>;
     usePrivacyMode: boolean;
+    sendCardOverride?: boolean | null;
     password?: string | null;
 }
 
@@ -85,6 +86,7 @@ export const transferService = {
             senderProfileName: args.senderProfileName,
             standardDefinitionsToml: args.standardDefinitionsToml,
             usePrivacyMode: args.usePrivacyMode,
+            sendCardOverride: args.sendCardOverride ?? null,
             password: args.password
         });
         triggerAutoBackup();

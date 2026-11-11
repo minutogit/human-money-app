@@ -1,12 +1,18 @@
 ---
 project: human-money-app
-version: "0.5.1"
+version: "0.5.2"
 phase: "beta"
 health: "green"
-last_updated: "2026-11-10"
+last_updated: "2026-11-11"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-UX-08"
+    title: "Hardened UX Improvements, Marketplace Settings Tab, Slim AddressBook Header & Quick Contact QR Flow"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-UX-07"]
+    description: "Implemented all 6 phases of hardened UX improvements: version bump to 0.5.2; added marketSyncEnabled setting and decoupled market poll from sync drops; eliminated FrontendVoucherTemplateData and fixed dynamic voucher divisibility derivation; standardized ModalShell with integrated X button and default backdrop closing; disentangled settings with dedicated MarketplaceSettingsTab (auto-saving store hops and unknown creators toggle) and moved network reach to modal; relocated Wi-Fi only and shareMinLevel to ConnectionTab; added optional business card attachment in SendView; streamlined AddressBook header with slim 1-line status bar and 'Mein QR-Code'; implemented fast get_my_quick_contact Tauri command generating lightweight humoco://contact QR SVG; added QuickContactModal and non-blocking sync addition; expanded Help Center and HelpModal with collapsible deep-dive sections and L2 protection topic; updated all 5 locales and verified 497/497 Vitest tests, clippy (0 warnings), and i18n checks."
   - id: "APP-UX-07"
     title: "Phase 6 Feinschliff & Absicherung: 32-Step UI Tour, ui-audit Skill Overhaul, Automated Glossary Lint Test & Beginner Flow Verification"
     status: "completed"

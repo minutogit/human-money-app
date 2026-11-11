@@ -49,7 +49,7 @@ export const HelpContentRenderer: React.FC<HelpContentRendererProps> = ({ conten
                             {lines.map((line, lIdx) => {
                                 const isListItem = line.startsWith('• ') || line.startsWith('- ');
                                 if (isListItem) {
-                                    const cleanText = line.replace(/^[•\-]\s*/, '');
+                                    const cleanText = line.replace(/^[•-]\s*/, '');
                                     return (
                                         <div
                                             key={lIdx}

@@ -122,18 +122,19 @@ export function ShareCardModal({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {/* Save .hmcard file */}
                     <Button
-                        variant="outline"
+                        variant="primary"
                         onClick={handleSaveFile}
                         disabled={isSaving || !fileWire}
-                        className="h-auto py-3 px-3.5 flex items-start gap-2.5 text-left border-theme-subtle hover:border-theme-primary/30"
+                        className="h-auto py-3 px-3.5 flex items-start gap-2.5 text-left shadow-sm"
+                        data-testid="share-card-save-file-button"
                     >
-                        <Download size={18} className="text-theme-primary shrink-0 mt-0.5" />
+                        <Download size={18} className="shrink-0 mt-0.5" />
                         <div className="min-w-0">
-                            <div className="text-xs font-bold text-theme-secondary">
-                                {t('marketplace.saveCardFileBtn', 'Als Datei speichern')}
+                            <div className="text-xs font-bold">
+                                {t('marketplace.saveCardFileBtn', 'Als Datei speichern / teilen (.hmcard)')}
                             </div>
-                            <div className="text-[10px] text-theme-light truncate">
-                                {t('marketplace.saveCardFileDesc', 'Speichert eine .hmcard Datei')}
+                            <div className="text-[10px] opacity-90 truncate">
+                                {t('marketplace.saveCardFileDesc', 'Empfohlen für Bluetooth, AirDrop & Chat')}
                             </div>
                         </div>
                     </Button>
@@ -144,6 +145,7 @@ export function ShareCardModal({
                         onClick={handleCopy}
                         disabled={!shareUri}
                         className="h-auto py-3 px-3.5 flex items-start gap-2.5 text-left border-theme-subtle hover:border-theme-primary/30"
+                        data-testid="share-card-copy-link-button"
                     >
                         {copied ? (
                             <Check size={18} className="text-theme-success shrink-0 mt-0.5" />
@@ -186,6 +188,9 @@ export function ShareCardModal({
                             <p className="text-[11px] text-theme-light flex items-center justify-center gap-1.5 pt-1">
                                 <QrCode size={13} />
                                 <span>{t('marketplace.qrScanHint', 'Mit der Human Money Kamera scannen')}</span>
+                            </p>
+                            <p className="text-[10px] text-theme-light/80 italic text-center max-w-xs mx-auto">
+                                {t('marketplace.qrLargeRecommendation', 'Tipp: Für Mobilgeräte und umfangreiche Inserate wird die Übertragung als .hmcard-Datei empfohlen.')}
                             </p>
                             {qrIsPartial && (
                                 <div className="text-xs p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 flex items-start gap-2 text-left mt-2">

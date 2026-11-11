@@ -83,6 +83,7 @@ describe('SyncServiceSettingsCard Component', () => {
         activeNetwork: 'mainnet',
         postAcceptFromContacts: true,
         marketSendCardOnPayment: false,
+        marketSyncEnabled: true,
         wotShareViaSync: true,
         syncBackupEnabled: true,
         publicSyncs: [],

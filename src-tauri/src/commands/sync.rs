@@ -1227,7 +1227,10 @@ pub async fn sync_market_channels_impl(
         .collect();
 
     for pd in &settings.public_syncs {
-        if pd.enabled && !pd.write_url.is_empty() {
+        if pd.enabled
+            && !pd.write_url.is_empty()
+            && (pd.authorized_channels.is_empty() || pd.authorized_channels.iter().any(|c| c == "card"))
+        {
             upload_targets.push(humoco_market::DropDescriptor {
                 write_url: pd.write_url.clone(),
                 read_url: pd.read_url.clone(),
@@ -1237,8 +1240,9 @@ pub async fn sync_market_channels_impl(
         }
     }
 
-    if let Some(ref own_card) = own_card_opt {
-        if now_secs < own_card.payload.valid_until && !upload_targets.is_empty() {
+    if settings.market_sync_enabled {
+        if let Some(ref own_card) = own_card_opt {
+            if now_secs < own_card.payload.valid_until && !upload_targets.is_empty() {
             let needs_upload = force_upload == Some(true)
                 || sync_state.last_uploaded_card_v != Some(own_card.payload.v)
                 || sync_state.last_readers_hash.as_deref() != Some(&readers_hash)
@@ -1361,6 +1365,7 @@ pub async fn sync_market_channels_impl(
                 }
             }
         }
+    }
     }
 
     // 2b. Upload Channel "wot"
@@ -1684,65 +1689,67 @@ pub async fn sync_market_channels_impl(
         polled_syncs += 1;
 
         // Fetch card slot
-        match sync_client::get_slot(&client, &read_url, &slot_id, "card").await {
-            Ok(Some(blob)) => {
-                sync_health_updates.push((read_url.clone(), true));
-                match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
-                    Ok(Some(bundle)) => {
-                        decrypted_slots += 1;
-                        for env in bundle.envelopes {
-                            let mut service = state.service.lock().unwrap();
-                            let outcome = service.with_wallet(|wallet| {
-                                let is_offender = |did: &str| -> bool {
-                                    use human_money_core::models::conflict::TrustStatus;
-                                    matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_))
-                                };
-                                humoco_market::accept_envelope(
-                                    &mut store,
-                                    &env,
-                                    now_secs,
-                                    max_store_hops,
-                                    &is_offender,
-                                )
-                            });
+        if settings.market_sync_enabled {
+            match sync_client::get_slot(&client, &read_url, &slot_id, "card").await {
+                Ok(Some(blob)) => {
+                    sync_health_updates.push((read_url.clone(), true));
+                    match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
+                        Ok(Some(bundle)) => {
+                            decrypted_slots += 1;
+                            for env in bundle.envelopes {
+                                let mut service = state.service.lock().unwrap();
+                                let outcome = service.with_wallet(|wallet| {
+                                    let is_offender = |did: &str| -> bool {
+                                        use human_money_core::models::conflict::TrustStatus;
+                                        matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_))
+                                    };
+                                    humoco_market::accept_envelope(
+                                        &mut store,
+                                        &env,
+                                        now_secs,
+                                        max_store_hops,
+                                        &is_offender,
+                                    )
+                                });
 
-                            if let Ok(humoco_market::AcceptOutcome::Accepted { did, .. }) = outcome {
-                                imported_cards += 1;
-                                let can_did = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
-                                sync_state.sync_sources_by_did.insert(can_did, read_url.clone());
+                                if let Ok(humoco_market::AcceptOutcome::Accepted { did, .. }) = outcome {
+                                    imported_cards += 1;
+                                    let can_did = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
+                                    sync_state.sync_sources_by_did.insert(can_did, read_url.clone());
 
-                                if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
-                                    let card_syncs: Vec<FrontendSyncDescriptor> = stored
-                                        .card
-                                        .payload
-                                        .drops
-                                        .iter()
-                                        .cloned()
-                                        .map(Into::into)
-                                        .collect();
-                                    state.update_contact_syncs_from_card(
-                                        &mut service,
-                                        &did,
-                                        &card_syncs,
-                                        password.as_deref(),
-                                    );
+                                    if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
+                                        let card_syncs: Vec<FrontendSyncDescriptor> = stored
+                                            .card
+                                            .payload
+                                            .drops
+                                            .iter()
+                                            .cloned()
+                                            .map(Into::into)
+                                            .collect();
+                                        state.update_contact_syncs_from_card(
+                                            &mut service,
+                                            &did,
+                                            &card_syncs,
+                                            password.as_deref(),
+                                        );
+                                    }
                                 }
                             }
                         }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        errors.push(format!("Error opening card slot {}: {}", slot_id, e));
+                        Ok(None) => {}
+                        Err(e) => {
+                            errors.push(format!("Error opening card slot {}: {}", slot_id, e));
+                        }
                     }
                 }
-            }
-            Ok(None) => {
-                sync_health_updates.push((read_url.clone(), true));
-                // Graceful 404: slot not uploaded yet
-            }
-            Err(e) => {
-                sync_health_updates.push((read_url.clone(), false));
-                errors.push(format!("Failed to get direct card slot {} from {}: {}", slot_id, read_url, e));
+                Ok(None) => {
+                    sync_health_updates.push((read_url.clone(), true));
+                    // Graceful 404: slot not uploaded yet
+                }
+                Err(e) => {
+                    sync_health_updates.push((read_url.clone(), false));
+                    errors.push(format!("Failed to get direct card slot {} from {}: {}", slot_id, read_url, e));
+                }
             }
         }
 
@@ -1821,6 +1828,9 @@ pub async fn sync_market_channels_impl(
 
                 for entry in entries {
                     if entry.channel != "card" && entry.channel != "wot" {
+                        continue;
+                    }
+                    if entry.channel == "card" && !settings.market_sync_enabled {
                         continue;
                     }
                     let mtime_key = format!("{}:{}:{}", read_url, entry.channel, entry.id);
