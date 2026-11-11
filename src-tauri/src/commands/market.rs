@@ -214,7 +214,8 @@ pub fn rebuild_and_sign_own_card(
 
     let last_v = stored.last_card.as_ref().map(|c| c.payload.v);
     let v = humoco_market::next_card_version(last_v, now);
-    let valid_until = now.saturating_add(humoco_market::CARD_DEFAULT_VALIDITY_SECS);
+    let validity_years = stored.validity_years.clamp(1, 3) as u64;
+    let valid_until = now.saturating_add(validity_years * 365 * 86_400);
 
     let drops = stored
         .last_card
@@ -345,6 +346,7 @@ pub fn get_my_market_profile_impl(
         skills: stored.skills,
         ads,
         max_hops: stored.max_hops,
+        validity_years: stored.validity_years.clamp(1, 3),
         allow_inquiries: stored.allow_inquiries,
         published: stored.published,
         share_uri,
@@ -412,6 +414,7 @@ pub fn save_my_market_profile_impl(
     stored.visibility = request.visibility;
     stored.skills = request.skills;
     stored.max_hops = request.max_hops.clamp(1, 3);
+    stored.validity_years = request.validity_years.clamp(1, 3);
     stored.allow_inquiries = request.allow_inquiries;
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
@@ -549,6 +552,7 @@ pub fn upsert_ad_impl(
         existing.text = ad_input.text;
         existing.pricing = ad_input.pricing;
         existing.allow_inquiries = ad_input.allow_inquiries;
+        existing.is_remote = ad_input.is_remote;
     } else {
         // Create new ad: enforce active ads limit (max 5)
         let active_count = stored.ads.iter().filter(|a| a.expires_at > now).count();
@@ -569,6 +573,7 @@ pub fn upsert_ad_impl(
             renewed_at: None,
             expires_at,
             allow_inquiries: ad_input.allow_inquiries,
+            is_remote: ad_input.is_remote,
         });
     }
 
@@ -821,6 +826,7 @@ pub fn get_market_view_impl(
     Ok(FrontendMarketSnapshot {
         board,
         people: persons,
+        stored_card_count: store.cards.len(),
         now,
     })
 }
@@ -920,7 +926,7 @@ pub fn import_contact_card_impl(
         .get_cached_settings()
         .or_else(|_| state.load_settings(&mut service, password.as_deref()))
         .unwrap_or_default();
-    let max_store_hops = settings.max_store_hops.clamp(1, 3);
+    let max_stored_cards = settings.max_stored_cards.clamp(100, 10_000);
     let now = chrono::Utc::now().timestamp().max(0) as u64;
 
     let mut store: humoco_market::CardStore = service
@@ -935,7 +941,19 @@ pub fn import_contact_card_impl(
                 use human_money_core::models::conflict::TrustStatus;
                 matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_))
             };
-            humoco_market::accept_envelope(&mut store, &env, now, max_store_hops, &is_offender)
+            let own_coords = wallet
+                .profile
+                .coordinates
+                .as_deref()
+                .and_then(humoco_market::parse_coordinates_pair);
+            humoco_market::accept_envelope(
+                &mut store,
+                &env,
+                now,
+                max_stored_cards,
+                own_coords,
+                &is_offender,
+            )
         })
         .map_err(FrontendError::from)?;
 
@@ -1104,6 +1122,7 @@ mod tests {
             pricing: None,
             duration_days: 365,
             allow_inquiries: true,
+            is_remote: false,
         };
         assert!(upsert_ad_impl(bad_ad, Some(password.to_string()), &alice_state).is_err());
 
@@ -1116,6 +1135,7 @@ mod tests {
             pricing: None,
             duration_days: 30,
             allow_inquiries: true,
+            is_remote: false,
         };
         let p1 = upsert_ad_impl(ad_30, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p1.ads.len(), 1);
@@ -1157,6 +1177,7 @@ mod tests {
                 pricing: None,
                 duration_days: 90,
                 allow_inquiries: true,
+                is_remote: false,
             };
             let p = upsert_ad_impl(ad_input, Some(password.to_string()), &alice_state).unwrap();
             ad_ids.push(p.ads.last().unwrap().id.clone());
@@ -1171,6 +1192,7 @@ mod tests {
             pricing: None,
             duration_days: 90,
             allow_inquiries: true,
+            is_remote: false,
         };
         let err = upsert_ad_impl(ad_6, Some(password.to_string()), &alice_state).unwrap_err();
         assert!(err.message.contains("market.adLimitReached"));
@@ -1188,6 +1210,7 @@ mod tests {
             pricing: Some("15 Minuto".to_string()),
             duration_days: 90,
             allow_inquiries: false,
+            is_remote: false,
         };
         let p_after = upsert_ad_impl(edit_input, Some(password.to_string()), &alice_state).unwrap();
         let ad_after = p_after.ads.iter().find(|a| a.id == target_id).unwrap();
@@ -1215,6 +1238,7 @@ mod tests {
             pricing: None,
             duration_days: 30,
             allow_inquiries: true,
+            is_remote: false,
         };
         let p_new = upsert_ad_impl(ad_new, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p_new.ads.len(), 5);
@@ -1245,8 +1269,10 @@ mod tests {
                 title: "Engineering".to_string(),
                 text: None,
                 pricing: None,
+                is_remote: false,
             }],
             max_hops: 2,
+            validity_years: 2,
             allow_inquiries: true,
         };
 
@@ -1311,14 +1337,17 @@ mod tests {
                     title: "Carpentry".to_string(),
                     text: None,
                     pricing: None,
+                    is_remote: false,
                 },
                 humoco_market::Skill {
                     title: "Plumbing".to_string(),
                     text: None,
                     pricing: None,
+                    is_remote: false,
                 },
             ],
             max_hops: 2,
+            validity_years: 2,
             allow_inquiries: true,
         };
 
@@ -1364,8 +1393,10 @@ mod tests {
                 title: "Artisan Bread".to_string(),
                 text: None,
                 pricing: None,
+                is_remote: false,
             }],
             max_hops: 2,
+            validity_years: 2,
             allow_inquiries: true,
         };
         save_my_market_profile_impl(save_req, Some(password.to_string()), &alice_state).unwrap();
@@ -1378,6 +1409,7 @@ mod tests {
             pricing: Some("3 M".to_string()),
             duration_days: 90,
             allow_inquiries: true,
+            is_remote: false,
         };
         upsert_ad_impl(ad_req, Some(password.to_string()), &alice_state).unwrap();
         let alice_profile = set_card_published_impl(true, false, Some(password.to_string()), &alice_state).await.unwrap();

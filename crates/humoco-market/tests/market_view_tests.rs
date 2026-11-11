@@ -362,6 +362,7 @@ fn test_skills_deduplication_and_needs_preservation() {
                     title: "organic apples".to_string(),
                     text: Some("Card supersedes voucher description".to_string()),
                     pricing: Some("2 Minuto".to_string()),
+                    is_remote: false,
                 }),
                 2,
             ),
@@ -376,6 +377,7 @@ fn test_skills_deduplication_and_needs_preservation() {
                     renewed_at: None,
                     expires_at: 1700000000 + 30 * 86_400,
                     allow_inquiries: true,
+                    is_remote: false,
                 }),
                 2,
             ),
@@ -453,6 +455,7 @@ fn test_filter_expired_ads_and_board_sorting() {
                     renewed_at: None,
                     expires_at: now + 1000, // active
                     allow_inquiries: true,
+                    is_remote: false,
                 }),
                 2,
             ),
@@ -467,6 +470,7 @@ fn test_filter_expired_ads_and_board_sorting() {
                     renewed_at: None,
                     expires_at: now - 10 * 86_400, // EXPIRED!
                     allow_inquiries: true,
+                    is_remote: false,
                 }),
                 2,
             ),
@@ -498,6 +502,7 @@ fn test_filter_expired_ads_and_board_sorting() {
                 renewed_at: Some(1695000000), // renewed later than ad 1
                 expires_at: now + 5000,
                 allow_inquiries: true,
+                is_remote: false,
             }),
             2,
         )],

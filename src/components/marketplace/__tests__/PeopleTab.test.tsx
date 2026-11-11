@@ -107,4 +107,56 @@ describe('PeopleTab Component', () => {
 
     expect(screen.getByText(/Noch keine Visitenkarten vorhanden|No business cards available yet/i)).toBeInTheDocument();
   });
+
+  it('filters people by radius and retains people with remote skills', () => {
+    const peopleWithCoords: FrontendMarketPerson[] = [
+      {
+        ...mockPeople[0],
+        profile: { ...mockPeople[0].profile, coordinates: '52.52, 13.40' },
+      },
+      {
+        ...mockPeople[1],
+        profile: { ...mockPeople[1].profile, coordinates: '48.14, 11.58' },
+      },
+      {
+        ...mockPeople[1],
+        did: 'did:key:z6MkuRemoteCharlie',
+        profile: { ...mockPeople[1].profile, firstName: 'Charlie', lastName: 'Online', coordinates: '48.14, 11.58' },
+        skills: [{ title: 'Online Yoga', origin: 'card', isRemote: true }],
+      },
+    ];
+
+    const { rerender } = render(
+      <PeopleTab
+        people={peopleWithCoords}
+        myCoordinates="52.52, 13.40"
+        onSelectPerson={vi.fn()}
+      />
+    );
+
+    // All 3 initially visible
+    expect(screen.getByText('Alice Wonderland')).toBeInTheDocument();
+    expect(screen.getByText('Bob Builder')).toBeInTheDocument();
+    expect(screen.getByText('Charlie Online')).toBeInTheDocument();
+
+    // Select 50 km radius
+    const radiusSelect = screen.getByTestId('people-radius-select');
+    fireEvent.change(radiusSelect, { target: { value: '50' } });
+
+    // Alice (0 km) and Charlie (has isRemote skill) are shown; Bob (~500 km, no remote) is filtered out
+    expect(screen.getByText('Alice Wonderland')).toBeInTheDocument();
+    expect(screen.getByText('Charlie Online')).toBeInTheDocument();
+    expect(screen.queryByText('Bob Builder')).not.toBeInTheDocument();
+
+    // When myCoordinates is missing and radius is selected, show warning
+    rerender(
+      <PeopleTab
+        people={peopleWithCoords}
+        myCoordinates={null}
+        onSelectPerson={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('missing-coordinates-hint')).toBeInTheDocument();
+  });
 });

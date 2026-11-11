@@ -479,7 +479,7 @@ describe('MarketplaceView Component', () => {
       if (cmd === 'get_app_settings') {
         return Promise.resolve({
           marketShowUnknown: true,
-          maxStoreHops: 2,
+          maxStoredCards: 2000,
         });
       }
       if (cmd === 'save_app_settings') return Promise.resolve();
@@ -512,9 +512,8 @@ describe('MarketplaceView Component', () => {
 
     // Test updating own profile maxHops in options panel
     const outboundSection = screen.getByTestId('marketplace-options-outbound-section');
-    const hopButtons = within(outboundSection).getAllByRole('button');
-    expect(hopButtons).toHaveLength(3);
-    fireEvent.click(hopButtons[2]);
+    const reachSelect = within(outboundSection).getByTestId('reach-select');
+    fireEvent.change(reachSelect, { target: { value: '3' } });
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('save_my_market_profile', expect.objectContaining({

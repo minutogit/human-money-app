@@ -1680,7 +1680,7 @@ pub async fn sync_market_channels_impl(
             .unwrap_or_default()
     };
 
-    let max_store_hops = settings.max_store_hops.clamp(1, 3);
+    let max_stored_cards = settings.max_stored_cards.clamp(100, 10_000);
     let my_x25519_sk = human_money_core::crypto::ed25519_sk_to_x25519_sk(&my_ed_sk);
     let mut sync_health_updates: Vec<(String, bool)> = Vec::new();
 
@@ -1703,11 +1703,17 @@ pub async fn sync_market_channels_impl(
                                         use human_money_core::models::conflict::TrustStatus;
                                         matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_))
                                     };
+                                    let own_coords = wallet
+                                        .profile
+                                        .coordinates
+                                        .as_deref()
+                                        .and_then(humoco_market::parse_coordinates_pair);
                                     humoco_market::accept_envelope(
                                         &mut store,
                                         &env,
                                         now_secs,
-                                        max_store_hops,
+                                        max_stored_cards,
+                                        own_coords,
                                         &is_offender,
                                     )
                                 });
@@ -1852,11 +1858,17 @@ pub async fn sync_market_channels_impl(
                                                     use human_money_core::models::conflict::TrustStatus;
                                                     matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_))
                                                 };
+                                                let own_coords = wallet
+                                                    .profile
+                                                    .coordinates
+                                                    .as_deref()
+                                                    .and_then(humoco_market::parse_coordinates_pair);
                                                 humoco_market::accept_envelope(
                                                     &mut store,
                                                     &env,
                                                     now_secs,
-                                                    max_store_hops,
+                                                    max_stored_cards,
+                                                    own_coords,
                                                     &is_offender,
                                                 )
                                             });
@@ -3188,8 +3200,10 @@ pub(crate) mod tests {
                 title: "Fresh Bread".to_string(),
                 text: Some("Warm and crispy".to_string()),
                 pricing: Some("5 M".to_string()),
+                is_remote: false,
             }],
             max_hops: 2,
+            validity_years: 2,
             allow_inquiries: true,
         };
         save_my_market_profile_impl(save_req, Some(password.to_string()), &bob_state).unwrap();

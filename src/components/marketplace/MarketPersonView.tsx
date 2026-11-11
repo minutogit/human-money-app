@@ -571,15 +571,26 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
                                         <h4 className="text-sm font-bold text-theme-secondary leading-snug">
                                             {skill.title}
                                         </h4>
-                                        {skill.origin === 'voucher' ? (
-                                            <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md shrink-0">
-                                                {t('marketplace.originFromVoucher', 'laut Gutschein')}
-                                            </span>
-                                        ) : (
-                                            <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md shrink-0">
-                                                {t('marketplace.originCard', 'Aus Visitenkarte')}
-                                            </span>
-                                        )}
+                                        <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+                                            {(skill.isRemote || (skill as any).is_remote) && (
+                                                <span
+                                                    className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md"
+                                                    data-testid="skill-remote-badge"
+                                                >
+                                                    <Globe size={10} />
+                                                    <span>{t('marketplace.remoteBadge', 'Ortsunabhängig')}</span>
+                                                </span>
+                                            )}
+                                            {skill.origin === 'voucher' ? (
+                                                <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                                                    {t('marketplace.originFromVoucher', 'laut Gutschein')}
+                                                </span>
+                                            ) : (
+                                                <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md">
+                                                    {t('marketplace.originCard', 'Aus Visitenkarte')}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
 
                                     {skill.text && (

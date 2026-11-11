@@ -39,6 +39,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
     const [pricing, setPricing] = useState('');
     const [durationDays, setDurationDays] = useState<number>(90);
     const [allowInquiries, setAllowInquiries] = useState<boolean>(true);
+    const [isRemote, setIsRemote] = useState<boolean>(false);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -49,6 +50,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             setText(targetAd.text || '');
             setPricing(targetAd.pricing || '');
             setAllowInquiries(targetAd.allowInquiries);
+            setIsRemote(targetAd.isRemote ?? (targetAd as any).is_remote ?? false);
             setError(null);
         } else {
             setKind('offer');
@@ -57,6 +59,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             setPricing('');
             setDurationDays(90);
             setAllowInquiries(true);
+            setIsRemote(false);
             setError(null);
         }
     }, [targetAd, isOpen]);
@@ -97,6 +100,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                 pricing: pricing.trim() || undefined,
                 durationDays,
                 allowInquiries,
+                isRemote,
             });
             onClose();
         } catch (err) {
@@ -310,6 +314,27 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                             </span>
                             <span className="text-[11px] text-theme-light block mt-0.5 leading-snug">
                                 {t('marketplace.allowInquiriesDesc', 'Andere können dir über ihren Sync-Dienst eine Nachricht oder Reservierungsanfrage zu diesem Inserat senden.')}
+                            </span>
+                        </div>
+                    </label>
+                </div>
+
+                {/* 7. Is remote toggle */}
+                <div className="pt-1">
+                    <label className="flex items-start gap-3 p-3 rounded-xl bg-bg-app/50 border border-theme-subtle cursor-pointer hover:bg-bg-app transition-colors">
+                        <input
+                            type="checkbox"
+                            checked={isRemote}
+                            onChange={(e) => setIsRemote(e.target.checked)}
+                            className="mt-0.5 rounded text-theme-primary focus:ring-theme-primary"
+                            data-testid="ad-is-remote-checkbox"
+                        />
+                        <div className="min-w-0">
+                            <span className="text-xs font-bold text-theme-secondary block">
+                                {t('marketplace.adIsRemoteLabel', 'Ortsunabhängig / Online / Versand (überregional sichtbar)')}
+                            </span>
+                            <span className="text-[11px] text-theme-light block mt-0.5 leading-snug">
+                                {t('marketplace.adIsRemoteDesc', 'Dieses Inserat wird auch bei regionaler Filterung als ortsunabhängig angezeigt.')}
                             </span>
                         </div>
                     </label>

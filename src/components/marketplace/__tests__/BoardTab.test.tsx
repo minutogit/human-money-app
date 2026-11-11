@@ -112,4 +112,74 @@ describe('BoardTab Component', () => {
     fireEvent.click(createBtn);
     expect(onCreateAd).toHaveBeenCalled();
   });
+
+  it('filters ads by distance and always includes remote ads', () => {
+    const mockPeople: any[] = [
+      {
+        did: 'did:key:z6MkuAlice',
+        profile: { coordinates: '52.52, 13.40' }, // Berlin
+      },
+      {
+        did: 'did:key:z6MkuBob',
+        profile: { coordinates: '48.14, 11.58' }, // Munich (~500 km)
+      },
+    ];
+
+    const remoteAdItem: FrontendBoardItem = {
+      ownerDid: 'did:key:z6MkuBob',
+      ownerName: 'Bob Online',
+      trust: 'trusted',
+      ad: {
+        id: 'ad-3',
+        kind: 'offer',
+        title: 'Online Beratung',
+        published_at: nowSecs,
+        expires_at: nowSecs + 86400 * 10,
+        allow_inquiries: true,
+        is_remote: true,
+      },
+      daysLeft: 10,
+    };
+
+    const { rerender } = render(
+      <BoardTab
+        items={[...mockItems, remoteAdItem]}
+        people={mockPeople}
+        myCoordinates="52.52, 13.40"
+        hasSyncService={true}
+        onCreateAd={vi.fn()}
+        onImportCard={vi.fn()}
+        onNavigateToSyncSettings={vi.fn()}
+      />
+    );
+
+    // Initially all 3 ads are shown
+    expect(screen.getByText('Bio-Honig 500g')).toBeInTheDocument();
+    expect(screen.getByText('Suche Balken')).toBeInTheDocument();
+    expect(screen.getByText('Online Beratung')).toBeInTheDocument();
+
+    // Select 25 km radius
+    const radiusSelect = screen.getByTestId('board-radius-select');
+    fireEvent.change(radiusSelect, { target: { value: '25' } });
+
+    // Alice is 0 km (shown), remote ad is shown, Bob is ~500 km (filtered out)
+    expect(screen.getByText('Bio-Honig 500g')).toBeInTheDocument();
+    expect(screen.getByText('Online Beratung')).toBeInTheDocument();
+    expect(screen.queryByText('Suche Balken')).not.toBeInTheDocument();
+
+    // If myCoordinates is missing and radius is selected, show warning
+    rerender(
+      <BoardTab
+        items={[...mockItems, remoteAdItem]}
+        people={mockPeople}
+        myCoordinates={null}
+        hasSyncService={true}
+        onCreateAd={vi.fn()}
+        onImportCard={vi.fn()}
+        onNavigateToSyncSettings={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('missing-coordinates-hint')).toBeInTheDocument();
+  });
 });

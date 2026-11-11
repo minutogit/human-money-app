@@ -27,6 +27,8 @@ pub struct MarketSkill {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<String>,
+    #[serde(default, skip_serializing_if = "crate::model::is_false")]
+    pub is_remote: bool,
     pub origin: SkillOrigin,
 }
 
@@ -103,6 +105,7 @@ fn extract_voucher_skill(raw_input: &str) -> Option<MarketSkill> {
         title,
         text,
         pricing: None,
+        is_remote: false,
         origin: SkillOrigin::Voucher,
     })
 }
@@ -273,6 +276,7 @@ pub fn build_market_view<'a>(
                     title: s.title,
                     text: s.text,
                     pricing: s.pricing,
+                    is_remote: s.is_remote,
                     origin: SkillOrigin::Card,
                 });
             }

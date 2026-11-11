@@ -3076,8 +3076,10 @@ mod tests {
                 title: "Honey".to_string(),
                 text: None,
                 pricing: None,
+                is_remote: false,
             }],
             max_hops: 2,
+            validity_years: 2,
             allow_inquiries: true,
         };
         save_my_market_profile_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
@@ -3091,6 +3093,7 @@ mod tests {
             pricing: Some("10 Minuto".to_string()),
             duration_days: 30,
             allow_inquiries: true,
+            is_remote: false,
         };
         let updated_bob_profile = upsert_ad_impl(ad_input, Some(password.to_string()), &bob_state).unwrap();
         let ad_id = updated_bob_profile.ads[0].id.clone();

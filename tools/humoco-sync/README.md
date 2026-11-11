@@ -31,6 +31,7 @@ tools/humoco-sync/
 ├── robots.txt           # Crawling prevention (User-agent: * / Disallow: /)
 ├── index.html           # Empty blank landing page
 ├── README.md            # Installation and documentation
+├── start-sync-server.sh # Local dev server runner (Document root = script dir)
 └── tests/run.sh         # Automated test suite using `php -S` and curl
 ```
 

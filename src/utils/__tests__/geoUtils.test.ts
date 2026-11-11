@@ -4,7 +4,9 @@ import {
     isValidCoordinateString,
     extractCoordinatesFromUrl,
     geocodeAddress,
-    getCurrentLocation
+    getCurrentLocation,
+    roundCoordinates,
+    calculateDistanceKm,
 } from "../geoUtils";
 
 describe("geoUtils", () => {
@@ -164,6 +166,50 @@ describe("geoUtils", () => {
             });
 
             await expect(getCurrentLocation()).rejects.toThrow("Location permission denied");
+        });
+    });
+
+    describe("roundCoordinates", () => {
+        it("should round to 2 decimals by default (~1 km precision)", () => {
+            expect(roundCoordinates("52.520008, 13.404954")).toBe("52.52, 13.40");
+            expect(roundCoordinates("52.520008, 13.404954", 2)).toBe("52.52, 13.40");
+        });
+
+        it("should round to 3 decimals (~100 m neighborhood precision)", () => {
+            expect(roundCoordinates("52.520008, 13.404954", 3)).toBe("52.520, 13.405");
+        });
+
+        it("should round to 4 decimals (~10 m exact precision)", () => {
+            expect(roundCoordinates("52.520008, 13.404954", 4)).toBe("52.5200, 13.4050");
+        });
+
+        it("should return null for invalid coordinates", () => {
+            expect(roundCoordinates("")).toBeNull();
+            expect(roundCoordinates("invalid coords")).toBeNull();
+            expect(roundCoordinates("100.0, 200.0")).toBeNull();
+        });
+    });
+
+    describe("calculateDistanceKm", () => {
+        it("should calculate distance correctly between two known locations (Berlin to Munich)", () => {
+            // Berlin: 52.5200, 13.4050; Munich: 48.1371, 11.5761
+            const dist = calculateDistanceKm("52.5200, 13.4050", "48.1371, 11.5761");
+            expect(dist).not.toBeNull();
+            // Distance is approx 504 km
+            expect(dist!).toBeGreaterThan(500);
+            expect(dist!).toBeLessThan(510);
+        });
+
+        it("should return 0 for identical coordinates", () => {
+            const dist = calculateDistanceKm("52.52, 13.40", "52.52, 13.40");
+            expect(dist).toBeCloseTo(0, 1);
+        });
+
+        it("should return null if either coordinate string is missing or invalid", () => {
+            expect(calculateDistanceKm(null, "52.52, 13.40")).toBeNull();
+            expect(calculateDistanceKm("52.52, 13.40", undefined)).toBeNull();
+            expect(calculateDistanceKm("invalid", "52.52, 13.40")).toBeNull();
+            expect(calculateDistanceKm("52.52, 13.40", "invalid")).toBeNull();
         });
     });
 });

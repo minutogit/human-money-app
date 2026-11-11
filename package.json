@@ -1,7 +1,7 @@
 {
   "name": "human_money_app",
   "private": true,
-  "version": "0.5.3",
+  "version": "0.5.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,7 +18,8 @@
     "i18n:status": "node scripts/i18n-prep.js --dry-run",
     "i18n:check": "node scripts/i18n-check-keys.js",
     "tour": "node scripts/ui-tour.mjs",
-    "tour:auto": "node scripts/ui-tour.mjs --auto"
+    "tour:auto": "node scripts/ui-tour.mjs --auto",
+    "sync:server": "bash tools/humoco-sync/start-sync-server.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "~2.11.0",

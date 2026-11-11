@@ -1,7 +1,16 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { ProfileCardEditor } from '../ProfileCardEditor';
 import { FrontendMyMarketProfile } from '../../../types';
+
+vi.mock('../../../utils/geoUtils', async () => {
+  const actual = await vi.importActual<any>('../../../utils/geoUtils');
+  return {
+    ...actual,
+    getCurrentLocation: vi.fn().mockResolvedValue('52.520008, 13.404954'),
+    geocodeAddress: vi.fn().mockResolvedValue('48.137154, 11.576124'),
+  };
+});
 
 describe('ProfileCardEditor Component', () => {
   const mockMyProfile: FrontendMyMarketProfile = {
@@ -87,8 +96,9 @@ describe('ProfileCardEditor Component', () => {
         organization: 'everyone',
       }),
       skills: expect.arrayContaining([
-        expect.objectContaining({ title: 'Möbelbau' }),
+        expect.objectContaining({ title: 'Möbelbau', is_remote: false }),
       ]),
+      validityYears: 2,
     }));
   });
 
@@ -159,5 +169,70 @@ describe('ProfileCardEditor Component', () => {
 
     const remainingInputs = screen.getAllByPlaceholderText(/Fähigkeit \(z\. B\. Holzarbeiten|Skill \(e\.g\./i);
     expect(remainingInputs.length).toBe(1);
+  });
+
+  it('supports GPS location lookup and switches coordinate visibility to everyone', async () => {
+    const onSave = vi.fn();
+    render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={{
+          ...mockMyProfile,
+          profile: { ...mockMyProfile.profile, coordinates: undefined },
+          visibility: { ...mockMyProfile.visibility, coordinates: 'nobody' },
+        }}
+        onSave={onSave}
+      />
+    );
+
+    // Recommended hint should be shown when coordinates are empty
+    expect(screen.getByTestId('coordinates-recommended-hint')).toBeInTheDocument();
+
+    // Click GPS button
+    const gpsBtn = screen.getByTestId('fetch-gps-btn');
+    fireEvent.click(gpsBtn);
+
+    // Coordinate input should be populated and rounded to 2 decimals (~1 km)
+    await screen.findByDisplayValue('52.52, 13.40');
+
+    // Change precision to 3 (~100 m)
+    const precisionSelect = screen.getByTestId('coord-precision-select');
+    fireEvent.change(precisionSelect, { target: { value: '3' } });
+
+    // Should re-round existing coordinates to 3 decimals
+    expect(screen.getByDisplayValue('52.520, 13.400')).toBeInTheDocument();
+
+    // Recommended hint disappears when coordinates are present and visibility is everyone
+    expect(screen.queryByTestId('coordinates-recommended-hint')).not.toBeInTheDocument();
+  });
+
+  it('supports toggling is_remote on skills', () => {
+    const onSave = vi.fn();
+    render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={mockMyProfile}
+        onSave={onSave}
+      />
+    );
+
+    const remoteCheckbox = screen.getByTestId('skill-remote-checkbox-0');
+    expect(remoteCheckbox).not.toBeChecked();
+    fireEvent.click(remoteCheckbox);
+    expect(remoteCheckbox).toBeChecked();
+
+    const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
+    fireEvent.click(saveBtn);
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      skills: [
+        expect.objectContaining({
+          title: 'Möbelbau',
+          is_remote: true,
+        }),
+      ],
+    }));
   });
 });

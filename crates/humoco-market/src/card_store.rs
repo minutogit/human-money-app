@@ -1,7 +1,9 @@
 use human_money_core::crypto::get_pubkey_from_user_id;
 
-use crate::model::{CardEnvelope, CardStore, StoredCard, WireFilter, MAX_STORED_CARDS};
-use crate::sd_card::{merge, strip_disclosures_beyond_distance, verify_sd_card};
+use crate::model::{CardEnvelope, CardStore, StoredCard, WireFilter};
+use crate::sd_card::{
+    decoded_items, merge, strip_disclosures_beyond_distance, verify_sd_card, CardItem,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AcceptOutcome {
@@ -11,6 +13,50 @@ pub enum AcceptOutcome {
     RejectedExpired,
     RejectedHops,
     Invalid(String),
+}
+
+/// Parses a "lat, lon" pair (comma, semicolon, or whitespace separated),
+/// validating that latitude is in [-90.0, 90.0], longitude is in [-180.0, 180.0],
+/// and both values are finite.
+pub fn parse_coordinates_pair(s: &str) -> Option<(f64, f64)> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = s
+        .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let lat = parts[0].parse::<f64>().ok()?;
+    let lon = parts[1].parse::<f64>().ok()?;
+    if lat.is_finite()
+        && lon.is_finite()
+        && (-90.0..=90.0).contains(&lat)
+        && (-180.0..=180.0).contains(&lon)
+    {
+        Some((lat, lon))
+    } else {
+        None
+    }
+}
+
+/// Computes the great-circle distance between two points on Earth using the Haversine formula (km).
+/// Uses Earth mean radius of 6371.0 km.
+pub fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (lat1, lon1) = a;
+    let (lat2, lon2) = b;
+    let d_lat = (lat2 - lat1).to_radians();
+    let d_lon = (lon2 - lon1).to_radians();
+    let sin_dlat_2 = (d_lat / 2.0).sin();
+    let sin_dlon_2 = (d_lon / 2.0).sin();
+
+    let h = sin_dlat_2 * sin_dlat_2
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * sin_dlon_2 * sin_dlon_2;
+    let c = 2.0 * h.clamp(0.0, 1.0).sqrt().asin();
+    6371.0 * c
 }
 
 pub fn derive_effective_hops(env_hops: u8, card_did: &str, slot_writer_did: Option<&str>) -> u8 {
@@ -25,10 +71,19 @@ pub fn accept_envelope(
     store: &mut CardStore,
     env: &CardEnvelope,
     now: u64,
-    max_store_hops: u8,
+    max_stored_cards: usize,
+    own_coords: Option<(f64, f64)>,
     is_offender: &dyn Fn(&str) -> bool,
 ) -> AcceptOutcome {
-    accept_envelope_with_writer(store, env, None, now, max_store_hops, is_offender)
+    accept_envelope_with_writer(
+        store,
+        env,
+        None,
+        now,
+        max_stored_cards,
+        own_coords,
+        is_offender,
+    )
 }
 
 pub fn accept_envelope_with_writer(
@@ -36,7 +91,8 @@ pub fn accept_envelope_with_writer(
     env: &CardEnvelope,
     slot_writer_did: Option<&str>,
     now: u64,
-    max_store_hops: u8,
+    max_stored_cards: usize,
+    own_coords: Option<(f64, f64)>,
     is_offender: &dyn Fn(&str) -> bool,
 ) -> AcceptOutcome {
     if env.hops == 0 {
@@ -59,7 +115,7 @@ pub fn accept_envelope_with_writer(
         return AcceptOutcome::RejectedExpired;
     }
 
-    if effective_hops > card.payload.max_hops || effective_hops > max_store_hops {
+    if effective_hops > card.payload.max_hops {
         return AcceptOutcome::RejectedHops;
     }
 
@@ -118,15 +174,48 @@ pub fn accept_envelope_with_writer(
     // Purge expired cards
     store.cards.retain(|_, c| c.card.payload.valid_until > now);
 
-    // Enforce MAX_STORED_CARDS limit:
-    // Evict largest hops first, then oldest received_at (smallest), tie-break by pubkey bytes.
-    while store.cards.len() > MAX_STORED_CARDS {
+    // Enforce max_stored_cards limit:
+    // Evict card maximizing:
+    // 1. !is_protected (unprotected true > protected false, so unprotected evicted before protected)
+    // 2. c.hops (larger hops evicted first: hop 3 before hop 2)
+    // 3. dist_bucket_10km (larger distance bucket evicted first)
+    // 4. oldest received_at (c2.received_at.cmp(&c1.received_at))
+    // 5. tie-break k1.cmp(k2)
+    let card_meta = |c: &StoredCard| -> (bool, u64) {
+        let items = decoded_items(&c.card);
+        let is_protected = c.hops == 1
+            || items.iter().any(|(item, _)| match item {
+                CardItem::Skill(s) => s.is_remote,
+                CardItem::Ad(a) => a.is_remote && a.expires_at > now,
+                _ => false,
+            });
+        let dist_bucket_10km = if let Some(my_pos) = own_coords {
+            let coords_str = items.iter().find_map(|(item, _)| match item {
+                CardItem::Coordinates(s) => Some(s.as_str()),
+                _ => None,
+            });
+            if let Some(their_pos) = coords_str.and_then(parse_coordinates_pair) {
+                (haversine_km(my_pos, their_pos) / 10.0).round() as u64
+            } else {
+                25 // 250 km neutral fallback
+            }
+        } else {
+            0
+        };
+        (is_protected, dist_bucket_10km)
+    };
+
+    while store.cards.len() > max_stored_cards.max(1) {
         let victim_pk = store
             .cards
             .iter()
             .max_by(|(k1, c1), (k2, c2)| {
-                c1.hops
-                    .cmp(&c2.hops)
+                let (p1, d1) = card_meta(c1);
+                let (p2, d2) = card_meta(c2);
+                (!p1)
+                    .cmp(&(!p2))
+                    .then_with(|| c1.hops.cmp(&c2.hops))
+                    .then_with(|| d1.cmp(&d2))
                     .then_with(|| c2.received_at.cmp(&c1.received_at))
                     .then_with(|| k1.cmp(k2))
             })

@@ -11,7 +11,8 @@ import { stringifyError, translateError } from '../../utils/errorHelper';
 
 export interface MarketplaceOptionsPanelProps {
     myProfile?: FrontendMyMarketProfile;
-    onUpdateMyProfile?: (patch: { maxHops?: number; allowInquiries?: boolean }) => Promise<void>;
+    onUpdateMyProfile?: (patch: { maxHops?: number; validityYears?: number; allowInquiries?: boolean }) => Promise<void>;
+    storedCardCount?: number;
     onSettingsChanged?: () => void;
     onClose?: () => void;
     hasSyncService?: boolean;
@@ -22,6 +23,7 @@ export interface MarketplaceOptionsPanelProps {
 export function MarketplaceOptionsPanel({
     myProfile,
     onUpdateMyProfile,
+    storedCardCount,
     onSettingsChanged,
     onClose,
     hasSyncService,
@@ -31,7 +33,7 @@ export function MarketplaceOptionsPanel({
     const { t } = useTranslation();
 
     const [marketShowUnknown, setMarketShowUnknown] = useState<boolean>(true);
-    const [maxStoreHops, setMaxStoreHops] = useState<number>(2);
+    const [maxStoredCards, setMaxStoredCards] = useState<number>(2000);
     const [isSaving, setIsSaving] = useState(false);
     const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -43,7 +45,7 @@ export function MarketplaceOptionsPanel({
             .then((s) => {
                 if (isMounted && s) {
                     setMarketShowUnknown(s.marketShowUnknown ?? true);
-                    setMaxStoreHops(s.maxStoreHops ?? 2);
+                    setMaxStoredCards(s.maxStoredCards ?? 2000);
                 }
             })
             .catch((err) => {
@@ -54,7 +56,7 @@ export function MarketplaceOptionsPanel({
         };
     }, []);
 
-    const handleUpdateProfile = async (patch: { maxHops?: number; allowInquiries?: boolean }) => {
+    const handleUpdateProfile = async (patch: { maxHops?: number; validityYears?: number; allowInquiries?: boolean }) => {
         if (!onUpdateMyProfile) return;
         setIsUpdatingProfile(true);
         setErrorMsg(null);
@@ -85,17 +87,17 @@ export function MarketplaceOptionsPanel({
         }
     };
 
-    const handleSelectMaxStoreHops = async (hops: number) => {
-        setMaxStoreHops(hops);
+    const handleSelectMaxStoredCards = async (count: number) => {
+        setMaxStoredCards(count);
         try {
             setIsSaving(true);
             setErrorMsg(null);
             const current = await settingsService.getSettings();
-            const updated: AppSettings = { ...current, maxStoreHops: hops };
+            const updated: AppSettings = { ...current, maxStoredCards: count };
             await settingsService.saveSettings(updated);
             onSettingsChanged?.();
         } catch (err) {
-            logger.error('Failed to save maxStoreHops: ' + stringifyError(err));
+            logger.error('Failed to save maxStoredCards: ' + stringifyError(err));
             setErrorMsg(translateError(err, t));
         } finally {
             setIsSaving(false);
@@ -129,42 +131,56 @@ export function MarketplaceOptionsPanel({
                     <div className="space-y-3 pb-3 border-b border-theme-subtle/40" data-testid="marketplace-options-outbound-section">
                         <div className="flex items-center gap-2">
                             <h5 className="text-xs font-black uppercase tracking-wider text-theme-secondary">
-                                {t('marketplace.optionsOutboundSection', 'Meine Visitenkarte & Erreichbarkeit')}
+                                {t('marketplace.optionsOutboundSection', 'Meine Visitenkarte & Reichweite')}
                             </h5>
                         </div>
 
                         {/* Reach of own business card */}
-                        <div className="space-y-1.5">
-                            <label className="text-xs font-bold text-theme-secondary block">
-                                {t('marketplace.reachLabel', 'Reichweite deiner Visitenkarte')}
-                            </label>
-                            <p className="text-[11px] text-theme-light leading-relaxed">
-                                {t('marketplace.maxHopsDesc', 'Bestimmt, wie weit Empfänger deine Visitenkarte an eigene Kontakte weiterempfehlen dürfen.')}
-                            </p>
-                            <div className="grid grid-cols-3 gap-2 pt-1">
-                                {[
-                                    { hops: 1, labelKey: 'marketplace.maxHops1Short' },
-                                    { hops: 2, labelKey: 'marketplace.maxHops2Short' },
-                                    { hops: 3, labelKey: 'marketplace.maxHops3Short' },
-                                ].map(({ hops, labelKey }) => {
-                                    const isSelected = (myProfile.maxHops || 2) === hops;
-                                    return (
-                                        <button
-                                            key={hops}
-                                            type="button"
-                                            disabled={isSaving || isUpdatingProfile}
-                                            onClick={() => handleUpdateProfile({ maxHops: hops })}
-                                            className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50 text-center border ${
-                                                isSelected
-                                                    ? 'bg-theme-primary text-white border-theme-primary shadow-sm'
-                                                    : 'bg-white border-theme-subtle text-theme-secondary hover:border-theme-primary/40'
-                                            }`}
-                                        >
-                                            {t(labelKey)}
-                                        </button>
-                                    );
-                                })}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div className="flex-1 min-w-0 pr-2">
+                                <label htmlFor="reachSelect" className="text-xs font-bold text-theme-secondary block">
+                                    {t('marketplace.reachLabel', 'Reichweite deiner Visitenkarte')}
+                                </label>
+                                <p className="text-xs text-theme-light leading-relaxed">
+                                    {t('marketplace.maxHopsDesc', 'Bestimmt, wie weit Empfänger deine Visitenkarte an eigene Kontakte weiterempfehlen dürfen.')}
+                                </p>
                             </div>
+                            <select
+                                id="reachSelect"
+                                data-testid="reach-select"
+                                disabled={isSaving || isUpdatingProfile}
+                                value={myProfile.maxHops || 2}
+                                onChange={(e) => handleUpdateProfile({ maxHops: Number(e.target.value) })}
+                                className="px-3 py-1.5 rounded-xl text-xs font-medium bg-white border border-theme-subtle text-theme-secondary shrink-0 focus:outline-none focus:ring-2 focus:ring-theme-primary/30 cursor-pointer"
+                            >
+                                <option value={1}>{t('marketplace.maxHops1Short', 'Nur direkte Kontakte (1 Stufe)')}</option>
+                                <option value={2}>{t('marketplace.maxHops2Short', 'Freunde von Kontakten (2 Stufen – Standard)')}</option>
+                                <option value={3}>{t('marketplace.maxHops3Short', 'Erweitertes Netzwerk (3 Stufen)')}</option>
+                            </select>
+                        </div>
+
+                        {/* Validity of own business card */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-theme-subtle/30">
+                            <div className="flex-1 min-w-0 pr-2">
+                                <label htmlFor="validityYearsSelect" className="text-xs font-bold text-theme-secondary block">
+                                    {t('marketplace.validityYearsLabel', 'Gültigkeit der Visitenkarte')}
+                                </label>
+                                <p className="text-xs text-theme-light leading-relaxed">
+                                    {t('marketplace.validityYearsDesc', 'Gibt an, nach wie vielen Jahren dein Profil erneuert werden muss.')}
+                                </p>
+                            </div>
+                            <select
+                                id="validityYearsSelect"
+                                data-testid="validity-years-select"
+                                disabled={isSaving || isUpdatingProfile}
+                                value={myProfile.validityYears ?? 2}
+                                onChange={(e) => handleUpdateProfile({ validityYears: Number(e.target.value) })}
+                                className="px-3 py-1.5 rounded-xl text-xs font-medium bg-white border border-theme-subtle text-theme-secondary shrink-0 focus:outline-none focus:ring-2 focus:ring-theme-primary/30 cursor-pointer"
+                            >
+                                <option value={1}>{t('marketplace.validityYears1', '1 Jahr')}</option>
+                                <option value={2}>{t('marketplace.validityYears2', '2 Jahre (Standard)')}</option>
+                                <option value={3}>{t('marketplace.validityYears3', '3 Jahre')}</option>
+                            </select>
                         </div>
 
                         {/* Allow general inquiries toggle */}
@@ -186,7 +202,7 @@ export function MarketplaceOptionsPanel({
                                 </label>
                                 <label
                                     htmlFor="panelAllowInquiries"
-                                    className="block text-[11px] text-theme-light font-normal cursor-pointer mt-0.5"
+                                    className="block text-xs text-theme-light font-normal cursor-pointer mt-0.5"
                                 >
                                     {t('marketplace.allowInquiriesGeneralDesc', 'Ermöglicht anderen Kontakten, dir direkte Nachrichten oder Anfragen zu deinen Fähigkeiten zu senden.')}
                                 </label>
@@ -195,46 +211,44 @@ export function MarketplaceOptionsPanel({
                     </div>
                 )}
 
-                {/* Section 2: Marketplace Filter & Storage (Inbound) */}
+                {/* Section 2: Marketplace Storage & Cleanup (Inbound) */}
                 <div className="space-y-3" data-testid="marketplace-options-inbound-section">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-between">
                         <h5 className="text-xs font-black uppercase tracking-wider text-theme-secondary">
-                            {t('marketplace.optionsInboundSection', 'Marktplatz-Filter & Speicher')}
+                            {t('marketplace.optionsInboundSection', 'Kartenspeicher & Bereinigung')}
                         </h5>
+                        {storedCardCount !== undefined && (
+                            <span
+                                className="px-2 py-0.5 rounded-full text-xs font-semibold bg-theme-primary/10 text-theme-primary border border-theme-primary/20"
+                                data-testid="stored-cards-count-badge"
+                            >
+                                {`${storedCardCount} / ${maxStoredCards} ${t('settings.storedCardsCountUnit', 'Karten belegt')}`}
+                            </span>
+                        )}
                     </div>
 
-                    {/* Marketplace Max Store Hops Reach */}
-                    <div className="space-y-1.5">
-                        <label className="text-xs font-bold text-theme-secondary block">
-                            {t('settings.maxStoreHops')}
-                        </label>
-                        <p className="text-[11px] text-theme-light leading-relaxed">
-                            {t('settings.maxStoreHopsDesc')}
-                        </p>
-                        <div className="grid grid-cols-3 gap-2 pt-1">
-                            {[
-                                { hops: 1, labelKey: 'settings.maxStoreHops1' },
-                                { hops: 2, labelKey: 'settings.maxStoreHops2' },
-                                { hops: 3, labelKey: 'settings.maxStoreHops3' },
-                            ].map(({ hops, labelKey }) => {
-                                const isSelected = maxStoreHops === hops;
-                                return (
-                                    <button
-                                        key={hops}
-                                        type="button"
-                                        disabled={isSaving || isUpdatingProfile}
-                                        onClick={() => handleSelectMaxStoreHops(hops)}
-                                        className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50 text-center border ${
-                                            isSelected
-                                                ? 'bg-theme-primary text-white border-theme-primary shadow-sm'
-                                                : 'bg-white border-theme-subtle text-theme-secondary hover:border-theme-primary/40'
-                                        }`}
-                                    >
-                                        {t(labelKey)}
-                                    </button>
-                                );
-                            })}
+                    {/* Max Stored Cards Select */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex-1 min-w-0 pr-2">
+                            <label htmlFor="maxStoredCardsSelect" className="text-xs font-bold text-theme-secondary block">
+                                {t('settings.maxStoredCards', 'Lokaler Kartenspeicher')}
+                            </label>
+                            <p className="text-xs text-theme-light leading-relaxed">
+                                {t('settings.maxStoredCardsDesc', 'Abgelaufene Profile werden automatisch entfernt. Bei vollem Speicherplatz weichen zuerst weit entfernte, rein lokale Profile aus dem erweiterten Netzwerk (direkte Kontakte bleiben immer geschützt).')}
+                            </p>
                         </div>
+                        <select
+                            id="maxStoredCardsSelect"
+                            data-testid="max-stored-cards-select"
+                            disabled={isSaving || isUpdatingProfile}
+                            value={maxStoredCards}
+                            onChange={(e) => handleSelectMaxStoredCards(Number(e.target.value))}
+                            className="px-3 py-1.5 rounded-xl text-xs font-medium bg-white border border-theme-subtle text-theme-secondary shrink-0 focus:outline-none focus:ring-2 focus:ring-theme-primary/30 cursor-pointer"
+                        >
+                            <option value={500}>{t('settings.maxStoredCards500', 'Sparsam (max. 500 Karten)')}</option>
+                            <option value={2000}>{t('settings.maxStoredCards2000', 'Standard (max. 2.000 Karten)')}</option>
+                            <option value={5000}>{t('settings.maxStoredCards5000', 'Groß (max. 5.000 Karten)')}</option>
+                        </select>
                     </div>
 
                     {/* Marketplace Show Unknown Creators Toggle */}
@@ -256,7 +270,7 @@ export function MarketplaceOptionsPanel({
                             </label>
                             <label
                                 htmlFor="panelMarketShowUnknown"
-                                className="block text-[11px] text-theme-light font-normal cursor-pointer mt-0.5"
+                                className="block text-xs text-theme-light font-normal cursor-pointer mt-0.5"
                             >
                                 {t('settings.marketShowUnknownDesc')}
                             </label>

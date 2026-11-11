@@ -1,14 +1,19 @@
 // src/components/marketplace/BoardTab.tsx
 import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, Plus, Cloud, FileUp, RotateCcw } from 'lucide-react';
-import { Ad, FrontendBoardItem } from '../../types';
+import { Search, Plus, Cloud, FileUp, RotateCcw, MapPin } from 'lucide-react';
+import { Ad, FrontendBoardItem, FrontendMarketPerson } from '../../types';
 import { AdCard } from './AdCard';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
+import { calculateDistanceKm } from '../../utils/geoUtils';
 
 export interface BoardTabProps {
     items: FrontendBoardItem[];
+    people?: FrontendMarketPerson[];
+    myCoordinates?: string | null;
+    maxDistanceKm?: number | null;
+    onMaxDistanceChange?: (val: number | null) => void;
     hasSyncService: boolean;
     onCreateAd: () => void;
     onImportCard: () => void;
@@ -22,6 +27,10 @@ export type BoardFilter = 'all' | 'offer' | 'request';
 
 export const BoardTab: React.FC<BoardTabProps> = ({
     items,
+    people,
+    myCoordinates,
+    maxDistanceKm,
+    onMaxDistanceChange,
     hasSyncService,
     onCreateAd,
     onImportCard,
@@ -33,6 +42,10 @@ export const BoardTab: React.FC<BoardTabProps> = ({
     const { t } = useTranslation();
     const [searchQuery, setSearchQuery] = useState('');
     const [filterKind, setFilterKind] = useState<BoardFilter>('all');
+    const [internalMaxDistance, setInternalMaxDistance] = useState<number | null>(null);
+
+    const effectiveMaxDistance = maxDistanceKm !== undefined ? maxDistanceKm : internalMaxDistance;
+    const setEffectiveMaxDistance = onMaxDistanceChange || setInternalMaxDistance;
 
     const filteredItems = useMemo(() => {
         return items.filter((item) => {
@@ -46,32 +59,79 @@ export const BoardTab: React.FC<BoardTabProps> = ({
                 const titleMatch = item.ad.title.toLowerCase().includes(query);
                 const textMatch = item.ad.text ? item.ad.text.toLowerCase().includes(query) : false;
                 const ownerMatch = item.ownerName.toLowerCase().includes(query);
-                return titleMatch || textMatch || ownerMatch;
+                if (!titleMatch && !textMatch && !ownerMatch) {
+                    return false;
+                }
+            }
+            // Distance filter
+            if (effectiveMaxDistance !== null && effectiveMaxDistance > 0 && myCoordinates) {
+                if (!item.ad.is_remote) {
+                    const ownerPerson = (people || []).find((p) => p.did === item.ownerDid);
+                    const ownerCoords = ownerPerson?.profile.coordinates;
+                    if (!ownerCoords) {
+                        return false;
+                    }
+                    const dist = calculateDistanceKm(myCoordinates, ownerCoords);
+                    if (dist === null || dist > effectiveMaxDistance) {
+                        return false;
+                    }
+                }
             }
             return true;
         });
-    }, [items, filterKind, searchQuery]);
+    }, [items, people, filterKind, searchQuery, effectiveMaxDistance, myCoordinates]);
 
     const isBoardEmptyOverall = items.length === 0;
 
     return (
         <div className="space-y-6">
-            {/* Filter toolbar: Search input + Kind chips */}
+            {/* Missing coords hint when radius is selected */}
+            {effectiveMaxDistance !== null && effectiveMaxDistance > 0 && !myCoordinates && (
+                <div
+                    className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center gap-2"
+                    data-testid="missing-coordinates-hint"
+                >
+                    <MapPin size={14} className="text-amber-600 shrink-0" />
+                    <span>
+                        {t(
+                            'marketplace.radiusMissingCoordsHint',
+                            'Für den Umkreisfilter werden eigene Koordinaten in deiner Visitenkarte benötigt.'
+                        )}
+                    </span>
+                </div>
+            )}
+
+            {/* Filter toolbar: Search input + Radius select + Kind chips */}
             {!isBoardEmptyOverall && (
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                    {/* Search box */}
-                    <div className="relative flex-1 max-w-md">
-                        <Search
-                            size={16}
-                            className="absolute left-3.5 top-1/2 -translate-y-1/2 text-theme-light pointer-events-none"
-                        />
-                        <Input
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder={t('marketplace.searchBoardPlaceholder', 'Pinnwand durchsuchen...')}
-                            className="pl-9 bg-white border-theme-subtle"
-                            data-testid="board-search-input"
-                        />
+                    {/* Search box & Radius select */}
+                    <div className="flex items-center gap-2 flex-1 max-w-xl">
+                        <div className="relative flex-1">
+                            <Search
+                                size={16}
+                                className="absolute left-3.5 top-1/2 -translate-y-1/2 text-theme-light pointer-events-none"
+                            />
+                            <Input
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder={t('marketplace.searchBoardPlaceholder', 'Pinnwand durchsuchen...')}
+                                className="pl-9 bg-white border-theme-subtle"
+                                data-testid="board-search-input"
+                            />
+                        </div>
+                        <select
+                            value={effectiveMaxDistance === null ? '' : String(effectiveMaxDistance)}
+                            onChange={(e) => setEffectiveMaxDistance(e.target.value === '' ? null : Number(e.target.value))}
+                            className="px-3 py-2 rounded-xl text-xs font-medium bg-white border border-theme-subtle text-theme-secondary focus:outline-none focus:ring-2 focus:ring-theme-primary/30 cursor-pointer shrink-0"
+                            data-testid="board-radius-select"
+                            aria-label={t('marketplace.radiusLabel', 'Umkreis')}
+                        >
+                            <option value="">{t('marketplace.radiusAll', 'Alle Entfernungen')}</option>
+                            <option value="10">{t('marketplace.radius10', 'Umkreis ≤ 10 km')}</option>
+                            <option value="25">{t('marketplace.radius25', 'Umkreis ≤ 25 km')}</option>
+                            <option value="50">{t('marketplace.radius50', 'Umkreis ≤ 50 km')}</option>
+                            <option value="100">{t('marketplace.radius100', 'Umkreis ≤ 100 km')}</option>
+                        </select>
                     </div>
 
                     {/* Filter chips: Alle / Angebote / Gesuche */}

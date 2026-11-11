@@ -149,4 +149,24 @@ describe('MarketPersonView Component', () => {
     expect(screen.getByText(/(Laut Gutschein gesucht:|Sought according to voucher:)/i)).toBeInTheDocument();
     expect(screen.getByText('Hilfe bei der Obsternte im Herbst')).toBeInTheDocument();
   });
+
+  it('renders remote badge when skill is remote', () => {
+    const personWithRemoteSkill: FrontendMarketPerson = {
+      ...basePerson,
+      skills: [
+        {
+          title: 'Online Nachhilfe',
+          text: 'Mathematik und Physik via Video',
+          origin: 'card',
+          isRemote: true,
+        },
+      ],
+    };
+
+    render(<MarketPersonView person={personWithRemoteSkill} onBack={vi.fn()} />);
+
+    expect(screen.getByText('Online Nachhilfe')).toBeInTheDocument();
+    expect(screen.getByTestId('skill-remote-badge')).toBeInTheDocument();
+    expect(screen.getByText(/Ortsunabhängig|Location-independent/i)).toBeInTheDocument();
+  });
 });

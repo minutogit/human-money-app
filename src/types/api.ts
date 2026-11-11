@@ -87,7 +87,7 @@ export interface AppSettings {
     regionalMeshSources?: RegionalSourceDto[];
     enablePosMode?: boolean;
     marketShowUnknown?: boolean;
-    maxStoreHops?: number;
+    maxStoredCards?: number;
     marketSendCardOnPayment?: boolean;
     marketSyncEnabled?: boolean;
     shareMinLevel?: number;

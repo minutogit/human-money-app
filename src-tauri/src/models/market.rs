@@ -36,7 +36,7 @@ impl Default for CardFieldVisibility {
             street: FieldAudience::Contacts,
             email: FieldAudience::Contacts,
             phone: FieldAudience::Contacts,
-            coordinates: FieldAudience::Nobody,
+            coordinates: FieldAudience::Everyone,
             gender: FieldAudience::Nobody,
         }
     }
@@ -44,6 +44,10 @@ impl Default for CardFieldVisibility {
 
 fn default_max_hops() -> u8 {
     humoco_market::DEFAULT_MAX_HOPS
+}
+
+fn default_validity_years() -> u8 {
+    2
 }
 
 fn default_true() -> bool {
@@ -61,6 +65,8 @@ pub struct StoredOwnMarketProfile {
     pub ads: Vec<humoco_market::Ad>,
     #[serde(default = "default_max_hops")]
     pub max_hops: u8,
+    #[serde(default = "default_validity_years")]
+    pub validity_years: u8,
     #[serde(default = "default_true")]
     pub allow_inquiries: bool,
     #[serde(default)]
@@ -76,6 +82,7 @@ impl Default for StoredOwnMarketProfile {
             skills: Vec::new(),
             ads: Vec::new(),
             max_hops: humoco_market::DEFAULT_MAX_HOPS,
+            validity_years: 2,
             allow_inquiries: true,
             published: false,
             last_card: None,
@@ -107,6 +114,8 @@ pub struct FrontendMarketSkill {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<String>,
+    #[serde(default)]
+    pub is_remote: bool,
     pub origin: FrontendSkillOrigin,
 }
 
@@ -116,6 +125,7 @@ impl From<humoco_market::MarketSkill> for FrontendMarketSkill {
             title: s.title,
             text: s.text,
             pricing: s.pricing,
+            is_remote: s.is_remote,
             origin: s.origin.into(),
         }
     }
@@ -136,6 +146,8 @@ pub struct FrontendMyAd {
     pub renewed_at: Option<u64>,
     pub expires_at: u64,
     pub allow_inquiries: bool,
+    #[serde(default)]
+    pub is_remote: bool,
     pub status: String,
     pub days_left: u64,
 }
@@ -160,6 +172,7 @@ impl FrontendMyAd {
             renewed_at: ad.renewed_at,
             expires_at: ad.expires_at,
             allow_inquiries: ad.allow_inquiries,
+            is_remote: ad.is_remote,
             status,
             days_left,
         }
@@ -174,6 +187,7 @@ pub struct FrontendMyMarketProfile {
     pub skills: Vec<humoco_market::Skill>,
     pub ads: Vec<FrontendMyAd>,
     pub max_hops: u8,
+    pub validity_years: u8,
     pub allow_inquiries: bool,
     pub published: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,6 +207,8 @@ pub struct FrontendSaveMyMarketProfileRequest {
     pub visibility: CardFieldVisibility,
     pub skills: Vec<humoco_market::Skill>,
     pub max_hops: u8,
+    #[serde(default = "default_validity_years")]
+    pub validity_years: u8,
     pub allow_inquiries: bool,
 }
 
@@ -208,6 +224,8 @@ pub struct FrontendAdInput {
     pub pricing: Option<String>,
     pub duration_days: u64,
     pub allow_inquiries: bool,
+    #[serde(default)]
+    pub is_remote: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -389,6 +407,8 @@ impl From<humoco_market::MarketPerson> for FrontendMarketPerson {
 pub struct FrontendMarketSnapshot {
     pub board: Vec<FrontendBoardItem>,
     pub people: Vec<FrontendMarketPerson>,
+    #[serde(default)]
+    pub stored_card_count: usize,
     pub now: u64,
 }
 

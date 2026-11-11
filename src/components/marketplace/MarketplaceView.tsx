@@ -85,6 +85,7 @@ export function MarketplaceView({
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isPublishPromptOpen, setIsPublishPromptOpen] = useState(false);
     const [isOptionsOpen, setIsOptionsOpen] = useState(false);
+    const [maxDistanceKm, setMaxDistanceKm] = useState<number | null>(null);
 
     // Sync status count
     const [connectedSyncCount, setConnectedSyncCount] = useState<number | null>(null);
@@ -266,13 +267,14 @@ export function MarketplaceView({
         }
     };
 
-    const handleUpdateMyProfileOptions = async (patch: { maxHops?: number; allowInquiries?: boolean }) => {
+    const handleUpdateMyProfileOptions = async (patch: { maxHops?: number; validityYears?: number; allowInquiries?: boolean }) => {
         try {
             const req: FrontendSaveMyMarketProfileRequest = {
                 profile: currentProfile.profile,
                 visibility: currentProfile.visibility,
                 skills: currentProfile.skills,
                 maxHops: patch.maxHops ?? currentProfile.maxHops,
+                validityYears: patch.validityYears ?? currentProfile.validityYears ?? 2,
                 allowInquiries: patch.allowInquiries ?? currentProfile.allowInquiries,
             };
             const updated = await protectAction(async (pwd) => {
@@ -398,6 +400,7 @@ export function MarketplaceView({
                     <MarketplaceOptionsPanel
                         myProfile={currentProfile}
                         onUpdateMyProfile={handleUpdateMyProfileOptions}
+                        storedCardCount={snapshot?.storedCardCount}
                         onSettingsChanged={() => refreshData(false)}
                         onClose={() => setIsOptionsOpen(false)}
                         hasSyncService={(connectedSyncCount ?? 0) > 0}
@@ -540,6 +543,10 @@ export function MarketplaceView({
                     {activeTab === 'board' && (
                         <BoardTab
                             items={snapshot?.board || []}
+                            people={snapshot?.people || []}
+                            myCoordinates={currentProfile.profile.coordinates}
+                            maxDistanceKm={maxDistanceKm}
+                            onMaxDistanceChange={setMaxDistanceKm}
                             hasSyncService={connectedSyncCount !== null && connectedSyncCount > 0}
                             onCreateAd={handleCreateAdClick}
                             onImportCard={() => setIsImportModalOpen(true)}
@@ -553,6 +560,9 @@ export function MarketplaceView({
                     {activeTab === 'people' && (
                         <PeopleTab
                             people={snapshot?.people || []}
+                            myCoordinates={currentProfile.profile.coordinates}
+                            maxDistanceKm={maxDistanceKm}
+                            onMaxDistanceChange={setMaxDistanceKm}
                             onSelectPerson={(person) => setSelectedPersonDid(person.did)}
                         />
                     )}

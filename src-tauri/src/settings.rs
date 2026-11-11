@@ -90,8 +90,8 @@ pub struct AppSettings {
     pub backup_dirty: bool,
     #[serde(default = "default_market_show_unknown")]
     pub market_show_unknown: bool,
-    #[serde(default = "default_max_store_hops")]
-    pub max_store_hops: u8,
+    #[serde(default = "default_max_stored_cards")]
+    pub max_stored_cards: usize,
     #[serde(default)]
     pub market_send_card_on_payment: bool,
     #[serde(default = "default_true")]
@@ -135,8 +135,8 @@ fn default_share_min_level() -> u8 {
     1
 }
 
-fn default_max_store_hops() -> u8 {
-    2
+fn default_max_stored_cards() -> usize {
+    2000
 }
 
 fn default_market_show_unknown() -> bool {
@@ -181,7 +181,7 @@ impl Default for AppSettings {
             auto_backup_enabled: true,
             backup_dirty: false,
             market_show_unknown: true,
-            max_store_hops: 2,
+            max_stored_cards: default_max_stored_cards(),
             market_send_card_on_payment: false,
             market_sync_enabled: true,
             share_min_level: default_share_min_level(),
@@ -194,5 +194,30 @@ impl Default for AppSettings {
             pending_restore_l2_reconciliation: false,
             post_accept_from_contacts: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_settings_default_max_stored_cards() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.max_stored_cards, 2000);
+    }
+
+    #[test]
+    fn test_app_settings_deserialize_default() {
+        let json = r#"{}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.max_stored_cards, 2000);
+    }
+
+    #[test]
+    fn test_app_settings_deserialize_custom_max_stored_cards() {
+        let json = r#"{"maxStoredCards": 500}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.max_stored_cards, 500);
     }
 }

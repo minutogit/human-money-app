@@ -3,11 +3,12 @@ use std::collections::BTreeSet;
 use ed25519_dalek::SigningKey;
 use human_money_core::crypto::create_user_id;
 use humoco_market::{
-    accept_envelope, derive_effective_hops, encode_qr_svg, mark_sent, merge, new_ad_id,
-    next_card_version, render_wire, should_attach_card, sign_sd_card, verify_sd_card,
-    AcceptOutcome, Ad, AdKind, CardEnvelope, CardItem, CardPayloadInput, CardStore, DropDescriptor,
-    Skill, WireFilter, CARD_SD_PADDED_LEN, MAX_BUNDLE_CARD_WIRE_BYTES, MAX_PRICING_CHARS,
-    MAX_QR_SHARE_BYTES, MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
+    accept_envelope, derive_effective_hops, encode_qr_svg, haversine_km, mark_sent, merge,
+    new_ad_id, next_card_version, parse_coordinates_pair, render_wire, should_attach_card,
+    sign_sd_card, verify_sd_card, AcceptOutcome, Ad, AdKind, CardEnvelope, CardItem,
+    CardPayloadInput, CardStore, DropDescriptor, Skill, WireFilter, CARD_SD_PADDED_LEN,
+    MAX_BUNDLE_CARD_WIRE_BYTES, MAX_PRICING_CHARS, MAX_QR_SHARE_BYTES, MAX_SKILL_TEXT_CHARS,
+    MAX_SKILL_TITLE_CHARS,
 };
 use proptest::prelude::*;
 
@@ -56,6 +57,7 @@ fn sample_items() -> Vec<(CardItem, u8)> {
                 title: "Bread Baking".to_string(),
                 text: Some("Sourdough bread once a week".to_string()),
                 pricing: Some("1 Minuto / loaf".to_string()),
+                is_remote: false,
             }),
             2,
         ),
@@ -70,6 +72,7 @@ fn sample_items() -> Vec<(CardItem, u8)> {
                 renewed_at: None,
                 expires_at: 1700000000 + 30 * 86_400,
                 allow_inquiries: true,
+                is_remote: false,
             }),
             2,
         ),
@@ -221,6 +224,7 @@ fn test_no_ads_wire_filter_fits_7168_with_8_skills() {
                 title: format!("Skill {}", "S".repeat(MAX_SKILL_TITLE_CHARS - 10)),
                 text: Some("T".repeat(MAX_SKILL_TEXT_CHARS)),
                 pricing: Some("P".repeat(MAX_PRICING_CHARS)),
+                is_remote: false,
             }),
             2,
         ));
@@ -238,6 +242,7 @@ fn test_no_ads_wire_filter_fits_7168_with_8_skills() {
             renewed_at: None,
             expires_at: 1700000000 + 30 * 86_400,
             allow_inquiries: false,
+            is_remote: false,
         }),
         2,
     ));
@@ -304,7 +309,7 @@ fn test_accept_envelope_all_cases() {
         card_wire: wire_v100.clone(),
         hops: 1,
     };
-    let out = accept_envelope(&mut store, &env_v100, 1700000000, 3, &no_offender);
+    let out = accept_envelope(&mut store, &env_v100, 1700000000, 2000, None, &no_offender);
     assert_eq!(
         out,
         AcceptOutcome::Accepted {
@@ -321,7 +326,7 @@ fn test_accept_envelope_all_cases() {
         card_wire: wire_v200,
         hops: 1,
     };
-    let out2 = accept_envelope(&mut store, &env_v200, 1700000000, 3, &no_offender);
+    let out2 = accept_envelope(&mut store, &env_v200, 1700000000, 2000, None, &no_offender);
     assert_eq!(
         out2,
         AcceptOutcome::Accepted {
@@ -331,7 +336,7 @@ fn test_accept_envelope_all_cases() {
     );
 
     // 3. Case 2: new.v == stored.v && new.jws == stored.jws -> merge
-    let out3 = accept_envelope(&mut store, &env_v200, 1700000000, 3, &no_offender);
+    let out3 = accept_envelope(&mut store, &env_v200, 1700000000, 2000, None, &no_offender);
     assert_eq!(
         out3,
         AcceptOutcome::Accepted {
@@ -341,7 +346,7 @@ fn test_accept_envelope_all_cases() {
     );
 
     // 4. Case 4: new.v < stored.v (v = 100 < 200) -> IgnoredStale
-    let out4 = accept_envelope(&mut store, &env_v100, 1700000000, 3, &no_offender);
+    let out4 = accept_envelope(&mut store, &env_v100, 1700000000, 2000, None, &no_offender);
     assert_eq!(out4, AcceptOutcome::IgnoredStale);
 }
 
@@ -362,7 +367,7 @@ fn test_receiver_rule_strip_contacts_at_hop2() {
         hops: 2,
     };
 
-    let outcome = accept_envelope(&mut store, &env, 1700000000, 3, &no_offender);
+    let outcome = accept_envelope(&mut store, &env, 1700000000, 2000, None, &no_offender);
     assert!(matches!(outcome, AcceptOutcome::Accepted { .. }));
 
     // Honest app stripped Phone because max_distance (1) < hops (2)
@@ -402,6 +407,7 @@ fn test_limits_skills_and_ads() {
                     title: format!("Skill {}", i),
                     text: None,
                     pricing: None,
+                    is_remote: false,
                 }),
                 2,
             )
@@ -415,6 +421,7 @@ fn test_limits_skills_and_ads() {
             title: "Skill 9".to_string(),
             text: None,
             pricing: None,
+            is_remote: false,
         }),
         2,
     ));
@@ -434,6 +441,7 @@ fn test_limits_skills_and_ads() {
                     renewed_at: None,
                     expires_at: 1700000000 + 30 * 86_400,
                     allow_inquiries: false,
+                    is_remote: false,
                 }),
                 2,
             )
@@ -453,6 +461,7 @@ fn test_limits_skills_and_ads() {
             renewed_at: None,
             expires_at: 1700000000 + 30 * 86_400,
             allow_inquiries: false,
+            is_remote: false,
         }),
         2,
     ));
@@ -477,6 +486,7 @@ fn test_ad_duration_and_validity_invariants() {
             renewed_at: None,
             expires_at: 1700000000 + 181 * 86_400,
             allow_inquiries: false,
+            is_remote: false,
         }),
         2,
     );
@@ -494,6 +504,7 @@ fn test_ad_duration_and_validity_invariants() {
             renewed_at: None,
             expires_at: 1700000000 + 101 * 86_400,
             allow_inquiries: false,
+            is_remote: false,
         }),
         2,
     );
@@ -512,6 +523,7 @@ fn test_ad_duration_and_validity_invariants() {
             renewed_at: None,
             expires_at: 1700000000 + 30 * 86_400,
             allow_inquiries: false,
+            is_remote: false,
         }),
         2,
     );
@@ -526,6 +538,7 @@ fn test_ad_duration_and_validity_invariants() {
             renewed_at: None,
             expires_at: 1700000000 + 30 * 86_400,
             allow_inquiries: false,
+            is_remote: false,
         }),
         2,
     );
@@ -543,6 +556,7 @@ fn test_ad_duration_and_validity_invariants() {
             renewed_at: None,
             expires_at: 1600000000 + 30 * 86_400,
             allow_inquiries: false,
+            is_remote: false,
         }),
         2,
     );
@@ -604,6 +618,393 @@ fn test_qr_svg_generation() {
     assert!(svg_str.ends_with("</svg>"));
 }
 
+#[test]
+fn test_parse_coordinates_pair() {
+    assert_eq!(
+        parse_coordinates_pair("52.5200, 13.4050"),
+        Some((52.52, 13.405))
+    );
+    assert_eq!(
+        parse_coordinates_pair("52.52; 13.4050"),
+        Some((52.52, 13.405))
+    );
+    assert_eq!(
+        parse_coordinates_pair("52.52 13.4050"),
+        Some((52.52, 13.405))
+    );
+    assert_eq!(
+        parse_coordinates_pair(" -12.34 , 56.78 "),
+        Some((-12.34, 56.78))
+    );
+    assert_eq!(parse_coordinates_pair("91.0, 10.0"), None);
+    assert_eq!(parse_coordinates_pair("-90.1, 10.0"), None);
+    assert_eq!(parse_coordinates_pair("10.0, 180.1"), None);
+    assert_eq!(parse_coordinates_pair("10.0, -180.1"), None);
+    assert_eq!(parse_coordinates_pair("invalid, coords"), None);
+    assert_eq!(parse_coordinates_pair("52.52"), None);
+    assert_eq!(parse_coordinates_pair(""), None);
+    assert_eq!(parse_coordinates_pair("   "), None);
+}
+
+#[test]
+fn test_haversine_km() {
+    let p1 = (52.52, 13.405); // Berlin
+    let p2 = (48.137, 11.576); // Munich
+    let dist = haversine_km(p1, p2);
+    assert!((dist - 504.0).abs() < 5.0, "expected ~504 km, got {}", dist);
+    assert_eq!(haversine_km(p1, p1), 0.0);
+}
+
+#[test]
+fn test_geo_eviction_remote_protection() {
+    let mut store = CardStore::default();
+    let no_offender = |_did: &str| false;
+    let own_coords = Some((52.52, 13.405)); // Berlin
+
+    // Card A: Local skill, Berlin
+    let sk_a = make_key(30);
+    let card_a = sign_sd_card(
+        valid_payload_input(&sk_a),
+        vec![
+            (CardItem::Coordinates("52.52, 13.405".to_string()), 2),
+            (
+                CardItem::Skill(Skill {
+                    title: "Local Berlin Bakery".to_string(),
+                    text: None,
+                    pricing: None,
+                    is_remote: false,
+                }),
+                2,
+            ),
+        ],
+        &sk_a,
+    )
+    .unwrap();
+    let wire_a = render_wire(&card_a, 2, WireFilter::Full).unwrap();
+
+    // Card B: Remote skill, Tokyo (9000 km away)
+    let sk_b = make_key(31);
+    let card_b = sign_sd_card(
+        valid_payload_input(&sk_b),
+        vec![
+            (CardItem::Coordinates("35.676, 139.65".to_string()), 2),
+            (
+                CardItem::Skill(Skill {
+                    title: "Remote Rust Dev".to_string(),
+                    text: None,
+                    pricing: None,
+                    is_remote: true,
+                }),
+                2,
+            ),
+        ],
+        &sk_b,
+    )
+    .unwrap();
+    let wire_b = render_wire(&card_b, 2, WireFilter::Full).unwrap();
+
+    // Card C: Local skill, Leipzig (~150 km from Berlin)
+    let sk_c = make_key(32);
+    let card_c = sign_sd_card(
+        valid_payload_input(&sk_c),
+        vec![
+            (CardItem::Coordinates("51.339, 12.373".to_string()), 2),
+            (
+                CardItem::Skill(Skill {
+                    title: "Leipzig Pottery".to_string(),
+                    text: None,
+                    pricing: None,
+                    is_remote: false,
+                }),
+                2,
+            ),
+        ],
+        &sk_c,
+    )
+    .unwrap();
+    let wire_c = render_wire(&card_c, 2, WireFilter::Full).unwrap();
+
+    // Insert A and B with max_stored_cards = 2
+    accept_envelope(
+        &mut store,
+        &CardEnvelope {
+            card_wire: wire_a,
+            hops: 2,
+        },
+        1700000000,
+        2,
+        own_coords,
+        &no_offender,
+    );
+    accept_envelope(
+        &mut store,
+        &CardEnvelope {
+            card_wire: wire_b,
+            hops: 2,
+        },
+        1700000000,
+        2,
+        own_coords,
+        &no_offender,
+    );
+    assert_eq!(store.cards.len(), 2);
+
+    // Insert C with max_stored_cards = 2
+    // B is protected (remote skill), so between A (dist ~0) and C (dist ~150), C is evicted!
+    accept_envelope(
+        &mut store,
+        &CardEnvelope {
+            card_wire: wire_c,
+            hops: 2,
+        },
+        1700000000,
+        2,
+        own_coords,
+        &no_offender,
+    );
+
+    assert_eq!(store.cards.len(), 2);
+    let pk_a = *sk_a.verifying_key().as_bytes();
+    let pk_b = *sk_b.verifying_key().as_bytes();
+    let pk_c = *sk_c.verifying_key().as_bytes();
+
+    assert!(store.cards.contains_key(&pk_a), "Card A (close local) should be kept");
+    assert!(store.cards.contains_key(&pk_b), "Card B (remote protected) should be kept");
+    assert!(!store.cards.contains_key(&pk_c), "Card C (farther local) should be evicted");
+}
+
+#[test]
+fn test_geo_eviction_hop1_protection() {
+    let mut store = CardStore::default();
+    let no_offender = |_did: &str| false;
+    let own_coords = Some((52.52, 13.405)); // Berlin
+
+    // Card 1: Hop 1 (direct contact), local skill, Tokyo coords (far)
+    let sk1 = make_key(40);
+    let card1 = sign_sd_card(
+        valid_payload_input(&sk1),
+        vec![
+            (CardItem::Coordinates("35.676, 139.65".to_string()), 1),
+            (
+                CardItem::Skill(Skill {
+                    title: "Direct Friend".to_string(),
+                    text: None,
+                    pricing: None,
+                    is_remote: false,
+                }),
+                1,
+            ),
+        ],
+        &sk1,
+    )
+    .unwrap();
+    let wire1 = render_wire(&card1, 1, WireFilter::Full).unwrap();
+
+    // Card 2: Hop 2, local skill, Leipzig coords (~150 km)
+    let sk2 = make_key(41);
+    let card2 = sign_sd_card(
+        valid_payload_input(&sk2),
+        vec![
+            (CardItem::Coordinates("51.339, 12.373".to_string()), 2),
+            (
+                CardItem::Skill(Skill {
+                    title: "Leipzig Friend".to_string(),
+                    text: None,
+                    pricing: None,
+                    is_remote: false,
+                }),
+                2,
+            ),
+        ],
+        &sk2,
+    )
+    .unwrap();
+    let wire2 = render_wire(&card2, 2, WireFilter::Full).unwrap();
+
+    // Card 3: Hop 2, local skill, Potsdam coords (~30 km)
+    let sk3 = make_key(42);
+    let card3 = sign_sd_card(
+        valid_payload_input(&sk3),
+        vec![
+            (CardItem::Coordinates("52.398, 13.065".to_string()), 2),
+            (
+                CardItem::Skill(Skill {
+                    title: "Potsdam Friend".to_string(),
+                    text: None,
+                    pricing: None,
+                    is_remote: false,
+                }),
+                2,
+            ),
+        ],
+        &sk3,
+    )
+    .unwrap();
+    let wire3 = render_wire(&card3, 2, WireFilter::Full).unwrap();
+
+    accept_envelope(
+        &mut store,
+        &CardEnvelope {
+            card_wire: wire1,
+            hops: 1,
+        },
+        1700000000,
+        2,
+        own_coords,
+        &no_offender,
+    );
+    accept_envelope(
+        &mut store,
+        &CardEnvelope {
+            card_wire: wire2,
+            hops: 2,
+        },
+        1700000000,
+        2,
+        own_coords,
+        &no_offender,
+    );
+    assert_eq!(store.cards.len(), 2);
+
+    // Insert Card 3: Card 1 is hop 1 (protected), so Card 2 (hop 2, farther than Card 3) is evicted.
+    accept_envelope(
+        &mut store,
+        &CardEnvelope {
+            card_wire: wire3,
+            hops: 2,
+        },
+        1700000000,
+        2,
+        own_coords,
+        &no_offender,
+    );
+
+    assert_eq!(store.cards.len(), 2);
+    let pk1 = *sk1.verifying_key().as_bytes();
+    let pk2 = *sk2.verifying_key().as_bytes();
+    let pk3 = *sk3.verifying_key().as_bytes();
+
+    assert!(store.cards.contains_key(&pk1), "Card 1 (Hop 1 protected) should be kept");
+    assert!(store.cards.contains_key(&pk3), "Card 3 (closer Hop 2) should be kept");
+    assert!(!store.cards.contains_key(&pk2), "Card 2 (farther Hop 2) should be evicted");
+}
+
+#[test]
+fn test_geo_eviction_far_vs_near() {
+    let mut store = CardStore::default();
+    let no_offender = |_did: &str| false;
+    let own_coords = Some((52.52, 13.405)); // Berlin
+
+    // Card 1: Hop 2, Munich (~504 km)
+    let sk1 = make_key(50);
+    let card1 = sign_sd_card(
+        valid_payload_input(&sk1),
+        vec![
+            (CardItem::Coordinates("48.137, 11.576".to_string()), 2),
+            (
+                CardItem::Skill(Skill {
+                    title: "Munich Service".to_string(),
+                    text: None,
+                    pricing: None,
+                    is_remote: false,
+                }),
+                2,
+            ),
+        ],
+        &sk1,
+    )
+    .unwrap();
+    let wire1 = render_wire(&card1, 2, WireFilter::Full).unwrap();
+
+    // Card 2: Hop 2, Potsdam (~30 km)
+    let sk2 = make_key(51);
+    let card2 = sign_sd_card(
+        valid_payload_input(&sk2),
+        vec![
+            (CardItem::Coordinates("52.398, 13.065".to_string()), 2),
+            (
+                CardItem::Skill(Skill {
+                    title: "Potsdam Service".to_string(),
+                    text: None,
+                    pricing: None,
+                    is_remote: false,
+                }),
+                2,
+            ),
+        ],
+        &sk2,
+    )
+    .unwrap();
+    let wire2 = render_wire(&card2, 2, WireFilter::Full).unwrap();
+
+    // Card 3: Hop 2, Berlin (~0 km)
+    let sk3 = make_key(52);
+    let card3 = sign_sd_card(
+        valid_payload_input(&sk3),
+        vec![
+            (CardItem::Coordinates("52.52, 13.405".to_string()), 2),
+            (
+                CardItem::Skill(Skill {
+                    title: "Berlin Service".to_string(),
+                    text: None,
+                    pricing: None,
+                    is_remote: false,
+                }),
+                2,
+            ),
+        ],
+        &sk3,
+    )
+    .unwrap();
+    let wire3 = render_wire(&card3, 2, WireFilter::Full).unwrap();
+
+    accept_envelope(
+        &mut store,
+        &CardEnvelope {
+            card_wire: wire1,
+            hops: 2,
+        },
+        1700000000,
+        2,
+        own_coords,
+        &no_offender,
+    );
+    accept_envelope(
+        &mut store,
+        &CardEnvelope {
+            card_wire: wire2,
+            hops: 2,
+        },
+        1700000000,
+        2,
+        own_coords,
+        &no_offender,
+    );
+    assert_eq!(store.cards.len(), 2);
+
+    // Insert Card 3 (Berlin): Munich (Card 1, ~504 km) is farthest, evicted!
+    accept_envelope(
+        &mut store,
+        &CardEnvelope {
+            card_wire: wire3,
+            hops: 2,
+        },
+        1700000000,
+        2,
+        own_coords,
+        &no_offender,
+    );
+
+    assert_eq!(store.cards.len(), 2);
+    let pk1 = *sk1.verifying_key().as_bytes();
+    let pk2 = *sk2.verifying_key().as_bytes();
+    let pk3 = *sk3.verifying_key().as_bytes();
+
+    assert!(!store.cards.contains_key(&pk1), "Card 1 (Munich, far) should be evicted");
+    assert!(store.cards.contains_key(&pk2), "Card 2 (Potsdam, closer) should be kept");
+    assert!(store.cards.contains_key(&pk3), "Card 3 (Berlin, closest) should be kept");
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(16))]
 
@@ -617,7 +1018,7 @@ proptest! {
         let wire = render_wire(&card, 1, WireFilter::Full).unwrap();
         let env = CardEnvelope { card_wire: wire, hops };
 
-        let outcome = accept_envelope(&mut store, &env, 1700000000, 3, &|_| false);
+        let outcome = accept_envelope(&mut store, &env, 1700000000, 2000, None, &|_| false);
         let is_accepted = matches!(outcome, AcceptOutcome::Accepted { .. });
         if hops <= card.payload.max_hops {
             prop_assert!(is_accepted);

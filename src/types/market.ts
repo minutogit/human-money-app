@@ -22,6 +22,7 @@ export interface Skill {
     title: string;
     text?: string | null;
     pricing?: string | null;
+    is_remote?: boolean;
 }
 
 export type AdKind = 'offer' | 'request';
@@ -36,6 +37,7 @@ export interface Ad {
     renewed_at?: number | null;
     expires_at: number;
     allow_inquiries: boolean;
+    is_remote?: boolean;
 }
 
 export interface FrontendMyAd {
@@ -48,6 +50,7 @@ export interface FrontendMyAd {
     renewedAt?: number | null;
     expiresAt: number;
     allowInquiries: boolean;
+    isRemote?: boolean;
     status: 'active' | 'expired' | string;
     daysLeft: number;
 }
@@ -58,6 +61,7 @@ export interface FrontendMyMarketProfile {
     skills: Skill[];
     ads: FrontendMyAd[];
     maxHops: number;
+    validityYears?: number;
     allowInquiries: boolean;
     published: boolean;
     shareUri?: string | null;
@@ -71,6 +75,7 @@ export interface FrontendSaveMyMarketProfileRequest {
     visibility: CardFieldVisibility;
     skills: Skill[];
     maxHops: number;
+    validityYears?: number;
     allowInquiries: boolean;
 }
 
@@ -82,6 +87,7 @@ export interface FrontendAdInput {
     pricing?: string | null;
     durationDays: number;
     allowInquiries: boolean;
+    isRemote?: boolean;
 }
 
 export type FrontendTrustTier = 'trusted' | 'unknown' | 'hidden';
@@ -101,6 +107,7 @@ export interface FrontendMarketSkill {
     text?: string | null;
     pricing?: string | null;
     origin: FrontendSkillOrigin;
+    isRemote?: boolean;
 }
 
 export type FrontendEntrySource =
@@ -142,6 +149,7 @@ export interface FrontendMarketSnapshot {
     board: FrontendBoardItem[];
     people: FrontendMarketPerson[];
     now: number;
+    storedCardCount?: number;
 }
 
 export interface FrontendForwardCardExport {

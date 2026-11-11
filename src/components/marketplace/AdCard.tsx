@@ -1,7 +1,7 @@
 // src/components/marketplace/AdCard.tsx
 import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MessageSquare, ArrowRight, Clock, Tag, ChevronDown, ChevronUp, User } from 'lucide-react';
+import { MessageSquare, ArrowRight, Clock, Tag, ChevronDown, ChevronUp, User, Globe } from 'lucide-react';
 import { Ad, FrontendTrustTier } from '../../types';
 import { Button } from '../ui/Button';
 import { TrustBadge } from '../ui/TrustBadge';
@@ -65,18 +65,29 @@ export const AdCard: React.FC<AdCardProps> = ({
             data-testid={`ad-card-${ad.id}`}
         >
             <div className="space-y-3">
-                {/* Header row: Kind badge + Days left badge */}
-                <div className="flex items-center justify-between gap-2">
-                    <span
-                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${
-                            isOffer
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-sky-50 text-sky-700 border border-sky-200'
-                        }`}
-                        data-testid="ad-kind-badge"
-                    >
-                        {isOffer ? t('marketplace.adKindOffer', 'Angebot') : t('marketplace.adKindRequest', 'Gesuch')}
-                    </span>
+                {/* Header row: Kind badge + Remote badge + Days left badge */}
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                        <span
+                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${
+                                isOffer
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    : 'bg-sky-50 text-sky-700 border border-sky-200'
+                            }`}
+                            data-testid="ad-kind-badge"
+                        >
+                            {isOffer ? t('marketplace.adKindOffer', 'Angebot') : t('marketplace.adKindRequest', 'Gesuch')}
+                        </span>
+                        {(ad.is_remote || (ad as any).isRemote) && (
+                            <span
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200"
+                                data-testid="ad-remote-badge"
+                            >
+                                <Globe size={11} />
+                                <span>{t('marketplace.remoteBadge', 'Ortsunabhängig')}</span>
+                            </span>
+                        )}
+                    </div>
 
                     <span
                         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${

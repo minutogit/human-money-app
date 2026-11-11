@@ -88,4 +88,17 @@ describe('AdCard Component', () => {
     fireEvent.click(payBtn);
     expect(onPay).toHaveBeenCalledWith('did:key:z6MkuAlice');
   });
+
+  it('renders remote badge when ad is remote', () => {
+    render(
+      <AdCard
+        ad={{ ...mockAdOffer, is_remote: true }}
+        ownerDid="did:key:z6MkuAlice"
+        ownerName="Alice Imkerei"
+      />
+    );
+
+    expect(screen.getByTestId('ad-remote-badge')).toBeInTheDocument();
+    expect(screen.getByText(/Ortsunabhängig|Location-independent/i)).toBeInTheDocument();
+  });
 });

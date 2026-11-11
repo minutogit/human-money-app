@@ -819,7 +819,7 @@ impl AppState {
             .get_cached_settings()
             .or_else(|_| self.load_settings(service, password))
             .unwrap_or_default();
-        let max_store_hops = settings.max_store_hops.clamp(1, 3);
+        let max_stored_cards = settings.max_stored_cards.clamp(100, 10_000);
         let now = Utc::now().timestamp().max(0) as u64;
 
         let mut store = match service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
@@ -832,7 +832,19 @@ impl AppState {
                 use human_money_core::models::conflict::TrustStatus;
                 matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_))
             };
-            humoco_market::accept_envelope(&mut store, &env, now, max_store_hops, &is_offender)
+            let own_coords = wallet
+                .profile
+                .coordinates
+                .as_deref()
+                .and_then(humoco_market::parse_coordinates_pair);
+            humoco_market::accept_envelope(
+                &mut store,
+                &env,
+                now,
+                max_stored_cards,
+                own_coords,
+                &is_offender,
+            )
         });
 
         match outcome {

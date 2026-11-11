@@ -36,6 +36,10 @@ describe('AdEditorModal Component', () => {
     const duration90Tab = screen.getByRole('tab', { name: /90 Tage|90 days/i });
     fireEvent.click(duration90Tab);
 
+    // Toggle isRemote
+    const remoteCheckbox = screen.getByTestId('ad-is-remote-checkbox');
+    fireEvent.click(remoteCheckbox);
+
     // Submit
     const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
     fireEvent.click(saveBtn);
@@ -46,6 +50,7 @@ describe('AdEditorModal Component', () => {
       text: 'Brauche Ratschenkasten für Samstag',
       durationDays: 90,
       allowInquiries: true,
+      isRemote: true,
     });
   });
 
@@ -84,7 +89,7 @@ describe('AdEditorModal Component', () => {
     expect(textInput).toBeInTheDocument();
 
     // Toggle inquiries
-    const inquiryToggle = screen.getByRole('checkbox');
+    const inquiryToggle = screen.getAllByRole('checkbox')[0];
     fireEvent.click(inquiryToggle);
 
     // Save
@@ -99,6 +104,7 @@ describe('AdEditorModal Component', () => {
       pricing: '80 Minuto / Ster',
       durationDays: 90,
       allowInquiries: true,
+      isRemote: false,
     });
   });
 

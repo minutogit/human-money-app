@@ -7,61 +7,119 @@ import { TrustBadge } from '../ui/TrustBadge';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { truncateUserId } from '../../utils/userIdHelper';
+import { calculateDistanceKm } from '../../utils/geoUtils';
 
 export interface PeopleTabProps {
     people: FrontendMarketPerson[];
+    myCoordinates?: string | null;
+    maxDistanceKm?: number | null;
+    onMaxDistanceChange?: (val: number | null) => void;
     onSelectPerson: (person: FrontendMarketPerson) => void;
 }
 
 export const PeopleTab: React.FC<PeopleTabProps> = ({
     people,
+    myCoordinates,
+    maxDistanceKm,
+    onMaxDistanceChange,
     onSelectPerson,
 }) => {
     const { t } = useTranslation();
     const [searchQuery, setSearchQuery] = useState('');
+    const [internalMaxDistance, setInternalMaxDistance] = useState<number | null>(null);
+
+    const effectiveMaxDistance = maxDistanceKm !== undefined ? maxDistanceKm : internalMaxDistance;
+    const setEffectiveMaxDistance = onMaxDistanceChange || setInternalMaxDistance;
 
     const filteredPeople = useMemo(() => {
-        if (!searchQuery.trim()) return people;
-        const query = searchQuery.trim().toLowerCase();
-
         return people.filter((p) => {
-            const nameParts = [p.profile.firstName, p.profile.lastName].filter(Boolean).join(' ').toLowerCase();
-            const org = p.profile.organization?.toLowerCase() || '';
-            const community = p.profile.community?.toLowerCase() || '';
-            const city = p.profile.address?.city?.toLowerCase() || '';
+            // Search query filter
+            if (searchQuery.trim()) {
+                const query = searchQuery.trim().toLowerCase();
+                const nameParts = [p.profile.firstName, p.profile.lastName].filter(Boolean).join(' ').toLowerCase();
+                const org = p.profile.organization?.toLowerCase() || '';
+                const community = p.profile.community?.toLowerCase() || '';
+                const city = p.profile.address?.city?.toLowerCase() || '';
 
-            const skillMatch = p.skills.some(
-                (s) => s.title.toLowerCase().includes(query) || (s.text && s.text.toLowerCase().includes(query))
-            );
+                const skillMatch = p.skills.some(
+                    (s) => s.title.toLowerCase().includes(query) || (s.text && s.text.toLowerCase().includes(query))
+                );
 
-            return (
-                nameParts.includes(query) ||
-                org.includes(query) ||
-                community.includes(query) ||
-                city.includes(query) ||
-                skillMatch
-            );
+                const queryMatches =
+                    nameParts.includes(query) ||
+                    org.includes(query) ||
+                    community.includes(query) ||
+                    city.includes(query) ||
+                    skillMatch;
+
+                if (!queryMatches) return false;
+            }
+
+            // Distance filter
+            if (effectiveMaxDistance !== null && effectiveMaxDistance > 0 && myCoordinates) {
+                const hasRemoteSkill = p.skills.some((s) => s.isRemote || (s as any).is_remote);
+                const hasRemoteAd = p.activeAds.some((a) => a.is_remote || (a as any).isRemote);
+                if (!hasRemoteSkill && !hasRemoteAd) {
+                    const coords = p.profile.coordinates;
+                    if (!coords) return false;
+                    const dist = calculateDistanceKm(myCoordinates, coords);
+                    if (dist === null || dist > effectiveMaxDistance) return false;
+                }
+            }
+
+            return true;
         });
-    }, [people, searchQuery]);
+    }, [people, searchQuery, effectiveMaxDistance, myCoordinates]);
 
     const isPeopleEmptyOverall = people.length === 0;
 
     return (
         <div className="space-y-6">
-            {/* Search input: "Wer kann ...?" */}
+            {/* Missing coords hint when radius is selected */}
+            {effectiveMaxDistance !== null && effectiveMaxDistance > 0 && !myCoordinates && (
+                <div
+                    className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center gap-2"
+                    data-testid="missing-coordinates-hint"
+                >
+                    <MapPin size={14} className="text-amber-600 shrink-0" />
+                    <span>
+                        {t(
+                            'marketplace.radiusMissingCoordsHint',
+                            'Für den Umkreisfilter werden eigene Koordinaten in deiner Visitenkarte benötigt.'
+                        )}
+                    </span>
+                </div>
+            )}
+
+            {/* Search input + Radius select: "Wer kann ...?" */}
             {!isPeopleEmptyOverall && (
-                <div className="relative max-w-md">
-                    <Search
-                        size={16}
-                        className="absolute left-3.5 top-1/2 -translate-y-1/2 text-theme-light pointer-events-none"
-                    />
-                    <Input
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder={t('marketplace.searchPeoplePlaceholder', 'Wer kann...? Fähigkeiten, Namen oder Ort')}
-                        className="pl-9 bg-white border-theme-subtle"
-                        data-testid="people-search-input"
-                    />
+                <div className="flex items-center gap-2 max-w-xl">
+                    <div className="relative flex-1">
+                        <Search
+                            size={16}
+                            className="absolute left-3.5 top-1/2 -translate-y-1/2 text-theme-light pointer-events-none"
+                        />
+                        <Input
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder={t('marketplace.searchPeoplePlaceholder', 'Wer kann...? Fähigkeiten, Namen oder Ort')}
+                            className="pl-9 bg-white border-theme-subtle"
+                            data-testid="people-search-input"
+                        />
+                    </div>
+                    <select
+                        value={effectiveMaxDistance === null ? '' : String(effectiveMaxDistance)}
+                        onChange={(e) => setEffectiveMaxDistance(e.target.value === '' ? null : Number(e.target.value))}
+                        className="px-3 py-2 rounded-xl text-xs font-medium bg-white border border-theme-subtle text-theme-secondary focus:outline-none focus:ring-2 focus:ring-theme-primary/30 cursor-pointer shrink-0"
+                        data-testid="people-radius-select"
+                        aria-label={t('marketplace.radiusLabel', 'Umkreis')}
+                    >
+                        <option value="">{t('marketplace.radiusAll', 'Alle Entfernungen')}</option>
+                        <option value="10">{t('marketplace.radius10', 'Umkreis ≤ 10 km')}</option>
+                        <option value="25">{t('marketplace.radius25', 'Umkreis ≤ 25 km')}</option>
+                        <option value="50">{t('marketplace.radius50', 'Umkreis ≤ 50 km')}</option>
+                        <option value="100">{t('marketplace.radius100', 'Umkreis ≤ 100 km')}</option>
+                    </select>
                 </div>
             )}
 

@@ -93,6 +93,57 @@ export function normalizeCoordinates(input: string): string | null {
     return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
 }
 
+export type CoordinatePrecision = 2 | 3 | 4;
+
+/**
+ * Rounds coordinate string to the specified decimal precision.
+ * Precision: 2 = ~1 km city district, 3 = ~100 m neighborhood, 4 = ~10 m exact.
+ */
+export function roundCoordinates(input: string, decimals: CoordinatePrecision = 2): string | null {
+    const normalized = normalizeCoordinates(input);
+    if (!normalized) return null;
+    const parts = normalized.split(',').map((s) => s.trim());
+    if (parts.length < 2) return null;
+    const lat = parseFloat(parts[0]);
+    const lon = parseFloat(parts[1]);
+    if (isNaN(lat) || isNaN(lon)) return null;
+    return `${lat.toFixed(decimals)}, ${lon.toFixed(decimals)}`;
+}
+
+/**
+ * Calculates the Haversine distance in kilometers between two "lat, lon" strings.
+ * Returns null if either coordinate string is missing or invalid.
+ */
+export function calculateDistanceKm(coordsA?: string | null, coordsB?: string | null): number | null {
+    if (!coordsA || !coordsB) return null;
+    const normA = normalizeCoordinates(coordsA);
+    const normB = normalizeCoordinates(coordsB);
+    if (!normA || !normB) return null;
+
+    const partsA = normA.split(',').map((s) => s.trim());
+    const partsB = normB.split(',').map((s) => s.trim());
+    if (partsA.length < 2 || partsB.length < 2) return null;
+
+    const lat1 = parseFloat(partsA[0]);
+    const lon1 = parseFloat(partsA[1]);
+    const lat2 = parseFloat(partsB[0]);
+    const lon2 = parseFloat(partsB[1]);
+
+    if (isNaN(lat1) || isNaN(lon1) || isNaN(lat2) || isNaN(lon2)) return null;
+
+    const R = 6371; // Earth radius in km
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos((lat1 * Math.PI) / 180) *
+            Math.cos((lat2 * Math.PI) / 180) *
+            Math.sin(dLon / 2) *
+            Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
+
 /**
  * Checks if a string has a valid coordinate format without fully normalizing it yet.
  */
@@ -104,7 +155,7 @@ export function isValidCoordinateString(input: string): boolean {
  * Geocodes an Address object using OpenStreetMap Nominatim.
  * Returns coordinates as a "lat, lon" string or throws an error.
  */
-export async function geocodeAddress(address: Address): Promise<string> {
+export async function geocodeAddress(address: Address, decimals: number = 6): Promise<string> {
     const parts = [
         address.street,
         address.houseNumber,
@@ -133,7 +184,7 @@ export async function geocodeAddress(address: Address): Promise<string> {
         const lat = parseFloat(data[0].lat);
         const lon = parseFloat(data[0].lon);
         if (isValidCoordinate(lat, lon)) {
-            return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+            return `${lat.toFixed(decimals)}, ${lon.toFixed(decimals)}`;
         }
     }
 
@@ -144,7 +195,7 @@ export async function geocodeAddress(address: Address): Promise<string> {
  * Gets the current device GPS location using the HTML5 Geolocation API.
  * Returns coordinates as a "lat, lon" string or throws an error.
  */
-export function getCurrentLocation(): Promise<string> {
+export function getCurrentLocation(decimals: number = 6): Promise<string> {
     return new Promise((resolve, reject) => {
         if (!navigator.geolocation) {
             reject(new Error("GPS Geolocation is not supported by your device/browser"));
@@ -156,7 +207,7 @@ export function getCurrentLocation(): Promise<string> {
                 const lat = position.coords.latitude;
                 const lon = position.coords.longitude;
                 if (isValidCoordinate(lat, lon)) {
-                    resolve(`${lat.toFixed(6)}, ${lon.toFixed(6)}`);
+                    resolve(`${lat.toFixed(decimals)}, ${lon.toFixed(decimals)}`);
                 } else {
                     reject(new Error("Received invalid coordinates from GPS"));
                 }

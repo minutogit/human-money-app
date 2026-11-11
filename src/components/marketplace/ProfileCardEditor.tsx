@@ -16,6 +16,7 @@ import {
     EyeOff,
     Briefcase,
     Sparkles,
+    Search,
 } from 'lucide-react';
 import {
     CardFieldVisibility,
@@ -30,6 +31,12 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { SegmentedTabs } from '../ui/SegmentedTabs';
 import { InfoHint } from '../ui/InfoHint';
+import {
+    CoordinatePrecision,
+    roundCoordinates,
+    getCurrentLocation,
+    geocodeAddress,
+} from '../../utils/geoUtils';
 
 export interface ProfileCardEditorProps {
     isOpen: boolean;
@@ -54,6 +61,10 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
     const [previewPerspective, setPreviewPerspective] = useState<'contact' | 'forwarded'>('contact');
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    const [coordPrecision, setCoordPrecision] = useState<CoordinatePrecision>(2);
+    const [isLocating, setIsLocating] = useState(false);
+    const [geoError, setGeoError] = useState<string | null>(null);
 
     // Synchronize initial state
     useEffect(() => {
@@ -93,8 +104,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                 phone: 'everyone',
                 url: 'everyone',
                 picture: 'everyone',
-                // Keep coordinates & gender as nobody
-                coordinates: prev.coordinates,
+                coordinates: 'everyone',
                 gender: prev.gender,
             }));
         } else {
@@ -109,7 +119,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                 street: 'contacts',
                 email: 'contacts',
                 phone: 'contacts',
-                coordinates: 'nobody',
+                coordinates: 'everyone',
                 gender: 'nobody',
             });
         }
@@ -158,10 +168,50 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
         );
     };
 
+    const handlePrecisionChange = (newPrecision: CoordinatePrecision) => {
+        setCoordPrecision(newPrecision);
+        if (profile.coordinates?.trim()) {
+            const rounded = roundCoordinates(profile.coordinates, newPrecision);
+            if (rounded) {
+                setProfile((prev) => ({ ...prev, coordinates: rounded }));
+            }
+        }
+    };
+
+    const handleFetchGps = async () => {
+        setIsLocating(true);
+        setGeoError(null);
+        try {
+            const rawCoords = await getCurrentLocation(6);
+            const rounded = roundCoordinates(rawCoords, coordPrecision) || rawCoords;
+            setProfile((prev) => ({ ...prev, coordinates: rounded }));
+            setVisibility((prev) => ({ ...prev, coordinates: 'everyone' }));
+        } catch (err) {
+            setGeoError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setIsLocating(false);
+        }
+    };
+
+    const handleGeocodeAddress = async () => {
+        setIsLocating(true);
+        setGeoError(null);
+        try {
+            const rawCoords = await geocodeAddress(profile.address || {}, 6);
+            const rounded = roundCoordinates(rawCoords, coordPrecision) || rawCoords;
+            setProfile((prev) => ({ ...prev, coordinates: rounded }));
+            setVisibility((prev) => ({ ...prev, coordinates: 'everyone' }));
+        } catch (err) {
+            setGeoError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setIsLocating(false);
+        }
+    };
+
     // Skills management
     const handleAddSkill = () => {
         if (skills.length >= 8) return;
-        setSkills([...skills, { title: '', text: '', pricing: '' }]);
+        setSkills([...skills, { title: '', text: '', pricing: '', is_remote: false }]);
     };
 
     const handleRemoveSkill = (index: number) => {
@@ -177,7 +227,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
         setSkills(copy);
     };
 
-    const handleSkillChange = (index: number, field: keyof Skill, value: string) => {
+    const handleSkillChange = (index: number, field: keyof Skill, value: any) => {
         setSkills(
             skills.map((s, i) => {
                 if (i !== index) return s;
@@ -221,8 +271,10 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                     title: s.title.trim(),
                     text: s.text?.trim() || undefined,
                     pricing: s.pricing?.trim() || undefined,
+                    is_remote: s.is_remote ?? false,
                 })),
                 maxHops: myProfile.maxHops,
+                validityYears: myProfile.validityYears ?? 2,
                 allowInquiries: myProfile.allowInquiries,
             });
             onClose();
@@ -473,18 +525,89 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                             </div>
 
                             {/* Koordinaten */}
-                            <div className="space-y-1.5">
+                            <div className="space-y-2">
                                 <div className="flex items-center justify-between">
                                     <label className="text-[11px] font-bold text-theme-secondary">
                                         {t('profile.coordinates', 'GPS-Koordinaten')}
                                     </label>
                                     {renderVisibilityButton('coordinates')}
                                 </div>
-                                <Input
-                                    placeholder="z. B. 48.137, 11.575"
-                                    value={profile.coordinates || ''}
-                                    onChange={(e) => setProfile({ ...profile, coordinates: e.target.value })}
-                                />
+
+                                <div className="flex flex-col sm:flex-row gap-2">
+                                    <div className="flex-1">
+                                        <Input
+                                            placeholder="z. B. 48.14, 11.58"
+                                            value={profile.coordinates || ''}
+                                            onChange={(e) => setProfile({ ...profile, coordinates: e.target.value })}
+                                            data-testid="profile-coordinates-input"
+                                        />
+                                    </div>
+                                    <select
+                                        value={coordPrecision}
+                                        onChange={(e) => handlePrecisionChange(Number(e.target.value) as CoordinatePrecision)}
+                                        className="px-2.5 py-1.5 rounded-xl text-xs font-medium bg-white border border-theme-subtle text-theme-secondary shrink-0 focus:outline-none focus:ring-2 focus:ring-theme-primary/30 cursor-pointer"
+                                        data-testid="coord-precision-select"
+                                        title={t('profile.coordPrecisionTooltip', 'Genauigkeit der Koordinaten')}
+                                    >
+                                        <option value={2}>{t('profile.coordPrecision2', 'Ungefähr (~1 km, empfohlen)')}</option>
+                                        <option value={3}>{t('profile.coordPrecision3', 'Mittel – Nachbarschaft (~100 m)')}</option>
+                                        <option value={4}>{t('profile.coordPrecision4', 'Exakt – Adresse (~10 m)')}</option>
+                                    </select>
+                                </div>
+
+                                {/* Action Buttons: GPS & Aus Ort ermitteln */}
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Button
+                                        type="button"
+                                        size="xs"
+                                        variant="outline"
+                                        disabled={isLocating}
+                                        onClick={handleFetchGps}
+                                        data-testid="fetch-gps-btn"
+                                        className="flex items-center gap-1.5"
+                                    >
+                                        <MapPin size={12} className="text-theme-primary" />
+                                        <span>{t('profile.gpsButton', 'GPS')}</span>
+                                    </Button>
+
+                                    <Button
+                                        type="button"
+                                        size="xs"
+                                        variant="outline"
+                                        disabled={isLocating || (!profile.address?.city?.trim() && !profile.address?.zipCode?.trim())}
+                                        onClick={handleGeocodeAddress}
+                                        data-testid="geocode-address-btn"
+                                        className="flex items-center gap-1.5"
+                                    >
+                                        <Search size={12} className="text-theme-primary" />
+                                        <span>{t('profile.autoAddressButton', 'Aus Ort ermitteln')}</span>
+                                    </Button>
+
+                                    {isLocating && (
+                                        <span className="text-[11px] text-theme-light italic">
+                                            {t('profile.locatingInProgress', 'Wird ermittelt...')}
+                                        </span>
+                                    )}
+                                </div>
+
+                                {geoError && (
+                                    <p className="text-xs text-rose-600 bg-rose-50 p-2 rounded-lg border border-rose-200">
+                                        {geoError}
+                                    </p>
+                                )}
+
+                                {/* Nudge info box if empty or visibility is nobody */}
+                                {(!profile.coordinates?.trim() || visibility.coordinates === 'nobody') && (
+                                    <div
+                                        className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-950 text-xs leading-relaxed"
+                                        data-testid="coordinates-recommended-hint"
+                                    >
+                                        {t(
+                                            'marketplace.coordinatesRecommendedHint',
+                                            '💡 Empfohlen für lokale Angebote: Trage deinen ungefähren Standort (~1 km Schutz) ein, damit Nachbarn deine Angebote im Umkreis finden können.'
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -638,6 +761,18 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                                                 onChange={(e) => handleSkillChange(index, 'pricing', e.target.value)}
                                                 maxLength={40}
                                             />
+                                            <label className="flex items-center gap-2 pt-1 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={skill.is_remote ?? false}
+                                                    onChange={(e) => handleSkillChange(index, 'is_remote', e.target.checked)}
+                                                    className="rounded text-theme-primary focus:ring-theme-primary cursor-pointer"
+                                                    data-testid={`skill-remote-checkbox-${index}`}
+                                                />
+                                                <span className="text-xs text-theme-secondary font-medium">
+                                                    {t('marketplace.skillIsRemoteLabel', 'Ortsunabhängig / Online möglich (überregional)')}
+                                                </span>
+                                            </label>
                                         </div>
                                     ))}
                                 </div>
@@ -741,10 +876,17 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                                     <div className="space-y-1.5">
                                         {skills.map((s, i) => (
                                             <div key={i} className="p-2 rounded-xl bg-bg-app border border-theme-subtle/50 text-xs">
-                                                <div className="font-bold text-theme-secondary flex items-center justify-between">
-                                                    <span>{s.title || t('marketplace.untitled', 'Ohne Titel')}</span>
+                                                <div className="font-bold text-theme-secondary flex items-center justify-between gap-1">
+                                                    <div className="flex items-center gap-1.5 min-w-0">
+                                                        <span className="truncate">{s.title || t('marketplace.untitled', 'Ohne Titel')}</span>
+                                                        {s.is_remote && (
+                                                            <span className="text-[9px] px-1 py-0.2 rounded font-semibold bg-sky-50 text-sky-700 border border-sky-200 shrink-0">
+                                                                🌐 {t('marketplace.remoteBadgeShort', 'Online')}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                     {s.pricing && (
-                                                        <span className="text-[10px] text-theme-primary font-semibold">
+                                                        <span className="text-[10px] text-theme-primary font-semibold shrink-0">
                                                             {s.pricing}
                                                         </span>
                                                     )}

@@ -15,7 +15,7 @@ pub const AD_DURATION_CHOICES_DAYS: [u64; 3] = [30, 90, 180];
 pub const AD_DEFAULT_DURATION_DAYS: u64 = 90;
 pub const AD_MAX_DURATION_SECS: u64 = 180 * 86_400;
 
-pub const CARD_DEFAULT_VALIDITY_SECS: u64 = 180 * 86_400;
+pub const CARD_DEFAULT_VALIDITY_SECS: u64 = 2 * 365 * 86_400;
 pub const CARD_AUTO_RENEW_THRESHOLD_SECS: u64 = 30 * 86_400;
 pub const CARD_SD_PADDED_LEN: usize = 32;
 
@@ -40,6 +40,8 @@ pub struct Skill {
     pub text: Option<String>, // ..=MAX_SKILL_TEXT_CHARS
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<String>, // ..=MAX_PRICING_CHARS
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_remote: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +66,8 @@ pub struct Ad {
     pub expires_at: u64, // published_at/renewed_at + duration, max +180 days
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_inquiries: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_remote: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
