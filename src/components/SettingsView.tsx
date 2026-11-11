@@ -13,15 +13,14 @@ import { tourBridge, SettingsTabId } from '../utils/tourBridge';
 import { PageLayout } from './ui/PageLayout';
 import { SegmentedTabs } from './ui/SegmentedTabs';
 import { ProfileTab } from './settings/ProfileTab';
-import { MarketplaceSettingsTab } from './settings/MarketplaceSettingsTab';
 import { SecurityBackupTab } from './settings/SecurityBackupTab';
 import { ConnectionTab } from './settings/ConnectionTab';
 import { AdvancedTab } from './settings/AdvancedTab';
 import { AppSettings } from '../types';
 
-import { User, Store, Shield, Cloud, Settings as SettingsIcon } from 'lucide-react';
+import { User, Shield, Cloud, Settings as SettingsIcon } from 'lucide-react';
 
-export type SettingsActiveTab = 'profile' | 'marketplace' | 'security' | 'connection' | 'advanced';
+export type SettingsActiveTab = 'profile' | 'security' | 'connection' | 'advanced';
 
 interface SettingsViewProps {
     onBack: () => void;
@@ -214,7 +213,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     onChange={setActiveTab}
                     tabs={[
                         { id: 'profile', label: t('settings.tabProfile'), icon: <User size={14} /> },
-                        { id: 'marketplace', label: t('settings.tabMarketplace'), icon: <Store size={14} /> },
                         { id: 'security', label: t('settings.tabSecurityBackup'), icon: <Shield size={14} /> },
                         { id: 'connection', label: t('settings.tabConnection'), icon: <Cloud size={14} /> },
                         { id: 'advanced', label: t('settings.tabAdvanced'), icon: <SettingsIcon size={14} /> }
@@ -224,13 +222,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 {activeTab === 'profile' && (
                     <ProfileTab 
                         userId={userId} 
-                        settings={settings}
-                        onSettingsUpdated={setSettings}
-                    />
-                )}
-
-                {activeTab === 'marketplace' && (
-                    <MarketplaceSettingsTab
                         settings={settings}
                         onSettingsUpdated={setSettings}
                     />

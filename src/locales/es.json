@@ -866,6 +866,8 @@
   "marketplace.noOwnListingsYet": "Aún no se han añadido anuncios. Añade una oferta o petición arriba.",
   "marketplace.noPublicSyncsConfigured": "No hay depósitos públicos configurados todavía.",
   "marketplace.optionsBtn": "Opciones",
+  "marketplace.optionsInboundSection": "Filtros de mercado y almacenamiento",
+  "marketplace.optionsOutboundSection": "Mi tarjeta de contacto y accesibilidad",
   "marketplace.optionsTitle": "Opciones y alcance del mercado",
   "marketplace.originCard": "De tarjeta de contacto",
   "marketplace.originFromVoucher": "según cupón",

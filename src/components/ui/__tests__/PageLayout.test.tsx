@@ -289,16 +289,16 @@ describe('PageOptionsPanel', () => {
     expect(handleClose).toHaveBeenCalledTimes(1);
   });
 
-  it('renders headerRight content when provided', () => {
+  it('renders help topic icon when provided', () => {
     render(
       <PageOptionsPanel
-        title="Panel With Actions"
-        headerRight={<button type="button" data-testid="panel-extra-action">Extra Action</button>}
+        title="Panel With Help"
+        helpTopic="wotNetwork"
       >
         <div>Content</div>
       </PageOptionsPanel>
     );
 
-    expect(screen.getByTestId('panel-extra-action')).toBeInTheDocument();
+    expect(screen.getByText('Panel With Help')).toBeInTheDocument();
   });
 });

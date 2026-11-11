@@ -866,6 +866,8 @@
   "marketplace.noOwnListingsYet": "Nessuna inserzione inserita finora. Aggiungi un'offerta o una richiesta qui sopra.",
   "marketplace.noPublicSyncsConfigured": "Nessun deposito pubblico configurato finora.",
   "marketplace.optionsBtn": "Opzioni",
+  "marketplace.optionsInboundSection": "Filtri del marketplace e archiviazione",
+  "marketplace.optionsOutboundSection": "Il mio biglietto da visita e raggiungibilità",
   "marketplace.optionsTitle": "Opzioni e portata del marketplace",
   "marketplace.originCard": "Dal biglietto da visita",
   "marketplace.originFromVoucher": "secondo il buono",

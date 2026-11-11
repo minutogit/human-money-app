@@ -1,7 +1,7 @@
 // src/components/wot/WotNetworkOptionsPanel.tsx
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { MoreHorizontal, CloudOff, Settings } from 'lucide-react';
+import { Shield, MoreHorizontal, CloudOff, Settings } from 'lucide-react';
 import { PageOptionsPanel } from '../ui/PageOptionsPanel';
 import { Button } from '../ui/Button';
 import { HelpIcon } from '../ui/HelpIcon';
@@ -47,54 +47,30 @@ export function WotNetworkOptionsPanel({
         }
     })();
 
-    const headerTitle = (
-        <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-black text-theme-secondary tracking-tight">
-                {t('contacts.wotBannerTitle')}
-            </span>
-            <span className="text-xs text-theme-light font-medium ml-1">
-                {wotSummary && (wotSummary.ratedContactsCount > 0 || wotSummary.importedPeerListsCount > 0)
-                    ? t('contacts.wotBannerStats', {
-                          rated: wotSummary.ratedContactsCount,
-                          lists: wotSummary.importedPeerListsCount,
-                      })
-                    : t('contacts.wotBannerEmpty')}
-            </span>
-        </div>
-    );
-
-    const headerRight = (
-        <Button
-            type="button"
-            variant="secondary"
-            onClick={onOpenTrustListModal}
-            className="rounded-xl text-xs py-1.5 px-3 gap-1.5 whitespace-nowrap"
-            title={t('contacts.trustListMenuDesc', 'Vertrauenslisten offline teilen oder einlesen')}
-            data-testid="trust-list-menu-button"
-        >
-            <MoreHorizontal size={13} />
-            <span>{t('contacts.trustListMenuBtn', 'Vertrauensliste')}</span>
-        </Button>
-    );
-
     return (
         <PageOptionsPanel
-            title={headerTitle}
+            title={t('contacts.networkOptionsModalTitle', 'Netzwerk-Optionen & Reichweite')}
+            icon={<Shield size={18} />}
             helpTopic="wotNetwork"
-            headerRight={headerRight}
             onClose={onClose}
             className={className}
             data-testid="wot-network-options-panel"
         >
             <div className="space-y-4">
-                {/* Reach & Forwarding Limit */}
+                {/* Block 1 – Reach & Forwarding Limit */}
                 <div className="space-y-3" data-testid="expanded-network-options">
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-theme-secondary">
-                            {t('contacts.wotReachLabel', 'Netzwerk-Reichweite deiner Vertrauenseinstufungen')}
-                        </span>
-                        <HelpIcon topic="wotReach" size={14} />
+                    <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-bold text-theme-secondary">
+                                {t('contacts.wotReachLabel', 'Netzwerk-Reichweite deiner Vertrauenseinstufungen')}
+                            </span>
+                            <HelpIcon topic="wotReach" size={14} />
+                        </div>
+                        <p className="text-[11px] text-theme-light leading-relaxed">
+                            {t('contacts.wotReachSubtitle', 'Bestimme, wie weit deine Vertrauenseinstufungen im Netzwerk weitergegeben werden.')}
+                        </p>
                     </div>
+
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         {[
                             { hops: 1, labelKey: 'contacts.wotHops1' },
@@ -133,7 +109,36 @@ export function WotNetworkOptionsPanel({
                     </div>
                 </div>
 
-                {/* Sync Service recommendation banner */}
+                {/* Block 2 – Offline Trust Lists card */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-white/70 border border-theme-subtle rounded-xl">
+                    <div className="flex-1 min-w-0">
+                        <h5 className="text-xs font-bold text-theme-secondary">
+                            {t('contacts.trustListMenuBtn', 'Vertrauensliste')}
+                        </h5>
+                        <p className="text-[11px] text-theme-light mt-0.5 leading-relaxed">
+                            {wotSummary && (wotSummary.ratedContactsCount > 0 || wotSummary.importedPeerListsCount > 0)
+                                ? `${t('contacts.wotBannerStats', {
+                                      rated: wotSummary.ratedContactsCount,
+                                      lists: wotSummary.importedPeerListsCount,
+                                  })} · ${t('contacts.trustListMenuDesc', 'Vertrauenslisten offline teilen oder einlesen')}`
+                                : t('contacts.trustListMenuDesc', 'Vertrauenslisten offline teilen oder einlesen')}
+                        </p>
+                    </div>
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={onOpenTrustListModal}
+                        className="rounded-xl text-xs py-1.5 px-3 gap-1.5 whitespace-nowrap self-start sm:self-auto shrink-0"
+                        title={t('contacts.trustListMenuDesc', 'Vertrauenslisten offline teilen oder einlesen')}
+                        data-testid="trust-list-menu-button"
+                    >
+                        <MoreHorizontal size={13} />
+                        <span>{t('contacts.trustListMenuBtn', 'Vertrauensliste')}</span>
+                    </Button>
+                </div>
+
+                {/* Block 3 – Sync Service recommendation banner */}
                 {!hasSyncService && (
                     <div
                         data-testid="sync-service-recommendation"

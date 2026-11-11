@@ -1,7 +1,7 @@
 // src/utils/tourBridge.ts
 import { AppState } from '../types';
 
-export type SettingsTabId = 'profile' | 'marketplace' | 'security' | 'connection' | 'advanced';
+export type SettingsTabId = 'profile' | 'security' | 'connection' | 'advanced';
 
 export interface HumocoTourState {
     appState?: AppState;

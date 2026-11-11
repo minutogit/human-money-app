@@ -266,6 +266,29 @@ export function MarketplaceView({
         }
     };
 
+    const handleUpdateMyProfileOptions = async (patch: { maxHops?: number; allowInquiries?: boolean }) => {
+        try {
+            const req: FrontendSaveMyMarketProfileRequest = {
+                profile: currentProfile.profile,
+                visibility: currentProfile.visibility,
+                skills: currentProfile.skills,
+                maxHops: patch.maxHops ?? currentProfile.maxHops,
+                allowInquiries: patch.allowInquiries ?? currentProfile.allowInquiries,
+            };
+            const updated = await protectAction(async (pwd) => {
+                return await marketService.saveMyMarketProfile(req, pwd || undefined);
+            });
+            if (updated) {
+                setMyProfile(updated);
+            }
+            await refreshData(false);
+        } catch (err) {
+            logger.error('Failed to update profile options: ' + stringifyError(err));
+            setError(translateError(err, t));
+            throw err;
+        }
+    };
+
     const handleReplyInquiry = async (
         inquiryId: string,
         decision: 'confirm' | 'decline',
@@ -373,6 +396,8 @@ export function MarketplaceView({
             optionsPanel={
                 isOptionsOpen ? (
                     <MarketplaceOptionsPanel
+                        myProfile={currentProfile}
+                        onUpdateMyProfile={handleUpdateMyProfileOptions}
                         onSettingsChanged={() => refreshData(false)}
                         onClose={() => setIsOptionsOpen(false)}
                         hasSyncService={(connectedSyncCount ?? 0) > 0}

@@ -866,6 +866,8 @@
   "marketplace.noOwnListingsYet": "Aucune annonce enregistrée pour le moment. Ajoutez une offre ou une demande ci-dessus.",
   "marketplace.noPublicSyncsConfigured": "Aucun dépôt public configuré pour le moment.",
   "marketplace.optionsBtn": "Options",
+  "marketplace.optionsInboundSection": "Filtres du marché et stockage",
+  "marketplace.optionsOutboundSection": "Ma carte de visite et accessibilité",
   "marketplace.optionsTitle": "Options et portée du marché",
   "marketplace.originCard": "De la carte de visite",
   "marketplace.originFromVoucher": "selon le bon",

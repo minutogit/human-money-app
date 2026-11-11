@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { MarketplaceView } from '../MarketplaceView';
 import { invoke } from '@tauri-apps/api/core';
@@ -483,6 +483,7 @@ describe('MarketplaceView Component', () => {
         });
       }
       if (cmd === 'save_app_settings') return Promise.resolve();
+      if (cmd === 'save_my_market_profile') return Promise.resolve({ ...mockMyProfile, maxHops: 3 });
       return Promise.resolve({});
     });
 
@@ -505,7 +506,21 @@ describe('MarketplaceView Component', () => {
       expect(screen.getByTestId('marketplace-options-panel')).toBeInTheDocument();
     });
 
+    expect(screen.getByTestId('marketplace-options-outbound-section')).toBeInTheDocument();
+    expect(screen.getByTestId('marketplace-options-inbound-section')).toBeInTheDocument();
     expect(screen.getByText(/settings\.marketShowUnknown|Unbekannte Ersteller anzeigen|Show unknown creators/i)).toBeInTheDocument();
+
+    // Test updating own profile maxHops in options panel
+    const outboundSection = screen.getByTestId('marketplace-options-outbound-section');
+    const hopButtons = within(outboundSection).getAllByRole('button');
+    expect(hopButtons).toHaveLength(3);
+    fireEvent.click(hopButtons[2]);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('save_my_market_profile', expect.objectContaining({
+        request: expect.objectContaining({ maxHops: 3 }),
+      }));
+    });
 
     // Toggle close
     fireEvent.click(toggleBtn);

@@ -49,8 +49,6 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
     const [profile, setProfile] = useState<FrontendUserProfile>(myProfile.profile);
     const [visibility, setVisibility] = useState<CardFieldVisibility>(myProfile.visibility);
     const [skills, setSkills] = useState<Skill[]>(myProfile.skills || []);
-    const [maxHops, setMaxHops] = useState<number>(myProfile.maxHops || 2);
-    const [allowInquiries, setAllowInquiries] = useState<boolean>(myProfile.allowInquiries);
 
     const [isBusinessPreset, setIsBusinessPreset] = useState<boolean>(false);
     const [previewPerspective, setPreviewPerspective] = useState<'contact' | 'forwarded'>('contact');
@@ -63,8 +61,6 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
             setProfile(myProfile.profile);
             setVisibility(myProfile.visibility);
             setSkills(myProfile.skills || []);
-            setMaxHops(myProfile.maxHops || 2);
-            setAllowInquiries(myProfile.allowInquiries);
             setError(null);
 
             // Check if business preset matches current visibility
@@ -226,8 +222,8 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                     text: s.text?.trim() || undefined,
                     pricing: s.pricing?.trim() || undefined,
                 })),
-                maxHops,
-                allowInquiries,
+                maxHops: myProfile.maxHops,
+                allowInquiries: myProfile.allowInquiries,
             });
             onClose();
         } catch (err) {
@@ -646,45 +642,6 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                                     ))}
                                 </div>
                             )}
-                        </div>
-
-                        {/* Section 5: Reichweite & Anfragen */}
-                        <div className="space-y-4 pt-4 border-t border-theme-subtle/60">
-                            <div className="space-y-1.5">
-                                <label className="text-[11px] font-bold text-theme-secondary block">
-                                    {t('marketplace.reachLabel', 'Reichweite deiner Visitenkarte')}
-                                </label>
-                                <SegmentedTabs<string>
-                                    fullWidth
-                                    activeTab={String(maxHops)}
-                                    onChange={(tab) => setMaxHops(Number(tab))}
-                                    tabs={[
-                                        { id: '1', label: t('marketplace.maxHops1Short', 'Nur Kontakte') },
-                                        { id: '2', label: t('marketplace.maxHops2Short', '+ deren Kontakte') },
-                                        { id: '3', label: t('marketplace.maxHops3Short', '+ 1 weitere Stufe') },
-                                    ]}
-                                />
-                                <p className="text-[11px] text-theme-light">
-                                    {t('marketplace.maxHopsDesc', 'Bestimmt, wie weit Empfänger deine Visitenkarte an eigene Kontakte weiterempfehlen dürfen.')}
-                                </p>
-                            </div>
-
-                            <label className="flex items-start gap-3 p-3 rounded-xl bg-bg-app/50 border border-theme-subtle cursor-pointer hover:bg-bg-app transition-colors">
-                                <input
-                                    type="checkbox"
-                                    checked={allowInquiries}
-                                    onChange={(e) => setAllowInquiries(e.target.checked)}
-                                    className="mt-0.5 rounded text-theme-primary focus:ring-theme-primary"
-                                />
-                                <div className="min-w-0">
-                                    <span className="text-xs font-bold text-theme-secondary block">
-                                        {t('marketplace.allowInquiriesGeneralLabel', 'Allgemeine Anfragen erlauben')}
-                                    </span>
-                                    <span className="text-[11px] text-theme-light block mt-0.5 leading-snug">
-                                        {t('marketplace.allowInquiriesGeneralDesc', 'Ermöglicht anderen Kontakten, dir direkte Nachrichten oder Anfragen zu deinen Fähigkeiten zu senden.')}
-                                    </span>
-                                </div>
-                            </label>
                         </div>
                     </div>
 
