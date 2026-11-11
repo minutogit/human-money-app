@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { ProfileCardEditor } from '../ProfileCardEditor';
 import { FrontendMyMarketProfile } from '../../../types';
@@ -9,6 +9,13 @@ vi.mock('../../../utils/geoUtils', async () => {
     ...actual,
     getCurrentLocation: vi.fn().mockResolvedValue('52.520008, 13.404954'),
     geocodeAddress: vi.fn().mockResolvedValue('48.137154, 11.576124'),
+  };
+});
+
+vi.mock('../../../utils/imageCompression', async () => {
+  return {
+    compressAvatarToWebpDataUri: vi.fn().mockResolvedValue('data:image/webp;base64,mockavataruri'),
+    compressAdImageToWebpDataUri: vi.fn().mockResolvedValue('data:image/webp;base64,mockaduri'),
   };
 });
 
@@ -233,6 +240,44 @@ describe('ProfileCardEditor Component', () => {
           is_remote: true,
         }),
       ],
+    }));
+  });
+
+  it('supports avatar upload via avatar-file-input and removal via avatar-remove-btn', async () => {
+    const onSave = vi.fn();
+    render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={mockMyProfile}
+        onSave={onSave}
+      />
+    );
+
+    // Initial avatar input is present
+    const fileInput = screen.getByTestId('avatar-file-input');
+    expect(fileInput).toBeInTheDocument();
+
+    // Trigger file change
+    const dummyFile = new File(['dummy content'], 'avatar.jpg', { type: 'image/jpeg' });
+    fireEvent.change(fileInput, { target: { files: [dummyFile] } });
+
+    // Wait for remove button to appear when pictureUrl is set
+    const removeBtn = await screen.findByTestId('avatar-remove-btn');
+    expect(removeBtn).toBeInTheDocument();
+
+    // Click remove button
+    fireEvent.click(removeBtn);
+    expect(screen.queryByTestId('avatar-remove-btn')).not.toBeInTheDocument();
+
+    // Save and verify pictureUrl is undefined
+    const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
+    fireEvent.click(saveBtn);
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      profile: expect.objectContaining({
+        pictureUrl: undefined,
+      }),
     }));
   });
 });

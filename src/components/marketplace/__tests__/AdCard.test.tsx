@@ -1,9 +1,14 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
-import { AdCard } from '../AdCard';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { AdCard, clearAdImageCacheForTests } from '../AdCard';
 import { Ad } from '../../../types';
+import { marketService } from '../../../services/marketService';
 
 describe('AdCard Component', () => {
+  beforeEach(() => {
+    clearAdImageCacheForTests();
+    vi.restoreAllMocks();
+  });
   const nowSecs = Math.floor(Date.now() / 1000);
 
   const mockAdOffer: Ad = {
@@ -100,5 +105,59 @@ describe('AdCard Component', () => {
 
     expect(screen.getByTestId('ad-remote-badge')).toBeInTheDocument();
     expect(screen.getByText(/Ortsunabhängig|Location-independent/i)).toBeInTheDocument();
+  });
+
+  it('renders ad-card-image when getAdImage returns a data URI', async () => {
+    const mockDataUri = 'data:image/webp;base64,UklGRkAAAABXRUJQVlA4IDQAAADwAQCdASoAA';
+    vi.spyOn(marketService, 'getAdImage').mockResolvedValue(mockDataUri);
+
+    render(
+      <AdCard
+        ad={{ ...mockAdOffer, image_token: 'img-tok-123' }}
+        ownerDid="did:key:z6MkuAlice"
+        ownerName="Alice Imkerei"
+      />
+    );
+
+    const imageElement = await screen.findByTestId('ad-card-image');
+    expect(imageElement).toBeInTheDocument();
+    expect(imageElement).toHaveAttribute('src', mockDataUri);
+    expect(marketService.getAdImage).toHaveBeenCalledWith('did:key:z6MkuAlice', 'img-tok-123');
+  });
+
+  it('renders ad-card-image-unavailable ("Bild nicht mehr verfügbar") when getAdImage returns null', async () => {
+    vi.spyOn(marketService, 'getAdImage').mockResolvedValue(null);
+
+    render(
+      <AdCard
+        ad={{ ...mockAdOffer, image_token: 'img-tok-404' }}
+        ownerDid="did:key:z6MkuAlice"
+        ownerName="Alice Imkerei"
+      />
+    );
+
+    const unavailableElement = await screen.findByTestId('ad-card-image-unavailable');
+    expect(unavailableElement).toBeInTheDocument();
+    expect(screen.getByText(/Bild nicht mehr verfügbar|Image no longer available/i)).toBeInTheDocument();
+  });
+
+  it('switches to ad-card-image-unavailable when <img onError> fires', async () => {
+    const mockDataUri = 'data:image/webp;base64,broken';
+    vi.spyOn(marketService, 'getAdImage').mockResolvedValue(mockDataUri);
+
+    render(
+      <AdCard
+        ad={{ ...mockAdOffer, image_token: 'img-tok-broken' }}
+        ownerDid="did:key:z6MkuAlice"
+        ownerName="Alice Imkerei"
+      />
+    );
+
+    const imageElement = await screen.findByTestId('ad-card-image');
+    fireEvent.error(imageElement);
+
+    const unavailableElement = await screen.findByTestId('ad-card-image-unavailable');
+    expect(unavailableElement).toBeInTheDocument();
+    expect(screen.queryByTestId('ad-card-image')).not.toBeInTheDocument();
   });
 });

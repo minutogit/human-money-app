@@ -1,5 +1,4 @@
 // src/components/wot/WotNetworkOptionsPanel.tsx
-import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Shield, MoreHorizontal, CloudOff, Settings } from 'lucide-react';
 import { PageOptionsPanel } from '../ui/PageOptionsPanel';

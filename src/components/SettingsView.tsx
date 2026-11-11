@@ -49,14 +49,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         if (nav?.appState.view === 'settings') {
             const state = nav.appState as {
                 view: 'settings';
-                initialSection?: 'sync' | 'backup' | 'network' | 'profile' | 'marketplace' | 'standards' | 'security' | 'connection' | 'advanced';
+                initialSection?: 'sync' | 'backup' | 'network' | 'profile' | 'standards' | 'security' | 'connection' | 'advanced';
             };
             if (state.initialSection) {
                 const sec = state.initialSection;
                 if (sec === 'profile') {
                     setActiveTab('profile');
-                } else if (sec === 'marketplace') {
-                    setActiveTab('marketplace');
                 } else if (sec === 'security' || sec === 'backup') {
                     setActiveTab('security');
                 } else if (sec === 'connection' || sec === 'sync') {
@@ -84,8 +82,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         tourBridge.registerSettingsTabSetter((tab: SettingsTabId) => {
             if (tab === 'profile') {
                 setActiveTab('profile');
-            } else if (tab === 'marketplace') {
-                setActiveTab('marketplace');
             } else if (tab === 'security') {
                 setActiveTab('security');
             } else if (tab === 'connection') {

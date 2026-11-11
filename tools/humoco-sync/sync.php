@@ -37,7 +37,7 @@ $disableRateLimit = !empty($config['disable_rate_limit'])
 
 $channels = isset($config['channels']) && is_array($config['channels']) ? $config['channels'] : [];
 $maxTotalStorageMb = isset($config['max_total_storage_mb']) ? (int)$config['max_total_storage_mb'] : 256;
-$maxTotalBytes = $maxTotalStorageMb * 1024 * 1024;
+$maxTotalBytes = isset($config['max_total_bytes']) ? (int)$config['max_total_bytes'] : ($maxTotalStorageMb * 1024 * 1024);
 $softLimitBytes = (int)floor($maxTotalBytes * 0.8);
 
 // Resolve data directory
@@ -176,6 +176,9 @@ if (!isset($state['nonces']) || !is_array($state['nonces'])) {
 if (!isset($state['member_buckets']) || !is_array($state['member_buckets'])) {
     $state['member_buckets'] = [];
 }
+if (!isset($state['media_blobs']) || !is_array($state['media_blobs'])) {
+    $state['media_blobs'] = [];
+}
 if (!isset($state['used_bytes'])) {
     $totalUsed = 0;
     $existingBins = glob($dataDir . DIRECTORY_SEPARATOR . '*.*.bin');
@@ -293,6 +296,9 @@ function rebuild_index($dataDir, array $channels) {
             }
             $id = $matches[1];
             $ch = $matches[2];
+            if ($ch === 'media') {
+                continue;
+            }
             if (!isset($channels[$ch])) {
                 continue;
             }
@@ -341,6 +347,7 @@ function lazy_prune_slots($dataDir, array $channels, array &$state, $now) {
         if (!preg_match('/^([0-9a-f]{64})\.([a-z0-9_]{1,32})\.bin$/', $base, $matches)) {
             continue;
         }
+        $id = $matches[1];
         $ch = $matches[2];
         if (!isset($channels[$ch]['ttl_days'])) {
             continue;
@@ -357,11 +364,64 @@ function lazy_prune_slots($dataDir, array $channels, array &$state, $now) {
             if ($size !== false) {
                 $state['used_bytes'] = max(0, $state['used_bytes'] - $size);
             }
-            $changed = true;
+            if ($ch === 'media') {
+                if (isset($state['media_blobs'][$id])) {
+                    unset($state['media_blobs'][$id]);
+                }
+            } else {
+                $changed = true;
+            }
+        }
+    }
+    // Clean up any entries in $state['media_blobs'] whose file <data_dir>/<id>.media.bin no longer exists on disk
+    if (isset($state['media_blobs']) && is_array($state['media_blobs'])) {
+        foreach ($state['media_blobs'] as $mId => $mInfo) {
+            $mPath = $dataDir . DIRECTORY_SEPARATOR . $mId . '.media.bin';
+            if (!file_exists($mPath)) {
+                $mSize = isset($mInfo['size']) ? (int)$mInfo['size'] : 0;
+                $state['used_bytes'] = max(0, $state['used_bytes'] - $mSize);
+                unset($state['media_blobs'][$mId]);
+            }
         }
     }
     if ($changed) {
         rebuild_index($dataDir, $channels);
+    }
+}
+
+// Helper: evict oldest media blobs when higher-priority channels need space
+function evict_oldest_media_for_space($dataDir, array &$state, $neededBytes, $maxTotalBytes) {
+    if (!isset($state['media_blobs']) || !is_array($state['media_blobs']) || empty($state['media_blobs'])) {
+        return;
+    }
+    if ($state['used_bytes'] + $neededBytes <= $maxTotalBytes) {
+        return;
+    }
+
+    uasort($state['media_blobs'], function ($a, $b) {
+        $ta = isset($a['mtime']) ? (int)$a['mtime'] : 0;
+        $tb = isset($b['mtime']) ? (int)$b['mtime'] : 0;
+        if ($ta === $tb) {
+            return 0;
+        }
+        return ($ta < $tb) ? -1 : 1;
+    });
+
+    foreach ($state['media_blobs'] as $blobId => $blobInfo) {
+        if ($state['used_bytes'] + $neededBytes <= $maxTotalBytes) {
+            break;
+        }
+        $mFile = $dataDir . DIRECTORY_SEPARATOR . $blobId . '.media.bin';
+        $sz = isset($blobInfo['size']) ? (int)$blobInfo['size'] : 0;
+        if (file_exists($mFile)) {
+            $realSz = filesize($mFile);
+            if ($realSz !== false) {
+                $sz = $realSz;
+            }
+            @unlink($mFile);
+        }
+        $state['used_bytes'] = max(0, $state['used_bytes'] - $sz);
+        unset($state['media_blobs'][$blobId]);
     }
 }
 
@@ -376,7 +436,14 @@ if ($state['rotation'] !== null && $now < $state['rotation']['retire_at']) {
 function load_channel_members($configFile, $channel) {
     $mFile = dirname($configFile) . DIRECTORY_SEPARATOR . 'members.' . $channel . '.php';
     if (!file_exists($mFile)) {
-        return [];
+        if ($channel === 'media') {
+            $mFile = dirname($configFile) . DIRECTORY_SEPARATOR . 'members.card.php';
+            if (!file_exists($mFile)) {
+                return [];
+            }
+        } else {
+            return [];
+        }
     }
     $raw = file_get_contents($mFile);
     if ($raw === false || strlen($raw) <= 28) {
@@ -483,6 +550,23 @@ if ($method === 'HEAD') {
         'X-Drop-Slot-Etag'  => $slotEtag !== false ? $slotEtag : '',
     ]);
 
+    if ($channel === 'media') {
+        $usedCount = 0;
+        $usedBytes = 0;
+        if (isset($state['media_blobs']) && is_array($state['media_blobs'])) {
+            foreach ($state['media_blobs'] as $mInfo) {
+                if (isset($mInfo['owner']) && $mInfo['owner'] === $pubkey) {
+                    $usedCount++;
+                    $usedBytes += isset($mInfo['size']) ? (int)$mInfo['size'] : 0;
+                }
+            }
+        }
+        $respHeaders['X-Drop-Media-Max-Count'] = (string)(isset($channels['media']['max_user_count']) ? (int)$channels['media']['max_user_count'] : 5);
+        $respHeaders['X-Drop-Media-Max-User-Bytes'] = (string)(isset($channels['media']['max_user_bytes']) ? (int)$channels['media']['max_user_bytes'] : 409600);
+        $respHeaders['X-Drop-Media-Used-Count'] = (string)$usedCount;
+        $respHeaders['X-Drop-Media-Used-Bytes'] = (string)$usedBytes;
+    }
+
     sync_respond(200, $lockFp, null, $respHeaders);
 }
 
@@ -573,6 +657,28 @@ if ($method === 'PUT' && isset($_GET['members'])) {
                     if ($sz !== false) {
                         $state['used_bytes'] = max(0, $state['used_bytes'] - $sz);
                     }
+                }
+            }
+        }
+    }
+
+    if ($channel === 'card' || $channel === 'media') {
+        if (isset($state['media_blobs']) && is_array($state['media_blobs'])) {
+            foreach ($state['media_blobs'] as $mId => $mInfo) {
+                $owner = isset($mInfo['owner']) ? $mInfo['owner'] : '';
+                if (!isset($memberSet[$owner])) {
+                    $mFile = $dataDir . DIRECTORY_SEPARATOR . $mId . '.media.bin';
+                    if (file_exists($mFile)) {
+                        $sz = filesize($mFile);
+                        @unlink($mFile);
+                        if ($sz !== false) {
+                            $state['used_bytes'] = max(0, $state['used_bytes'] - $sz);
+                        }
+                    } else {
+                        $sz = isset($mInfo['size']) ? (int)$mInfo['size'] : 0;
+                        $state['used_bytes'] = max(0, $state['used_bytes'] - $sz);
+                    }
+                    unset($state['media_blobs'][$mId]);
                 }
             }
         }
@@ -700,8 +806,12 @@ if ($method === 'GET' && isset($_GET['status'])) {
     $slotCounts = [];
     $totalSlotCount = 0;
     foreach (array_keys($channels) as $ch) {
-        $files = glob($dataDir . DIRECTORY_SEPARATOR . '*.' . $ch . '.bin');
-        $c = ($files !== false) ? count($files) : 0;
+        if ($ch === 'media') {
+            $c = isset($state['media_blobs']) && is_array($state['media_blobs']) ? count($state['media_blobs']) : 0;
+        } else {
+            $files = glob($dataDir . DIRECTORY_SEPARATOR . '*.' . $ch . '.bin');
+            $c = ($files !== false) ? count($files) : 0;
+        }
         $slotCounts[$ch] = $c;
         $totalSlotCount += $c;
     }
@@ -785,7 +895,20 @@ if ($method === 'PUT') {
         sync_respond(400, $lockFp, 'Bad Request: Empty payload', $commonHeaders);
     }
 
-    $canonicalMsg = "HUMOCO-DROP-REQ-V1\nPUT\n{$channel}\n{$timestamp}\n{$nonce}\n" . hash('sha256', $rawBody);
+    if ($channel === 'media') {
+        $mediaId = isset($_SERVER['HTTP_X_MEDIA_ID']) ? strtolower(trim((string)$_SERVER['HTTP_X_MEDIA_ID'])) : '';
+        if (!preg_match('/^[0-9a-f]{64}$/', $mediaId)) {
+            if (!$disableRateLimit) {
+                $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
+                write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
+            }
+            sync_respond(400, $lockFp, 'Bad Request: Missing or invalid X-Media-Id', $commonHeaders);
+        }
+        $canonicalMsg = "HUMOCO-DROP-REQ-V1\nPUT\nmedia:{$mediaId}\n{$timestamp}\n{$nonce}\n" . hash('sha256', $rawBody);
+    } else {
+        $canonicalMsg = "HUMOCO-DROP-REQ-V1\nPUT\n{$channel}\n{$timestamp}\n{$nonce}\n" . hash('sha256', $rawBody);
+    }
+
     if (!verify_ed25519_detached($signature, $canonicalMsg, $pubkey)) {
         if (!$disableRateLimit) {
             $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
@@ -818,6 +941,78 @@ if ($method === 'PUT') {
 
     lazy_prune_slots($dataDir, $channels, $state, $now);
 
+    if ($channel === 'media') {
+        // Ownership check
+        if (isset($state['media_blobs'][$mediaId]) && $state['media_blobs'][$mediaId]['owner'] !== $pubkey) {
+            sync_respond(403, $lockFp, 'Forbidden: Media blob owned by another member', $commonHeaders);
+        }
+
+        $newSize = strlen($rawBody);
+        $oldBlobSize = 0;
+        if (isset($state['media_blobs'][$mediaId])) {
+            $oldBlobSize = (int)$state['media_blobs'][$mediaId]['size'];
+        }
+
+        // Compute member's current media count & bytes (excluding $mediaId if overwriting own existing blob)
+        // and total channel media bytes across all $state['media_blobs']
+        $userCount = 0;
+        $userBytes = 0;
+        $channelMediaBytes = 0;
+        if (isset($state['media_blobs']) && is_array($state['media_blobs'])) {
+            foreach ($state['media_blobs'] as $mId => $mInfo) {
+                $mSize = isset($mInfo['size']) ? (int)$mInfo['size'] : 0;
+                $channelMediaBytes += $mSize;
+                if (isset($mInfo['owner']) && $mInfo['owner'] === $pubkey) {
+                    if ($mId !== $mediaId) {
+                        $userCount++;
+                        $userBytes += $mSize;
+                    }
+                }
+            }
+        }
+
+        // Check per-member limits
+        $maxUserCount = isset($channelCfg['max_user_count']) ? (int)$channelCfg['max_user_count'] : 5;
+        $maxUserBytes = isset($channelCfg['max_user_bytes']) ? (int)$channelCfg['max_user_bytes'] : 409600;
+        if (($userCount + 1) > $maxUserCount || ($userBytes + $newSize) > $maxUserBytes) {
+            sync_respond(507, $lockFp, 'Insufficient Storage: Member media quota exceeded', $commonHeaders);
+        }
+
+        // Check channel limit
+        $maxChannelMb = isset($channelCfg['max_channel_mb']) ? (int)$channelCfg['max_channel_mb'] : 100;
+        $maxChannelBytes = $maxChannelMb * 1024 * 1024;
+        $delta = $newSize - $oldBlobSize;
+        if (($channelMediaBytes + $delta) > $maxChannelBytes) {
+            sync_respond(507, $lockFp, 'Insufficient Storage: Media channel quota exceeded', $commonHeaders);
+        }
+
+        // Check global limit
+        if ($state['used_bytes'] + $delta > $maxTotalBytes) {
+            sync_respond(507, $lockFp, 'Insufficient Storage: Global sync quota exceeded', $commonHeaders);
+        }
+
+        $mediaFile = $dataDir . DIRECTORY_SEPARATOR . $mediaId . '.media.bin';
+        $tmpMedia = $mediaFile . '.tmp.' . getmypid() . '.' . mt_rand();
+        if (file_put_contents($tmpMedia, $rawBody) === false || !rename($tmpMedia, $mediaFile)) {
+            @unlink($tmpMedia);
+            sync_respond(500, $lockFp, 'Internal Server Error: Failed to write media blob', $commonHeaders);
+        }
+
+        $state['media_blobs'][$mediaId] = [
+            'owner' => $pubkey,
+            'size'  => $newSize,
+            'mtime' => $now,
+        ];
+        $state['used_bytes'] = max(0, $state['used_bytes'] + $delta);
+        save_state($stateFile, $state);
+
+        $newEtag = hash('sha256', $rawBody);
+        sync_respond(204, $lockFp, null, array_merge($commonHeaders, [
+            'ETag' => '"' . $newEtag . '"',
+        ]));
+    }
+
+    // Standard slot channels (card, wot, backup, post)
     $slotFile = $dataDir . DIRECTORY_SEPARATOR . $pubkey . '.' . $channel . '.bin';
     $currentEtag = null;
     $oldSize = 0;
@@ -851,9 +1046,12 @@ if ($method === 'PUT') {
         }
     }
 
-    // Hard quota check
+    // Hard quota check with active priority eviction of oldest media blobs
     $newSize = strlen($rawBody);
     $delta = $newSize - $oldSize;
+    if ($state['used_bytes'] + $delta > $maxTotalBytes) {
+        evict_oldest_media_for_space($dataDir, $state, $delta, $maxTotalBytes);
+    }
     if ($state['used_bytes'] + $delta > $maxTotalBytes) {
         sync_respond(507, $lockFp, 'Insufficient Storage: Global sync quota exceeded', $commonHeaders);
     }
@@ -875,7 +1073,7 @@ if ($method === 'PUT') {
 }
 
 // =========================================================================
-// ROUTE 7: DELETE sync.php (Member Slot Delete)
+// ROUTE 7: DELETE sync.php (Member Slot or Media Delete)
 // =========================================================================
 if ($method === 'DELETE') {
     $channel = isset($_SERVER['HTTP_X_CHANNEL']) ? trim((string)$_SERVER['HTTP_X_CHANNEL']) : '';
@@ -896,10 +1094,129 @@ if ($method === 'DELETE') {
         sync_respond(400, $lockFp, 'Bad Request: Invalid auth headers', $commonHeaders);
     }
 
-    $slotFile = $dataDir . DIRECTORY_SEPARATOR . $pubkey . '.' . $channel . '.bin';
-    $slotExists = file_exists($slotFile);
     $channelMembers = load_channel_members($configFile, $channel);
     $isMember = in_array($pubkey, $channelMembers, true);
+
+    if ($channel === 'media') {
+        $mediaId = isset($_SERVER['HTTP_X_MEDIA_ID']) ? strtolower(trim((string)$_SERVER['HTTP_X_MEDIA_ID'])) : '';
+        if ($mediaId !== '') {
+            if (!preg_match('/^[0-9a-f]{64}$/', $mediaId)) {
+                if (!$disableRateLimit) {
+                    $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
+                    write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
+                }
+                sync_respond(400, $lockFp, 'Bad Request: Invalid X-Media-Id', $commonHeaders);
+            }
+            $canonicalMsg = "HUMOCO-DROP-REQ-V1\nDELETE\nmedia:{$mediaId}\n{$timestamp}\n{$nonce}\n" . hash('sha256', '');
+        } else {
+            $canonicalMsg = "HUMOCO-DROP-REQ-V1\nDELETE\nmedia\n{$timestamp}\n{$nonce}\n" . hash('sha256', '');
+        }
+
+        if (!verify_ed25519_detached($signature, $canonicalMsg, $pubkey)) {
+            if (!$disableRateLimit) {
+                $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
+                write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
+            }
+            sync_respond(403, $lockFp, 'Forbidden: Invalid request signature', $commonHeaders);
+        }
+
+        if (!$isMember) {
+            $ownsAny = false;
+            if (isset($state['media_blobs']) && is_array($state['media_blobs'])) {
+                foreach ($state['media_blobs'] as $mInfo) {
+                    if (isset($mInfo['owner']) && $mInfo['owner'] === $pubkey) {
+                        $ownsAny = true;
+                        break;
+                    }
+                }
+            }
+            if (!$ownsAny) {
+                if (!$disableRateLimit) {
+                    $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
+                    write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
+                }
+                sync_respond(404, $lockFp, 'Not Found', $commonHeaders);
+            }
+        }
+
+        if (!$disableRateLimit) {
+            if (!isset($state['member_buckets'][$pubkey])) {
+                $state['member_buckets'][$pubkey] = [$now, 15.0];
+            }
+            $mb = &$state['member_buckets'][$pubkey];
+            $elapsedMb = max(0, $now - $mb[0]);
+            $mb[1] = min(15.0, $mb[1] + $elapsedMb * 0.25);
+            $mb[0] = $now;
+            if ($mb[1] < 1.0) {
+                save_state($stateFile, $state);
+                sync_respond(429, $lockFp, 'Too Many Requests', array_merge($commonHeaders, ['Retry-After' => '4']));
+            }
+            $mb[1] -= 1.0;
+        }
+
+        if (isset($state['nonces'][$nonce])) {
+            sync_respond(409, $lockFp, 'Conflict: Replay detected', $commonHeaders);
+        }
+        $state['nonces'][$nonce] = $now;
+
+        if ($mediaId !== '') {
+            if (isset($state['media_blobs'][$mediaId])) {
+                if ($state['media_blobs'][$mediaId]['owner'] !== $pubkey) {
+                    sync_respond(403, $lockFp, 'Forbidden: Media blob owned by another member', $commonHeaders);
+                }
+                $mFile = $dataDir . DIRECTORY_SEPARATOR . $mediaId . '.media.bin';
+                if (file_exists($mFile)) {
+                    $sz = filesize($mFile);
+                    @unlink($mFile);
+                    if ($sz !== false) {
+                        $state['used_bytes'] = max(0, $state['used_bytes'] - $sz);
+                    }
+                } else {
+                    $sz = isset($state['media_blobs'][$mediaId]['size']) ? (int)$state['media_blobs'][$mediaId]['size'] : 0;
+                    $state['used_bytes'] = max(0, $state['used_bytes'] - $sz);
+                }
+                unset($state['media_blobs'][$mediaId]);
+                save_state($stateFile, $state);
+            } else {
+                $mFile = $dataDir . DIRECTORY_SEPARATOR . $mediaId . '.media.bin';
+                if (file_exists($mFile)) {
+                    $sz = filesize($mFile);
+                    @unlink($mFile);
+                    if ($sz !== false) {
+                        $state['used_bytes'] = max(0, $state['used_bytes'] - $sz);
+                    }
+                    save_state($stateFile, $state);
+                }
+            }
+            sync_respond(204, $lockFp, null, $commonHeaders);
+        } else {
+            // Delete all media blobs where owner === pubkey
+            if (isset($state['media_blobs']) && is_array($state['media_blobs'])) {
+                foreach ($state['media_blobs'] as $mId => $mInfo) {
+                    if (isset($mInfo['owner']) && $mInfo['owner'] === $pubkey) {
+                        $mFile = $dataDir . DIRECTORY_SEPARATOR . $mId . '.media.bin';
+                        if (file_exists($mFile)) {
+                            $sz = filesize($mFile);
+                            @unlink($mFile);
+                            if ($sz !== false) {
+                                $state['used_bytes'] = max(0, $state['used_bytes'] - $sz);
+                            }
+                        } else {
+                            $sz = isset($mInfo['size']) ? (int)$mInfo['size'] : 0;
+                            $state['used_bytes'] = max(0, $state['used_bytes'] - $sz);
+                        }
+                        unset($state['media_blobs'][$mId]);
+                    }
+                }
+                save_state($stateFile, $state);
+            }
+            sync_respond(204, $lockFp, null, $commonHeaders);
+        }
+    }
+
+    // Standard slot channels
+    $slotFile = $dataDir . DIRECTORY_SEPARATOR . $pubkey . '.' . $channel . '.bin';
+    $slotExists = file_exists($slotFile);
 
     if (!$isMember && !$slotExists) {
         if (!$disableRateLimit) {

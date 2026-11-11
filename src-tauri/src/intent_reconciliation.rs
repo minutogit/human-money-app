@@ -272,15 +272,9 @@ mod tests {
         service: AppService,
         settings: Option<AppSettings>,
     ) -> AppState {
-        AppState {
-            service: Mutex::new(service),
-            history: Mutex::new(None),
-            events: Mutex::new(None),
-            contacts: Mutex::new(None),
-            settings: Mutex::new(settings),
-            regional_views: Mutex::new(None),
-            wot: Mutex::new(None),
-        }
+        let state = AppState::new(service);
+        *state.settings.lock().unwrap() = settings;
+        state
     }
 
     fn unlocked_fixture(path: &Path, password: &str) -> (AppState, String) {

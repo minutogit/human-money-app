@@ -90,6 +90,10 @@ export const marketService = {
         return await invoke<void>("delete_foreign_contact_card", { did, password: password || undefined });
     },
 
+    getAdImage: async (ownerDid: string, imageToken: string, password?: string): Promise<string | null> => {
+        return await invoke<string | null>("get_ad_image", { ownerDid, imageToken, password: password || undefined });
+    },
+
     // --- Sync Service Management ---
 
     prepareSyncSetup: async (

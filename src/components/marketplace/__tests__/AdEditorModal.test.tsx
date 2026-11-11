@@ -1,7 +1,8 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { AdEditorModal } from '../AdEditorModal';
 import { FrontendMyAd } from '../../../types';
+import { marketService } from '../../../services/marketService';
 
 describe('AdEditorModal Component', () => {
   const nowSecs = Math.floor(Date.now() / 1000);
@@ -122,5 +123,65 @@ describe('AdEditorModal Component', () => {
     expect(screen.getByText(/Du hast das Limit von 5 aktiven Inseraten erreicht|limit of 5 active ads/i)).toBeInTheDocument();
     const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
     expect(saveBtn).toBeDisabled();
+  });
+
+  it('renders quota status badge and loads ad image when editing ad has imageToken', async () => {
+    const existingAdWithImage: FrontendMyAd = {
+      id: 'ad-img-1',
+      kind: 'offer',
+      title: 'Kamera Nikon FM2',
+      text: 'Klassische SLR Kamera',
+      publishedAt: nowSecs - 86400,
+      expiresAt: nowSecs + 86400 * 30,
+      allowInquiries: true,
+      status: 'active',
+      daysLeft: 30,
+      imageToken: 'token-abc-123',
+    };
+
+    const mockDataUri = 'data:image/webp;base64,mockpreviewdata';
+    vi.spyOn(marketService, 'getAdImage').mockResolvedValue(mockDataUri);
+
+    const onSave = vi.fn();
+
+    render(
+      <AdEditorModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSave={onSave}
+        editingAd={existingAdWithImage}
+        ownerDid="did:key:z6MkuSeller"
+        mediaMaxCount={5}
+        mediaUsedCount={2}
+      />
+    );
+
+    // Verify quota badge
+    expect(screen.getByTestId('media-quota-badge')).toBeInTheDocument();
+    expect(screen.getByText(/2 von 5 Bildern belegt|2 of 5 images used/i)).toBeInTheDocument();
+
+    // Verify getAdImage was called and preview thumbnail is rendered
+    await waitFor(() => {
+      expect(marketService.getAdImage).toHaveBeenCalledWith('did:key:z6MkuSeller', 'token-abc-123');
+    });
+
+    const previewImg = await screen.findByAltText('Ad preview');
+    expect(previewImg).toHaveAttribute('src', mockDataUri);
+
+    // Click remove button
+    const removeBtn = screen.getByTestId('ad-image-remove-btn');
+    fireEvent.click(removeBtn);
+
+    // Preview should be gone
+    expect(screen.queryByAltText('Ad preview')).not.toBeInTheDocument();
+
+    // Save and verify imageWebpDataUri is null
+    const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
+    fireEvent.click(saveBtn);
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'ad-img-1',
+      imageWebpDataUri: null,
+    }));
   });
 });

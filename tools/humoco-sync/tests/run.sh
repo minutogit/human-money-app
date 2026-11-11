@@ -27,7 +27,12 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Check if php binary is available
+# Check if php binary is available (support isolated test environment in /tmp/php-env)
+if ! command -v php >/dev/null 2>&1; then
+    if [ -x "/tmp/php-env/bin/php" ]; then
+        export PATH="/tmp/php-env/bin:$PATH"
+    fi
+fi
 if ! command -v php >/dev/null 2>&1; then
     if [ "$ALLOW_MISSING_PHP" -eq 1 ]; then
         echo "SKIP: php binary not installed"
@@ -130,7 +135,7 @@ MEMBER3_KP="$(php -r '
 MEMBER3_SK="$(echo "$MEMBER3_KP" | cut -d: -f1)"
 MEMBER3_PK="$(echo "$MEMBER3_KP" | cut -d: -f2)"
 
-# Write test config.php: max_members = 2, max_bytes = 128
+# Write test config.php: max_members = 2, max_bytes = 128, max_total_bytes = 120
 cat <<EOF > "$TEST_DIR/config.php"
 <?php
 return [
@@ -138,8 +143,17 @@ return [
     'data_dir'             => 'data',
     'max_members'          => 2,
     'max_total_storage_mb' => 1,
+    'max_total_bytes'      => 120,
     'channels' => [
-        'card' => ['max_bytes' => 128, 'ttl_days' => 30],
+        'card'  => ['max_bytes' => 128, 'ttl_days' => 30],
+        'wot'   => ['max_bytes' => 128, 'ttl_days' => 30],
+        'media' => [
+            'max_bytes'      => 256,
+            'max_user_count' => 2,
+            'max_user_bytes' => 512,
+            'max_channel_mb' => 1,
+            'ttl_days'       => 180,
+        ],
     ],
 ];
 EOF
@@ -218,7 +232,7 @@ assert_status "POST sync.php without rotate is rejected with 405" "405" "$CODE"
 
 # 1.3 GET sync.php?info -> 200 OK
 INFO_JSON=$(curl -s "$BASE_URL/sync.php?info")
-if echo "$INFO_JSON" | grep -q "$ADMIN_PK" && echo "$INFO_JSON" | grep -q '"channels":\["card"\]'; then
+if echo "$INFO_JSON" | grep -q "$ADMIN_PK" && echo "$INFO_JSON" | grep -q '"card"' && echo "$INFO_JSON" | grep -q '"media"'; then
     echo "  [PASS] GET sync.php?info returned correct admin_pubkey and channel list"
 else
     echo "  [FAIL] GET sync.php?info response invalid: $INFO_JSON" >&2
@@ -400,6 +414,213 @@ if [ ! -f "$DATA_DIR/$MEMBER1_PK.card.bin" ]; then
     echo "  [PASS] Slot file was unlinked from disk"
 else
     echo "  [FAIL] Slot file still exists after DELETE" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+echo ""
+echo "=== Test Group 7: Media Blobs (Channel media, Quotas, Ownership & Priority Eviction) ==="
+
+# 7.1 Upload media blob for MEMBER1
+MEDIA_ID1=$(php -r 'echo bin2hex(random_bytes(32));')
+MEDIA_PAYLOAD1="ENCRYPTED_IMAGE_BLOB_MEMBER1_ALPHA"
+MEDIA_HASH1=$(php -r 'echo hash("sha256", $argv[1]);' "$MEDIA_PAYLOAD1")
+TS=$(date +%s)
+NONCE_M1="ba010101010101010101010101010101"
+CANON_PUT_M1=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID1" "$TS" "$NONCE_M1" "$MEDIA_HASH1")
+SIG_PUT_M1=$(php_sign "$CANON_PUT_M1" "$MEMBER1_SK")
+
+PUT_M1_RESP=$(curl -s -i -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: media" \
+    -H "X-Media-Id: $MEDIA_ID1" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_M1" \
+    -H "X-Drop-Signature: $SIG_PUT_M1" \
+    --data-binary "$MEDIA_PAYLOAD1")
+
+PUT_M1_CODE=$(echo "$PUT_M1_RESP" | grep -m1 "HTTP/" | awk '{print $2}')
+assert_status "Upload media blob returns 204" "204" "$PUT_M1_CODE"
+
+if echo "$PUT_M1_RESP" | grep -qi "ETag: \"$MEDIA_HASH1\""; then
+    echo "  [PASS] Media PUT response contains matching ETag header"
+else
+    echo "  [FAIL] Media PUT response missing matching ETag: $PUT_M1_RESP" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# 7.2 Static read of media blob and verify index.json exclusion
+FETCHED_MEDIA=$(curl -s "$BASE_URL/data/$MEDIA_ID1.media.bin")
+if [ "$FETCHED_MEDIA" = "$MEDIA_PAYLOAD1" ]; then
+    echo "  [PASS] Static read of .media.bin matches uploaded blob byte-for-byte"
+else
+    echo "  [FAIL] Static read of media blob mismatch" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+INDEX_JSON=$(curl -s "$BASE_URL/data/index.json")
+if echo "$INDEX_JSON" | grep -q "$MEDIA_ID1"; then
+    echo "  [FAIL] index.json must NOT contain media blob entries: $INDEX_JSON" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+else
+    echo "  [PASS] index.json correctly excludes media blobs"
+fi
+
+# 7.3 HEAD on channel media returns quota and usage headers
+HEAD_MEDIA_RESP=$(curl -s -I "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: media")
+
+PAYLOAD1_LEN=$(php -r 'echo strlen($argv[1]);' "$MEDIA_PAYLOAD1")
+if echo "$HEAD_MEDIA_RESP" | grep -q "200 OK" \
+    && echo "$HEAD_MEDIA_RESP" | grep -qi "X-Drop-Media-Max-Count: 2" \
+    && echo "$HEAD_MEDIA_RESP" | grep -qi "X-Drop-Media-Used-Count: 1" \
+    && echo "$HEAD_MEDIA_RESP" | grep -qi "X-Drop-Media-Used-Bytes: $PAYLOAD1_LEN"; then
+    echo "  [PASS] HEAD on media returns correct X-Drop-Media capability and usage headers"
+else
+    echo "  [FAIL] HEAD on media response invalid: $HEAD_MEDIA_RESP" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# 7.4 Another member cannot overwrite or delete MEMBER1's media blob (403)
+TS=$(date +%s)
+NONCE_M2_OW="ba020202020202020202020202020202"
+FORGED_BODY="MALICIOUS_OVERWRITE_ATTEMPT"
+FORGED_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$FORGED_BODY")
+CANON_M2_OW=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID1" "$TS" "$NONCE_M2_OW" "$FORGED_HASH")
+SIG_M2_OW=$(php_sign "$CANON_M2_OW" "$MEMBER2_SK")
+
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER2_PK" \
+    -H "X-Channel: media" \
+    -H "X-Media-Id: $MEDIA_ID1" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_M2_OW" \
+    -H "X-Drop-Signature: $SIG_M2_OW" \
+    --data-binary "$FORGED_BODY")
+assert_status "Another member cannot overwrite mediaId (returns 403)" "403" "$CODE"
+
+TS=$(date +%s)
+NONCE_M2_DEL="ba030303030303030303030303030303"
+CANON_M2_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID1" "$TS" "$NONCE_M2_DEL" "$EMPTY_HASH")
+SIG_M2_DEL=$(php_sign "$CANON_M2_DEL" "$MEMBER2_SK")
+
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER2_PK" \
+    -H "X-Channel: media" \
+    -H "X-Media-Id: $MEDIA_ID1" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_M2_DEL" \
+    -H "X-Drop-Signature: $SIG_M2_DEL")
+assert_status "Another member cannot delete mediaId (returns 403)" "403" "$CODE"
+
+# 7.5 Exceeding max_user_count returns 507
+sleep 1
+MEDIA_ID2=$(php -r 'echo bin2hex(random_bytes(32));')
+MEDIA_PAYLOAD2="ENCRYPTED_IMAGE_BLOB_MEMBER1_BETA"
+MEDIA_HASH2=$(php -r 'echo hash("sha256", $argv[1]);' "$MEDIA_PAYLOAD2")
+TS=$(date +%s)
+NONCE_M1_2="ba040404040404040404040404040404"
+CANON_PUT_M2=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID2" "$TS" "$NONCE_M1_2" "$MEDIA_HASH2")
+SIG_PUT_M2=$(php_sign "$CANON_PUT_M2" "$MEMBER1_SK")
+
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: media" \
+    -H "X-Media-Id: $MEDIA_ID2" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_M1_2" \
+    -H "X-Drop-Signature: $SIG_PUT_M2" \
+    --data-binary "$MEDIA_PAYLOAD2")
+assert_status "Upload 2nd media blob within max_user_count returns 204" "204" "$CODE"
+
+MEDIA_ID3=$(php -r 'echo bin2hex(random_bytes(32));')
+MEDIA_PAYLOAD3="ENCRYPTED_IMAGE_BLOB_MEMBER1_GAMMA"
+MEDIA_HASH3=$(php -r 'echo hash("sha256", $argv[1]);' "$MEDIA_PAYLOAD3")
+TS=$(date +%s)
+NONCE_M1_3="ba050505050505050505050505050505"
+CANON_PUT_M3=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID3" "$TS" "$NONCE_M1_3" "$MEDIA_HASH3")
+SIG_PUT_M3=$(php_sign "$CANON_PUT_M3" "$MEMBER1_SK")
+
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: media" \
+    -H "X-Media-Id: $MEDIA_ID3" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_M1_3" \
+    -H "X-Drop-Signature: $SIG_PUT_M3" \
+    --data-binary "$MEDIA_PAYLOAD3")
+assert_status "Upload 3rd media blob exceeding max_user_count (2) returns 507" "507" "$CODE"
+
+# 7.6 Priority eviction: uploading Prio-1 wot slot evicts oldest media blob when storage is full
+# Authorize MEMBER1 for wot channel
+TS=$(date +%s)
+NONCE_WOT_MEM="ba060606060606060606060606060606"
+WOT_MEM_BODY="{\"pubkeys\":[\"$MEMBER1_PK\"]}"
+WOT_MEM_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$WOT_MEM_BODY")
+CANON_WOT_MEM=$(printf "HUMOCO-DROP-ADMIN-V1\nPUT_MEMBERS\nwot\n%s\n%s\n%s" "$TS" "$NONCE_WOT_MEM" "$WOT_MEM_HASH")
+SIG_WOT_MEM=$(php_sign "$CANON_WOT_MEM" "$ADMIN2_SK")
+
+curl -s -o /dev/null -X PUT "$BASE_URL/sync.php?members&channel=wot" \
+    -H "X-Drop-Pubkey: $ADMIN2_PK" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_WOT_MEM" \
+    -H "X-Drop-Signature: $SIG_WOT_MEM" \
+    -d "$WOT_MEM_BODY"
+
+# Current used storage: MEDIA_ID1 (35 B) + MEDIA_ID2 (34 B) = 69 B. Max total is 120 B.
+# Uploading a 73 B wot slot needs 69 + 73 = 142 B > 120 B.
+# Priority eviction must automatically evict the oldest media blob (MEDIA_ID1) -> 69 - 35 + 73 = 107 B <= 120 B!
+WOT_PAYLOAD="WOT_TRUST_GRAPH_PAYLOAD_FOR_MEMBER1_PRIO1_EVIC_TEST_EXACTLY_70_BYTES_NOW!"
+WOT_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$WOT_PAYLOAD")
+TS=$(date +%s)
+NONCE_WOT="ba070707070707070707070707070707"
+CANON_WOT=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nwot\n%s\n%s\n%s" "$TS" "$NONCE_WOT" "$WOT_HASH")
+SIG_WOT=$(php_sign "$CANON_WOT" "$MEMBER1_SK")
+
+WOT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: wot" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_WOT" \
+    -H "X-Drop-Signature: $SIG_WOT" \
+    --data-binary "$WOT_PAYLOAD")
+assert_status "Priority-1 wot slot upload succeeds via eviction (returns 204)" "204" "$WOT_CODE"
+
+# Verify oldest media blob MEDIA_ID1 was evicted from disk
+if [ ! -f "$DATA_DIR/$MEDIA_ID1.media.bin" ]; then
+    echo "  [PASS] Oldest media blob (MEDIA_ID1) was automatically evicted"
+else
+    echo "  [FAIL] Oldest media blob (MEDIA_ID1) was NOT evicted" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# Verify newer media blob MEDIA_ID2 is still preserved on disk
+if [ -f "$DATA_DIR/$MEDIA_ID2.media.bin" ]; then
+    echo "  [PASS] Newer media blob (MEDIA_ID2) is preserved"
+else
+    echo "  [FAIL] Newer media blob (MEDIA_ID2) was prematurely evicted" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# 7.7 Member DELETE of own media blob
+TS=$(date +%s)
+NONCE_M1_DEL="ba080808080808080808080808080808"
+CANON_M1_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID2" "$TS" "$NONCE_M1_DEL" "$EMPTY_HASH")
+SIG_M1_DEL=$(php_sign "$CANON_M1_DEL" "$MEMBER1_SK")
+
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: media" \
+    -H "X-Media-Id: $MEDIA_ID2" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_M1_DEL" \
+    -H "X-Drop-Signature: $SIG_M1_DEL")
+assert_status "Member DELETE of own mediaId returns 204" "204" "$CODE"
+
+if [ ! -f "$DATA_DIR/$MEDIA_ID2.media.bin" ]; then
+    echo "  [PASS] Deleted media blob was unlinked from disk"
+else
+    echo "  [FAIL] Deleted media blob still exists on disk" >&2
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 

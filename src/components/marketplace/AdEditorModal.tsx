@@ -1,12 +1,14 @@
 // src/components/marketplace/AdEditorModal.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Tag, HandHeart, Search, Calendar } from 'lucide-react';
+import { Tag, HandHeart, Search, Calendar, Upload, Trash2 } from 'lucide-react';
 import { AdKind, FrontendAdInput, FrontendMyAd } from '../../types';
 import { ModalShell } from '../ui/ModalShell';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { SegmentedTabs } from '../ui/SegmentedTabs';
+import { marketService } from '../../services/marketService';
+import { compressAdImageToWebpDataUri } from '../../utils/imageCompression';
 
 export interface AdEditorModalProps {
     isOpen: boolean;
@@ -16,6 +18,10 @@ export interface AdEditorModalProps {
     activeAdsCount?: number;
     maxAds?: number;
     onSave: (input: FrontendAdInput) => Promise<void>;
+    ownerDid?: string;
+    mediaMaxBytes?: number;
+    mediaMaxCount?: number;
+    mediaUsedCount?: number;
 }
 
 export const AdEditorModal: React.FC<AdEditorModalProps> = ({
@@ -26,6 +32,10 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
     activeAdsCount,
     maxAds = 5,
     onSave,
+    ownerDid,
+    mediaMaxBytes,
+    mediaMaxCount,
+    mediaUsedCount,
 }) => {
     const { t } = useTranslation();
 
@@ -42,6 +52,10 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
     const [isRemote, setIsRemote] = useState<boolean>(false);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    const [imagePreviewUri, setImagePreviewUri] = useState<string | null>(null);
+    const [imageWebpDataUri, setImageWebpDataUri] = useState<string | null | undefined>(undefined);
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
 
     useEffect(() => {
         if (targetAd) {
@@ -63,6 +77,47 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             setError(null);
         }
     }, [targetAd, isOpen]);
+
+    useEffect(() => {
+        setImageWebpDataUri(undefined);
+        const token = targetAd?.imageToken || (targetAd as any)?.image_token;
+        if (isOpen && token) {
+            let isMounted = true;
+            marketService
+                .getAdImage(ownerDid || '', token)
+                .then((uri) => {
+                    if (isMounted) setImagePreviewUri(uri);
+                })
+                .catch(() => {
+                    if (isMounted) setImagePreviewUri(null);
+                });
+            return () => {
+                isMounted = false;
+            };
+        } else {
+            setImagePreviewUri(null);
+        }
+    }, [isOpen, targetAd, ownerDid]);
+
+    const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+            const maxBytes = mediaMaxBytes || 102400;
+            const webpDataUri = await compressAdImageToWebpDataUri(file, maxBytes);
+            setImagePreviewUri(webpDataUri);
+            setImageWebpDataUri(webpDataUri);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+        } finally {
+            e.target.value = '';
+        }
+    };
+
+    const handleRemoveImage = () => {
+        setImagePreviewUri(null);
+        setImageWebpDataUri(null);
+    };
 
     const titleCharCount = title.trim().length;
     const textCharCount = text.trim().length;
@@ -101,6 +156,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                 durationDays,
                 allowInquiries,
                 isRemote,
+                ...(imageWebpDataUri !== undefined ? { imageWebpDataUri } : {}),
             });
             onClose();
         } catch (err) {
@@ -264,6 +320,83 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                         maxLength={40}
                         data-testid="ad-pricing-input"
                     />
+                </div>
+
+                {/* Image upload section (optional) */}
+                <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-black text-theme-light uppercase tracking-wider block">
+                            {t('marketplace.adImageLabel', 'Inseratsbild (optional)')}
+                        </label>
+                        <span className="text-[10px] font-semibold text-theme-light" data-testid="media-quota-badge">
+                            {t('marketplace.mediaQuotaStatus', '{{used}} von {{max}} Bildern belegt', {
+                                used: mediaUsedCount ?? 0,
+                                max: mediaMaxCount ?? 5,
+                            })}
+                        </span>
+                    </div>
+
+                    <div className="p-3 rounded-2xl bg-bg-app/50 border border-theme-subtle space-y-3">
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="image/*"
+                            data-testid="ad-image-file-input"
+                            onChange={handleImageFileChange}
+                            className="hidden"
+                        />
+
+                        {imagePreviewUri ? (
+                            <div className="space-y-2">
+                                <div className="rounded-xl overflow-hidden border border-theme-subtle max-h-48 bg-white flex items-center justify-center">
+                                    <img
+                                        src={imagePreviewUri}
+                                        alt="Ad preview"
+                                        className="w-full max-h-48 object-cover rounded-xl"
+                                    />
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        type="button"
+                                        size="xs"
+                                        variant="outline"
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className="flex items-center gap-1.5"
+                                    >
+                                        <Upload size={13} />
+                                        <span>{t('marketplace.adImageUpload', 'Bild auswählen')}</span>
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        size="xs"
+                                        variant="secondary"
+                                        data-testid="ad-image-remove-btn"
+                                        onClick={handleRemoveImage}
+                                        className="flex items-center gap-1.5"
+                                    >
+                                        <Trash2 size={13} />
+                                        <span>{t('marketplace.adImageRemove', 'Bild entfernen')}</span>
+                                    </Button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex items-center gap-3">
+                                <Button
+                                    type="button"
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="flex items-center gap-1.5"
+                                >
+                                    <Upload size={13} />
+                                    <span>{t('marketplace.adImageUpload', 'Bild auswählen')}</span>
+                                </Button>
+                                <span className="text-[10px] text-theme-light leading-snug">
+                                    {t('marketplace.adImageHint', 'Max. 800×800 Pixel, WebP komprimiert (max. 100 KB).')}
+                                </span>
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 {/* 5. Duration: Segmented control if creating, info text if editing */}

@@ -15,5 +15,12 @@ return [
         'wot'    => ['max_bytes' => 131072,  'ttl_days' => 30],
         'backup' => ['max_bytes' => 5242880, 'ttl_days' => 180],
         'post'   => ['max_bytes' => 524288,  'ttl_days' => 21],
+        'media'  => [
+            'max_bytes'      => 102400, // max 100 KB per encrypted image blob
+            'max_user_count' => 5,      // max 5 images per member
+            'max_user_bytes' => 409600, // max 400 KB total media per member
+            'max_channel_mb' => 100,    // max 100 MB across all media blobs
+            'ttl_days'       => 180,    // 180 days (matches max Ad duration)
+        ],
     ],
 ];

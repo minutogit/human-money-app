@@ -1172,7 +1172,7 @@ pub async fn sync_market_channels_impl(
     }
 
     // 2. Upload check
-    let (my_ed_sk, master_seed, own_card_opt, readers, readers_hash) = {
+    let (my_ed_sk, master_seed, own_card_opt, own_profile_opt, readers, readers_hash) = {
         let mut service = state.service.lock().unwrap();
         let my_ed_sk = service
             .with_wallet_and_identity(|_w, id| id.signing_key.clone())
@@ -1183,7 +1183,7 @@ pub async fn sync_market_channels_impl(
             .load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password.as_deref())
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-        let own_card = own_profile.and_then(|p| if p.published { p.last_card } else { None });
+        let own_card = own_profile.as_ref().and_then(|p| if p.published { p.last_card.clone() } else { None });
 
         let reg = state.get_or_load_wot_register(&mut service, password.as_deref()).ok();
 
@@ -1206,7 +1206,7 @@ pub async fn sync_market_channels_impl(
         }
         let readers_hash = hex::encode(hasher.finalize());
 
-        (my_ed_sk, master_seed, own_card, reader_keys, readers_hash)
+        (my_ed_sk, master_seed, own_card, own_profile, reader_keys, readers_hash)
     };
 
     let mut sync_state: StoredSyncState = {
@@ -1272,6 +1272,26 @@ pub async fn sync_market_channels_impl(
                         &trust_level_of,
                         SYNC_CARD_MAX_BYTES,
                     )
+                };
+
+                let active_media_blobs: Vec<(String, Vec<u8>)> = if let Some(ref prof) = own_profile_opt {
+                    let mut blobs = Vec::new();
+                    let mut service = state.service.lock().unwrap();
+                    for ad in &prof.ads {
+                        if ad.expires_at > now_secs {
+                            if let Some(ref token) = ad.image_token {
+                                let storage_key = crate::state::own_media_storage_key(token);
+                                if let Ok(webp_bytes) = service.load_encrypted_data(&storage_key, password.as_deref()) {
+                                    if let Ok((_tok, blob_id, ciphertext)) = humoco_market::seal_media_blob(&own_card.payload.did, &webp_bytes) {
+                                        blobs.push((blob_id, ciphertext));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    blobs
+                } else {
+                    Vec::new()
                 };
 
                 match humoco_market::seal_slot_blob(&bundle, &readers, SYNC_CARD_MAX_BYTES) {
@@ -1344,6 +1364,80 @@ pub async fn sync_market_channels_impl(
                                 }
                                 Err(e) => {
                                     errors.push(format!("Signing error for {}: {}", drop_desc.write_url, e));
+                                }
+                            }
+
+                            // Upload active media blobs to this drop target
+                            for (blob_id, ciphertext) in &active_media_blobs {
+                                let upload_key = format!("{}::{}", drop_desc.write_url, blob_id);
+                                let force = force_upload == Some(true);
+                                if !force && sync_state.uploaded_media_blobs.contains(&upload_key) {
+                                    continue;
+                                }
+
+                                let nonce = sync_client::generate_sync_nonce();
+                                let signed_res = if drop_desc.slot_id.is_some() {
+                                    match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
+                                        Ok((r_sk, _, _)) => {
+                                            Ok(humoco_market::sign_member_request_direct(
+                                                &r_sk,
+                                                "PUT",
+                                                &format!("media:{}", blob_id),
+                                                now_secs,
+                                                &nonce,
+                                                ciphertext,
+                                            ))
+                                        }
+                                        Err(e) => Err(format!("Public drop key derivation error: {}", e)),
+                                    }
+                                } else {
+                                    humoco_market::sign_member_request_stealth(
+                                        &my_ed_sk,
+                                        &drop_desc.drop_pub,
+                                        "PUT",
+                                        &format!("media:{}", blob_id),
+                                        now_secs,
+                                        &nonce,
+                                        ciphertext,
+                                    )
+                                    .map_err(|e| format!("Stealth signing error for media: {}", e))
+                                };
+
+                                match signed_res {
+                                    Ok(signed) => {
+                                        match sync_client::put_media_blob(
+                                            &client,
+                                            &drop_desc.write_url,
+                                            &signed,
+                                            blob_id,
+                                            ciphertext,
+                                        )
+                                        .await
+                                        {
+                                            Ok(PutSlotOutcome::Saved { rotation, .. }) => {
+                                                sync_state.uploaded_media_blobs.insert(upload_key);
+                                                if let Some(ref cert) = rotation {
+                                                    if sync_client::apply_verified_rotation(drop_desc, cert, now_secs) {
+                                                        for s_sync in &mut settings.market_selected_syncs {
+                                                            if s_sync.read_url == drop_desc.read_url {
+                                                                s_sync.drop_pub = drop_desc.drop_pub.clone();
+                                                                settings_changed = true;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
+                                                log::warn!("Media upload to {} precondition failed", drop_desc.write_url);
+                                            }
+                                            Err(e) => {
+                                                log::warn!("Media upload to {} non-fatal error: {}", drop_desc.write_url, e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::warn!("Media request signing for {} non-fatal error: {}", drop_desc.write_url, e);
+                                    }
                                 }
                             }
                         }
@@ -2641,15 +2735,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn create_test_state(service: AppService) -> AppState {
-        AppState {
-            service: Mutex::new(service),
-            history: Mutex::new(None),
-            events: Mutex::new(None),
-            contacts: Mutex::new(None),
-            settings: Mutex::new(None),
-            regional_views: Mutex::new(None),
-            wot: Mutex::new(None),
-        }
+        AppState::new(service)
     }
 
     #[allow(dead_code)]

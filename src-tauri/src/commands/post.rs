@@ -3094,6 +3094,7 @@ mod tests {
             duration_days: 30,
             allow_inquiries: true,
             is_remote: false,
+            image_webp_data_uri: None,
         };
         let updated_bob_profile = upsert_ad_impl(ad_input, Some(password.to_string()), &bob_state).unwrap();
         let ad_id = updated_bob_profile.ads[0].id.clone();

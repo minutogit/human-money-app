@@ -571,6 +571,20 @@ pub fn sign_member_request_direct(
     }
 }
 
+pub fn sign_member_request(
+    member_stealth_sk: &[u8; 32],
+    method: &str,
+    channel: &str,
+    timestamp: u64,
+    nonce_hex: &str,
+    body: &[u8],
+) -> Result<SignedDropHeaders, MarketError> {
+    let sk = SigningKey::from_bytes(member_stealth_sk);
+    Ok(sign_member_request_direct(
+        &sk, method, channel, timestamp, nonce_hex, body,
+    ))
+}
+
 pub fn sign_admin_request(
     admin_sk: &SigningKey,
     action: &str,

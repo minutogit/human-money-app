@@ -378,6 +378,7 @@ fn test_skills_deduplication_and_needs_preservation() {
                     expires_at: 1700000000 + 30 * 86_400,
                     allow_inquiries: true,
                     is_remote: false,
+                    image_token: None,
                 }),
                 2,
             ),
@@ -456,6 +457,7 @@ fn test_filter_expired_ads_and_board_sorting() {
                     expires_at: now + 1000, // active
                     allow_inquiries: true,
                     is_remote: false,
+                    image_token: None,
                 }),
                 2,
             ),
@@ -471,6 +473,7 @@ fn test_filter_expired_ads_and_board_sorting() {
                     expires_at: now - 10 * 86_400, // EXPIRED!
                     allow_inquiries: true,
                     is_remote: false,
+                    image_token: None,
                 }),
                 2,
             ),
@@ -503,6 +506,7 @@ fn test_filter_expired_ads_and_board_sorting() {
                 expires_at: now + 5000,
                 allow_inquiries: true,
                 is_remote: false,
+                image_token: None,
             }),
             2,
         )],

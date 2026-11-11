@@ -1,11 +1,18 @@
 // src/components/marketplace/AdCard.tsx
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MessageSquare, ArrowRight, Clock, Tag, ChevronDown, ChevronUp, User, Globe } from 'lucide-react';
+import { MessageSquare, ArrowRight, Clock, Tag, ChevronDown, ChevronUp, User, Globe, ImageOff } from 'lucide-react';
 import { Ad, FrontendTrustTier } from '../../types';
 import { Button } from '../ui/Button';
 import { TrustBadge } from '../ui/TrustBadge';
 import { truncateUserId } from '../../utils/userIdHelper';
+import { marketService } from '../../services/marketService';
+
+const adImageCache = new Map<string, string | null>();
+
+export function clearAdImageCacheForTests(): void {
+    adImageCache.clear();
+}
 
 export interface AdCardProps {
     ad: Ad;
@@ -32,6 +39,63 @@ export const AdCard: React.FC<AdCardProps> = ({
 }) => {
     const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState(false);
+
+    const imageToken = ad.image_token || (ad as any).imageToken;
+    const [imageUri, setImageUri] = useState<string | null>(() => {
+        if (!imageToken) return null;
+        return adImageCache.get(`${ownerDid}:${imageToken}`) ?? null;
+    });
+    const [imageFailed, setImageFailed] = useState<boolean>(() => {
+        if (!imageToken) return false;
+        const cached = adImageCache.get(`${ownerDid}:${imageToken}`);
+        return cached === null && adImageCache.has(`${ownerDid}:${imageToken}`);
+    });
+
+    useEffect(() => {
+        if (!imageToken) {
+            setImageUri(null);
+            setImageFailed(false);
+            return;
+        }
+
+        const cacheKey = `${ownerDid}:${imageToken}`;
+        if (adImageCache.has(cacheKey)) {
+            const cached = adImageCache.get(cacheKey);
+            if (cached) {
+                setImageUri(cached);
+                setImageFailed(false);
+            } else {
+                setImageUri(null);
+                setImageFailed(true);
+            }
+            return;
+        }
+
+        let isMounted = true;
+        marketService
+            .getAdImage(ownerDid, imageToken)
+            .then((res) => {
+                adImageCache.set(cacheKey, res);
+                if (!isMounted) return;
+                if (res) {
+                    setImageUri(res);
+                    setImageFailed(false);
+                } else {
+                    setImageUri(null);
+                    setImageFailed(true);
+                }
+            })
+            .catch(() => {
+                adImageCache.set(cacheKey, null);
+                if (!isMounted) return;
+                setImageUri(null);
+                setImageFailed(true);
+            });
+
+        return () => {
+            isMounted = false;
+        };
+    }, [ownerDid, imageToken]);
 
     const nowSecs = Math.floor(Date.now() / 1000);
     const effectiveDaysLeft =
@@ -105,6 +169,27 @@ export const AdCard: React.FC<AdCardProps> = ({
                         </span>
                     </span>
                 </div>
+
+                {/* Ad Image / Graceful Degradation */}
+                {imageToken && (
+                    imageUri && !imageFailed ? (
+                        <img
+                            src={imageUri}
+                            alt={ad.title}
+                            data-testid="ad-card-image"
+                            className="w-full max-h-56 object-cover rounded-xl border border-theme-subtle/50"
+                            onError={() => setImageFailed(true)}
+                        />
+                    ) : imageFailed ? (
+                        <div
+                            data-testid="ad-card-image-unavailable"
+                            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-bg-app border border-theme-subtle/60 text-theme-light text-xs"
+                        >
+                            <ImageOff size={14} className="shrink-0 text-theme-light/70" />
+                            <span>{t('marketplace.imageUnavailable', 'Bild nicht mehr verfügbar')}</span>
+                        </div>
+                    ) : null
+                )}
 
                 {/* Title */}
                 <h3 className="text-base font-bold text-theme-secondary leading-snug break-words">

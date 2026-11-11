@@ -436,6 +436,7 @@ mod tests {
             settings: Mutex::new(Some(AppSettings::default())),
             regional_views: Mutex::new(None),
             wot: Mutex::new(None),
+            media_negative_cache: Mutex::new(std::collections::HashMap::new()),
         };
 
         // We can't call the command directly easily because of tauri::State, 

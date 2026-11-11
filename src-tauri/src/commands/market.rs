@@ -179,7 +179,8 @@ pub fn rebuild_and_sign_own_card(
     }
 
     // Picture
-    if let Some(ref pic) = profile.picture_url {
+    let picture_url = stored.picture_url.clone().or_else(|| profile.picture_url.clone());
+    if let Some(ref pic) = picture_url {
         if !pic.trim().is_empty() {
             if let Some(dist) = audience_dist(stored.visibility.picture) {
                 items.push((humoco_market::CardItem::Picture(pic.trim().to_string()), dist));
@@ -321,6 +322,12 @@ pub fn get_my_market_profile_impl(
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
 
+    let media_used_count = stored
+        .ads
+        .iter()
+        .filter(|a| a.expires_at > now && a.image_token.is_some())
+        .count();
+
     let ads = stored
         .ads
         .iter()
@@ -340,8 +347,13 @@ pub fn get_my_market_profile_impl(
         (None, None, None, false)
     };
 
+    let mut frontend_profile: crate::models::FrontendUserProfile = core_profile.into();
+    if stored.picture_url.is_some() {
+        frontend_profile.picture_url = stored.picture_url.clone();
+    }
+
     Ok(FrontendMyMarketProfile {
-        profile: core_profile.into(),
+        profile: frontend_profile,
         visibility: stored.visibility,
         skills: stored.skills,
         ads,
@@ -353,6 +365,9 @@ pub fn get_my_market_profile_impl(
         file_wire,
         qr_svg,
         qr_is_partial,
+        media_max_bytes: humoco_market::MAX_AD_MEDIA_BYTES,
+        media_max_count: humoco_market::MAX_ADS_PER_CARD,
+        media_used_count,
     })
 }
 
@@ -369,6 +384,14 @@ pub fn save_my_market_profile_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
+    if let Some(ref pic) = request.profile.picture_url {
+        let pic_trimmed = pic.trim();
+        if !pic_trimmed.is_empty() && pic_trimmed.starts_with(humoco_market::MEDIA_DATA_URI_PREFIX) {
+            humoco_market::validate_avatar_data_uri(pic_trimmed)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
+        }
+    }
+
     let mut service = state.service.lock().unwrap();
 
     let mut core_profile = service
@@ -385,7 +408,7 @@ pub fn save_my_market_profile_impl(
     core_profile.phone = request.profile.phone;
     core_profile.coordinates = request.profile.coordinates;
     core_profile.url = request.profile.url;
-    core_profile.picture_url = request.profile.picture_url;
+    core_profile.picture_url = request.profile.picture_url.clone();
 
     // Maintainer Decision 7: service_offer is derived from joined skill titles; needs is preserved!
     let service_offer = request
@@ -416,6 +439,7 @@ pub fn save_my_market_profile_impl(
     stored.max_hops = request.max_hops.clamp(1, 3);
     stored.validity_years = request.validity_years.clamp(1, 3);
     stored.allow_inquiries = request.allow_inquiries;
+    stored.picture_url = request.profile.picture_url;
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     if stored.published {
@@ -544,6 +568,51 @@ pub fn upsert_ad_impl(
         .as_ref()
         .and_then(|id| stored.ads.iter().position(|a| &a.id == id));
 
+    let new_image_token: Option<String> = match ad_input.image_webp_data_uri {
+        Some(ref uri) if uri.trim().is_empty() => None,
+        Some(ref uri) => {
+            let uri_trimmed = uri.trim();
+            if !uri_trimmed.starts_with(humoco_market::MEDIA_DATA_URI_PREFIX) {
+                return Err(FrontendError::from(format!(
+                    "Ad image data URI must start with '{}'",
+                    humoco_market::MEDIA_DATA_URI_PREFIX
+                )));
+            }
+            let b64_part = &uri_trimmed[humoco_market::MEDIA_DATA_URI_PREFIX.len()..];
+            use base64::engine::general_purpose::STANDARD;
+            use base64::Engine;
+            let webp_bytes = STANDARD
+                .decode(b64_part.trim().as_bytes())
+                .map_err(|e| FrontendError::from(format!("Invalid base64 in ad image: {}", e)))?;
+
+            let raw_id = service.with_wallet(|w| w.get_user_id().to_string()).map_err(FrontendError::from)?;
+            let pk = human_money_core::crypto::get_pubkey_from_user_id(&raw_id)
+                .map_err(|e| FrontendError::from(format!("Failed to parse wallet DID: {}", e)))?;
+            let root_did = human_money_core::crypto::create_user_id(&pk, None)
+                .map_err(|e| FrontendError::from(format!("Failed to recreate root DID: {}", e)))?;
+
+            let (token, _blob_id, _ciphertext) = humoco_market::seal_media_blob(&root_did, &webp_bytes)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
+
+            service
+                .save_encrypted_data(
+                    &crate::state::own_media_storage_key(&token),
+                    &webp_bytes,
+                    password.as_deref(),
+                )
+                .map_err(FrontendError::from)?;
+
+            Some(token)
+        }
+        None => {
+            if let Some(idx) = existing_idx {
+                stored.ads[idx].image_token.clone()
+            } else {
+                None
+            }
+        }
+    };
+
     if let Some(idx) = existing_idx {
         // Edit existing ad: MUST keep published_at, renewed_at, and expires_at unchanged!
         let existing = &mut stored.ads[idx];
@@ -553,6 +622,7 @@ pub fn upsert_ad_impl(
         existing.pricing = ad_input.pricing;
         existing.allow_inquiries = ad_input.allow_inquiries;
         existing.is_remote = ad_input.is_remote;
+        existing.image_token = new_image_token;
     } else {
         // Create new ad: enforce active ads limit (max 5)
         let active_count = stored.ads.iter().filter(|a| a.expires_at > now).count();
@@ -574,6 +644,7 @@ pub fn upsert_ad_impl(
             expires_at,
             allow_inquiries: ad_input.allow_inquiries,
             is_remote: ad_input.is_remote,
+            image_token: new_image_token,
         });
     }
 
@@ -698,6 +769,142 @@ pub fn delete_ad(
     state: State<'_, AppState>,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
     delete_ad_impl(id, password, &state)
+}
+
+pub async fn get_ad_image_impl(
+    owner_did: String,
+    image_token: String,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<Option<String>, FrontendError> {
+    if !humoco_market::is_valid_image_token(&image_token) {
+        return Ok(None);
+    }
+
+    let blob_id = match humoco_market::derive_media_blob_id(&image_token) {
+        Ok(id) => id,
+        Err(_) => return Ok(None),
+    };
+
+    let read_urls = {
+        let mut service = match state.service.lock() {
+            Ok(s) => s,
+            Err(_) => return Ok(None),
+        };
+
+        let own_key = crate::state::own_media_storage_key(&image_token);
+        if let Ok(webp_bytes) = service.load_encrypted_data(&own_key, password.as_deref()) {
+            if humoco_market::validate_ad_webp(&webp_bytes).is_ok() {
+                use base64::engine::general_purpose::STANDARD;
+                use base64::Engine;
+                return Ok(Some(format!(
+                    "data:image/webp;base64,{}",
+                    STANDARD.encode(&webp_bytes)
+                )));
+            }
+        }
+
+        let cache_key = crate::state::cached_media_storage_key(&blob_id);
+        if let Ok(webp_bytes) = service.load_encrypted_data(&cache_key, password.as_deref()) {
+            if humoco_market::validate_ad_webp(&webp_bytes).is_ok() {
+                use base64::engine::general_purpose::STANDARD;
+                use base64::Engine;
+                return Ok(Some(format!(
+                    "data:image/webp;base64,{}",
+                    STANDARD.encode(&webp_bytes)
+                )));
+            }
+        }
+
+        let mut candidate_urls = Vec::new();
+
+        if let Ok(bytes) = service.load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref()) {
+            if let Ok(card_store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+                if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(&owner_did) {
+                    if let Some(stored_card) = card_store.cards.get(&pk.to_bytes()) {
+                        for d in &stored_card.card.payload.drops {
+                            if !d.read_url.trim().is_empty() {
+                                candidate_urls.push(d.read_url.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let settings = state
+            .get_cached_settings()
+            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
+            .unwrap_or_default();
+
+        for s in &settings.market_selected_syncs {
+            if !s.read_url.trim().is_empty() {
+                candidate_urls.push(s.read_url.clone());
+            }
+        }
+        for p in &settings.public_syncs {
+            if p.enabled && !p.read_url.trim().is_empty() {
+                candidate_urls.push(p.read_url.clone());
+            }
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        candidate_urls.retain(|u| seen.insert(u.clone()));
+        candidate_urls
+    };
+
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
+
+    {
+        if let Ok(neg_cache) = state.media_negative_cache.lock() {
+            if let Some(&ts) = neg_cache.get(&blob_id) {
+                if now.saturating_sub(ts) < 86_400 {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
+    if read_urls.is_empty() {
+        return Ok(None);
+    }
+
+    let client = sync_client::create_sync_http_client();
+    for read_url in &read_urls {
+        match sync_client::get_media_blob(&client, read_url, &blob_id).await {
+            Ok(Some(ciphertext)) => {
+                if let Ok(webp_bytes) = humoco_market::open_media_blob(&image_token, &ciphertext) {
+                    let cache_key = crate::state::cached_media_storage_key(&blob_id);
+                    if let Ok(mut service) = state.service.lock() {
+                        let _ = service.save_encrypted_data(&cache_key, &webp_bytes, password.as_deref());
+                    }
+                    use base64::engine::general_purpose::STANDARD;
+                    use base64::Engine;
+                    return Ok(Some(format!(
+                        "data:image/webp;base64,{}",
+                        STANDARD.encode(&webp_bytes)
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Ok(mut neg_cache) = state.media_negative_cache.lock() {
+        neg_cache.insert(blob_id, now);
+    }
+
+    Ok(None)
+}
+
+#[tauri::command]
+pub async fn get_ad_image(
+    owner_did: String,
+    image_token: String,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, FrontendError> {
+    get_ad_image_impl(owner_did, image_token, password, &state).await
 }
 
 pub fn get_market_view_impl(
@@ -1061,7 +1268,6 @@ pub fn delete_foreign_contact_card(
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
     use human_money_core::app_service::AppService;
     use crate::models::{
         CardFieldVisibility, FieldAudience, FrontendAdInput, FrontendSaveMyMarketProfileRequest,
@@ -1095,15 +1301,7 @@ mod tests {
     }
 
     fn create_test_state(service: AppService) -> AppState {
-        AppState {
-            service: Mutex::new(service),
-            history: Mutex::new(None),
-            events: Mutex::new(None),
-            contacts: Mutex::new(None),
-            settings: Mutex::new(None),
-            regional_views: Mutex::new(None),
-            wot: Mutex::new(None),
-        }
+        AppState::new(service)
     }
 
     #[test]
@@ -1123,6 +1321,7 @@ mod tests {
             duration_days: 365,
             allow_inquiries: true,
             is_remote: false,
+            image_webp_data_uri: None,
         };
         assert!(upsert_ad_impl(bad_ad, Some(password.to_string()), &alice_state).is_err());
 
@@ -1136,6 +1335,7 @@ mod tests {
             duration_days: 30,
             allow_inquiries: true,
             is_remote: false,
+            image_webp_data_uri: None,
         };
         let p1 = upsert_ad_impl(ad_30, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p1.ads.len(), 1);
@@ -1178,6 +1378,7 @@ mod tests {
                 duration_days: 90,
                 allow_inquiries: true,
                 is_remote: false,
+                image_webp_data_uri: None,
             };
             let p = upsert_ad_impl(ad_input, Some(password.to_string()), &alice_state).unwrap();
             ad_ids.push(p.ads.last().unwrap().id.clone());
@@ -1193,6 +1394,7 @@ mod tests {
             duration_days: 90,
             allow_inquiries: true,
             is_remote: false,
+            image_webp_data_uri: None,
         };
         let err = upsert_ad_impl(ad_6, Some(password.to_string()), &alice_state).unwrap_err();
         assert!(err.message.contains("market.adLimitReached"));
@@ -1211,6 +1413,7 @@ mod tests {
             duration_days: 90,
             allow_inquiries: false,
             is_remote: false,
+            image_webp_data_uri: None,
         };
         let p_after = upsert_ad_impl(edit_input, Some(password.to_string()), &alice_state).unwrap();
         let ad_after = p_after.ads.iter().find(|a| a.id == target_id).unwrap();
@@ -1239,6 +1442,7 @@ mod tests {
             duration_days: 30,
             allow_inquiries: true,
             is_remote: false,
+            image_webp_data_uri: None,
         };
         let p_new = upsert_ad_impl(ad_new, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p_new.ads.len(), 5);
@@ -1410,16 +1614,20 @@ mod tests {
             duration_days: 90,
             allow_inquiries: true,
             is_remote: false,
+            image_webp_data_uri: None,
         };
         upsert_ad_impl(ad_req, Some(password.to_string()), &alice_state).unwrap();
         let alice_profile = set_card_published_impl(true, false, Some(password.to_string()), &alice_state).await.unwrap();
 
         assert!(alice_profile.published);
         assert!(alice_profile.share_uri.is_some());
-        let share_uri = alice_profile.share_uri.unwrap();
+        let _share_uri = alice_profile.share_uri.unwrap();
 
-        // 2. Bob imports Alice's card via share URI
-        let import_res_bob = import_contact_card_impl(share_uri, Some(password.to_string()), &bob_state).unwrap();
+        // 2. Bob imports Alice's full card via file envelope (since QR share_uri is 100% ad-free & image-free)
+        let file_wire = alice_profile.file_wire.expect("file_wire must be present");
+        let file_env = humoco_market::own_envelope(file_wire);
+        let file_env_json = serde_json::to_string(&file_env).unwrap();
+        let import_res_bob = import_contact_card_impl(file_env_json, Some(password.to_string()), &bob_state).unwrap();
         assert_eq!(import_res_bob.status, "accepted");
 
         // Bob checks market view and board
@@ -1450,5 +1658,168 @@ mod tests {
         let bob_view_empty = get_market_view_impl(Some(password.to_string()), &bob_state).unwrap();
         assert!(bob_view_empty.people.is_empty());
         assert!(bob_view_empty.board.is_empty());
+    }
+
+    fn make_test_vp8_webp(width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(30);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(22u32).to_le_bytes());
+        bytes.extend_from_slice(b"WEBP");
+        bytes.extend_from_slice(b"VP8 ");
+        bytes.extend_from_slice(&(10u32).to_le_bytes());
+        bytes.push(0x00);
+        bytes.extend_from_slice(&[0x00, 0x00]);
+        bytes.extend_from_slice(&[0x9d, 0x01, 0x2a]);
+        bytes.extend_from_slice(&(width & 0x3fff).to_le_bytes());
+        bytes.extend_from_slice(&(height & 0x3fff).to_le_bytes());
+        bytes
+    }
+
+    #[tokio::test]
+    async fn test_market_media_workflow() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+
+        let base_dir = temp_test_dir("market_media_workflow");
+        let password = "TestPassword123!";
+        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_state = create_test_state(alice_service);
+
+        // 1. Initial profile check
+        let initial_profile = get_my_market_profile_impl(Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(initial_profile.media_max_bytes, humoco_market::MAX_AD_MEDIA_BYTES);
+        assert_eq!(initial_profile.media_max_count, humoco_market::MAX_ADS_PER_CARD);
+        assert_eq!(initial_profile.media_used_count, 0);
+
+        // 2. Avatar validation in save_my_market_profile_impl
+        let bad_avatar_req = FrontendSaveMyMarketProfileRequest {
+            profile: FrontendUserProfile {
+                picture_url: Some(format!("data:image/webp;base64,{}", STANDARD.encode(&make_test_vp8_webp(120, 120)))),
+                ..Default::default()
+            },
+            visibility: CardFieldVisibility::default(),
+            skills: vec![],
+            max_hops: 2,
+            validity_years: 2,
+            allow_inquiries: true,
+        };
+        assert!(save_my_market_profile_impl(bad_avatar_req, Some(password.to_string()), &alice_state).is_err());
+
+        let good_avatar_req = FrontendSaveMyMarketProfileRequest {
+            profile: FrontendUserProfile {
+                picture_url: Some(format!("data:image/webp;base64,{}", STANDARD.encode(&make_test_vp8_webp(96, 96)))),
+                ..Default::default()
+            },
+            visibility: CardFieldVisibility::default(),
+            skills: vec![],
+            max_hops: 2,
+            validity_years: 2,
+            allow_inquiries: true,
+        };
+        let saved_profile = save_my_market_profile_impl(good_avatar_req, Some(password.to_string()), &alice_state).unwrap();
+        assert!(saved_profile.profile.picture_url.is_some());
+
+        // 3. Create ad with WebP image
+        let webp_ad = make_test_vp8_webp(400, 300);
+        let ad_data_uri = format!("data:image/webp;base64,{}", STANDARD.encode(&webp_ad));
+
+        let ad_with_img = FrontendAdInput {
+            id: None,
+            kind: humoco_market::AdKind::Offer,
+            title: "Handmade Pottery".to_string(),
+            text: Some("High quality clay".to_string()),
+            pricing: Some("15 M".to_string()),
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: Some(ad_data_uri.clone()),
+        };
+        let p_after_ad = upsert_ad_impl(ad_with_img, Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(p_after_ad.media_used_count, 1);
+        let ad_id = p_after_ad.ads[0].id.clone();
+        let token = p_after_ad.ads[0].image_token.clone().expect("Must have image_token");
+        assert!(humoco_market::is_valid_image_token(&token));
+
+        // Verify own image retrieval via get_ad_image_impl
+        let alice_did = {
+            let s = alice_state.service.lock().unwrap();
+            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+        };
+        let retrieved_img = get_ad_image_impl(alice_did.clone(), token.clone(), Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert_eq!(retrieved_img, Some(ad_data_uri.clone()));
+
+        // 4. Edit ad without changing image (image_webp_data_uri: None) -> image_token preserved
+        let edit_no_img_change = FrontendAdInput {
+            id: Some(ad_id.clone()),
+            kind: humoco_market::AdKind::Offer,
+            title: "Handmade Pottery (Refined)".to_string(),
+            text: Some("High quality clay".to_string()),
+            pricing: Some("15 M".to_string()),
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: None,
+        };
+        let p_edit = upsert_ad_impl(edit_no_img_change, Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(p_edit.ads[0].image_token, Some(token.clone()));
+        assert_eq!(p_edit.media_used_count, 1);
+
+        // 5. Edit ad removing image (image_webp_data_uri: Some("")) -> image_token becomes None
+        let edit_remove_img = FrontendAdInput {
+            id: Some(ad_id.clone()),
+            kind: humoco_market::AdKind::Offer,
+            title: "Handmade Pottery (No Photo)".to_string(),
+            text: Some("High quality clay".to_string()),
+            pricing: Some("15 M".to_string()),
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: Some("".to_string()),
+        };
+        let p_removed = upsert_ad_impl(edit_remove_img, Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(p_removed.ads[0].image_token, None);
+        assert_eq!(p_removed.media_used_count, 0);
+
+        // 6. Test negative caching and unknown image tokens in get_ad_image_impl
+        // Invalid token
+        let invalid_token_res = get_ad_image_impl(alice_did.clone(), "invalid_token".to_string(), Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert_eq!(invalid_token_res, None);
+
+        // Valid syntax token but unknown and drops configured -> tries network, fails, inserts into negative cache
+        {
+            let mut s = alice_state.settings.lock().unwrap();
+            *s = Some(crate::settings::AppSettings {
+                market_selected_syncs: vec![crate::models::FrontendSyncDescriptor {
+                    write_url: "http://127.0.0.1:9999".to_string(),
+                    read_url: "http://127.0.0.1:9999".to_string(),
+                    slot_id: None,
+                    drop_pub: "0".repeat(64),
+                    last_seen_at: None,
+                    last_error_at: None,
+                    fail_count: 0,
+                }],
+                ..Default::default()
+            });
+        }
+
+        let unknown_token = "0123456789abcdef0123456789abcdef".to_string();
+        let unknown_res = get_ad_image_impl(alice_did.clone(), unknown_token.clone(), Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert_eq!(unknown_res, None);
+
+        // Negative cache must contain blob_id
+        let blob_id = humoco_market::derive_media_blob_id(&unknown_token).unwrap();
+        assert!(alice_state.media_negative_cache.lock().unwrap().contains_key(&blob_id));
+
+        // Subsequent call hits negative cache immediately
+        let hit_neg_cache = get_ad_image_impl(alice_did.clone(), unknown_token.clone(), Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert_eq!(hit_neg_cache, None);
     }
 }

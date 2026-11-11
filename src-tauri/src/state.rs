@@ -16,6 +16,14 @@ pub const MARKET_SYNC_KEY: &str = "market_sync_state";
 pub const MARKET_POST_STATE_KEY: &str = "market_post_state";
 pub const BUNDLE_RETENTION_DAYS: i64 = 90;
 
+pub fn own_media_storage_key(image_token: &str) -> String {
+    format!("market_own_media_{}", image_token)
+}
+
+pub fn cached_media_storage_key(blob_id: &str) -> String {
+    format!("market_media_cache_{}", blob_id)
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PostOutboxEntry {
     pub msg_id: String,
@@ -90,6 +98,8 @@ pub struct StoredSyncState {
     pub slot_mtimes: std::collections::BTreeMap<String, u64>,
     #[serde(default)]
     pub sync_sources_by_did: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub uploaded_media_blobs: std::collections::HashSet<String>,
 }
 
 pub struct AppState {
@@ -100,9 +110,23 @@ pub struct AppState {
     pub settings: Mutex<Option<AppSettings>>,
     pub(crate) regional_views: Mutex<Option<crate::checkout::RegionalViewCache>>,
     pub wot: Mutex<Option<humoco_wot::TrustRegister>>,
+    pub media_negative_cache: Mutex<std::collections::HashMap<String, u64>>,
 }
 
 impl AppState {
+    pub fn new(service: AppService) -> Self {
+        Self {
+            service: Mutex::new(service),
+            history: Mutex::new(None),
+            events: Mutex::new(None),
+            contacts: Mutex::new(None),
+            settings: Mutex::new(None),
+            regional_views: Mutex::new(None),
+            wot: Mutex::new(None),
+            media_negative_cache: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
     // 1. Central helper method to access the locked service
     pub fn service(&self) -> MutexGuard<'_, AppService> {
         self.service.lock().unwrap()

@@ -1,5 +1,5 @@
 // src/components/marketplace/ProfileCardEditor.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     User,
@@ -17,6 +17,7 @@ import {
     Briefcase,
     Sparkles,
     Search,
+    Upload,
 } from 'lucide-react';
 import {
     CardFieldVisibility,
@@ -37,6 +38,7 @@ import {
     getCurrentLocation,
     geocodeAddress,
 } from '../../utils/geoUtils';
+import { compressAvatarToWebpDataUri } from '../../utils/imageCompression';
 
 export interface ProfileCardEditorProps {
     isOpen: boolean;
@@ -65,6 +67,20 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
     const [coordPrecision, setCoordPrecision] = useState<CoordinatePrecision>(2);
     const [isLocating, setIsLocating] = useState(false);
     const [geoError, setGeoError] = useState<string | null>(null);
+    const avatarInputRef = useRef<HTMLInputElement | null>(null);
+
+    const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+            const webpDataUri = await compressAvatarToWebpDataUri(file);
+            setProfile((prev) => ({ ...prev, pictureUrl: webpDataUri }));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+        } finally {
+            e.target.value = '';
+        }
+    };
 
     // Synchronize initial state
     useEffect(() => {
@@ -416,19 +432,64 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                                 />
                             </div>
 
-                            {/* Foto URL */}
-                            <div className="space-y-1.5">
+                            {/* Profilbild / Logo (96x96 Avatar Upload) */}
+                            <div className="space-y-2">
                                 <div className="flex items-center justify-between">
                                     <label className="text-[11px] font-bold text-theme-secondary">
-                                        {t('profile.pictureUrl', 'Foto-URL')}
+                                        {t('marketplace.avatarLabel', 'Profilbild / Logo')}
                                     </label>
                                     {renderVisibilityButton('picture')}
                                 </div>
-                                <Input
-                                    placeholder="https://..."
-                                    value={profile.pictureUrl || ''}
-                                    onChange={(e) => setProfile({ ...profile, pictureUrl: e.target.value })}
-                                />
+                                <div className="flex items-center gap-4">
+                                    {/* Circular 96x96 preview */}
+                                    <div className="w-24 h-24 rounded-full overflow-hidden border border-theme-subtle bg-theme-primary/10 text-theme-primary flex items-center justify-center shrink-0 shadow-xs">
+                                        {profile.pictureUrl ? (
+                                            <img
+                                                src={profile.pictureUrl}
+                                                alt="Avatar"
+                                                className="w-full h-full object-cover rounded-full"
+                                            />
+                                        ) : (
+                                            <User size={36} className="text-theme-primary/60" />
+                                        )}
+                                    </div>
+                                    <div className="space-y-1.5 flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <input
+                                                ref={avatarInputRef}
+                                                type="file"
+                                                accept="image/*"
+                                                data-testid="avatar-file-input"
+                                                onChange={handleAvatarFileChange}
+                                                className="hidden"
+                                            />
+                                            <Button
+                                                type="button"
+                                                size="xs"
+                                                variant="outline"
+                                                onClick={() => avatarInputRef.current?.click()}
+                                                className="flex items-center gap-1.5"
+                                            >
+                                                <Upload size={13} />
+                                                <span>{t('marketplace.avatarUpload', 'Bild auswählen')}</span>
+                                            </Button>
+                                            {profile.pictureUrl && (
+                                                <Button
+                                                    type="button"
+                                                    size="xs"
+                                                    variant="secondary"
+                                                    data-testid="avatar-remove-btn"
+                                                    onClick={() => setProfile((prev) => ({ ...prev, pictureUrl: undefined }))}
+                                                >
+                                                    {t('marketplace.avatarRemove', 'Entfernen')}
+                                                </Button>
+                                            )}
+                                        </div>
+                                        <p className="text-[10px] text-theme-light leading-snug">
+                                            {t('marketplace.avatarHint', 'Wird quadratisch auf 96×96 Pixel zugeschnitten (WebP, max. 4 KB).')}
+                                        </p>
+                                    </div>
+                                </div>
                             </div>
 
                             {/* Geschlecht */}

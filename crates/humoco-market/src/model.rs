@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::sd_card::SdCard;
 
+pub const MAX_AVATAR_DATA_URI_CHARS: usize = 4096;
+pub const MAX_AD_MEDIA_BYTES: usize = 102_400;
+pub const MAX_AD_IMAGE_DIM: u16 = 1024;
+pub const AVATAR_IMAGE_DIM: u16 = 96;
+
 pub const MAX_SKILLS_PER_CARD: usize = 8;
 pub const MAX_SKILL_TITLE_CHARS: usize = 60;
 pub const MAX_SKILL_TEXT_CHARS: usize = 160;
@@ -68,6 +73,8 @@ pub struct Ad {
     pub allow_inquiries: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_remote: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

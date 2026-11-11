@@ -17,6 +17,21 @@ export interface PeopleTabProps {
     onSelectPerson: (person: FrontendMarketPerson) => void;
 }
 
+const PersonAvatar: React.FC<{ pictureUrl?: string; displayName: string }> = ({ pictureUrl, displayName }) => {
+    const [hasError, setHasError] = useState(false);
+    if (pictureUrl && !hasError) {
+        return (
+            <img
+                src={pictureUrl}
+                alt=""
+                className="w-full h-full object-cover rounded-full"
+                onError={() => setHasError(true)}
+            />
+        );
+    }
+    return <>{displayName.charAt(0).toUpperCase() || <User size={18} />}</>;
+};
+
 export const PeopleTab: React.FC<PeopleTabProps> = ({
     people,
     myCoordinates,
@@ -150,15 +165,7 @@ export const PeopleTab: React.FC<PeopleTabProps> = ({
                                     <div className="flex flex-wrap items-start justify-between gap-2">
                                         <div className="flex items-center gap-3 min-w-[140px] flex-1">
                                             <div className="w-11 h-11 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center font-bold text-sm shrink-0 overflow-hidden">
-                                                {person.profile.pictureUrl ? (
-                                                    <img
-                                                        src={person.profile.pictureUrl}
-                                                        alt={displayName}
-                                                        className="w-full h-full object-cover"
-                                                    />
-                                                ) : (
-                                                    displayName.charAt(0).toUpperCase() || <User size={18} />
-                                                )}
+                                                <PersonAvatar pictureUrl={person.profile.pictureUrl} displayName={displayName} />
                                             </div>
                                             <div className="min-w-0 flex-1">
                                                 <h3 className="text-sm font-bold text-theme-secondary truncate" title={displayName}>

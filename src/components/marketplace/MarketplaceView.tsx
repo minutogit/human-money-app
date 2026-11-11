@@ -600,6 +600,10 @@ export function MarketplaceView({
                 onSave={handleSaveAd}
                 editingAd={editingAd}
                 activeAdsCount={activeMyAdsCount}
+                ownerDid={currentProfile?.profile?.id}
+                mediaMaxBytes={currentProfile?.mediaMaxBytes}
+                mediaMaxCount={currentProfile?.mediaMaxCount}
+                mediaUsedCount={currentProfile?.mediaUsedCount}
             />
 
             {/* Renew Ad Modal */}

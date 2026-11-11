@@ -17,7 +17,6 @@ use chrono::Local;
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::sync::Mutex;
 
 use log::info;
 use tauri::{AppHandle, Manager};
@@ -84,15 +83,7 @@ pub fn run() {
             info!("Using wallet data path: {}", wallet_path.display());
 
             let service = AppService::new(&wallet_path).expect("Failed to create AppService");
-            app.manage(AppState {
-                service: Mutex::new(service),
-                history: Mutex::new(None),
-                events: Mutex::new(None),
-                contacts: Mutex::new(None),
-                settings: Mutex::new(None),
-                regional_views: Mutex::new(None),
-                wot: Mutex::new(None),
-            });
+            app.manage(AppState::new(service));
             spawn_regional_view_renewal_worker(app.handle().clone());
             crate::intent_reconciliation::spawn_intent_reconciliation_worker(app.handle().clone());
 
@@ -171,6 +162,7 @@ pub fn run() {
             upsert_ad,
             renew_ad,
             delete_ad,
+            get_ad_image,
             get_market_view,
             export_forward_card,
             import_contact_card,

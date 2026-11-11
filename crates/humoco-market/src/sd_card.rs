@@ -326,11 +326,15 @@ fn validate_card_item_fields(item: &CardItem, valid_until: u64) -> Result<(), Ma
             }
         }
         CardItem::Picture(s) => {
-            let trimmed = s.trim();
-            if trimmed.is_empty() || trimmed.chars().count() > 200 {
-                return Err(MarketError::Validation(
-                    "Picture must be 1..=200 characters".to_string(),
-                ));
+            if s.starts_with(crate::media::MEDIA_DATA_URI_PREFIX) {
+                crate::media::validate_avatar_data_uri(s)?;
+            } else {
+                let trimmed = s.trim();
+                if trimmed.is_empty() || trimmed.chars().count() > 200 {
+                    return Err(MarketError::Validation(
+                        "Picture must be 1..=200 characters".to_string(),
+                    ));
+                }
             }
         }
         CardItem::Gender(s) => {
@@ -431,6 +435,14 @@ fn validate_card_item_fields(item: &CardItem, valid_until: u64) -> Result<(), Ma
                     "Ad expires_at {} exceeds card valid_until {}",
                     ad.expires_at, valid_until
                 )));
+            }
+            if let Some(ref token) = ad.image_token {
+                if !crate::media::is_valid_image_token(token) {
+                    return Err(MarketError::Validation(format!(
+                        "Invalid ad image_token '{}': expected 32 lowercase hex chars",
+                        token
+                    )));
+                }
             }
         }
     }
@@ -973,6 +985,12 @@ pub fn render_wire(card: &SdCard, target_distance: u8, filter: WireFilter) -> Op
             if bare_wire.len() > budget {
                 return None;
             }
+
+            // Exclude Picture and Ad items so QR codes remain 100% image-free and ad-free
+            let mut eligible: Vec<(&str, CardItem)> = eligible
+                .into_iter()
+                .filter(|(_, item)| !matches!(item, CardItem::Picture(_) | CardItem::Ad(_)))
+                .collect();
 
             // Sort eligible disclosures by item priority_rank ascending
             eligible.sort_by_key(|(_, item)| item.priority_rank());

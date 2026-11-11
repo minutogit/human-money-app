@@ -357,7 +357,6 @@ mod tests {
     use super::*;
     use human_money_core::app_service::AppService;
     use std::path::Path;
-    use std::sync::Mutex;
 
     fn cache(expires_at_ms:u64)->RegionalViewCache {
         RegionalViewCache {
@@ -369,15 +368,9 @@ mod tests {
     }
 
     fn test_state(cache:Option<RegionalViewCache>,path:&Path)->AppState {
-        AppState {
-            service:Mutex::new(AppService::new(path).unwrap()),
-            history:Mutex::new(None),
-            events:Mutex::new(None),
-            contacts:Mutex::new(None),
-            settings:Mutex::new(None),
-            regional_views:Mutex::new(cache),
-            wot: Mutex::new(None),
-        }
+        let state = AppState::new(AppService::new(path).unwrap());
+        *state.regional_views.lock().unwrap() = cache;
+        state
     }
 
     #[test]
@@ -411,15 +404,8 @@ mod tests {
             human_money_core::MnemonicLanguage::English,
             "device-pos-test".into(),
         ).unwrap();
-        let state = AppState {
-            service: Mutex::new(service),
-            history: Mutex::new(None),
-            events: Mutex::new(None),
-            contacts: Mutex::new(None),
-            settings: Mutex::new(Some(AppSettings::default())),
-            regional_views: Mutex::new(None),
-            wot: Mutex::new(None),
-        };
+        let state = AppState::new(service);
+        *state.settings.lock().unwrap() = Some(AppSettings::default());
         let error = checkout_bundle(&state, "p1", b"fake_bundle", &HashMap::new(), None).await.expect_err("must fail");
         assert_eq!(error.message, "pos.noServersConfigured");
         drop(state);

@@ -186,6 +186,7 @@ mod tests {
             settings: Mutex::new(None),
             regional_views: Mutex::new(None),
             wot: Mutex::new(None),
+            media_negative_cache: Mutex::new(std::collections::HashMap::new()),
         };
 
         let cache = state_raw.contacts.lock().unwrap();

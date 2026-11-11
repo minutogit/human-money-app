@@ -1,5 +1,5 @@
 // src/components/marketplace/MarketplaceOptionsPanel.tsx
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Store, CloudOff, Settings } from 'lucide-react';
 import { PageOptionsPanel } from '../ui/PageOptionsPanel';

@@ -41,6 +41,10 @@ pub struct SyncCapabilityResult {
     pub ttl_days: Option<u32>,
     pub slot_etag: Option<String>,
     pub rotation: Option<DropRotationCertificate>,
+    pub media_max_count: Option<usize>,
+    pub media_max_user_bytes: Option<usize>,
+    pub media_used_count: Option<usize>,
+    pub media_used_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,6 +248,26 @@ pub async fn head_slot_capability(
             .and_then(|v| v.to_str().ok())
             .map(|s| s.trim().trim_matches('"').to_string())
             .filter(|s| !s.is_empty());
+        let media_max_count = resp
+            .headers()
+            .get("x-drop-media-max-count")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok());
+        let media_max_user_bytes = resp
+            .headers()
+            .get("x-drop-media-max-user-bytes")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok());
+        let media_used_count = resp
+            .headers()
+            .get("x-drop-media-used-count")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok());
+        let media_used_bytes = resp
+            .headers()
+            .get("x-drop-media-used-bytes")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok());
 
         Ok(SyncCapabilityResult {
             authorized: true,
@@ -251,6 +275,10 @@ pub async fn head_slot_capability(
             ttl_days,
             slot_etag,
             rotation,
+            media_max_count,
+            media_max_user_bytes,
+            media_used_count,
+            media_used_bytes,
         })
     } else if status.as_u16() == 403 {
         Ok(SyncCapabilityResult {
@@ -259,6 +287,10 @@ pub async fn head_slot_capability(
             ttl_days: None,
             slot_etag: None,
             rotation,
+            media_max_count: None,
+            media_max_user_bytes: None,
+            media_used_count: None,
+            media_used_bytes: None,
         })
     } else if status.as_u16() == 429 {
         let secs = parse_retry_after(resp.headers());
@@ -360,6 +392,97 @@ pub async fn delete_slot(
         let text = resp.text().await.unwrap_or_default();
         Err(format!(
             "Server returned HTTP {} on slot DELETE: {}",
+            status,
+            text.trim()
+        ))
+    }
+}
+
+pub async fn put_media_blob(
+    client: &reqwest::Client,
+    write_url: &str,
+    signed_headers: &SignedDropHeaders,
+    blob_id: &str,
+    blob_bytes: &[u8],
+) -> Result<PutSlotOutcome, String> {
+    validate_sync_url(write_url)?;
+
+    let resp = client
+        .put(write_url)
+        .header("X-Drop-Pubkey", &signed_headers.pubkey_hex)
+        .header("X-Channel", "media")
+        .header("X-Media-Id", blob_id)
+        .header("X-Drop-Timestamp", signed_headers.timestamp.to_string())
+        .header("X-Drop-Nonce", &signed_headers.nonce_hex)
+        .header("X-Drop-Signature", &signed_headers.signature_hex)
+        .header("Content-Type", "application/octet-stream")
+        .body(blob_bytes.to_vec())
+        .send()
+        .await
+        .map_err(|e| format!("Network error sending media blob: {}", e))?;
+
+    let status = resp.status();
+    let status_code = status.as_u16();
+
+    if status_code == 200 || status_code == 201 || status_code == 204 {
+        let etag = extract_etag(resp.headers());
+        let rotation = extract_rotation_header(resp.headers());
+        Ok(PutSlotOutcome::Saved { etag, rotation })
+    } else if status_code == 412 {
+        let current_etag = extract_etag(resp.headers());
+        Ok(PutSlotOutcome::PreconditionFailed { current_etag })
+    } else if status_code == 413 {
+        Err("Payload too large: sync server rejected media size (HTTP 413)".to_string())
+    } else if status_code == 429 {
+        let secs = parse_retry_after(resp.headers());
+        Err(format!("Too many requests: sync server rate limit exceeded (HTTP 429). Retry-After: {}s", secs))
+    } else if status_code == 507 {
+        Err("Insufficient storage: sync server quota exceeded (HTTP 507)".to_string())
+    } else {
+        let text = resp.text().await.unwrap_or_default();
+        Err(format!(
+            "Server returned HTTP {} on media PUT: {}",
+            status,
+            text.trim()
+        ))
+    }
+}
+
+pub async fn delete_media_blob(
+    client: &reqwest::Client,
+    write_url: &str,
+    signed_headers: &SignedDropHeaders,
+    blob_id: Option<&str>,
+) -> Result<(), String> {
+    validate_sync_url(write_url)?;
+
+    let mut req = client
+        .delete(write_url)
+        .header("X-Drop-Pubkey", &signed_headers.pubkey_hex)
+        .header("X-Channel", "media")
+        .header("X-Drop-Timestamp", signed_headers.timestamp.to_string())
+        .header("X-Drop-Nonce", &signed_headers.nonce_hex)
+        .header("X-Drop-Signature", &signed_headers.signature_hex);
+
+    if let Some(id) = blob_id {
+        req = req.header("X-Media-Id", id);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Network error deleting media blob: {}", e))?;
+
+    let status = resp.status();
+    if status.as_u16() == 200 || status.as_u16() == 204 {
+        Ok(())
+    } else if status.as_u16() == 429 {
+        let secs = parse_retry_after(resp.headers());
+        Err(format!("Rate limited deleting media blob (HTTP 429). Retry-After: {}s", secs))
+    } else {
+        let text = resp.text().await.unwrap_or_default();
+        Err(format!(
+            "Server returned HTTP {} on media DELETE: {}",
             status,
             text.trim()
         ))
@@ -630,6 +753,20 @@ pub async fn get_slot(
     Ok(Some(bytes.to_vec()))
 }
 
+pub async fn get_media_blob(
+    client: &reqwest::Client,
+    read_url: &str,
+    blob_id: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    if blob_id.len() != 64 || !blob_id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+        return Err(format!(
+            "Invalid blob_id '{}': expected 64 lowercase hex chars",
+            blob_id
+        ));
+    }
+    get_slot(client, read_url, blob_id, "media").await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -659,5 +796,17 @@ mod tests {
 
         let err3 = "Network timeout: connection refused";
         assert_eq!(extract_retry_after_from_error_str(err3), None);
+    }
+
+    #[tokio::test]
+    async fn test_get_media_blob_id_validation() {
+        let client = create_sync_http_client();
+        // Invalid length
+        let err_short = get_media_blob(&client, "https://example.com/sync", "abc").await.unwrap_err();
+        assert!(err_short.contains("Invalid blob_id"));
+
+        // Invalid characters (uppercase or non-hex)
+        let err_chars = get_media_blob(&client, "https://example.com/sync", &"G".repeat(64)).await.unwrap_err();
+        assert!(err_chars.contains("Invalid blob_id"));
     }
 }

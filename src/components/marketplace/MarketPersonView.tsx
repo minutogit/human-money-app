@@ -70,6 +70,11 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [isContactDialogOpen, setIsContactDialogOpen] = useState(false);
     const [copiedDid, setCopiedDid] = useState(false);
+    const [avatarError, setAvatarError] = useState(false);
+
+    useEffect(() => {
+        setAvatarError(false);
+    }, [currentPerson.profile.pictureUrl]);
 
     // Forwarding
     const [isForwarding, setIsForwarding] = useState(false);
@@ -327,11 +332,12 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
             <Card className="p-6 sm:p-8 bg-white border border-theme-subtle rounded-3xl shadow-soft space-y-6">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-6">
                     <div className="ring-4 ring-theme-primary/10 rounded-full p-1 shrink-0 bg-white shadow-sm overflow-hidden w-20 h-20 flex items-center justify-center">
-                        {currentPerson.profile.pictureUrl ? (
+                        {currentPerson.profile.pictureUrl && !avatarError ? (
                             <img
                                 src={currentPerson.profile.pictureUrl}
-                                alt={displayName}
+                                alt=""
                                 className="w-full h-full object-cover rounded-full"
+                                onError={() => setAvatarError(true)}
                             />
                         ) : (
                             <Avatar

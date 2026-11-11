@@ -73,6 +73,7 @@ fn sample_items() -> Vec<(CardItem, u8)> {
                 expires_at: 1700000000 + 30 * 86_400,
                 allow_inquiries: true,
                 is_remote: false,
+                image_token: None,
             }),
             2,
         ),
@@ -243,6 +244,7 @@ fn test_no_ads_wire_filter_fits_7168_with_8_skills() {
             expires_at: 1700000000 + 30 * 86_400,
             allow_inquiries: false,
             is_remote: false,
+            image_token: None,
         }),
         2,
     ));
@@ -442,6 +444,7 @@ fn test_limits_skills_and_ads() {
                     expires_at: 1700000000 + 30 * 86_400,
                     allow_inquiries: false,
                     is_remote: false,
+                    image_token: None,
                 }),
                 2,
             )
@@ -462,6 +465,7 @@ fn test_limits_skills_and_ads() {
             expires_at: 1700000000 + 30 * 86_400,
             allow_inquiries: false,
             is_remote: false,
+            image_token: None,
         }),
         2,
     ));
@@ -487,6 +491,7 @@ fn test_ad_duration_and_validity_invariants() {
             expires_at: 1700000000 + 181 * 86_400,
             allow_inquiries: false,
             is_remote: false,
+            image_token: None,
         }),
         2,
     );
@@ -505,6 +510,7 @@ fn test_ad_duration_and_validity_invariants() {
             expires_at: 1700000000 + 101 * 86_400,
             allow_inquiries: false,
             is_remote: false,
+            image_token: None,
         }),
         2,
     );
@@ -524,6 +530,7 @@ fn test_ad_duration_and_validity_invariants() {
             expires_at: 1700000000 + 30 * 86_400,
             allow_inquiries: false,
             is_remote: false,
+            image_token: None,
         }),
         2,
     );
@@ -539,6 +546,7 @@ fn test_ad_duration_and_validity_invariants() {
             expires_at: 1700000000 + 30 * 86_400,
             allow_inquiries: false,
             is_remote: false,
+            image_token: None,
         }),
         2,
     );
@@ -557,6 +565,7 @@ fn test_ad_duration_and_validity_invariants() {
             expires_at: 1600000000 + 30 * 86_400,
             allow_inquiries: false,
             is_remote: false,
+            image_token: None,
         }),
         2,
     );

@@ -1,5 +1,5 @@
 // src/components/marketplace/MineTab.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     User,
@@ -64,6 +64,11 @@ export const MineTab: React.FC<MineTabProps> = ({
     const [isExpiredOpen, setIsExpiredOpen] = useState(false);
     const [isTogglingPublish, setIsTogglingPublish] = useState(false);
     const [inquiryTab, setInquiryTab] = useState<'received' | 'sent'>('received');
+    const [avatarError, setAvatarError] = useState(false);
+
+    useEffect(() => {
+        setAvatarError(false);
+    }, [myProfile.profile.pictureUrl]);
 
     // Separate active and expired ads
     const activeAds = myProfile.ads.filter((a) => a.status === 'active');
@@ -136,11 +141,12 @@ export const MineTab: React.FC<MineTabProps> = ({
                         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                             <div className="flex items-center gap-3.5 min-w-0">
                                 <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center font-bold text-base shrink-0 overflow-hidden">
-                                    {myProfile.profile.pictureUrl ? (
+                                    {myProfile.profile.pictureUrl && !avatarError ? (
                                         <img
                                             src={myProfile.profile.pictureUrl}
-                                            alt={displayName}
-                                            className="w-full h-full object-cover"
+                                            alt=""
+                                            className="w-full h-full object-cover rounded-full"
+                                            onError={() => setAvatarError(true)}
                                         />
                                     ) : (
                                         displayName.charAt(0) || <User size={20} />

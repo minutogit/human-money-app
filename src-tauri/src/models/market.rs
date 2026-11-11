@@ -73,6 +73,8 @@ pub struct StoredOwnMarketProfile {
     pub published: bool,
     #[serde(default)]
     pub last_card: Option<humoco_market::SdCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture_url: Option<String>,
 }
 
 impl Default for StoredOwnMarketProfile {
@@ -86,6 +88,7 @@ impl Default for StoredOwnMarketProfile {
             allow_inquiries: true,
             published: false,
             last_card: None,
+            picture_url: None,
         }
     }
 }
@@ -150,6 +153,8 @@ pub struct FrontendMyAd {
     pub is_remote: bool,
     pub status: String,
     pub days_left: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_token: Option<String>,
 }
 
 impl FrontendMyAd {
@@ -175,8 +180,17 @@ impl FrontendMyAd {
             is_remote: ad.is_remote,
             status,
             days_left,
+            image_token: ad.image_token.clone(),
         }
     }
+}
+
+fn default_media_max_bytes() -> usize {
+    humoco_market::MAX_AD_MEDIA_BYTES
+}
+
+fn default_media_max_count() -> usize {
+    humoco_market::MAX_ADS_PER_CARD
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -198,6 +212,12 @@ pub struct FrontendMyMarketProfile {
     pub qr_svg: Option<String>,
     #[serde(default)]
     pub qr_is_partial: bool,
+    #[serde(default = "default_media_max_bytes")]
+    pub media_max_bytes: usize,
+    #[serde(default = "default_media_max_count")]
+    pub media_max_count: usize,
+    #[serde(default)]
+    pub media_used_count: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -226,6 +246,8 @@ pub struct FrontendAdInput {
     pub allow_inquiries: bool,
     #[serde(default)]
     pub is_remote: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_webp_data_uri: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

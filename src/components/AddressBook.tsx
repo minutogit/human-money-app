@@ -12,7 +12,6 @@ import { useRateLimitCooldown } from '../hooks/useRateLimitCooldown';
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../utils/syncEvents';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeFile, readFile } from '@tauri-apps/plugin-fs';
-import { HelpIcon } from './ui/HelpIcon';
 import { InfoHint } from './ui/InfoHint';
 import { 
     Contact, 
@@ -56,9 +55,6 @@ import {
     Handshake,
     ChevronDown,
     ChevronUp,
-    CloudOff,
-    Settings,
-    MoreHorizontal,
     Check,
     QrCode,
     SlidersHorizontal,

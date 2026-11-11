@@ -38,6 +38,7 @@ export interface Ad {
     expires_at: number;
     allow_inquiries: boolean;
     is_remote?: boolean;
+    image_token?: string | null;
 }
 
 export interface FrontendMyAd {
@@ -53,6 +54,7 @@ export interface FrontendMyAd {
     isRemote?: boolean;
     status: 'active' | 'expired' | string;
     daysLeft: number;
+    imageToken?: string | null;
 }
 
 export interface FrontendMyMarketProfile {
@@ -68,6 +70,9 @@ export interface FrontendMyMarketProfile {
     fileWire?: string | null;
     qrSvg?: string | null;
     qrIsPartial: boolean;
+    mediaMaxBytes?: number;
+    mediaMaxCount?: number;
+    mediaUsedCount?: number;
 }
 
 export interface FrontendSaveMyMarketProfileRequest {
@@ -88,6 +93,7 @@ export interface FrontendAdInput {
     durationDays: number;
     allowInquiries: boolean;
     isRemote?: boolean;
+    imageWebpDataUri?: string | null;
 }
 
 export type FrontendTrustTier = 'trusted' | 'unknown' | 'hidden';

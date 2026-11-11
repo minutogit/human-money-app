@@ -621,7 +621,6 @@ pub fn evaluate_voucher_trust_preview_impl(
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
     use human_money_core::app_service::AppService;
     use crate::models::{FrontendContact, FrontendUserProfile};
 
@@ -649,15 +648,7 @@ mod tests {
     }
 
     fn create_test_state(service: AppService) -> AppState {
-        AppState {
-            service: Mutex::new(service),
-            history: Mutex::new(None),
-            events: Mutex::new(None),
-            contacts: Mutex::new(None),
-            settings: Mutex::new(None),
-            regional_views: Mutex::new(None),
-            wot: Mutex::new(None),
-        }
+        AppState::new(service)
     }
 
     #[test]
