@@ -4,6 +4,7 @@ import AddressBook from '../AddressBook';
 import { invoke } from '@tauri-apps/api/core';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { Contact } from '../../types';
+import { rateLimitManager } from '../../utils/rateLimitManager';
 
 // Mock the Tauri API
 vi.mock('@tauri-apps/api/core', () => ({
@@ -74,6 +75,7 @@ describe('AddressBook Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    rateLimitManager.clearCooldown();
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') {
         return Promise.resolve(mockContacts);
@@ -470,6 +472,66 @@ describe('AddressBook Component', () => {
       expect(syncBtn).toBeDisabled();
       expect(syncBtn).toHaveTextContent(/warten|wait/i);
     });
+  });
+
+  it('displays warning feedback when syncing with no sync services configured', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_sync_overview_status') {
+        return Promise.resolve({
+          connectedCount: 0,
+          pendingCount: 0,
+          friendSyncs: 0,
+          publicSyncs: 0,
+          lastSyncAt: null,
+        });
+      }
+      if (cmd === 'sync_market_channels') {
+        return Promise.resolve({
+          skippedWifiOnly: false,
+          uploadedTo: 0,
+          polledSyncs: 0,
+          decryptedSlots: 0,
+          importedCards: 0,
+          importedWotLists: 0,
+          errors: [],
+        });
+      }
+      if (cmd === 'sync_post_channels') {
+        return Promise.resolve({
+          uploadedTo: 0,
+          polledSyncs: 0,
+          importedPayments: 0,
+          importedReceipts: 0,
+          importedSignatures: 0,
+          newSignRequests: 0,
+          newWotHandshakes: 0,
+          newInquiries: 0,
+          newInquiryReplies: 0,
+          prunedBoxes: 0,
+          errors: [],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
+    });
+
+    const syncBtn = screen.getByRole('button', { name: /contacts\.syncServicesButton|Sync via drops|Über Sync-Dienste synchronisieren|Sync via sync services/i });
+    fireEvent.click(syncBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Kein Sync-Dienst eingerichtet|No sync service configured/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Sync-Dienste synchronisiert: 0|Sync services synchronized: 0/i)).not.toBeInTheDocument();
+    });
+
+    const connectBtn = screen.getAllByRole('button', { name: /Sync-Dienst verbinden|Connect sync service/i })[0];
+    fireEvent.click(connectBtn);
+    expect(mockNavigateToSettingsSection).toHaveBeenCalledWith('sync');
   });
 
   it('shares business card and copies link with sync URLs included from settings', async () => {

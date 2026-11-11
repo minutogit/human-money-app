@@ -354,6 +354,7 @@
   "contacts.syncRecommendationDesc": "Conecta un servicio de sincronización para que pagos, avales y valoraciones de confianza fluyan automáticamente en segundo plano.",
   "contacts.syncRecommendationTitle": "Recomendado",
   "contacts.syncServicesButton": "Sincronizar mediante depósitos",
+  "contacts.syncServicesNoneConfigured": "Ningún servicio de sincronización configurado. Primero configure un servicio de sincronización para sincronizar listas de confianza y ofertas.",
   "contacts.syncServicesSuccess": "Depósitos sincronizados: {{wot}} lista(s) de confianza, {{cards}} oferta(s).",
   "contacts.syncServicesTooltip": "Sincronizar listas de confianza y ofertas mediante depósitos configurados",
   "contacts.tabPersonalContacts": "Contactos personales",

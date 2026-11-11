@@ -108,7 +108,11 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
     const [wotContainerPassword, setWotContainerPassword] = useState('');
     const [isImportingWot, setIsImportingWot] = useState(false);
     const [isSyncingServices, setIsSyncingServices] = useState(false);
-    const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+    const [feedbackMsg, setFeedbackMsg] = useState<{
+        type: 'success' | 'error' | 'warning' | 'info';
+        message: string;
+        action?: { label: string; onClick: () => void };
+    } | null>(null);
     const { cooldownSeconds, isCoolingDown, checkAndTriggerCooldown } = useRateLimitCooldown();
 
     // Handshakes
@@ -511,11 +515,30 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                     : `${t('contacts.syncServicesErrors', 'Fehler beim Synchronisieren:')} ${errorDetail}`;
                 setFeedbackMsg({ type: 'error', message: errorMsg });
             } else {
-                const msg = t('contacts.syncServicesSuccess', 'Sync-Dienste synchronisiert: {{wot}} Vertrauensliste(n), {{cards}} Angebot(e).', {
-                    wot: res?.importedWotLists ?? 0,
-                    cards: res?.importedCards ?? 0,
-                });
-                setFeedbackMsg({ type: 'success', message: msg });
+                const totalConnected = updatedOverview?.connectedCount ?? syncOverview?.connectedCount ?? 0;
+                const totalPolled = (res?.polledSyncs ?? 0) + (postRes?.polledSyncs ?? 0);
+                const totalUploaded = (res?.uploadedTo ?? 0) + (postRes?.uploadedTo ?? 0);
+                const hasActivity = totalConnected > 0 || totalPolled > 0 || totalUploaded > 0 || (res?.importedWotLists ?? 0) > 0 || (res?.importedCards ?? 0) > 0;
+
+                if (!hasActivity) {
+                    setFeedbackMsg({
+                        type: 'warning',
+                        message: t(
+                            'contacts.syncServicesNoneConfigured',
+                            'Kein Sync-Dienst eingerichtet. Richte zuerst einen Sync-Dienst ein, um Vertrauenslisten und Angebote abzugleichen.'
+                        ),
+                        action: {
+                            label: t('contacts.connectSyncServiceBtn', 'Sync-Dienst verbinden'),
+                            onClick: handleNavigateToSyncSettings,
+                        },
+                    });
+                } else {
+                    const msg = t('contacts.syncServicesSuccess', 'Sync-Dienste synchronisiert: {{wot}} Vertrauensliste(n), {{cards}} Angebot(e).', {
+                        wot: res?.importedWotLists ?? 0,
+                        cards: res?.importedCards ?? 0,
+                    });
+                    setFeedbackMsg({ type: 'success', message: msg });
+                }
             }
         } catch (err) {
             checkAndTriggerCooldown(err);
@@ -661,6 +684,17 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                     <AlertBanner
                         variant={feedbackMsg.type}
                         onDismiss={() => setFeedbackMsg(null)}
+                        action={feedbackMsg.action ? (
+                            <Button
+                                type="button"
+                                size="xs"
+                                variant="secondary"
+                                onClick={feedbackMsg.action.onClick}
+                                className="shrink-0 bg-white/80 hover:bg-white text-theme-primary font-bold shadow-xs border-amber-300/60"
+                            >
+                                {feedbackMsg.action.label}
+                            </Button>
+                        ) : undefined}
                     >
                         {feedbackMsg.message}
                     </AlertBanner>

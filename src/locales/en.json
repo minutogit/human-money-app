@@ -394,6 +394,7 @@
   "contacts.syncRecommendationTitle": "Recommended",
   "contacts.syncServicesButton": "Sync via sync services",
   "contacts.syncServicesErrors": "Errors during synchronization:",
+  "contacts.syncServicesNoneConfigured": "No sync service configured. Please connect a sync service in settings first to synchronize trust lists and offers.",
   "contacts.syncServicesSuccess": "Sync services synchronized: {{wot}} trust list(s), {{cards}} card(s).",
   "contacts.syncServicesTooltip": "Synchronize trust lists and marketplace offers via configured sync services",
   "contacts.syncUnreachable": "Unreachable",

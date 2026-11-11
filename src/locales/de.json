@@ -394,6 +394,7 @@
   "contacts.syncRecommendationTitle": "Empfohlen",
   "contacts.syncServicesButton": "Über Sync-Dienste synchronisieren",
   "contacts.syncServicesErrors": "Fehler beim Synchronisieren:",
+  "contacts.syncServicesNoneConfigured": "Kein Sync-Dienst eingerichtet. Richte zuerst einen Sync-Dienst in den Einstellungen ein, um Vertrauenslisten und Angebote abzugleichen.",
   "contacts.syncServicesSuccess": "Sync-Dienste synchronisiert: {{wot}} Vertrauensliste(n), {{cards}} Angebot(e).",
   "contacts.syncServicesTooltip": "Vertrauenseinstufungen und Angebote über konfigurierte Sync-Dienste abgleichen",
   "contacts.syncUnreachable": "Nicht erreichbar",

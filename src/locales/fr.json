@@ -354,6 +354,7 @@
   "contacts.syncRecommendationDesc": "Connectez un service de synchronisation pour que paiements, garants et évaluations de confiance circulent automatiquement en arrière-plan.",
   "contacts.syncRecommendationTitle": "Recommandé",
   "contacts.syncServicesButton": "Synchroniser via les dépôts",
+  "contacts.syncServicesNoneConfigured": "Aucun service de synchronisation configuré. Veuillez d'abord configurer un service de synchronisation pour synchroniser les listes de confiance et les offres.",
   "contacts.syncServicesSuccess": "Dépôts synchronisés : {{wot}} liste(s) de confiance, {{cards}} offre(s).",
   "contacts.syncServicesTooltip": "Synchroniser les listes de confiance et les offres via les dépôts configurés",
   "contacts.tabPersonalContacts": "Contacts personnels",

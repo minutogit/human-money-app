@@ -354,6 +354,7 @@
   "contacts.syncRecommendationDesc": "Collega un servizio di sincronizzazione in modo che pagamenti, garanti e valutazioni di fiducia fluiscano automaticamente in background.",
   "contacts.syncRecommendationTitle": "Consigliato",
   "contacts.syncServicesButton": "Sincronizza tramite depositi",
+  "contacts.syncServicesNoneConfigured": "Nessun servizio di sincronizzazione configurato. Configura prima un servizio di sincronizzazione per sincronizzare elenchi di fiducia e offerte.",
   "contacts.syncServicesSuccess": "Depositi sincronizzati: {{wot}} elenco/i di fiducia, {{cards}} offerta/e.",
   "contacts.syncServicesTooltip": "Sincronizza elenchi di fiducia e offerte tramite i depositi configurati",
   "contacts.tabPersonalContacts": "Contatti personali",
