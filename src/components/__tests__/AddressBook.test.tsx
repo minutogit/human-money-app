@@ -258,7 +258,7 @@ describe('AddressBook Component', () => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
     });
 
-    const syncBtn = screen.getByText(/Sync via drops|Über Ablagen synchronisieren|Über Sync-Dienste synchronisieren|Sync via sync services/i).closest('button')!;
+    const syncBtn = screen.getByTestId('sync-services-button');
     expect(syncBtn).toBeInTheDocument();
     fireEvent.click(syncBtn);
 
@@ -295,7 +295,7 @@ describe('AddressBook Component', () => {
     // Toggle button should be present
     const toggleBtn = screen.getByTestId('toggle-network-options-button');
     expect(toggleBtn).toBeInTheDocument();
-    expect(toggleBtn).toHaveTextContent(/Netzwerk-Optionen anpassen|Customize Network Options/i);
+    expect(toggleBtn).toHaveTextContent(/Netzwerk & Reichweite|Network & Reach|Netzwerk-Optionen anpassen|Customize Network Options/i);
 
     // Expand options
     fireEvent.click(toggleBtn);
@@ -357,6 +357,14 @@ describe('AddressBook Component', () => {
     render(<AddressBook onBack={mockOnBack} />);
 
     await waitFor(() => {
+      expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
+    });
+
+    // Open network options panel
+    const toggleBtn = screen.getByTestId('toggle-network-options-button');
+    fireEvent.click(toggleBtn);
+
+    await waitFor(() => {
       expect(screen.getByTestId('sync-service-recommendation')).toBeInTheDocument();
     });
 
@@ -390,6 +398,10 @@ describe('AddressBook Component', () => {
     await waitFor(() => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
     });
+
+    // Open options panel
+    const toggleBtn = screen.getByTestId('toggle-network-options-button');
+    fireEvent.click(toggleBtn);
 
     expect(screen.queryByTestId('sync-service-recommendation')).not.toBeInTheDocument();
   });

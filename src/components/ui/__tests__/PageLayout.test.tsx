@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { PageLayout } from '../PageLayout';
 import { PageHeader } from '../PageHeader';
 import { BackButton } from '../BackButton';
+import { PageOptionsPanel } from '../PageOptionsPanel';
 
 describe('PageLayout', () => {
   it('renders title as string, description, and children', () => {
@@ -147,6 +148,28 @@ describe('PageLayout', () => {
     const actionsContainer = screen.getByTestId('action-buttons').parentElement;
     expect(actionsContainer?.className).toContain('flex flex-wrap items-center gap-2 sm:justify-end shrink-0 max-w-full ml-auto');
   });
+
+  it('renders optionsPanel when provided above children and inside maxWidth container', () => {
+    render(
+      <PageLayout
+        title="Options Test"
+        maxWidth="5xl"
+        optionsPanel={<div data-testid="custom-options-panel">Options Content</div>}
+      >
+        <div data-testid="child-content">Main Children</div>
+      </PageLayout>
+    );
+
+    const options = screen.getByTestId('custom-options-panel');
+    expect(options).toBeInTheDocument();
+    const children = screen.getByTestId('child-content');
+    expect(children).toBeInTheDocument();
+
+    // Verify ordering and common container
+    const parentContainer = options.closest('.max-w-5xl');
+    expect(parentContainer).toBeInTheDocument();
+    expect(parentContainer).toContainElement(children);
+  });
 });
 
 describe('BackButton', () => {
@@ -240,5 +263,42 @@ describe('PageHeader', () => {
   it('applies custom className prop', () => {
     const { container } = render(<PageHeader title="Custom Class" className="my-header-class" />);
     expect(container.querySelector('header')?.className).toContain('my-header-class');
+  });
+});
+
+describe('PageOptionsPanel', () => {
+  it('renders title, icon, close button, and children', () => {
+    const handleClose = vi.fn();
+    render(
+      <PageOptionsPanel
+        title="Panel Title"
+        icon={<span data-testid="panel-icon">Icon</span>}
+        onClose={handleClose}
+      >
+        <div data-testid="panel-body">Panel Body Content</div>
+      </PageOptionsPanel>
+    );
+
+    expect(screen.getByText('Panel Title')).toBeInTheDocument();
+    expect(screen.getByTestId('panel-icon')).toBeInTheDocument();
+    expect(screen.getByTestId('panel-body')).toBeInTheDocument();
+
+    const closeBtn = screen.getByRole('button', { name: /Schließen|Close/i });
+    expect(closeBtn).toBeInTheDocument();
+    fireEvent.click(closeBtn);
+    expect(handleClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders headerRight content when provided', () => {
+    render(
+      <PageOptionsPanel
+        title="Panel With Actions"
+        headerRight={<button type="button" data-testid="panel-extra-action">Extra Action</button>}
+      >
+        <div>Content</div>
+      </PageOptionsPanel>
+    );
+
+    expect(screen.getByTestId('panel-extra-action')).toBeInTheDocument();
   });
 });

@@ -471,4 +471,44 @@ describe('MarketplaceView Component', () => {
     fireEvent.click(backBtn);
     expect(mockGoBack).toHaveBeenCalledTimes(1);
   });
+
+  it('toggles marketplace options panel and allows changing market settings', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_market_view') return Promise.resolve(mockSnapshot);
+      if (cmd === 'get_my_market_profile') return Promise.resolve(mockMyProfile);
+      if (cmd === 'get_app_settings') {
+        return Promise.resolve({
+          marketShowUnknown: true,
+          maxStoreHops: 2,
+        });
+      }
+      if (cmd === 'save_app_settings') return Promise.resolve();
+      return Promise.resolve({});
+    });
+
+    render(<MarketplaceView />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1, name: /Marktplatz|Marketplace/i })).toBeInTheDocument();
+    });
+
+    // Options panel is initially closed
+    expect(screen.queryByTestId('marketplace-options-panel')).not.toBeInTheDocument();
+
+    // Toggle button should be present
+    const toggleBtn = screen.getByTestId('toggle-marketplace-options-button');
+    expect(toggleBtn).toBeInTheDocument();
+    fireEvent.click(toggleBtn);
+
+    // Options panel opens
+    await waitFor(() => {
+      expect(screen.getByTestId('marketplace-options-panel')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/settings\.marketShowUnknown|Unbekannte Ersteller anzeigen|Show unknown creators/i)).toBeInTheDocument();
+
+    // Toggle close
+    fireEvent.click(toggleBtn);
+    expect(screen.queryByTestId('marketplace-options-panel')).not.toBeInTheDocument();
+  });
 });

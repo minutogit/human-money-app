@@ -8,6 +8,7 @@ export interface PageLayoutProps {
     actions?: React.ReactNode;
     customHeader?: React.ReactNode;
     maxWidth?: '3xl' | '4xl' | '5xl' | '6xl' | 'full';
+    optionsPanel?: React.ReactNode;
     children: React.ReactNode;
     className?: string;
     contentClassName?: string;
@@ -28,6 +29,7 @@ export function PageLayout({
     actions,
     customHeader,
     maxWidth,
+    optionsPanel,
     children,
     className = '',
     contentClassName = '',
@@ -50,10 +52,22 @@ export function PageLayout({
             <div className={`flex-grow py-2 ${contentClassName}`.trim()}>
                 {maxWidthClass ? (
                     <div className={`${maxWidthClass} mx-auto w-full`}>
+                        {optionsPanel && (
+                            <div className="mb-5 animate-in fade-in slide-in-from-top-2 duration-200">
+                                {optionsPanel}
+                            </div>
+                        )}
                         {children}
                     </div>
                 ) : (
-                    children
+                    <>
+                        {optionsPanel && (
+                            <div className="mb-5 animate-in fade-in slide-in-from-top-2 duration-200">
+                                {optionsPanel}
+                            </div>
+                        )}
+                        {children}
+                    </>
                 )}
             </div>
         </div>

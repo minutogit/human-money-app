@@ -393,6 +393,10 @@ describe('WoT Contacts & Trust Ratings', () => {
       });
 
       // Open Trust List menu modal, then export modal
+      const toggleBtn = screen.queryByTestId('toggle-network-options-button');
+      if (toggleBtn) {
+        fireEvent.click(toggleBtn);
+      }
       const trustListMenuBtn = screen.getByTestId('trust-list-menu-button');
       fireEvent.click(trustListMenuBtn);
 

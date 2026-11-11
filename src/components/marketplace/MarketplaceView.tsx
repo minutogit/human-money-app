@@ -7,6 +7,9 @@ import {
     Users,
     User,
     LayoutGrid,
+    SlidersHorizontal,
+    ChevronUp,
+    ChevronDown,
 } from 'lucide-react';
 import {
     FrontendMarketSnapshot,
@@ -35,6 +38,7 @@ import { RenewAdModal } from './RenewAdModal';
 import { ProfileCardEditor } from './ProfileCardEditor';
 import { ShareCardModal } from './ShareCardModal';
 import { ImportCardModal } from './ImportCardModal';
+import { MarketplaceOptionsPanel } from './MarketplaceOptionsPanel';
 import { translateError, stringifyError } from '../../utils/errorHelper';
 import { SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
 import { logger } from '../../utils/log';
@@ -80,6 +84,7 @@ export function MarketplaceView({
     const [isShareModalOpen, setIsShareModalOpen] = useState(false);
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isPublishPromptOpen, setIsPublishPromptOpen] = useState(false);
+    const [isOptionsOpen, setIsOptionsOpen] = useState(false);
 
     // Sync status count
     const [connectedSyncCount, setConnectedSyncCount] = useState<number | null>(null);
@@ -365,8 +370,31 @@ export function MarketplaceView({
             title={t('marketplace.title', 'Marktplatz')}
             onBack={handleBack}
             description={t('marketplace.subtitle', 'Angebote & Gesuche im Netzwerk')}
+            optionsPanel={
+                isOptionsOpen ? (
+                    <MarketplaceOptionsPanel
+                        onSettingsChanged={() => refreshData(false)}
+                        onClose={() => setIsOptionsOpen(false)}
+                        hasSyncService={(connectedSyncCount ?? 0) > 0}
+                        onNavigateToSyncSettings={() => navigateToSettingsSection?.('sync')}
+                    />
+                ) : null
+            }
             actions={
                 <div className="flex items-center gap-2">
+                    <Button
+                        size="sm"
+                        variant={isOptionsOpen ? 'primary' : 'outline'}
+                        onClick={() => setIsOptionsOpen((prev) => !prev)}
+                        className="flex items-center gap-1.5"
+                        data-testid="toggle-marketplace-options-button"
+                        title={t('marketplace.optionsTitle', 'Marktplatz-Optionen & Reichweite')}
+                        aria-label={t('marketplace.optionsTitle', 'Marktplatz-Optionen & Reichweite')}
+                    >
+                        <SlidersHorizontal size={15} />
+                        <span>{t('marketplace.optionsBtn', 'Optionen')}</span>
+                        {isOptionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </Button>
                     {activeTab === 'mine' && (
                         <Button
                             size="sm"

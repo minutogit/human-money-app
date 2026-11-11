@@ -64,6 +64,7 @@ import {
     SlidersHorizontal,
 } from 'lucide-react';
 import { QuickContactModal } from './profile/QuickContactModal';
+import { WotNetworkOptionsPanel } from './wot/WotNetworkOptionsPanel';
 
 interface AddressBookProps {
     onBack?: () => void;
@@ -90,7 +91,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
     const [initialAddSyncUrls, setInitialAddSyncUrls] = useState<string[] | undefined>(undefined);
     const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(initialOpenAddModal || false);
     const [isQuickContactModalOpen, setIsQuickContactModalOpen] = useState(false);
-    const [isNetworkOptionsModalOpen, setIsNetworkOptionsModalOpen] = useState(false);
+    const [isNetworkOptionsOpen, setIsNetworkOptionsOpen] = useState(false);
     const [isShareCardModalOpen, setIsShareCardModalOpen] = useState(false);
     const [ownProfileForShare, setOwnProfileForShare] = useState<FrontendMyMarketProfile | null>(null);
     const [isPublishPromptOpen, setIsPublishPromptOpen] = useState(false);
@@ -628,27 +629,69 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
 
     const currentMaxHops = wotSummary?.ownListMaxHops ?? 3;
 
-    const reachAudienceExplanation = (() => {
-        switch (currentMaxHops) {
-            case 1:
-                return t('contacts.wotReachAudience1', 'Nur Personen, die du direkt in deinen Kontakten hast.');
-            case 2:
-                return t('contacts.wotReachAudience2', 'Deine Kontakte und deren direkte Kontakte (Freunde von Freunden).');
-            case 3:
-                return t('contacts.wotReachAudience3', 'Dein erweitertes Umfeld über bis zu drei Stufen.');
-            case 4:
-            default:
-                return t('contacts.wotReachAudience4', 'Das gesamte erreichbare Netzwerk (maximale Weiterleitung).');
-        }
-    })();
-
     return (
         <PageLayout 
             title={t('contacts.title')} 
             onBack={onBack || navigation?.goBack}
             description={t('contacts.description')} 
+            maxWidth="6xl"
+            optionsPanel={
+                isNetworkOptionsOpen ? (
+                    <WotNetworkOptionsPanel
+                        wotSummary={wotSummary}
+                        currentMaxHops={currentMaxHops}
+                        isUpdatingHops={isUpdatingHops}
+                        hasSyncService={hasSyncService}
+                        onSelectMaxHops={handleSetMaxHops}
+                        onOpenTrustListModal={() => setIsTrustListModalOpen(true)}
+                        onNavigateToSyncSettings={handleNavigateToSyncSettings}
+                        onClose={() => setIsNetworkOptionsOpen(false)}
+                    />
+                ) : null
+            }
             actions={
                 <>
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={handleSyncServices}
+                        disabled={isSyncingServices || isCoolingDown}
+                        className="gap-1.5"
+                        title={isCoolingDown
+                            ? t('contacts.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })
+                            : isSyncingServices
+                            ? t('settings.syncing', 'Synchronisiere...')
+                            : t('contacts.syncServicesButton', 'Über Sync-Dienste synchronisieren')}
+                        aria-label={isCoolingDown
+                            ? t('contacts.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })
+                            : isSyncingServices
+                            ? t('settings.syncing', 'Synchronisiere...')
+                            : t('contacts.syncServicesButton', 'Über Sync-Dienste synchronisieren')}
+                        data-testid="sync-services-button"
+                    >
+                        <RefreshCw size={16} className={isSyncingServices ? 'animate-spin' : ''} />
+                        {isCoolingDown && (
+                            <span className="text-xs font-mono font-bold">
+                                {cooldownSeconds}s
+                                <span className="sr-only"> {t('contacts.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })}</span>
+                            </span>
+                        )}
+                    </Button>
+                    <Button
+                        type="button"
+                        variant={isNetworkOptionsOpen ? 'primary' : 'secondary'}
+                        size="sm"
+                        onClick={() => setIsNetworkOptionsOpen(prev => !prev)}
+                        className="gap-1.5"
+                        title={t('contacts.wotCustomizeOptions', 'Netzwerk-Optionen anpassen')}
+                        aria-label={t('contacts.wotCustomizeOptions', 'Netzwerk-Optionen anpassen')}
+                        data-testid="toggle-network-options-button"
+                    >
+                        <SlidersHorizontal size={16} />
+                        <span>{t('contacts.wotNetworkAndReachBtn', 'Netzwerk & Reichweite')}</span>
+                        {isNetworkOptionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </Button>
                     <Button
                         variant="secondary"
                         size="sm"
@@ -679,7 +722,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                 </>
             }
         >
-            <div className="max-w-6xl mx-auto space-y-8">
+            <div className="space-y-8">
                 {feedbackMsg && (
                     <AlertBanner
                         variant={feedbackMsg.type}
@@ -699,95 +742,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                         {feedbackMsg.message}
                     </AlertBanner>
                 )}
-
-                {/* Slim 1-Line Trust Network Status Bar */}
-                <div className="bg-white/60 backdrop-blur-sm border border-theme-subtle rounded-2xl p-4 shadow-sm space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                            <h4 className="text-sm font-black text-theme-secondary tracking-tight">
-                                {t('contacts.wotBannerTitle')}
-                            </h4>
-                            <HelpIcon topic="wotNetwork" size={15} />
-                            <span className="text-xs text-theme-light font-medium ml-1">
-                                {wotSummary && (wotSummary.ratedContactsCount > 0 || wotSummary.importedPeerListsCount > 0)
-                                    ? t('contacts.wotBannerStats', {
-                                          rated: wotSummary.ratedContactsCount,
-                                          lists: wotSummary.importedPeerListsCount
-                                      })
-                                    : t('contacts.wotBannerEmpty')}
-                            </span>
-                        </div>
-                        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
-                            <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={handleSyncServices}
-                                disabled={isSyncingServices || isCoolingDown}
-                                className="rounded-xl text-xs py-1.5 px-3 gap-1.5 whitespace-nowrap"
-                                title={t('contacts.syncServicesTooltip', 'Vertrauenseinstufungen und Angebote über konfigurierte Sync-Dienste abgleichen')}
-                            >
-                                <RefreshCw size={13} className={isSyncingServices ? 'animate-spin' : ''} />
-                                <span>
-                                    {isCoolingDown
-                                        ? t('contacts.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })
-                                        : isSyncingServices
-                                        ? t('settings.syncing', 'Synchronisiere...')
-                                        : t('contacts.syncServicesButton', 'Über Sync-Dienste synchronisieren')}
-                                </span>
-                            </Button>
-                            <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={() => setIsTrustListModalOpen(true)}
-                                className="rounded-xl text-xs py-1.5 px-3 gap-1.5 whitespace-nowrap"
-                                title={t('contacts.trustListMenuDesc', 'Vertrauenslisten offline teilen oder einlesen')}
-                                data-testid="trust-list-menu-button"
-                            >
-                                <MoreHorizontal size={13} />
-                                <span>{t('contacts.trustListMenuBtn', 'Vertrauensliste')}</span>
-                            </Button>
-                            <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={() => setIsNetworkOptionsModalOpen(prev => !prev)}
-                                className="rounded-xl text-xs py-1.5 px-3 gap-1.5 whitespace-nowrap"
-                                title={t('contacts.wotCustomizeOptions', 'Netzwerk-Optionen anpassen')}
-                                data-testid="toggle-network-options-button"
-                            >
-                                <SlidersHorizontal size={13} />
-                                <span>{t('contacts.wotCustomizeOptions', 'Netzwerk-Optionen anpassen')}</span>
-                            </Button>
-                        </div>
-                    </div>
-
-                    {/* Sync Service recommendation */}
-                    {!hasSyncService && (
-                        <div
-                            data-testid="sync-service-recommendation"
-                            className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-950"
-                        >
-                            <div className="flex items-start sm:items-center gap-2.5">
-                                <CloudOff size={16} className="text-amber-600 shrink-0 mt-0.5 sm:mt-0" />
-                                <p className="text-xs font-medium text-amber-900 leading-relaxed">
-                                    <span className="font-bold text-amber-950">
-                                        {t('contacts.syncRecommendationTitle', 'Empfohlen')}:
-                                    </span>{' '}
-                                    {t('contacts.syncRecommendationDesc', 'Verbinde einen Sync-Dienst, damit Zahlungen, Bürgschaften und Vertrauenseinstufungen automatisch im Hintergrund fließen und du Dateien nicht manuell austauschen musst.')}
-                                </p>
-                            </div>
-                            <Button
-                                type="button"
-                                size="xs"
-                                variant="secondary"
-                                onClick={handleNavigateToSyncSettings}
-                                className="self-start sm:self-auto shrink-0 bg-white hover:bg-amber-50 border-amber-200 text-amber-900 font-bold text-xs gap-1.5 shadow-xs"
-                            >
-                                <Settings size={13} />
-                                <span>{t('contacts.connectSyncServiceBtn', 'Sync-Dienst verbinden')}</span>
-                            </Button>
-                        </div>
-                    )}
-                </div>
 
                 {/* Incoming Pending Handshakes */}
                 {pendingHandshakes.length > 0 && (
@@ -1347,62 +1301,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                 onClose={() => setIsQuickContactModalOpen(false)}
                 onOpenFullShare={handleOpenShareCard}
             />
-
-            {/* Network / Reach Options Modal */}
-            <ModalShell
-                isOpen={isNetworkOptionsModalOpen}
-                onClose={() => setIsNetworkOptionsModalOpen(false)}
-                maxWidth="md"
-                title={t('contacts.networkOptionsModalTitle', 'Netzwerk-Optionen & Reichweite')}
-                description={t('contacts.wotReachSubtitle', 'Bestimme, wie weit deine Vertrauenseinstufungen im Netzwerk weitergegeben werden.')}
-            >
-                <div className="space-y-5 py-2" data-testid="expanded-network-options">
-                    <div className="space-y-3">
-                        <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs font-bold text-theme-secondary">
-                                {t('contacts.wotReachLabel', 'Netzwerk-Reichweite deiner Vertrauenseinstufungen')}
-                            </span>
-                            <HelpIcon topic="wotReach" size={14} />
-                        </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                            {[
-                                { hops: 1, labelKey: 'contacts.wotHops1' },
-                                { hops: 2, labelKey: 'contacts.wotHops2' },
-                                { hops: 3, labelKey: 'contacts.wotHops3' },
-                                { hops: 4, labelKey: 'contacts.wotHops4' }
-                            ].map(({ hops, labelKey }) => {
-                                const isSelected = currentMaxHops === hops;
-                                return (
-                                    <button
-                                        key={hops}
-                                        type="button"
-                                        disabled={isUpdatingHops}
-                                        onClick={() => handleSetMaxHops(hops)}
-                                        className={`px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50 text-center border ${
-                                            isSelected
-                                                ? 'bg-theme-primary text-white border-theme-primary shadow-sm'
-                                                : 'bg-white border-theme-subtle text-theme-secondary hover:border-theme-primary/40'
-                                        }`}
-                                    >
-                                        {t(labelKey)}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </div>
-
-                    {/* Live sentence & InfoHint */}
-                    <div className="p-3.5 bg-theme-primary/5 border border-theme-primary/10 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                        <div className="text-theme-secondary leading-relaxed">
-                            <span className="font-bold text-theme-primary mr-1">
-                                {t('contacts.wotReachAudienceLabel', 'Deine Einstufungen sehen:')}
-                            </span>
-                            <span data-testid="reach-live-sentence">{reachAudienceExplanation}</span>
-                        </div>
-                        <InfoHint topic="wotReach" />
-                    </div>
-                </div>
-            </ModalShell>
 
             {/* Share Own Business Card Modal */}
             {ownProfileForShare && (
