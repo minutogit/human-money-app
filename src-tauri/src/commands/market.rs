@@ -386,7 +386,7 @@ pub fn save_my_market_profile_impl(
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
     if let Some(ref pic) = request.profile.picture_url {
         let pic_trimmed = pic.trim();
-        if !pic_trimmed.is_empty() && pic_trimmed.starts_with(humoco_market::MEDIA_DATA_URI_PREFIX) {
+        if !pic_trimmed.is_empty() && humoco_market::is_supported_media_data_uri(pic_trimmed) {
             humoco_market::validate_avatar_data_uri(pic_trimmed)
                 .map_err(|e| FrontendError::from(e.to_string()))?;
         }
@@ -572,18 +572,16 @@ pub fn upsert_ad_impl(
         Some(ref uri) if uri.trim().is_empty() => None,
         Some(ref uri) => {
             let uri_trimmed = uri.trim();
-            if !uri_trimmed.starts_with(humoco_market::MEDIA_DATA_URI_PREFIX) {
+            if !humoco_market::is_supported_media_data_uri(uri_trimmed) {
                 return Err(FrontendError::from(format!(
-                    "Ad image data URI must start with '{}'",
-                    humoco_market::MEDIA_DATA_URI_PREFIX
+                    "Ad image data URI must start with '{}', '{}', or '{}'",
+                    humoco_market::MEDIA_DATA_URI_PREFIX,
+                    humoco_market::JPEG_DATA_URI_PREFIX,
+                    humoco_market::PNG_DATA_URI_PREFIX
                 )));
             }
-            let b64_part = &uri_trimmed[humoco_market::MEDIA_DATA_URI_PREFIX.len()..];
-            use base64::engine::general_purpose::STANDARD;
-            use base64::Engine;
-            let webp_bytes = STANDARD
-                .decode(b64_part.trim().as_bytes())
-                .map_err(|e| FrontendError::from(format!("Invalid base64 in ad image: {}", e)))?;
+            let media_bytes = humoco_market::extract_media_bytes(uri_trimmed)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
 
             let raw_id = service.with_wallet(|w| w.get_user_id().to_string()).map_err(FrontendError::from)?;
             let pk = human_money_core::crypto::get_pubkey_from_user_id(&raw_id)
@@ -591,13 +589,13 @@ pub fn upsert_ad_impl(
             let root_did = human_money_core::crypto::create_user_id(&pk, None)
                 .map_err(|e| FrontendError::from(format!("Failed to recreate root DID: {}", e)))?;
 
-            let (token, _blob_id, _ciphertext) = humoco_market::seal_media_blob(&root_did, &webp_bytes)
+            let (token, _blob_id, _ciphertext) = humoco_market::seal_media_blob(&root_did, &media_bytes)
                 .map_err(|e| FrontendError::from(e.to_string()))?;
 
             service
                 .save_encrypted_data(
                     &crate::state::own_media_storage_key(&token),
-                    &webp_bytes,
+                    &media_bytes,
                     password.as_deref(),
                 )
                 .map_err(FrontendError::from)?;
@@ -793,25 +791,29 @@ pub async fn get_ad_image_impl(
         };
 
         let own_key = crate::state::own_media_storage_key(&image_token);
-        if let Ok(webp_bytes) = service.load_encrypted_data(&own_key, password.as_deref()) {
-            if humoco_market::validate_ad_webp(&webp_bytes).is_ok() {
+        if let Ok(media_bytes) = service.load_encrypted_data(&own_key, password.as_deref()) {
+            if humoco_market::validate_ad_media(&media_bytes).is_ok() {
                 use base64::engine::general_purpose::STANDARD;
                 use base64::Engine;
+                let prefix = humoco_market::detect_media_data_uri_prefix(&media_bytes);
                 return Ok(Some(format!(
-                    "data:image/webp;base64,{}",
-                    STANDARD.encode(&webp_bytes)
+                    "{}{}",
+                    prefix,
+                    STANDARD.encode(&media_bytes)
                 )));
             }
         }
 
         let cache_key = crate::state::cached_media_storage_key(&blob_id);
-        if let Ok(webp_bytes) = service.load_encrypted_data(&cache_key, password.as_deref()) {
-            if humoco_market::validate_ad_webp(&webp_bytes).is_ok() {
+        if let Ok(media_bytes) = service.load_encrypted_data(&cache_key, password.as_deref()) {
+            if humoco_market::validate_ad_media(&media_bytes).is_ok() {
                 use base64::engine::general_purpose::STANDARD;
                 use base64::Engine;
+                let prefix = humoco_market::detect_media_data_uri_prefix(&media_bytes);
                 return Ok(Some(format!(
-                    "data:image/webp;base64,{}",
-                    STANDARD.encode(&webp_bytes)
+                    "{}{}",
+                    prefix,
+                    STANDARD.encode(&media_bytes)
                 )));
             }
         }
@@ -873,16 +875,18 @@ pub async fn get_ad_image_impl(
     for read_url in &read_urls {
         match sync_client::get_media_blob(&client, read_url, &blob_id).await {
             Ok(Some(ciphertext)) => {
-                if let Ok(webp_bytes) = humoco_market::open_media_blob(&image_token, &ciphertext) {
+                if let Ok(media_bytes) = humoco_market::open_media_blob(&image_token, &ciphertext) {
                     let cache_key = crate::state::cached_media_storage_key(&blob_id);
                     if let Ok(mut service) = state.service.lock() {
-                        let _ = service.save_encrypted_data(&cache_key, &webp_bytes, password.as_deref());
+                        let _ = service.save_encrypted_data(&cache_key, &media_bytes, password.as_deref());
                     }
                     use base64::engine::general_purpose::STANDARD;
                     use base64::Engine;
+                    let prefix = humoco_market::detect_media_data_uri_prefix(&media_bytes);
                     return Ok(Some(format!(
-                        "data:image/webp;base64,{}",
-                        STANDARD.encode(&webp_bytes)
+                        "{}{}",
+                        prefix,
+                        STANDARD.encode(&media_bytes)
                     )));
                 }
             }
@@ -1675,6 +1679,19 @@ mod tests {
         bytes
     }
 
+    fn make_test_jpeg(width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&[0xFF, 0xD8]);
+        bytes.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x10]);
+        bytes.extend_from_slice(b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
+        bytes.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08]);
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&[0x01, 0x01, 0x11, 0x00]);
+        bytes.extend_from_slice(&[0xFF, 0xD9]);
+        bytes
+    }
+
     #[tokio::test]
     async fn test_market_media_workflow() {
         use base64::engine::general_purpose::STANDARD;
@@ -1718,6 +1735,21 @@ mod tests {
         };
         let saved_profile = save_my_market_profile_impl(good_avatar_req, Some(password.to_string()), &alice_state).unwrap();
         assert!(saved_profile.profile.picture_url.is_some());
+
+        // Also test JPEG avatar (WebKitGTK fallback)
+        let good_jpeg_avatar_req = FrontendSaveMyMarketProfileRequest {
+            profile: FrontendUserProfile {
+                picture_url: Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(&make_test_jpeg(96, 96)))),
+                ..Default::default()
+            },
+            visibility: CardFieldVisibility::default(),
+            skills: vec![],
+            max_hops: 2,
+            validity_years: 2,
+            allow_inquiries: true,
+        };
+        let saved_jpeg_profile = save_my_market_profile_impl(good_jpeg_avatar_req, Some(password.to_string()), &alice_state).unwrap();
+        assert!(saved_jpeg_profile.profile.picture_url.as_ref().unwrap().starts_with("data:image/jpeg;base64,"));
 
         // 3. Create ad with WebP image
         let webp_ad = make_test_vp8_webp(400, 300);
@@ -1781,6 +1813,27 @@ mod tests {
         let p_removed = upsert_ad_impl(edit_remove_img, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p_removed.ads[0].image_token, None);
         assert_eq!(p_removed.media_used_count, 0);
+
+        // Also test ad with JPEG image (WebKitGTK fallback)
+        let jpeg_ad = make_test_jpeg(400, 300);
+        let jpeg_ad_data_uri = format!("data:image/jpeg;base64,{}", STANDARD.encode(&jpeg_ad));
+        let ad_with_jpeg = FrontendAdInput {
+            id: None,
+            kind: humoco_market::AdKind::Offer,
+            title: "Vintage Camera".to_string(),
+            text: Some("Fully functional".to_string()),
+            pricing: Some("50 M".to_string()),
+            duration_days: 30,
+            allow_inquiries: true,
+            is_remote: true,
+            image_webp_data_uri: Some(jpeg_ad_data_uri.clone()),
+        };
+        let p_after_jpeg_ad = upsert_ad_impl(ad_with_jpeg, Some(password.to_string()), &alice_state).unwrap();
+        let jpeg_token = p_after_jpeg_ad.ads[1].image_token.clone().expect("Must have jpeg image_token");
+        let retrieved_jpeg_img = get_ad_image_impl(alice_did.clone(), jpeg_token, Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert_eq!(retrieved_jpeg_img, Some(jpeg_ad_data_uri));
 
         // 6. Test negative caching and unknown image tokens in get_ad_image_impl
         // Invalid token

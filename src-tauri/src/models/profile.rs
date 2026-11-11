@@ -80,7 +80,7 @@ impl From<human_money_core::models::profile::PublicProfile> for FrontendUserProf
             url: p.url,
             service_offer: p.service_offer,
             needs: p.needs,
-            picture_url: None,
+            picture_url: p.picture_url,
         }
     }
 }

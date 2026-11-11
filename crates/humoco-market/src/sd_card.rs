@@ -326,7 +326,7 @@ fn validate_card_item_fields(item: &CardItem, valid_until: u64) -> Result<(), Ma
             }
         }
         CardItem::Picture(s) => {
-            if s.starts_with(crate::media::MEDIA_DATA_URI_PREFIX) {
+            if crate::media::is_supported_media_data_uri(s) {
                 crate::media::validate_avatar_data_uri(s)?;
             } else {
                 let trimmed = s.trim();

@@ -4,9 +4,12 @@ use ed25519_dalek::SigningKey;
 use human_money_core::crypto::create_user_id;
 use humoco_market::error::MarketError;
 use humoco_market::media::{
-    compute_image_token, derive_media_blob_id, derive_media_key_and_nonce, is_valid_image_token,
-    open_media_blob, parse_webp_dimensions, seal_media_blob, sign_media_request,
-    validate_ad_webp, validate_avatar_data_uri, MEDIA_DATA_URI_PREFIX,
+    compute_image_token, derive_media_blob_id, derive_media_key_and_nonce,
+    detect_media_data_uri_prefix, extract_media_bytes, is_supported_media_data_uri,
+    is_valid_image_token, open_media_blob, parse_image_dimensions, parse_jpeg_dimensions,
+    parse_png_dimensions, parse_webp_dimensions, seal_media_blob, sign_media_request,
+    validate_ad_media, validate_ad_webp, validate_avatar_data_uri, JPEG_DATA_URI_PREFIX,
+    MEDIA_DATA_URI_PREFIX, PNG_DATA_URI_PREFIX,
 };
 use humoco_market::model::{
     Ad, AdKind, CardPayloadInput, DropDescriptor, WireFilter, AVATAR_IMAGE_DIM,
@@ -64,6 +67,37 @@ fn make_vp8x_webp(width: u32, height: u32) -> Vec<u8> {
     bytes.extend_from_slice(&[wm as u8, (wm >> 8) as u8, (wm >> 16) as u8]);
     let hm = height.saturating_sub(1);
     bytes.extend_from_slice(&[hm as u8, (hm >> 8) as u8, (hm >> 16) as u8]);
+    bytes
+}
+
+fn make_test_jpeg(width: u16, height: u16) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    // SOI
+    bytes.extend_from_slice(&[0xFF, 0xD8]);
+    // APP0 (JFIF)
+    bytes.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x10]);
+    bytes.extend_from_slice(b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
+    // SOF0 (Baseline DCT)
+    bytes.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08]);
+    bytes.extend_from_slice(&height.to_be_bytes());
+    bytes.extend_from_slice(&width.to_be_bytes());
+    bytes.extend_from_slice(&[0x01, 0x01, 0x11, 0x00]);
+    // EOI
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
+}
+
+fn make_test_png(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    // PNG signature
+    bytes.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+    // IHDR chunk (13 bytes)
+    bytes.extend_from_slice(&(13u32).to_be_bytes());
+    bytes.extend_from_slice(b"IHDR");
+    bytes.extend_from_slice(&width.to_be_bytes());
+    bytes.extend_from_slice(&height.to_be_bytes());
+    bytes.extend_from_slice(&[0x08, 0x06, 0x00, 0x00, 0x00]); // 8-bit RGBA
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // CRC dummy
     bytes
 }
 
@@ -150,6 +184,119 @@ fn test_parse_webp_dimensions_invalid_headers() {
         parse_webp_dimensions(&zero_vp8_h),
         Err(MarketError::Validation(_))
     ));
+}
+
+#[test]
+fn test_parse_jpeg_dimensions() {
+    let jpeg = make_test_jpeg(640, 480);
+    assert_eq!(parse_jpeg_dimensions(&jpeg).unwrap(), (640, 480));
+
+    let avatar_jpeg = make_test_jpeg(96, 96);
+    assert_eq!(parse_jpeg_dimensions(&avatar_jpeg).unwrap(), (96, 96));
+
+    // Invalid SOI
+    assert!(matches!(
+        parse_jpeg_dimensions(&[0x00, 0x00, 0x00, 0x00]),
+        Err(MarketError::Validation(_))
+    ));
+
+    // Truncated
+    assert!(matches!(
+        parse_jpeg_dimensions(&jpeg[0..10]),
+        Err(MarketError::Validation(_))
+    ));
+}
+
+#[test]
+fn test_parse_png_dimensions() {
+    let png = make_test_png(800, 600);
+    assert_eq!(parse_png_dimensions(&png).unwrap(), (800, 600));
+
+    let avatar_png = make_test_png(96, 96);
+    assert_eq!(parse_png_dimensions(&avatar_png).unwrap(), (96, 96));
+
+    // Invalid signature
+    assert!(matches!(
+        parse_png_dimensions(&[0x00; 30]),
+        Err(MarketError::Validation(_))
+    ));
+
+    // Truncated (< 24 bytes)
+    assert!(matches!(
+        parse_png_dimensions(&png[0..20]),
+        Err(MarketError::Validation(_))
+    ));
+}
+
+#[test]
+fn test_parse_image_dimensions_and_detect_prefix() {
+    let webp = make_vp8_webp(100, 100);
+    let jpeg = make_test_jpeg(100, 100);
+    let png = make_test_png(100, 100);
+
+    assert_eq!(parse_image_dimensions(&webp).unwrap(), (100, 100));
+    assert_eq!(parse_image_dimensions(&jpeg).unwrap(), (100, 100));
+    assert_eq!(parse_image_dimensions(&png).unwrap(), (100, 100));
+
+    assert_eq!(detect_media_data_uri_prefix(&webp), MEDIA_DATA_URI_PREFIX);
+    assert_eq!(detect_media_data_uri_prefix(&jpeg), JPEG_DATA_URI_PREFIX);
+    assert_eq!(detect_media_data_uri_prefix(&png), PNG_DATA_URI_PREFIX);
+
+    // Unsupported format
+    assert!(matches!(
+        parse_image_dimensions(b"GIF89a..."),
+        Err(MarketError::Validation(_))
+    ));
+}
+
+#[test]
+fn test_validate_avatar_data_uri_all_formats() {
+    let valid_webp = make_vp8l_webp(96, 96);
+    let uri_webp = format!("{}{}", MEDIA_DATA_URI_PREFIX, STANDARD.encode(&valid_webp));
+    assert!(is_supported_media_data_uri(&uri_webp));
+    assert_eq!(extract_media_bytes(&uri_webp).unwrap(), valid_webp);
+    assert!(validate_avatar_data_uri(&uri_webp).is_ok());
+
+    let valid_jpeg = make_test_jpeg(96, 96);
+    let uri_jpeg = format!("{}{}", JPEG_DATA_URI_PREFIX, STANDARD.encode(&valid_jpeg));
+    assert!(is_supported_media_data_uri(&uri_jpeg));
+    assert_eq!(extract_media_bytes(&uri_jpeg).unwrap(), valid_jpeg);
+    assert!(validate_avatar_data_uri(&uri_jpeg).is_ok());
+
+    let valid_png = make_test_png(96, 96);
+    let uri_png = format!("{}{}", PNG_DATA_URI_PREFIX, STANDARD.encode(&valid_png));
+    assert!(is_supported_media_data_uri(&uri_png));
+    assert_eq!(extract_media_bytes(&uri_png).unwrap(), valid_png);
+    assert!(validate_avatar_data_uri(&uri_png).is_ok());
+
+    // Wrong dimensions for JPEG / PNG
+    let bad_jpeg = make_test_jpeg(120, 120);
+    let bad_jpeg_uri = format!("{}{}", JPEG_DATA_URI_PREFIX, STANDARD.encode(&bad_jpeg));
+    assert!(validate_avatar_data_uri(&bad_jpeg_uri).is_err());
+
+    let bad_png = make_test_png(48, 48);
+    let bad_png_uri = format!("{}{}", PNG_DATA_URI_PREFIX, STANDARD.encode(&bad_png));
+    assert!(validate_avatar_data_uri(&bad_png_uri).is_err());
+}
+
+#[test]
+fn test_validate_ad_media_all_formats() {
+    let webp = make_vp8_webp(800, 600);
+    assert_eq!(validate_ad_media(&webp).unwrap(), (800, 600));
+
+    let jpeg = make_test_jpeg(800, 600);
+    assert_eq!(validate_ad_media(&jpeg).unwrap(), (800, 600));
+
+    let png = make_test_png(800, 600);
+    assert_eq!(validate_ad_media(&png).unwrap(), (800, 600));
+
+    // Dimension bomb on JPEG
+    let bomb_jpeg = make_test_jpeg(2000, 2000);
+    assert!(validate_ad_media(&bomb_jpeg).is_err());
+
+    // Dimension bomb on PNG
+    let bomb_png = make_test_png(1025, 1025);
+    assert!(validate_ad_media(&bomb_png).is_err());
 }
 
 #[test]

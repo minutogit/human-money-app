@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   estimateDecodedByteSize,
+  isWebpCanvasSupported,
   compressAvatarToWebpDataUri,
   compressAdImageToWebpDataUri,
 } from '../imageCompression';
@@ -148,6 +149,154 @@ describe('imageCompression utils', () => {
         600
       );
       expect(mockToDataURL).toHaveBeenCalledWith('image/webp', 0.78);
+    } finally {
+      globalThis.FileReader = originalFileReader;
+      globalThis.Image = originalImage;
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('falls back to JPEG for avatar when WebP canvas export is unsupported (e.g. WebKitGTK)', async () => {
+    const mockDrawImage = vi.fn();
+    // Simulate WebKitGTK: toDataURL('image/webp') returns PNG, but toDataURL('image/jpeg') works
+    const mockToDataURL = vi.fn().mockImplementation((type: string) => {
+      if (type === 'image/webp') {
+        return 'data:image/png;base64,unsupported_png_fallback_string';
+      }
+      if (type === 'image/jpeg') {
+        return 'data:image/jpeg;base64,valid_jpeg_avatar';
+      }
+      return 'data:image/png;base64,fallback';
+    });
+    const mockGetContext = vi.fn().mockReturnValue({
+      drawImage: mockDrawImage,
+    });
+
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      if (tagName === 'canvas') {
+        return {
+          width: 0,
+          height: 0,
+          getContext: mockGetContext,
+          toDataURL: mockToDataURL,
+        } as unknown as HTMLCanvasElement;
+      }
+      return document.createElement(tagName);
+    });
+
+    const originalFileReader = globalThis.FileReader;
+    const originalImage = globalThis.Image;
+
+    class MockFileReader {
+      result: string = 'data:image/jpeg;base64,dummyrawdata';
+      onload: (() => void) | null = null;
+      readAsDataURL() {
+        setTimeout(() => this.onload?.(), 0);
+      }
+    }
+    class MockImage {
+      width: number = 200;
+      height: number = 200;
+      naturalWidth: number = 200;
+      naturalHeight: number = 200;
+      onload: (() => void) | null = null;
+      set src(_val: string) {
+        setTimeout(() => this.onload?.(), 0);
+      }
+    }
+
+    (globalThis as any).FileReader = MockFileReader;
+    (globalThis as any).Image = MockImage;
+
+    try {
+      const file = new File(['mock'], 'test.png', { type: 'image/png' });
+      const result = await compressAvatarToWebpDataUri(file);
+
+      expect(result).toBe('data:image/jpeg;base64,valid_jpeg_avatar');
+      expect(result.startsWith('data:image/jpeg;base64,')).toBe(true);
+      expect(result.length).toBeLessThanOrEqual(4096);
+    } finally {
+      globalThis.FileReader = originalFileReader;
+      globalThis.Image = originalImage;
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('downscales ad image dimensions when initial resolution exceeds maxBytes', async () => {
+    const mockDrawImage = vi.fn();
+    // Simulate oversized output on first scale, fits on second scale
+    let callCount = 0;
+    const mockToDataURL = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount <= 6) {
+        // Return string that exceeds 102400 bytes (e.g. 150000 base64 chars)
+        return 'data:image/webp;base64,' + 'A'.repeat(150000);
+      }
+      return 'data:image/webp;base64,fits_now';
+    });
+    const mockGetContext = vi.fn().mockReturnValue({
+      drawImage: mockDrawImage,
+    });
+
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      if (tagName === 'canvas') {
+        return {
+          width: 0,
+          height: 0,
+          getContext: mockGetContext,
+          toDataURL: mockToDataURL,
+        } as unknown as HTMLCanvasElement;
+      }
+      return document.createElement(tagName);
+    });
+
+    const originalFileReader = globalThis.FileReader;
+    const originalImage = globalThis.Image;
+
+    class MockFileReader {
+      result: string = 'data:image/jpeg;base64,dummyrawdata';
+      onload: (() => void) | null = null;
+      readAsDataURL() {
+        setTimeout(() => this.onload?.(), 0);
+      }
+    }
+    class MockImage {
+      width: number = 800;
+      height: number = 800;
+      naturalWidth: number = 800;
+      naturalHeight: number = 800;
+      onload: (() => void) | null = null;
+      set src(_val: string) {
+        setTimeout(() => this.onload?.(), 0);
+      }
+    }
+
+    (globalThis as any).FileReader = MockFileReader;
+    (globalThis as any).Image = MockImage;
+
+    try {
+      const file = new File(['mock'], 'ad.png', { type: 'image/png' });
+      const result = await compressAdImageToWebpDataUri(file, 102400);
+
+      expect(result).toBe('data:image/webp;base64,fits_now');
+      // mockDrawImage should be called multiple times with downscaled dimensions
+      expect(mockDrawImage).toHaveBeenCalledTimes(2);
+      expect(mockDrawImage).toHaveBeenNthCalledWith(
+        1,
+        expect.any(MockImage),
+        0,
+        0,
+        800,
+        800
+      );
+      expect(mockDrawImage).toHaveBeenNthCalledWith(
+        2,
+        expect.any(MockImage),
+        0,
+        0,
+        640,
+        640
+      );
     } finally {
       globalThis.FileReader = originalFileReader;
       globalThis.Image = originalImage;

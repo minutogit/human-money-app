@@ -2,8 +2,21 @@
 
 /**
  * Pure HTML5 Image + HTMLCanvasElement image compression utilities (zero external dependencies).
- * Enforces WebP encoding with size and dimension limits according to the media sync plan.
+ * Enforces WebP (or JPEG fallback on platforms without canvas WebP support, e.g. WebKitGTK / Safari)
+ * with size and dimension limits according to the media sync plan.
  */
+
+export function isWebpCanvasSupported(): boolean {
+    if (typeof document === 'undefined') return false;
+    try {
+        const c = document.createElement('canvas');
+        c.width = 1;
+        c.height = 1;
+        return c.toDataURL('image/webp').startsWith('data:image/webp');
+    } catch {
+        return false;
+    }
+}
 
 export function estimateDecodedByteSize(dataUri: string): number {
     const commaIdx = dataUri.indexOf(',');
@@ -30,8 +43,9 @@ function loadImageFromFile(file: File): Promise<HTMLImageElement> {
 }
 
 /**
- * Compresses an avatar or logo image to a 96x96 center-cropped WebP data URI.
- * Tries qualities [0.65, 0.5, 0.4, 0.3, 0.2] until data URI length <= 4096.
+ * Compresses an avatar or logo image to a 96x96 center-cropped WebP (or JPEG) data URI.
+ * First tries WebP (if supported) at qualities [0.7, 0.5, 0.4, 0.3, 0.2].
+ * If WebP is unsupported (WebKitGTK, Safari) or output exceeds 4096 chars, falls back to JPEG at qualities [0.7, 0.5, 0.4, 0.3, 0.2, 0.1].
  */
 export async function compressAvatarToWebpDataUri(file: File): Promise<string> {
     const img = await loadImageFromFile(file);
@@ -51,10 +65,22 @@ export async function compressAvatarToWebpDataUri(file: File): Promise<string> {
 
     ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, 96, 96);
 
-    const qualities = [0.65, 0.5, 0.4, 0.3, 0.2];
+    const hasWebp = isWebpCanvasSupported();
+    if (hasWebp) {
+        const webpQualities = [0.65, 0.5, 0.4, 0.3, 0.2];
+        for (const q of webpQualities) {
+            const res = canvas.toDataURL('image/webp', q);
+            if (res.startsWith('data:image/webp') && res.length <= 4096) {
+                return res;
+            }
+        }
+    }
+
+    // Fallback to JPEG (supported everywhere including WebKitGTK / Safari; 96x96 fits easily under 4096)
+    const jpegQualities = [0.65, 0.5, 0.4, 0.3, 0.2, 0.1];
     let result = '';
-    for (const q of qualities) {
-        result = canvas.toDataURL('image/webp', q);
+    for (const q of jpegQualities) {
+        result = canvas.toDataURL('image/jpeg', q);
         if (result.length <= 4096) {
             return result;
         }
@@ -63,8 +89,10 @@ export async function compressAvatarToWebpDataUri(file: File): Promise<string> {
 }
 
 /**
- * Compresses an ad listing image to a max 800x800 WebP data URI.
+ * Compresses an ad listing image to a max 800x800 WebP (or JPEG) data URI.
+ * Uses WebP if supported, otherwise JPEG.
  * Tries qualities [0.78, 0.65, 0.52, 0.4, 0.3] until decoded byte size <= maxBytes - 64.
+ * If size still exceeds threshold, iteratively downscales canvas dimensions by 0.8.
  */
 export async function compressAdImageToWebpDataUri(
     file: File,
@@ -80,24 +108,37 @@ export async function compressAdImageToWebpDataUri(
         height = Math.round(height * ratio);
     }
 
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-        throw new Error('Canvas 2D context not available');
-    }
-
-    ctx.drawImage(img, 0, 0, width, height);
-
-    const qualities = [0.78, 0.65, 0.52, 0.4, 0.3];
+    const hasWebp = isWebpCanvasSupported();
+    const mimeType = hasWebp ? 'image/webp' : 'image/jpeg';
     const threshold = maxBytes - 64;
+    const qualities = [0.78, 0.65, 0.52, 0.4, 0.3];
+
+    let currentWidth = width;
+    let currentHeight = height;
     let result = '';
-    for (const q of qualities) {
-        result = canvas.toDataURL('image/webp', q);
-        if (estimateDecodedByteSize(result) <= threshold) {
-            return result;
+
+    for (let scaleAttempt = 0; scaleAttempt < 5; scaleAttempt++) {
+        const canvas = document.createElement('canvas');
+        canvas.width = currentWidth;
+        canvas.height = currentHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            throw new Error('Canvas 2D context not available');
         }
+
+        ctx.drawImage(img, 0, 0, currentWidth, currentHeight);
+
+        for (const q of qualities) {
+            result = canvas.toDataURL(mimeType, q);
+            if (estimateDecodedByteSize(result) <= threshold) {
+                return result;
+            }
+        }
+
+        // If even lowest quality is too big, scale down dimensions and retry
+        currentWidth = Math.max(96, Math.round(currentWidth * 0.8));
+        currentHeight = Math.max(96, Math.round(currentHeight * 0.8));
     }
+
     return result;
 }
