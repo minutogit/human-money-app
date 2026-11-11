@@ -165,6 +165,7 @@ export const AppRouter: React.FC = () => {
         case "marketplace":
             return (
                 <MarketplaceView
+                    onBack={goBack}
                     initialSelectedDid={appState.selectedDid}
                     initialTab={appState.initialTab}
                     initialOpenEditor={appState.initialOpenEditor}

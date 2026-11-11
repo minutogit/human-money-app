@@ -924,7 +924,7 @@
   "marketplace.sourceSync": "Dépôt",
   "marketplace.sourceVoucher": "Du profil du bon",
   "marketplace.standardsIssued": "Standards de bons acceptés",
-  "marketplace.subtitle": "Offres et demandes de votre réseau",
+  "marketplace.subtitle": "Offres & demandes dans votre réseau",
   "marketplace.syncBaseUrlLabel": "Adresse de base HTTPS de votre dépôt",
   "marketplace.syncBaseUrlPlaceholder": "https://depot.exemple.fr",
   "marketplace.syncDecryptedSlots": "{{count}} emplacement(s) déchiffré(s)",

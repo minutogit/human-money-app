@@ -1077,7 +1077,7 @@
   "marketplace.sourceSync": "Sync-Dienst",
   "marketplace.sourceVoucher": "Aus Gutschein-Profil",
   "marketplace.standardsIssued": "Angenommene Gutschein-Standards",
-  "marketplace.subtitle": "Angebote und Gesuche aus deinem Netzwerk",
+  "marketplace.subtitle": "Angebote & Gesuche im Netzwerk",
   "marketplace.syncBaseUrlLabel": "HTTPS-Basisadresse deines Sync-Dienstes",
   "marketplace.syncBaseUrlPlaceholder": "https://sync.beispiel.de",
   "marketplace.syncDecryptedSlots": "{{count}} Slot(s) entschlüsselt",

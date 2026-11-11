@@ -66,12 +66,12 @@ import {
 import { QuickContactModal } from './profile/QuickContactModal';
 
 interface AddressBookProps {
-    onBack: () => void;
+    onBack?: () => void;
     initialSearchQuery?: string;
     initialOpenAddModal?: boolean;
 }
 
-const AddressBook: React.FC<AddressBookProps> = ({ onBack: _onBack, initialSearchQuery, initialOpenAddModal }) => {
+const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, initialOpenAddModal }) => {
     const { t } = useTranslation();
     const { protectAction } = useSession();
     const navigation = useOptionalNavigation();
@@ -622,12 +622,8 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack: _onBack, initialSearc
     return (
         <PageLayout 
             title={t('contacts.title')} 
-            description={
-                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                    <span>{t('contacts.description')}</span>
-                    <InfoHint topic="wotNetwork" />
-                </div>
-            } 
+            onBack={onBack || navigation?.goBack}
+            description={t('contacts.description')} 
             actions={
                 <>
                     <Button

@@ -1077,7 +1077,7 @@
   "marketplace.sourceSync": "Sync Service",
   "marketplace.sourceVoucher": "From voucher profile",
   "marketplace.standardsIssued": "Accepted Voucher Standards",
-  "marketplace.subtitle": "Offers and requests from your network",
+  "marketplace.subtitle": "Offers & requests in your network",
   "marketplace.syncBaseUrlLabel": "HTTPS Base URL of your Sync Service",
   "marketplace.syncBaseUrlPlaceholder": "https://sync.example.com",
   "marketplace.syncDecryptedSlots": "Decrypted {{count}} slot(s)",

@@ -924,7 +924,7 @@
   "marketplace.sourceSync": "Deposito",
   "marketplace.sourceVoucher": "Dal profilo del buono",
   "marketplace.standardsIssued": "Standard di buoni accettati",
-  "marketplace.subtitle": "Offerte e richieste dalla tua rete",
+  "marketplace.subtitle": "Offerte & richieste nella tua rete",
   "marketplace.syncBaseUrlLabel": "URL di base HTTPS del tuo deposito",
   "marketplace.syncBaseUrlPlaceholder": "https://deposito.esempio.it",
   "marketplace.syncDecryptedSlots": "{{count}} slot decifrato/i",

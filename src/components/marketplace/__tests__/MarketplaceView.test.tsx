@@ -443,4 +443,32 @@ describe('MarketplaceView Component', () => {
       }));
     });
   });
+
+  it('triggers onBack when back button in header is clicked', async () => {
+    const handleBack = vi.fn();
+    render(<MarketplaceView onBack={handleBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1, name: /Marktplatz|Marketplace/i })).toBeInTheDocument();
+    });
+
+    const backBtn = screen.getByRole('button', { name: /Back|Zurück/i });
+    expect(backBtn).toBeInTheDocument();
+    fireEvent.click(backBtn);
+    expect(handleBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('triggers goBack from navigation when onBack prop is not provided', async () => {
+    mockGoBack.mockClear();
+    render(<MarketplaceView />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1, name: /Marktplatz|Marketplace/i })).toBeInTheDocument();
+    });
+
+    const backBtn = screen.getByRole('button', { name: /Back|Zurück/i });
+    expect(backBtn).toBeInTheDocument();
+    fireEvent.click(backBtn);
+    expect(mockGoBack).toHaveBeenCalledTimes(1);
+  });
 });

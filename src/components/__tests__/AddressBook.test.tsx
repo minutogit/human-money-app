@@ -17,9 +17,11 @@ vi.mock('../../context/SessionContext', () => ({
 }));
 
 const mockNavigateToSettingsSection = vi.fn();
+const mockGoBack = vi.fn();
 vi.mock('../../context/NavigationContext', () => ({
   useOptionalNavigation: () => ({
     navigateToSettingsSection: mockNavigateToSettingsSection,
+    goBack: mockGoBack,
   }),
 }));
 
@@ -91,6 +93,36 @@ describe('AddressBook Component', () => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
       expect(screen.getByText(/Jane Smith/i)).toBeInTheDocument();
     });
+  });
+
+  it('triggers onBack when back button in header is clicked', async () => {
+    mockOnBack.mockClear();
+    render(<AddressBook onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Contacts & Trust|Kontakte & Vertrauen/i)).toBeInTheDocument();
+    });
+
+    const backButton = screen.getByRole('button', { name: /Back|Zurück/i });
+    expect(backButton).toBeInTheDocument();
+    fireEvent.click(backButton);
+
+    expect(mockOnBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to navigation.goBack when onBack is omitted and back button is clicked', async () => {
+    mockGoBack.mockClear();
+    render(<AddressBook />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Contacts & Trust|Kontakte & Vertrauen/i)).toBeInTheDocument();
+    });
+
+    const backButton = screen.getByRole('button', { name: /Back|Zurück/i });
+    expect(backButton).toBeInTheDocument();
+    fireEvent.click(backButton);
+
+    expect(mockGoBack).toHaveBeenCalledTimes(1);
   });
 
   it('loads contacts from backend on mount', async () => {

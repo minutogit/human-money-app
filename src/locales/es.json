@@ -924,7 +924,7 @@
   "marketplace.sourceSync": "Buzón",
   "marketplace.sourceVoucher": "Del perfil del vale",
   "marketplace.standardsIssued": "Estándares de vales aceptados",
-  "marketplace.subtitle": "Ofertas y solicitudes de tu red",
+  "marketplace.subtitle": "Ofertas & solicitudes en tu red",
   "marketplace.syncBaseUrlLabel": "Dirección base HTTPS de tu buzón",
   "marketplace.syncBaseUrlPlaceholder": "https://buzon.ejemplo.es",
   "marketplace.syncDecryptedSlots": "{{count}} ranura(s) descifrada(s)",

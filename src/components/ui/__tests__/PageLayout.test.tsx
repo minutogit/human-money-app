@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { PageLayout } from '../PageLayout';
+import { PageHeader } from '../PageHeader';
 import { BackButton } from '../BackButton';
 
 describe('PageLayout', () => {
@@ -189,5 +190,55 @@ describe('BackButton', () => {
 
     const button = screen.getByRole('button');
     expect(button.className).toContain('custom-back-btn');
+  });
+});
+
+describe('PageHeader', () => {
+  it('returns null when title, onBack, and actions are omitted', () => {
+    const { container } = render(<PageHeader />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders string title and description with canonical typography', () => {
+    render(<PageHeader title="Test Title" description="Test Description" />);
+    const heading = screen.getByRole('heading', { level: 1, name: 'Test Title' });
+    expect(heading).toBeInTheDocument();
+    expect(heading.className).toContain('text-xl sm:text-2xl font-black text-theme-primary');
+    expect(screen.getByText('Test Description')).toBeInTheDocument();
+  });
+
+  it('renders custom ReactNode title and description', () => {
+    render(
+      <PageHeader
+        title={<span data-testid="custom-title">Custom Node</span>}
+        description={<div data-testid="custom-desc">Custom Description Node</div>}
+      />
+    );
+    expect(screen.getByTestId('custom-title')).toBeInTheDocument();
+    expect(screen.getByTestId('custom-desc')).toBeInTheDocument();
+  });
+
+  it('renders BackButton when onBack is passed and triggers onBack on click', () => {
+    const handleBack = vi.fn();
+    render(<PageHeader title="Back Test" onBack={handleBack} />);
+    const backBtn = screen.getByRole('button', { name: 'Back' });
+    expect(backBtn).toBeInTheDocument();
+    fireEvent.click(backBtn);
+    expect(handleBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders actions inside flex container', () => {
+    render(
+      <PageHeader
+        title="Actions Test"
+        actions={<button type="button" data-testid="action-btn">Action</button>}
+      />
+    );
+    expect(screen.getByTestId('action-btn')).toBeInTheDocument();
+  });
+
+  it('applies custom className prop', () => {
+    const { container } = render(<PageHeader title="Custom Class" className="my-header-class" />);
+    expect(container.querySelector('header')?.className).toContain('my-header-class');
   });
 });

@@ -26,7 +26,6 @@ import { PageLayout } from '../ui/PageLayout';
 import { Button } from '../ui/Button';
 import { PageLoadingState } from '../ui/PageState';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
-import { InfoHint } from '../ui/InfoHint';
 import { BoardTab } from './BoardTab';
 import { PeopleTab } from './PeopleTab';
 import { MineTab } from './MineTab';
@@ -41,6 +40,7 @@ import { SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
 import { logger } from '../../utils/log';
 
 export interface MarketplaceViewProps {
+    onBack?: () => void;
     initialSelectedDid?: string;
     initialTab?: 'board' | 'people' | 'mine';
     initialOpenEditor?: boolean;
@@ -49,13 +49,15 @@ export interface MarketplaceViewProps {
 export type MarketplaceTab = 'board' | 'people' | 'mine';
 
 export function MarketplaceView({
+    onBack,
     initialSelectedDid,
     initialTab,
     initialOpenEditor = false,
 }: MarketplaceViewProps) {
     const { t } = useTranslation();
-    const { navigate, appState, navigateToSettingsSection } = useNavigation();
+    const { navigate, goBack, appState, navigateToSettingsSection } = useNavigation();
     const { protectAction } = useSession();
+    const handleBack = onBack || goBack;
 
     const [activeTab, setActiveTab] = useState<MarketplaceTab>(initialTab || 'board');
     const [snapshot, setSnapshot] = useState<FrontendMarketSnapshot | null>(null);
@@ -304,7 +306,11 @@ export function MarketplaceView({
 
     if (isLoading) {
         return (
-            <PageLayout title={t('marketplace.title', 'Marktplatz')}>
+            <PageLayout
+                title={t('marketplace.title', 'Marktplatz')}
+                onBack={handleBack}
+                description={t('marketplace.subtitle', 'Angebote & Gesuche im Netzwerk')}
+            >
                 <PageLoadingState message={t('common.loading', 'Laden...')} />
             </PageLayout>
         );
@@ -357,17 +363,8 @@ export function MarketplaceView({
     return (
         <PageLayout
             title={t('marketplace.title', 'Marktplatz')}
-            description={
-                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                    <span>
-                        {t(
-                            'marketplace.subtitle',
-                            'Hier siehst du, was Menschen aus deinem Umfeld können, anbieten und suchen.'
-                        )}
-                    </span>
-                    <InfoHint topic="marketplace" />
-                </div>
-            }
+            onBack={handleBack}
+            description={t('marketplace.subtitle', 'Angebote & Gesuche im Netzwerk')}
             actions={
                 <div className="flex items-center gap-2">
                     {activeTab === 'mine' && (
