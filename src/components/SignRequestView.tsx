@@ -72,6 +72,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
 
 
     useEffect(() => {
+        let active = true;
         const creatorId = voucherData.voucher?.creator?.id;
         if (!creatorId) return;
 
@@ -80,11 +81,15 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
             .map(s => s.signerId);
 
         wotService.evaluateVoucherTrustPreview(creatorId, guarantorIds)
-            .then(setPreviewTrust)
+            .then(res => {
+                if (active) setPreviewTrust(res);
+            })
             .catch(e => logger.error(`Failed to evaluate trust preview: ${stringifyError(e)}`));
+        return () => { active = false; };
     }, [voucherData.voucher]);
 
     useEffect(() => {
+        let active = true;
         async function fetchData() {
             try {
                 logger.info("SignRequestView opened, fetching standards and roles.");
@@ -93,6 +98,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                     settingsService.getSettings().catch(() => null),
                     profileService.getProfile().catch(() => null)
                 ]);
+                if (!active) return;
                 setSettings(currentSettings);
                 setUserProfile(profile);
                 if (profile?.gender === '1' || profile?.gender === '2') {
@@ -108,6 +114,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                     setStandardContent(matchingStandard.content);
                     try {
                         const parsed = await standardsService.parseStandard(matchingStandard.content);
+                        if (!active) return;
                         setParsedStandard(parsed);
                         
                         // Extract roles from allowedSignatureRoles
@@ -115,18 +122,21 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                         setAllowedRoles(roles);
                         if (roles.length === 1) setSelectedRole(roles[0]);
                     } catch (e) {
+                        if (!active) return;
                         setFeedbackMsg(t('voucher.signRequest.parseFailed', { error: translateError(e, t) }));
                         setFeedbackType('error');
                     }
                 }
             } catch (e) {
+                if (!active) return;
                 setFeedbackMsg(t('voucher.signRequest.initError', { error: translateError(e, t) }));
                 setFeedbackType('error');
             } finally {
-                setStandardsLoaded(true);
+                if (active) setStandardsLoaded(true);
             }
         }
         fetchData();
+        return () => { active = false; };
     }, [voucherData.voucher.voucherStandard.uuid, t]);
 
     const requiresGender = useMemo(() => {
@@ -158,12 +168,15 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
             }
         } catch (e) {
             logger.error(`Failed to save gender to profile: ${stringifyError(e)}`);
+            setFeedbackMsg(translateError(e, t));
+            setFeedbackType('error');
         } finally {
             setIsSavingGender(false);
         }
     };
 
     useEffect(() => {
+        let active = true;
         if (!selectedRole || !standardContent) {
             setImpact(null);
             return;
@@ -177,15 +190,18 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                     role: selectedRole,
                     standardTomlContent: standardContent as string
                 });
+                if (!active) return;
                 setImpact(impactResult);
             } catch (e) {
+                if (!active) return;
                 logger.error(`Failed to evaluate impact: ${stringifyError(e)}`);
                 setImpact(null);
             } finally {
-                setIsImpactLoading(false);
+                if (active) setIsImpactLoading(false);
             }
         }
         fetchImpact();
+        return () => { active = false; };
     }, [selectedRole, standardContent, voucherData]);
 
     async function handleSign() {

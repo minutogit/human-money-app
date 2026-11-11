@@ -138,11 +138,27 @@ export const TOUR_STEPS = [
         appState: {
             view: 'receive_success',
             payload: {
-                count: 1,
-                totalValue: 60,
-                currency: 'Minuto',
-                issuer: MOCK_USER_DID,
-                sender: MOCK_CAROL_DID
+                senderId: MOCK_CAROL_DID,
+                senderProfileName: 'Carol',
+                notes: '1 Stunde Gartenarbeit Minuto',
+                transferSummary: {
+                    summableAmounts: { 'Minuto': '60.00' },
+                    countableItems: {}
+                },
+                involvedVouchers: ['inst_sample_01'],
+                involvedVouchersDetails: [
+                    {
+                        localInstanceId: 'inst_sample_01',
+                        voucherId: MOCK_VOUCHER_ID,
+                        standardName: 'Minuto',
+                        amountTransferred: '60.00'
+                    }
+                ],
+                l2Quorum: {
+                    status: 'quorum_reached',
+                    confirmedNodes: 16,
+                    totalNodes: 20
+                }
             }
         }
     },
@@ -876,7 +892,32 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
                 displayCurrency: "FreeTaler"
             }
         ],
-        "get_transaction_history": () => handlers["get_transactions"](),
+        "get_transaction_history": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
+            {
+                id: "tx_transfer_001",
+                bundleId: "bundle_tour_001",
+                direction: "sent",
+                senderId: MOCK_USER_DID,
+                recipientId: MOCK_RECIPIENT_DID,
+                timestamp: "2026-11-08T14:30:00Z",
+                summableAmounts: { "Minuto": "60.00" },
+                countableItems: {},
+                involvedVouchers: ["inst_sample_01"],
+                notes: "Gartenhilfe im November"
+            },
+            {
+                id: "tx_transfer_002",
+                bundleId: "bundle_tour_002",
+                direction: "received",
+                senderId: MOCK_CAROL_DID,
+                recipientId: MOCK_USER_DID,
+                timestamp: "2026-11-07T11:15:00Z",
+                summableAmounts: { "FreeTaler": "10.00" },
+                countableItems: {},
+                involvedVouchers: ["inst_sample_02"],
+                notes: "Bio-Äpfel Lieferung"
+            }
+        ],
         "get_events": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
             {
                 eventId: "ev_01",
@@ -961,11 +1002,29 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             lastSyncTimestamp: "2026-11-10T08:15:00Z"
         }),
         "get_sync_admin_status": () => ({
-            serviceUrl: "https://sync.humoco.org",
-            adminKeyId: "key_admin_alice_01",
-            activeSlots: 2,
-            maxSlots: 10,
-            bandwidthUsedKb: 128
+            descriptor: {
+                writeUrl: "https://sync-admin.humoco.org/write",
+                readUrl: "https://sync-admin.humoco.org/read",
+                dropPub: "drop_pub_admin_01",
+                slotId: "slot_admin_01"
+            },
+            adminPubkey: "pubkey_admin_01",
+            generation: 1,
+            dataDir: "/home/user/.local/share/humoco/sync",
+            maxMembers: 10,
+            maxTotalStorageMb: 250,
+            usedBytes: 131072,
+            maxBytes: 262144000,
+            softWarning: false,
+            cardPolicy: {
+                kind: "friendsAndContacts"
+            },
+            allow: [],
+            deny: [],
+            blockedPubkeys: [],
+            directMemberCount: 2,
+            hop2MemberCount: 1,
+            totalMemberCount: 3
         }),
         "prepare_sync_setup": () => ({ token: "setup_token_demo" }),
         "save_sync_setup_zip": () => null,
@@ -979,7 +1038,17 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         "rotate_sync_admin_key": () => handlers["get_sync_admin_status"](),
         "delete_sync_admin": () => null,
         "discover_available_syncs": () => [
-            { name: "Freiburg Mesh Relay", url: "https://sync-freiburg.humoco.org", trustScore: 0.9 }
+            {
+                descriptor: {
+                    writeUrl: "https://sync-freiburg.humoco.org/write",
+                    readUrl: "https://sync-freiburg.humoco.org/read",
+                    dropPub: "drop_pub_freiburg_01",
+                    slotId: "slot_01"
+                },
+                isAuthorized: true,
+                isSelected: true,
+                sourceLabel: "Freiburg Mesh Relay"
+            }
         ],
         "set_selected_upload_syncs": () => [],
         "sync_market_channels": () => ({ syncedProfilesCount: 2, newOffersCount: 1 }),
@@ -1065,7 +1134,12 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             signingRequests: 1,
             signaturesToAttach: 0,
             wotHandshakes: 0,
-            marketInquiries: 0
+            marketInquiries: 0,
+            pendingSignRequests: [],
+            pendingWotHandshakes: [],
+            sellerInquiries: [],
+            buyerInquiries: [],
+            unacknowledgedPayments: []
         }),
         "sync_post_channels": () => ({ fetchedItems: 1, processedItems: 1, errors: [] }),
         "send_signing_request_via_post": () => ({ success: true }),

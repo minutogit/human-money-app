@@ -113,12 +113,12 @@ export const AdvancedTab: React.FC<AdvancedTabProps> = ({
                     <span
                         onClick={onDevClick}
                         className="font-mono text-[10px] text-theme-light/60 select-none cursor-pointer hover:text-theme-light/90 transition-colors"
-                        title={isDevUnlocked ? "Entwicklermodus aktiv" : `Klick ${Math.max(0, 7 - devClickCount)} bis Entwicklermodus`}
+                        title={isDevUnlocked ? t('settings.devModeActive', 'Entwicklermodus aktiv') : t('settings.devModeClicksRemaining', { count: Math.max(0, 7 - devClickCount), defaultValue: `Klick ${Math.max(0, 7 - devClickCount)} bis Entwicklermodus` })}
                         role="button"
                         tabIndex={0}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onDevClick(); }}}
                     >
-                        v{appVersion} • {isDevUnlocked ? 'DEV freigeschaltet' : `${devClickCount}/7`}
+                        v{appVersion} • {isDevUnlocked ? t('settings.devModeUnlockedBadge', 'DEV freigeschaltet') : `${devClickCount}/7`}
                     </span>
                     <span>•</span>
                     <div className="inline-flex items-center gap-1.5">

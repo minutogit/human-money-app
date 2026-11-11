@@ -12,7 +12,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { AppSettings } from '../../types';
 import { settingsService } from '../../services/settingsService';
 import { logger } from '../../utils/log';
-import { stringifyError } from '../../utils/errorHelper';
+import { stringifyError, translateError } from '../../utils/errorHelper';
 
 export interface ProfileTabProps {
     userId: string;
@@ -29,6 +29,7 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
     const nav = useOptionalNavigation();
     const [copiedUserId, setCopiedUserId] = useState(false);
     const [marketSendCardOnPayment, setMarketSendCardOnPayment] = useState<boolean>(settings?.marketSendCardOnPayment ?? false);
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
     useEffect(() => {
         if (settings) {
@@ -46,7 +47,9 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
     };
 
     const handleSaveSendCardToggle = async (val: boolean) => {
+        const prev = marketSendCardOnPayment;
         setMarketSendCardOnPayment(val);
+        setErrorMsg(null);
         try {
             const current = settings || await settingsService.getSettings();
             const updated: AppSettings = { ...current, marketSendCardOnPayment: val };
@@ -54,6 +57,8 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
             if (onSettingsUpdated) onSettingsUpdated(updated);
         } catch (err) {
             logger.error(`Failed to save marketSendCardOnPayment: ${stringifyError(err)}`);
+            setMarketSendCardOnPayment(prev);
+            setErrorMsg(translateError(err, t));
         }
     };
 
@@ -132,6 +137,12 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
                     </Button>
 
                     {/* Marketplace Send Card On Payment Toggle */}
+                    {errorMsg && (
+                        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center justify-between">
+                            <span>{errorMsg}</span>
+                            <button type="button" onClick={() => setErrorMsg(null)} className="text-rose-500 hover:text-rose-700 font-bold ml-2">×</button>
+                        </div>
+                    )}
                     <div className="flex items-start gap-3 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors pt-3">
                         <input
                             type="checkbox"

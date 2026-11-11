@@ -29,7 +29,7 @@ import {
     Check
 } from 'lucide-react';
 import { suggestFilename } from '../utils/userIdHelper';
-import { stringifyError } from '../utils/errorHelper';
+import { stringifyError, translateError } from '../utils/errorHelper';
 
 interface TransferSuccessViewProps {
     bundleData: number[];
@@ -67,15 +67,18 @@ export function TransferSuccessView({
     const [copiedData, setCopiedData] = useState(false);
 
     useEffect(() => {
+        let active = true;
         async function fetchSettings() {
             try {
                 const currentSettings = await settingsService.getSettings().catch(() => null);
+                if (!active) return;
                 setSettings(currentSettings);
             } catch (e) {
                 console.error("Failed to load settings in TransferSuccessView:", e);
             }
         }
         fetchSettings();
+        return () => { active = false; };
     }, []);
 
     // SST-V4 Invariant: Retry ONLY calls depositTransferToPost(bundleId), NEVER create_transfer_bundle!
@@ -137,7 +140,7 @@ export function TransferSuccessView({
                 setFeedback(t('transfer.success.synced'));
             }
         } catch (e) {
-            setFeedback(`Error: ${stringifyError(e)}`);
+            setFeedback(translateError(e, t));
         } finally {
             setIsSaving(false);
         }
@@ -147,11 +150,16 @@ export function TransferSuccessView({
         try {
             const binary = String.fromCharCode(...bundleData);
             const b64 = window.btoa(binary);
-            await copyToClipboard(b64);
-            setCopiedData(true);
-            setTimeout(() => setCopiedData(false), 2000);
+            const ok = await copyToClipboard(b64);
+            if (ok) {
+                setCopiedData(true);
+                setTimeout(() => setCopiedData(false), 2000);
+            } else {
+                setFeedback(t('common.copyFailed', 'Fehler beim Kopieren'));
+            }
         } catch (e) {
             console.error("Failed to copy bundle data", e);
+            setFeedback(translateError(e, t));
         }
     };
 

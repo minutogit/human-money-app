@@ -100,27 +100,42 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         };
     }, []);
 
+    // Reset error & success when active tab changes
     useEffect(() => {
+        setError('');
+        setSuccess('');
+    }, [activeTab]);
+
+    useEffect(() => {
+        let active = true;
         async function fetchSettings() {
             try {
                 logger.info("SettingsView: Fetching current settings.");
                 const currentSettings = await settingsService.getSettings();
+                if (!active) return;
                 setSettings(currentSettings);
                 
                 const deviceId = await authService.getLocalInstanceId().catch(() => '');
+                if (!active) return;
                 setLocalInstanceId(deviceId);
 
                 const currentUserId = await profileService.getUserId().catch(() => '');
+                if (!active) return;
                 setUserId(currentUserId);
             } catch (e) {
-                const msg = t('settings.loadFailed', { error: translateError(e, t) });
-                logger.error(`Failed to load settings: ${stringifyError(e)}`);
-                setError(msg);
+                if (active) {
+                    const msg = t('settings.loadFailed', { error: translateError(e, t) });
+                    logger.error(`Failed to load settings: ${stringifyError(e)}`);
+                    setError(msg);
+                }
             } finally {
-                setIsLoading(false);
+                if (active) setIsLoading(false);
             }
         }
         fetchSettings();
+        return () => {
+            active = false;
+        };
     }, [t]);
 
     const handleDevModeClick = () => {

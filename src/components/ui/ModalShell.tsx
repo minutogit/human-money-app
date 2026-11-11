@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
@@ -37,6 +38,7 @@ export function ModalShell({
     className = '',
     zIndexClass = 'z-[100]',
 }: ModalShellProps) {
+    const { t } = useTranslation();
     useEffect(() => {
         if (!isOpen || closeOnEscape === false || !onClose) return;
 
@@ -74,7 +76,7 @@ export function ModalShell({
                     <button
                         type="button"
                         onClick={onClose}
-                        aria-label="Close dialog"
+                        aria-label={t('common.closeDialog', 'Dialog schließen')}
                         className="absolute top-5 right-5 p-1.5 rounded-full text-theme-light hover:text-theme-primary hover:bg-theme-subtle/30 transition-colors z-10 cursor-pointer"
                     >
                         <X size={20} />
@@ -97,7 +99,7 @@ export function ModalShell({
                 )}
 
                 {children && (
-                    <div className="px-6 py-3 overflow-y-auto flex-1">
+                    <div className="px-6 py-3 overflow-y-auto overflow-x-hidden flex-1">
                         {children}
                     </div>
                 )}

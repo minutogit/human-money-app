@@ -446,7 +446,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                                 </p>
                             </div>
                             <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
-                                <span>Select directory</span>
+                                <span>{t('backup.selectDirectory', 'Verzeichnis auswählen')}</span>
                                 <ArrowRight size={14} />
                             </div>
                         </button>
@@ -856,7 +856,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                                                 <p className="text-xs font-black text-theme-secondary">
                                                     {inspection.blobCount}
                                                 </p>
-                                                <p className="text-[10px] text-theme-light">Data Blobs</p>
+                                                <p className="text-[10px] text-theme-light">{t('backup.dataBlobs', 'Datenblöcke')}</p>
                                             </div>
                                         </div>
                                         <div className="p-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2.5">
@@ -865,7 +865,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                                                 <p className="text-xs font-black text-theme-secondary">
                                                     {inspection.epoch}
                                                 </p>
-                                                <p className="text-[10px] text-theme-light">Epoch</p>
+                                                <p className="text-[10px] text-theme-light">{t('backup.epoch', 'Epoche')}</p>
                                             </div>
                                         </div>
                                         <div className="p-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2.5">
@@ -874,7 +874,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                                                 <p className="text-xs font-black text-theme-secondary">
                                                     {inspection.txNonce}
                                                 </p>
-                                                <p className="text-[10px] text-theme-light">Tx Nonce</p>
+                                                <p className="text-[10px] text-theme-light">{t('backup.txNonce', 'Tx-Nonce')}</p>
                                             </div>
                                         </div>
                                         <div className="p-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2.5">
@@ -883,7 +883,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                                                 <p className="text-xs font-black text-theme-secondary">
                                                     {inspection.customStandardCount}
                                                 </p>
-                                                <p className="text-[10px] text-theme-light">Standards</p>
+                                                <p className="text-[10px] text-theme-light">{t('backup.standards', 'Standards')}</p>
                                             </div>
                                         </div>
                                     </div>
@@ -978,19 +978,19 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                             <p className="text-lg font-black text-theme-primary">
                                 {restoreOutcome.activeVoucherQueriesCount}
                             </p>
-                            <p className="text-[10px] uppercase font-bold text-theme-light">Active</p>
+                            <p className="text-[10px] uppercase font-bold text-theme-light">{t('backup.active', 'Aktiv')}</p>
                         </div>
                         <div>
                             <p className="text-lg font-black text-slate-700">
                                 {restoreOutcome.reconciledSpentCount}
                             </p>
-                            <p className="text-[10px] uppercase font-bold text-theme-light">Spent</p>
+                            <p className="text-[10px] uppercase font-bold text-theme-light">{t('backup.spent', 'Ausgegeben')}</p>
                         </div>
                         <div>
                             <p className="text-lg font-black text-slate-700">
                                 {restoreOutcome.restoredStandardsCount}
                             </p>
-                            <p className="text-[10px] uppercase font-bold text-theme-light">Standards</p>
+                            <p className="text-[10px] uppercase font-bold text-theme-light">{t('backup.standards', 'Standards')}</p>
                         </div>
                     </div>
 

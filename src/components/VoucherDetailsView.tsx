@@ -87,14 +87,19 @@ export function VoucherDetailsView() {
     const isQuarantined = details && details.status === 'quarantined';
 
     useEffect(() => {
+        let active = true;
         if (voucher?.creator.id) {
             voucherService.checkReputation(voucher.creator.id)
-                .then(setTrustStatus)
+                .then(res => {
+                    if (active) setTrustStatus(res);
+                })
                 .catch(e => logger.error(`Reputation check error: ${stringifyError(e)}`));
         }
+        return () => { active = false; };
     }, [voucher?.creator.id]);
 
     useEffect(() => {
+        let active = true;
         async function fetchDetails() {
             setIsLoading(true);
             setErrorMsg("");
@@ -106,6 +111,7 @@ export function VoucherDetailsView() {
                     standardsService.getStandards().catch(() => []),
                     profileService.getUserId().catch(() => "")
                 ]);
+                if (!active) return;
                 setDetails(result);
                 setSettings(currentSettings);
                 setUserProfile(profile);
@@ -119,37 +125,48 @@ export function VoucherDetailsView() {
                         logger.error(`Failed to parse standard ${s.id}: ${stringifyError(e)}`);
                     }
                 }
+                if (!active) return;
                 setParsedStandards(parsed);
             } catch (e) {
+                if (!active) return;
                 const msg = `${t('voucher.errorFetchingDetails')}: ${stringifyError(e)}`;
                 logger.error(msg);
                 setErrorMsg(msg);
             } finally {
-                setIsLoading(false);
+                if (active) setIsLoading(false);
             }
         }
         fetchDetails();
+        return () => { active = false; };
     }, [voucherId, t]);
 
     useEffect(() => {
-        contactService.getContacts().then(setContacts).catch(e => logger.error(`Failed to fetch contacts: ${stringifyError(e)}`));
+        let active = true;
+        contactService.getContacts()
+            .then(res => {
+                if (active) setContacts(res);
+            })
+            .catch(e => logger.error(`Failed to fetch contacts: ${stringifyError(e)}`));
+        return () => { active = false; };
     }, []);
 
     useEffect(() => {
+        let active = true;
         if (isQuarantined && !proofId && !isFetchingProofId) {
             const fetchProofId = async () => {
                 setIsFetchingProofId(true);
                 try {
                     const id = await voucherService.getProofId(voucherId);
-                    setProofId(id);
+                    if (active) setProofId(id);
                 } catch (e) {
                     logger.error(`Failed to fetch proof ID for voucher ${voucherId}: ${stringifyError(e)}`);
                 } finally {
-                    setIsFetchingProofId(false);
+                    if (active) setIsFetchingProofId(false);
                 }
             };
             fetchProofId();
         }
+        return () => { active = false; };
     }, [isQuarantined, proofId, isFetchingProofId, voucherId]);
 
     const refreshDetails = async () => {
@@ -345,7 +362,7 @@ export function VoucherDetailsView() {
             await refreshDetails();
         } catch (e) {
             logger.error(`Failed to remove signature: ${stringifyError(e)}`);
-            alert(`${t('voucher.failedRemoveSignature')}: ${stringifyError(e)}`);
+            setSignatureImportFeedback({ type: 'error', msg: `${t('voucher.failedRemoveSignature')}: ${translateError(e, t)}` });
         } finally {
             setIsRemovingSignature(false);
         }

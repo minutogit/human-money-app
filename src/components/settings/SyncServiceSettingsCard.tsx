@@ -849,7 +849,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                                     checked={drop.isSelected}
                                                     onChange={() => handleToggleDiscoveredDrop(drop)}
                                                     className="rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
-                                                    title="Für Synchronisation aktivieren"
+                                                    title={t('settings.syncActivateTooltip', 'Für Synchronisation aktivieren')}
                                                 />
                                                 <div className="min-w-0">
                                                     <span className="font-bold text-theme-primary truncate block">

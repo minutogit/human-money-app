@@ -104,16 +104,20 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToR
 
     // Effect 2: Fetch BIP-39 wordlist on component mount
     useEffect(() => {
+        let active = true;
         async function fetchWordlist() {
             try {
                 const list = await profileService.getWordlist(selectedLanguage);
+                if (!active) return;
                 setBip39Wordlist(list);
                 info(`Successfully fetched BIP-39 wordlist for ${selectedLanguage} for import.`);
             } catch (e) {
+                if (!active) return;
                 error(`Failed to fetch BIP-39 wordlist: ${stringifyError(e)}`);
             }
         }
         fetchWordlist();
+        return () => { active = false; };
     }, [selectedLanguage]);
 
     // Effect 3: Process the raw text from the textarea ('phrase' mode)
@@ -164,19 +168,23 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToR
     // Effect 4: Validate the mnemonic against the backend
     // (Copied from WalletRecovery.tsx)
     useEffect(() => {
+        let active = true;
         const validate = async () => {
             const nonEmptyWords = mnemonicWords.filter(Boolean);
             if (nonEmptyWords.length === wordCount) {
                 const fullMnemonic = mnemonicWords.join(" ");
                 try {
                     await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
+                    if (!active) return;
                     setIsValidMnemonic(true);
                     setFeedback(t('auth.seedPhraseValid'), "success");
                 } catch (e) {
+                    if (!active) return;
                     setIsValidMnemonic(false);
                     setFeedback(`${t('profile.errorPrefix')}: ${translateError(e, t)}`, "error");
                 }
             } else {
+                if (!active) return;
                 setIsValidMnemonic(false);
                 if (nonEmptyWords.length > 0) {
                     setFeedback(t('profile.awaitingValidSeed'), "info");
@@ -186,7 +194,10 @@ export function RecreateProfile({ onProfileCreated, onSwitchToLogin, onSwitchToR
             }
         };
         const timer = setTimeout(validate, 300); // Debounce validation
-        return () => clearTimeout(timer);
+        return () => {
+            active = false;
+            clearTimeout(timer);
+        };
     }, [mnemonicWords, selectedLanguage, wordCount, t]);
 
 

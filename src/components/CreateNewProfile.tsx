@@ -84,18 +84,22 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNe
     }, []);
 
     useEffect(() => {
+        let active = true;
         async function generateNewSeed() {
             setIsLoading(true);
             try {
                 const newSeed: string = await profileService.generateMnemonic(wordCount, selectedLanguage);
+                if (!active) return;
                 setGeneratedSeed(newSeed.split(' '));
             } catch (e) {
+                if (!active) return;
                 setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(e, t)}`);
             } finally {
-                setIsLoading(false);
+                if (active) setIsLoading(false);
             }
         }
         generateNewSeed();
+        return () => { active = false; };
     }, [wordCount, selectedLanguage, t]);
 
     useEffect(() => {

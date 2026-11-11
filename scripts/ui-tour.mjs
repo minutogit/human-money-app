@@ -153,11 +153,111 @@ function getHudScript(initialStepId = '1.1') {
     if (currentIndex < 0) currentIndex = 0;
 
     let isMobile = false;
-    let isDark = document.documentElement.classList.contains('dark');
+    let isDark = false;
+    try {
+        isDark = document.documentElement?.classList?.contains('dark') ?? false;
+    } catch (e) {
+        // Safe fallback when documentElement is not yet available
+    }
     let scenarios = ['normal', 'empty', 'error'];
     let currentScenarioIdx = 0;
 
+    function applyStep(index) {
+        if (index < 0 || index >= STEPS.length) return;
+        currentIndex = index;
+        const step = STEPS[currentIndex];
+        try { window.location.hash = '#' + step.id; } catch (e) {}
+
+        if (window.__HUMOCO_TOUR__) {
+            window.__HUMOCO_TOUR__.setState({
+                appState: step.appState,
+                isAuthenticated: step.auth,
+                isSessionActive: step.auth,
+                isForkLocked: false,
+                isRecoveryRequired: false,
+                ...(step.sessionOverrides || {}),
+                settingsTab: step.settingsTab
+            });
+        }
+
+        if (step.postAction) {
+            try {
+                if (typeof step.postAction === 'function') {
+                    step.postAction();
+                } else if (typeof step.postAction === 'string') {
+                    eval(step.postAction);
+                }
+            } catch (err) {
+                console.warn('[Tour postAction error]', err);
+            }
+        }
+
+        renderHud();
+        try {
+            window.dispatchEvent(new CustomEvent('humoco:tour:step_changed', { detail: { step, index } }));
+        } catch (e) {}
+    }
+
+    // Register window.__HUMOCO_TOUR_HUD__ BEFORE any DOM access so it is always defined on window
+    window.__HUMOCO_TOUR_HUD__ = {
+        goToStep: (idx) => applyStep(idx),
+        goToStepId: (id) => {
+            const idx = STEPS.findIndex(s => s.id === id);
+            if (idx >= 0) applyStep(idx);
+        },
+        next: () => {
+            if (currentIndex < STEPS.length - 1) applyStep(currentIndex + 1);
+        },
+        prev: () => {
+            if (currentIndex > 0) applyStep(currentIndex - 1);
+        },
+        getCurrentStep: () => ({ index: currentIndex, step: STEPS[currentIndex] }),
+        toggleDark: () => {
+            isDark = !isDark;
+            try {
+                if (document.documentElement) {
+                    document.documentElement.classList.toggle('dark', isDark);
+                }
+            } catch (e) {}
+            renderHud();
+        },
+        toggleMobile: () => {
+            isMobile = !isMobile;
+            try {
+                if (document.body) {
+                    if (isMobile) {
+                        document.body.style.maxWidth = '390px';
+                        document.body.style.margin = '0 auto';
+                        document.body.style.boxShadow = '0 0 40px rgba(0,0,0,0.5)';
+                    } else {
+                        document.body.style.maxWidth = '';
+                        document.body.style.margin = '';
+                        document.body.style.boxShadow = '';
+                    }
+                }
+            } catch (e) {}
+            renderHud();
+        },
+        cycleScenario: () => {
+            currentScenarioIdx = (currentScenarioIdx + 1) % scenarios.length;
+            const nextSc = scenarios[currentScenarioIdx];
+            if (window.__HUMOCO_SET_SCENARIO__) {
+                window.__HUMOCO_SET_SCENARIO__(nextSc);
+            }
+            renderHud();
+        },
+        captureNote: () => {
+            const cur = STEPS[currentIndex];
+            const note = prompt("Notiz / Feedback für Step [" + cur.id + "] " + cur.title + ":");
+            if (note) {
+                console.info("[TOUR NOTE] [" + cur.id + "] " + note);
+                alert("Notiz erfasst für Step " + cur.id + ":\\n" + note);
+            }
+        }
+    };
+
     function renderHud() {
+        if (!document.body) return;
         let container = document.getElementById('__humoco_tour_hud__');
         if (!container) {
             container = document.createElement('div');
@@ -202,94 +302,19 @@ function getHudScript(initialStepId = '1.1') {
             <button id="__tour_note__" title="Notiz / Bug erfassen" style="background:none; border:none; color:white; cursor:pointer; font-size:14px; padding:2px;">📝</button>
         \`;
 
-        document.getElementById('__tour_prev__').onclick = () => window.__HUMOCO_TOUR_HUD__.prev();
-        document.getElementById('__tour_next__').onclick = () => window.__HUMOCO_TOUR_HUD__.next();
-        document.getElementById('__tour_dark__').onclick = () => window.__HUMOCO_TOUR_HUD__.toggleDark();
-        document.getElementById('__tour_mobile__').onclick = () => window.__HUMOCO_TOUR_HUD__.toggleMobile();
-        document.getElementById('__tour_scenario__').onclick = () => window.__HUMOCO_TOUR_HUD__.cycleScenario();
-        document.getElementById('__tour_note__').onclick = () => window.__HUMOCO_TOUR_HUD__.captureNote();
+        const prevBtn = document.getElementById('__tour_prev__');
+        if (prevBtn) prevBtn.onclick = () => window.__HUMOCO_TOUR_HUD__.prev();
+        const nextBtn = document.getElementById('__tour_next__');
+        if (nextBtn) nextBtn.onclick = () => window.__HUMOCO_TOUR_HUD__.next();
+        const darkBtn = document.getElementById('__tour_dark__');
+        if (darkBtn) darkBtn.onclick = () => window.__HUMOCO_TOUR_HUD__.toggleDark();
+        const mobBtn = document.getElementById('__tour_mobile__');
+        if (mobBtn) mobBtn.onclick = () => window.__HUMOCO_TOUR_HUD__.toggleMobile();
+        const scBtn = document.getElementById('__tour_scenario__');
+        if (scBtn) scBtn.onclick = () => window.__HUMOCO_TOUR_HUD__.cycleScenario();
+        const noteBtn = document.getElementById('__tour_note__');
+        if (noteBtn) noteBtn.onclick = () => window.__HUMOCO_TOUR_HUD__.captureNote();
     }
-
-    function applyStep(index) {
-        if (index < 0 || index >= STEPS.length) return;
-        currentIndex = index;
-        const step = STEPS[currentIndex];
-        window.location.hash = '#' + step.id;
-
-        if (window.__HUMOCO_TOUR__) {
-            window.__HUMOCO_TOUR__.setState({
-                appState: step.appState,
-                isAuthenticated: step.auth,
-                isSessionActive: step.auth,
-                ...(step.sessionOverrides || {}),
-                settingsTab: step.settingsTab
-            });
-        }
-
-        if (step.postAction) {
-            try {
-                if (typeof step.postAction === 'function') {
-                    step.postAction();
-                } else if (typeof step.postAction === 'string') {
-                    eval(step.postAction);
-                }
-            } catch (err) {
-                console.warn('[Tour postAction error]', err);
-            }
-        }
-
-        renderHud();
-        window.dispatchEvent(new CustomEvent('humoco:tour:step_changed', { detail: { step, index } }));
-    }
-
-    window.__HUMOCO_TOUR_HUD__ = {
-        goToStep: (idx) => applyStep(idx),
-        goToStepId: (id) => {
-            const idx = STEPS.findIndex(s => s.id === id);
-            if (idx >= 0) applyStep(idx);
-        },
-        next: () => {
-            if (currentIndex < STEPS.length - 1) applyStep(currentIndex + 1);
-        },
-        prev: () => {
-            if (currentIndex > 0) applyStep(currentIndex - 1);
-        },
-        getCurrentStep: () => ({ index: currentIndex, step: STEPS[currentIndex] }),
-        toggleDark: () => {
-            isDark = !isDark;
-            document.documentElement.classList.toggle('dark', isDark);
-            renderHud();
-        },
-        toggleMobile: () => {
-            isMobile = !isMobile;
-            if (isMobile) {
-                document.body.style.maxWidth = '390px';
-                document.body.style.margin = '0 auto';
-                document.body.style.boxShadow = '0 0 40px rgba(0,0,0,0.5)';
-            } else {
-                document.body.style.maxWidth = '';
-                document.body.style.margin = '';
-                document.body.style.boxShadow = '';
-            }
-            renderHud();
-        },
-        cycleScenario: () => {
-            currentScenarioIdx = (currentScenarioIdx + 1) % scenarios.length;
-            const nextSc = scenarios[currentScenarioIdx];
-            if (window.__HUMOCO_SET_SCENARIO__) {
-                window.__HUMOCO_SET_SCENARIO__(nextSc);
-            }
-            renderHud();
-        },
-        captureNote: () => {
-            const cur = STEPS[currentIndex];
-            const note = prompt("Notiz / Feedback für Step [" + cur.id + "] " + cur.title + ":");
-            if (note) {
-                console.info("[TOUR NOTE] [" + cur.id + "] " + note);
-                alert("Notiz erfasst für Step " + cur.id + ":\\n" + note);
-            }
-        }
-    };
 
     window.addEventListener('keydown', (e) => {
         const isInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName);
@@ -418,7 +443,7 @@ async function runTour() {
     });
 
     cdp.on('Runtime.exceptionThrown', (params) => {
-        const text = params.exceptionDetails?.text || params.exceptionDetails?.exception?.description || 'Unknown exception';
+        const text = params.exceptionDetails?.exception?.description || params.exceptionDetails?.text || 'Unknown exception';
         currentStepExceptions.push(text);
     });
 
@@ -460,8 +485,25 @@ async function runTour() {
 
             process.stdout.write(`Step [${step.id}] ${step.title.padEnd(42, ' ')} ... `);
 
-            // Navigate to step
-            await cdp.evaluate(`window.__HUMOCO_TOUR_HUD__ && window.__HUMOCO_TOUR_HUD__.goToStepId("${step.id}")`);
+            // Navigate to step via HUD and ensure TourBridge state is applied directly
+            const stepPayload = JSON.stringify({
+                appState: step.appState,
+                isAuthenticated: step.auth,
+                isSessionActive: step.auth,
+                isForkLocked: false,
+                isRecoveryRequired: false,
+                ...(step.sessionOverrides || {}),
+                settingsTab: step.settingsTab
+            });
+
+            await cdp.evaluate(`
+                if (window.__HUMOCO_TOUR_HUD__) {
+                    window.__HUMOCO_TOUR_HUD__.goToStepId("${step.id}");
+                }
+                if (window.__HUMOCO_TOUR__) {
+                    window.__HUMOCO_TOUR__.setState(${stepPayload});
+                }
+            `);
 
             // Wait for DOM to stabilize
             await new Promise(r => setTimeout(r, 650));

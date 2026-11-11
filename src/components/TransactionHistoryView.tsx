@@ -77,30 +77,37 @@ export function TransactionHistoryView() {
     const [contactModalData, setContactModalData] = useState<{ did: string; name?: string } | null>(null);
 
     useEffect(() => {
+        let active = true;
         async function fetchHistory() {
             logger.info("TransactionHistoryView: Loading history.");
             try {
                 const records = await transferService.getHistory();
                 records.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+                if (!active) return;
                 setHistory(records);
             } catch (e) {
+                if (!active) return;
                 const msg = t('history.loadFailed', { error: translateError(e, t) });
                 logger.error(`Failed to load transaction history: ${stringifyError(e)}`);
                 setError(msg);
             } finally {
-                setIsLoading(false);
+                if (active) setIsLoading(false);
             }
         }
         fetchHistory();
 
         const loadPostSummary = () => {
             postService.getPostInboxSummary()
-                .then(summary => setUnacknowledgedPayments(summary.unacknowledgedPayments || []))
+                .then(summary => {
+                    if (!active) return;
+                    setUnacknowledgedPayments(summary.unacknowledgedPayments || []);
+                })
                 .catch(() => {});
         };
         loadPostSummary();
         window.addEventListener(POST_INBOX_UPDATED_EVENT, loadPostSummary);
         return () => {
+            active = false;
             window.removeEventListener(POST_INBOX_UPDATED_EVENT, loadPostSummary);
         };
     }, [t]);
@@ -217,9 +224,12 @@ export function TransactionHistoryView() {
             if (success) {
                 setCopiedKey(key);
                 setTimeout(() => setCopiedKey(null), 2000);
+            } else {
+                setError(t('common.copyFailed', 'Fehler beim Kopieren'));
             }
         } catch (e) {
             logger.error(`Failed to copy: ${stringifyError(e)}`);
+            setError(translateError(e, t));
         }
     }
 

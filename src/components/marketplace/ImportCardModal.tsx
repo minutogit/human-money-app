@@ -11,7 +11,7 @@ import { useSession } from '../../context/SessionContext';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../../utils/log';
-import { stringifyError } from '../../utils/errorHelper';
+import { translateError, stringifyError } from '../../utils/errorHelper';
 import { truncateUserId } from '../../utils/userIdHelper';
 import { Contact, FrontendMyMarketProfile } from '../../types';
 
@@ -42,9 +42,15 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
+        let active = true;
         if (isOpen) {
-            marketService.getMyMarketProfile().then(setMyProfile).catch(() => {});
+            marketService.getMyMarketProfile().then((profile) => {
+                if (active) setMyProfile(profile);
+            }).catch(() => {});
         }
+        return () => {
+            active = false;
+        };
     }, [isOpen]);
 
     const resetState = () => {
@@ -82,7 +88,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
 
                 const defaultProfile = {
                     id: did,
-                    firstName: partnerName || 'Kontakt',
+                    firstName: partnerName || t('contacts.defaultContactName', 'Kontakt'),
                 };
 
                 const contactToSave: Contact = {
@@ -103,6 +109,11 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
             setSelectedTrustLevel(level);
         } catch (err) {
             logger.error(`Failed to set contact trust level: ${stringifyError(err)}`);
+            setResultFeedback({
+                type: 'error',
+                title: t('contacts.trustLevelSaveError', 'Fehler beim Speichern der Vertrauensstufe'),
+                message: translateError(err, t),
+            });
         } finally {
             setIsSavingTrust(false);
         }
@@ -196,7 +207,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 multiple: false,
                 filters: [
                     { name: t('marketplace.cardFilterName'), extensions: ['hmcard', 'json'] },
-                    { name: 'All Files', extensions: ['*'] },
+                    { name: t('common.allFiles', 'All Files'), extensions: ['*'] },
                 ],
             });
 

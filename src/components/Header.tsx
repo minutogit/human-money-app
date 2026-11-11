@@ -1,5 +1,6 @@
 // src/components/Header.tsx
 import React from "react";
+import { useTranslation } from "react-i18next";
 import logo from "../assets/logo.png";
 import { useNavigation } from "../context/NavigationContext";
 import { useSession } from "../context/SessionContext";
@@ -7,6 +8,7 @@ import { StatusChip } from "./StatusChip";
 import { INTERNAL_VIEWS } from "./Sidebar";
 
 export const Header: React.FC = () => {
+    const { t } = useTranslation();
     const { appState, setSidebarOpen } = useNavigation();
     const { isSessionActive, isAuthenticated } = useSession();
     const isLoggedIn = isAuthenticated ?? isSessionActive;
@@ -21,14 +23,14 @@ export const Header: React.FC = () => {
                 <button
                     onClick={() => setSidebarOpen(true)}
                     className="rounded-xl p-2 text-theme-secondary hover:bg-bg-app focus:outline-none focus:ring-2 focus:ring-theme-accent md:hidden shrink-0"
-                    aria-label="Navigation öffnen"
+                    aria-label={t('sidebar.openNavigation', 'Navigation öffnen')}
                 >
                     <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path>
                     </svg>
                 </button>
                 <div className="flex items-center gap-2.5 min-w-0">
-                    <img src={logo} alt="Logo" className="w-7 h-7 object-contain md:hidden shrink-0" />
+                    <img src={logo} alt={t('common.logo', 'Logo')} className="w-7 h-7 object-contain md:hidden shrink-0" />
                     <h1 className="text-base md:text-lg font-bold text-theme-primary truncate">
                         Human Money App
                     </h1>

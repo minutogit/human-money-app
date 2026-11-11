@@ -94,6 +94,7 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
                 const displayName = profile.firstName || profile.id;
                 logger.info(`Auto-login successful for profile: ${displayName}`);
                 notifyLoginRef.current(displayName);
+                if (tourBridge.getState().appState) return;
                 historyRef.current = [];
                 setAppState({ view: "logged_in" });
                 return;
@@ -102,10 +103,12 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
             }
 
             await authService.listProfiles();
+            if (tourBridge.getState().appState) return;
             historyRef.current = [];
             setAppState({ view: "needs_login" });
         } catch (e) {
             error(`Failed to check if profile exists: ${stringifyError(e)}`);
+            if (tourBridge.getState().appState) return;
             historyRef.current = [];
             setAppState({ view: "needs_login" });
         }
@@ -117,6 +120,12 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
     }, [checkProfile]);
 
     useEffect(() => {
+        const initial = tourBridge.getState();
+        if (initial.appState) {
+            historyRef.current = [];
+            appStateRef.current = initial.appState;
+            setAppState(initial.appState);
+        }
         return tourBridge.subscribe((partial) => {
             if (partial.appState) {
                 historyRef.current = [];

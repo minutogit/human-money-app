@@ -92,9 +92,28 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
     }, [selectedProfile, t]);
 
     useEffect(() => {
+        let active = true;
         logger.info("Login component displayed");
-        refreshProfiles();
-    }, [refreshProfiles]);
+        (async () => {
+            setIsLoading(true);
+            try {
+                const availableProfiles = await authService.listProfiles();
+                if (!active) return;
+                setProfiles(availableProfiles);
+                if (availableProfiles.length > 0 && !selectedProfile) {
+                    setSelectedProfile(availableProfiles[0].folderName);
+                }
+            } catch (e) {
+                if (!active) return;
+                setFeedback(`${t('profile.accessError')}: ${translateError(e, t)}`, "error");
+            } finally {
+                if (active) setIsLoading(false);
+            }
+        })();
+        return () => {
+            active = false;
+        };
+    }, [selectedProfile, t]);
 
     async function handleLogin() {
         if (!selectedProfile || !password) {
@@ -135,9 +154,10 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                 } else {
                     setFeedback(`${t('profile.verificationFailure')}: ${translateError(e, t)}`, "error");
                 }
-                setIsLoggingIn(false);
                 setPassword("");
                 passwordInputRef.current?.focus();
+            } finally {
+                setIsLoggingIn(false);
             }
         }, 150);
     }
@@ -156,9 +176,9 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
             const userId = await profileService.getUserId();
             setHandoverUserId(userId);
             setShowPostHandoverWarning(true);
-            setIsLoggingIn(false);
         } catch (e) {
             setFeedback(`${t('profile.handoverFailure')}: ${translateError(e, t)}`, "error");
+        } finally {
             setIsLoggingIn(false);
         }
     }
@@ -397,7 +417,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                         )}
 
                         <div className="flex gap-4">
-                            <Button type="button" variant="secondary" onClick={() => { setShowDeleteConfirm(false); setDeleteError(""); }} className="flex-1 rounded-2xl">{t('common.abort')}</Button>
+                            <Button type="button" variant="secondary" onClick={() => { setShowDeleteConfirm(false); setDeleteError(""); setDeletePassword(""); }} className="flex-1 rounded-2xl">{t('common.abort')}</Button>
                             <Button type="button" onClick={handleDeleteProfile} disabled={isDeleting} className="flex-1 rounded-3xl !bg-rose-600 hover:!bg-rose-700 shadow-premium-lg">
                                 {isDeleting ? t('profile.deleting') : t('profile.deleteProfile')}
                             </Button>

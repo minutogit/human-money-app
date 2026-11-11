@@ -102,15 +102,19 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     }, [wordCount]);
 
     useEffect(() => {
+        let active = true;
         async function fetchWordlist() {
             try {
                 const list = await profileService.getWordlist(selectedLanguage);
+                if (!active) return;
                 setBip39Wordlist(list);
             } catch (e) {
+                if (!active) return;
                 logger.error(`Failed to fetch BIP-39 wordlist: ${stringifyError(e)}`);
             }
         }
         fetchWordlist();
+        return () => { active = false; };
     }, [selectedLanguage, t]);
 
     useEffect(() => {
@@ -156,24 +160,29 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin }: WalletRec
     }, [rawPhrase, inputMode, bip39Wordlist, wordCount]);
 
     useEffect(() => {
+        let active = true;
         const validate = async () => {
             const nonEmptyWords = mnemonicWords.filter(Boolean);
             if (nonEmptyWords.length > 0 && mnemonicWords.every(word => word && word.length > 1)) {
                 const fullMnemonic = mnemonicWords.join(" ");
                 try {
                     await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
+                    if (!active) return;
                     setIsValidMnemonic(true);
                     setFeedback(t('auth.seedPhraseValid'), "success");
                 } catch (e) {
+                    if (!active) return;
                     setIsValidMnemonic(false);
                     setFeedback(`${t('profile.errorPrefix')}: ${translateError(e, t)}`, "error");
                 }
             } else {
+                if (!active) return;
                 setIsValidMnemonic(false);
                 setFeedback(nonEmptyWords.length > 0 ? t('auth.awaitingSequence') : "", nonEmptyWords.length > 0 ? "info" : null);
             }
         };
         validate();
+        return () => { active = false; };
     }, [mnemonicWords, selectedLanguage, wordCount, t]);
 
     const handleWordChange = (index: number, value: string) => {

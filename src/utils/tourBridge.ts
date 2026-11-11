@@ -46,6 +46,16 @@ class TourBridge {
             }
         }
 
+        // Reset locks by default on view transitions unless explicitly set
+        if (nextPartial.appState) {
+            if (nextPartial.isForkLocked === undefined) {
+                nextPartial.isForkLocked = false;
+            }
+            if (nextPartial.isRecoveryRequired === undefined) {
+                nextPartial.isRecoveryRequired = false;
+            }
+        }
+
         this.state = { ...this.state, ...nextPartial };
 
         if (nextPartial.settingsTab && this.settingsTabSetter) {

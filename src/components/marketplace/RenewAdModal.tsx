@@ -1,5 +1,5 @@
 // src/components/marketplace/RenewAdModal.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Clock, RefreshCw } from 'lucide-react';
 import { FrontendMyAd } from '../../types';
@@ -24,6 +24,12 @@ export const RenewAdModal: React.FC<RenewAdModalProps> = ({
     const [durationDays, setDurationDays] = useState<number>(90);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!isOpen) {
+            setError(null);
+        }
+    }, [isOpen]);
 
     if (!ad) return null;
 

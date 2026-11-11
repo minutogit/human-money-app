@@ -34,7 +34,7 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
             const selected = await open({
                 multiple: false,
                 filters: [
-                    { name: 'Double Spend Proof (.hmcproof)', extensions: ['hmcproof'] },
+                    { name: t('conflict.filterName', 'Double Spend Proof (.hmcproof)'), extensions: ['hmcproof'] },
                     { name: t('voucher.export.allFiles'), extensions: ['*'] }
                 ]
             });
@@ -57,22 +57,28 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
     };
 
     useEffect(() => {
+        let active = true;
         logger.info("ConflictListView: Loading conflicts");
         async function fetchConflicts() {
             setIsLoading(true);
             setErrorMsg("");
             try {
                 const result = await integrityService.getDoubleSpendConflicts();
-                setConflicts(result);
+                if (active) setConflicts(result);
             } catch (e) {
-                const msg = t('conflict.fetchFailed', { error: translateError(e, t) });
-                logger.error(`Failed to fetch conflicts: ${stringifyError(e)}`);
-                setErrorMsg(msg);
+                if (active) {
+                    const msg = t('conflict.fetchFailed', { error: translateError(e, t) });
+                    logger.error(`Failed to fetch conflicts: ${stringifyError(e)}`);
+                    setErrorMsg(msg);
+                }
             } finally {
-                setIsLoading(false);
+                if (active) setIsLoading(false);
             }
         }
         fetchConflicts();
+        return () => {
+            active = false;
+        };
     }, [t]);
 
     function formatTimestamp(isoString: string): string {

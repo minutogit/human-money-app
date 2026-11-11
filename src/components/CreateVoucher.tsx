@@ -131,8 +131,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             timerRef.current = setTimeout(onVoucherCreated, 2000);
         } catch (e) {
             setFeedback({type: 'error', msg: t('voucher.create.failed', { error: translateError(e, t) })});
-            setIsLoading(false);
             setShowConfirm(false);
+        } finally {
+            setIsLoading(false);
         }
     }
 

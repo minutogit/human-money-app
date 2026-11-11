@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { standardsService } from '../services/standardsService';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -32,6 +32,16 @@ export function ExportStandardModal({
     const [isExporting, setIsExporting] = useState(false);
     const [error, setError] = useState('');
 
+    useEffect(() => {
+        if (!isOpen) {
+            setPassword('');
+            setConfirmPassword('');
+            setError('');
+            setIsExporting(false);
+            setMode('Cleartext');
+        }
+    }, [isOpen]);
+
     const handleExport = async () => {
         setError('');
         if (mode === 'Password') {
@@ -56,7 +66,7 @@ export function ExportStandardModal({
                 const defaultFileName = `${standardName.toLowerCase().replace(/\s+/g, '-')}.toml`;
                 const filePath = await save({
                     defaultPath: defaultFileName,
-                    filters: [{ name: 'Voucher Standard TOML (*.toml)', extensions: ['toml'] }]
+                    filters: [{ name: t('standards.tomlFilterName', 'Voucher Standard TOML (*.toml)'), extensions: ['toml'] }]
                 });
 
                 if (filePath) {

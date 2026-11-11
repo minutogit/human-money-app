@@ -547,11 +547,9 @@ pub async fn reconcile_rollback(
                 if !resp.status().is_success() { continue; }
                 let Ok(resp_bytes) = resp.bytes().await else { continue };
 
-                let verdict_opt = if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
-                    Some(envelope.verdict)
-                } else {
-                    serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes).ok()
-                };
+                let verdict_opt = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes)
+                    .ok()
+                    .map(|e| e.verdict);
 
                 if let Some(verdict) = verdict_opt {
                     let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
@@ -899,11 +897,9 @@ pub async fn check_voucher_l2_status(
         if !resp.status().is_success() { continue; }
         let Ok(resp_bytes) = resp.bytes().await else { continue };
 
-        let verdict_opt = if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
-            Some(envelope.verdict)
-        } else {
-            serde_json::from_slice::<human_money_core::models::layer2_api::L2Verdict>(&resp_bytes).ok()
-        };
+        let verdict_opt = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes)
+            .ok()
+            .map(|e| e.verdict);
 
         if let Some(verdict) = verdict_opt {
             let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;

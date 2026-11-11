@@ -40,8 +40,8 @@ export function SegmentedTabs<T extends string = string>({
                         disabled={tab.disabled}
                         onClick={() => onChange(tab.id)}
                         className={`${
-                            fullWidth ? 'flex-1 min-w-[8rem]' : ''
-                        } flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${
+                            fullWidth ? 'flex-1 min-w-0' : ''
+                        } flex items-center justify-center gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-[11px] sm:text-xs font-bold uppercase tracking-tight sm:tracking-wider transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${
                             isActive
                                 ? 'bg-white text-theme-primary shadow-sm'
                                 : 'text-theme-light hover:text-theme-secondary hover:bg-white/40'

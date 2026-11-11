@@ -29,7 +29,8 @@ const VALID_DOMAINS = [
   'help',
   'helpCenter',
   'statusChip',
-  'sidebar'
+  'sidebar',
+  'backup'
 ];
 
 let enContent;

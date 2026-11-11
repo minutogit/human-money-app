@@ -42,9 +42,15 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
     const [deleteError, setDeleteError] = useState("");
 
     useEffect(() => {
+        let active = true;
         authService.listProfiles()
-            .then(setProfiles)
+            .then((res) => {
+                if (active) setProfiles(res);
+            })
             .catch(() => {});
+        return () => {
+            active = false;
+        };
     }, []);
 
     const activeProfile = profiles.find(p => p.profileName === profileName) || profiles[0];
@@ -160,7 +166,13 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
                         <div className="pt-2 border-t border-gray-100 dark:border-gray-700">
                             <button
                                 type="button"
-                                onClick={() => setShowReclaim(!showReclaim)}
+                                onClick={() => {
+                                    if (showReclaim) {
+                                        setReclaimPassword("");
+                                        setReclaimError("");
+                                    }
+                                    setShowReclaim(!showReclaim);
+                                }}
                                 className="w-full flex items-center justify-between text-xs font-semibold text-gray-500 dark:text-gray-400 hover:text-amber-600 transition-colors py-2"
                             >
                                 <span className="flex items-center gap-1.5">

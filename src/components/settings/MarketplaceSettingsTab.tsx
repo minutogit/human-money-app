@@ -6,7 +6,7 @@ import { Card } from '../ui/Card';
 import { AppSettings } from '../../types';
 import { settingsService } from '../../services/settingsService';
 import { logger } from '../../utils/log';
-import { stringifyError } from '../../utils/errorHelper';
+import { stringifyError, translateError } from '../../utils/errorHelper';
 
 export interface MarketplaceSettingsTabProps {
     settings: AppSettings | null;
@@ -21,6 +21,7 @@ export const MarketplaceSettingsTab: React.FC<MarketplaceSettingsTabProps> = ({
 
     const [marketShowUnknown, setMarketShowUnknown] = useState<boolean>(settings?.marketShowUnknown ?? true);
     const [maxStoreHops, setMaxStoreHops] = useState<number>(settings?.maxStoreHops ?? 2);
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
     useEffect(() => {
         if (settings) {
@@ -31,23 +32,27 @@ export const MarketplaceSettingsTab: React.FC<MarketplaceSettingsTabProps> = ({
 
     const handleSaveToggle = async (key: keyof AppSettings, value: boolean) => {
         try {
+            setErrorMsg(null);
             const current = settings || await settingsService.getSettings();
             const updated: AppSettings = { ...current, [key]: value };
             await settingsService.saveSettings(updated);
             if (onSettingsUpdated) onSettingsUpdated(updated);
         } catch (err) {
             logger.error(`Failed to save marketplace setting ${key}: ${stringifyError(err)}`);
+            setErrorMsg(translateError(err, t));
         }
     };
 
     const handleSaveNumber = async (key: keyof AppSettings, value: number) => {
         try {
+            setErrorMsg(null);
             const current = settings || await settingsService.getSettings();
             const updated: AppSettings = { ...current, [key]: value };
             await settingsService.saveSettings(updated);
             if (onSettingsUpdated) onSettingsUpdated(updated);
         } catch (err) {
             logger.error(`Failed to save marketplace setting ${key}: ${stringifyError(err)}`);
+            setErrorMsg(translateError(err, t));
         }
     };
 
@@ -60,6 +65,12 @@ export const MarketplaceSettingsTab: React.FC<MarketplaceSettingsTabProps> = ({
                 </div>
             }>
                 <div className="space-y-5">
+                    {errorMsg && (
+                        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center justify-between">
+                            <span>{errorMsg}</span>
+                            <button type="button" onClick={() => setErrorMsg(null)} className="text-rose-500 hover:text-rose-700 font-bold ml-2">×</button>
+                        </div>
+                    )}
                     {/* Marketplace Show Unknown Creators Toggle */}
                     <div className="flex items-start gap-3 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
                         <input

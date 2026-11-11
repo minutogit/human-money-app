@@ -120,6 +120,7 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
     } | null>(null);
 
     useEffect(() => {
+        let active = true;
         async function fetchData() {
             try {
                 logger.info("ReceiveView opened, fetching initial data.");
@@ -132,6 +133,7 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                      voucherService.getUserId().catch(() => ''),
                      profileService.getProfile().catch(() => null)
                 ]);
+                if (!active) return;
                 setVoucherStandards(standards);
                 if (standards.length > 0) {
                     setReqStandardId(standards[0].id);
@@ -140,12 +142,14 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                 setOwnUserId(userId);
                 setOwnProfile(profile);
             } catch (e) {
+                if (!active) return;
                 const msg = `Failed to fetch initial data: ${translateError(e, t)}`;
                 logger.error(msg);
                 setFeedbackMsg(msg);
             }
         }
         fetchData();
+        return () => { active = false; };
     }, [t]);
 
     useEffect(() => {

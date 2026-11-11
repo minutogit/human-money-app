@@ -325,7 +325,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack: _onBack, initialSearc
             });
             if (bytes && bytes.length > 0) {
                 const settings = await settingsService.getSettings().catch(() => null);
-                const safeName = (contact.profile.firstName || 'contact').toLowerCase().replace(/\s+/g, '-');
+                const safeName = (contact.profile.firstName || t('contacts.defaultContactName', 'contact')).toLowerCase().replace(/\s+/g, '-');
                 const filePath = await save({
                     defaultPath: settings?.lastUsedDirectory
                         ? `${settings.lastUsedDirectory}/trust-${safeName}.wot`

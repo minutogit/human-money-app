@@ -84,7 +84,7 @@ Das am oberen Rand sichtbare Tour-Badge bietet intuitive Kontrollmöglichkeiten:
 | **5.1** | **Konflikt-Übersicht** | [`src/components/ConflictListView.tsx`](file:///home/basti/Coding/humoco/human-money-app/src/components/ConflictListView.tsx) | Erkannte Double-Spends, SST-Trap-Funde, betroffene Gutscheine |
 | **5.2** | **Konflikt-Details** | [`src/components/ConflictDetailsView.tsx`](file:///home/basti/Coding/humoco/human-money-app/src/components/ConflictDetailsView.tsx) | Beweiskette, aufgedeckte Identität (DID), Quorum-Beweis |
 | **5.3** | **Fork-Lock Sicherheits-Sperre** | [`src/components/ForkLockOverlay.tsx`](file:///home/basti/Coding/humoco/human-money-app/src/components/ForkLockOverlay.tsx) | Notfall-Sperre bei Fork-Erkennung, Entsperr- und Sync-Anweisungen |
-| **5.4** | **Konzept & Hilfe** | [`src/components/ConceptView.tsx`](file:///home/basti/Coding/humoco/human-money-app/src/components/ConceptView.tsx) | Erklärungen zu Minuto, Web of Trust, Offline-Sicherheit, FAQ |
+| **5.4** | **Konzept & Hilfe** | [`src/components/HelpCenterView.tsx`](file:///home/basti/Coding/humoco/human-money-app/src/components/HelpCenterView.tsx) | Erklärungen zu Minuto, Web of Trust, Offline-Sicherheit, FAQ |
 | **5.5** | **Support & Spenden** | [`src/components/SupportView.tsx`](file:///home/basti/Coding/humoco/human-money-app/src/components/SupportView.tsx) | Entwickler unterstützen, Links zu GitHub, Community-Kanäle |
 | **5.6** | **Bug-Report** | [`src/components/BugReportView.tsx`](file:///home/basti/Coding/humoco/human-money-app/src/components/BugReportView.tsx) | Diagnose-Daten exportieren, Fehlerbericht formulieren |
 

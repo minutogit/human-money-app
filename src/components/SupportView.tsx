@@ -1,13 +1,14 @@
 // src/components/SupportView.tsx
-import React from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { PageLayout } from './ui/PageLayout';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
+import { AlertBanner } from './ui/AlertBanner';
 import { Heart, Globe, MessageSquare, Award } from 'lucide-react';
 import { logger } from '../utils/log';
-import { stringifyError } from '../utils/errorHelper';
+import { translateError, stringifyError } from '../utils/errorHelper';
 
 interface SupportViewProps {
     onBack?: () => void;
@@ -15,12 +16,15 @@ interface SupportViewProps {
 
 export const SupportView: React.FC<SupportViewProps> = ({ onBack }) => {
     const { t } = useTranslation();
+    const [error, setError] = useState<string>('');
 
     const handleOpenWebsite = async () => {
+        setError('');
         try {
             await openUrl('https://menschlich-miteinander.org');
         } catch (err) {
             logger.error(`Failed to open URL: ${stringifyError(err)}`);
+            setError(translateError(err, t));
         }
     };
 
@@ -31,6 +35,13 @@ export const SupportView: React.FC<SupportViewProps> = ({ onBack }) => {
             onBack={onBack}
         >
             <div className="max-w-3xl mx-auto flex flex-col items-center justify-center py-8">
+                {error && (
+                    <div className="w-full mb-6">
+                        <AlertBanner variant="danger" title={t('common.error', 'Fehler')}>
+                            {error}
+                        </AlertBanner>
+                    </div>
+                )}
                 {/* Large animated heart icon */}
                 <div className="relative mb-8 group">
                     <div className="absolute inset-0 bg-theme-primary/10 rounded-full blur-2xl group-hover:bg-theme-primary/20 transition-all duration-500 scale-125"></div>

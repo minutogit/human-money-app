@@ -23,8 +23,21 @@ export function useContactResolver() {
     }, []);
 
     useEffect(() => {
-        loadContacts();
-    }, [loadContacts]);
+        let active = true;
+        (async () => {
+            try {
+                const list = await contactService.getContacts();
+                if (!active) return;
+                setContacts(list || []);
+            } catch (error) {
+                if (!active) return;
+                console.error('Failed to load contacts for resolver:', error);
+            } finally {
+                if (active) setIsLoading(false);
+            }
+        })();
+        return () => { active = false; };
+    }, []);
 
     /**
      * Resolves a DID and/or provided name to a displayable string.

@@ -10,8 +10,9 @@ import { Button } from "./ui/Button";
 import { VoucherSummary, AppSettings, PublicProfile, VoucherStandardDefinition } from "../types";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import { useSession } from "../context/SessionContext";
-import { stringifyError } from "../utils/errorHelper";
+import { stringifyError, translateError } from "../utils/errorHelper";
 import { PageLayout } from "./ui/PageLayout";
+import { AlertBanner } from "./ui/AlertBanner";
 import { VoucherCard } from "./ui/VoucherCard";
 import { formatDate } from "../utils/format";
 import { 
@@ -37,6 +38,7 @@ export function WalletView() {
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
     const [parsedStandards, setParsedStandards] = useState<Record<string, VoucherStandardDefinition>>({});
     const [ownUserId, setOwnUserId] = useState<string>("");
+    const [feedbackMsg, setFeedbackMsg] = useState("");
 
     // Export state
     const [showExportModal, setShowExportModal] = useState(false);
@@ -79,6 +81,7 @@ export function WalletView() {
     const [expandedVoucherIds, setExpandedVoucherIds] = useState<string[]>([]);
 
     useEffect(() => {
+        let active = true;
         logger.info("WalletView component displayed");
         async function fetchData() {
             try {
@@ -89,6 +92,7 @@ export function WalletView() {
                     standardsService.getStandards().catch(() => []),
                     voucherService.getUserId().catch(() => "")
                 ]);
+                if (!active) return;
                 setVouchers(voucherList || []);
                 setSettings(currentSettings);
                 setUserProfile(profile);
@@ -103,14 +107,18 @@ export function WalletView() {
                         logger.error(`Failed to parse standard ${s.id}: ${stringifyError(e)}`);
                     }
                 }
+                if (!active) return;
                 setParsedStandards(parsed);
             } catch (e) {
+                if (!active) return;
                 const msg = `Failed to fetch wallet data: ${stringifyError(e)}`;
                 console.error(msg);
+                setFeedbackMsg(translateError(e, t));
             }
         }
         fetchData();
-    }, []);
+        return () => { active = false; };
+    }, [t]);
 
     const toggleVoucherExpansion = useCallback((voucherId: string) => {
         setExpandedVoucherIds(prev => 
@@ -182,6 +190,11 @@ export function WalletView() {
             }
         >
             <div className="max-w-5xl mx-auto space-y-6">
+                {feedbackMsg && (
+                    <AlertBanner variant="error">
+                        {feedbackMsg}
+                    </AlertBanner>
+                )}
                 <VoucherFilterBar 
                     statusFilters={statusFilters}
                     standardFilters={standardFilters}

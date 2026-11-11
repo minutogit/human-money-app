@@ -37,12 +37,14 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
     const [isRevoking, setIsRevoking] = useState(false);
 
     useEffect(() => {
+        let active = true;
         if (!details?.proof?.offenderId) return;
         const offenderId = details.proof.offenderId;
         const offenderBare = offenderId.split('@').pop();
 
         contactService.getContacts()
             .then(contacts => {
+                if (!active) return;
                 const found = contacts.find(c => {
                     if (c.trustLevel == null || c.trustLevel < 0) return false;
                     const contactBare = c.did.split('@').pop();
@@ -50,12 +52,18 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                 });
                 setMatchedContact(found || null);
             })
-            .catch(e => logger.error(`Failed to load contacts for offender check: ${stringifyError(e)}`));
+            .catch(e => {
+                if (active) logger.error(`Failed to load contacts for offender check: ${stringifyError(e)}`);
+            });
+        return () => {
+            active = false;
+        };
     }, [details?.proof?.offenderId]);
 
     const handleRevokeContactTrust = async () => {
         if (!matchedContact) return;
         setIsRevoking(true);
+        setErrorMsg("");
         try {
             await protectAction(async (pwd) => {
                 await contactService.saveContact({
@@ -67,27 +75,34 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
             setTrustRevoked(true);
         } catch (e) {
             logger.error(`Failed to revoke contact trust: ${stringifyError(e)}`);
+            setErrorMsg(translateError(e, t));
         } finally {
             setIsRevoking(false);
         }
     };
 
     useEffect(() => {
+        let active = true;
         async function fetchProof() {
             setIsLoading(true);
             try {
                 logger.info(`Fetching double-spend proof details: ${proofId}`);
                 const result = await integrityService.getProofOfDoubleSpend(proofId);
-                setDetails(result);
+                if (active) setDetails(result);
             } catch (e) {
-                const msg = t('conflict.fetchDetailsFailed', { error: translateError(e, t) });
-                logger.error(`Failed to fetch double-spend proof: ${stringifyError(e)}`);
-                setErrorMsg(msg);
+                if (active) {
+                    const msg = t('conflict.fetchDetailsFailed', { error: translateError(e, t) });
+                    logger.error(`Failed to fetch double-spend proof: ${stringifyError(e)}`);
+                    setErrorMsg(msg);
+                }
             } finally {
-                setIsLoading(false);
+                if (active) setIsLoading(false);
             }
         }
         fetchProof();
+        return () => {
+            active = false;
+        };
     }, [proofId, t]);
 
     const handleLocalOverride = async () => {
@@ -267,9 +282,9 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                             )}
                         </div>
                         <div className="space-y-4">
-                            <div>
+                            <div className="min-w-0 break-all">
                                 <p className="text-xs font-semibold text-theme-light uppercase tracking-wider">{t('conflict.offenderIdLabel')}</p>
-                                <p className="font-mono text-sm break-all text-red-700 bg-red-50 p-2 rounded mt-1">{proof.offenderId}</p>
+                                <p className="font-mono text-sm break-all text-red-700 bg-red-50 p-2.5 rounded-xl border border-red-200 mt-1 select-all">{proof.offenderId}</p>
                             </div>
                             {proof.isCryptographicallyAttributed ? (
                                 proof.hasVictimWitness && (

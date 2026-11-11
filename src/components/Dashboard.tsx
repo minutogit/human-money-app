@@ -37,7 +37,7 @@ import {
     RefreshCw
 } from "lucide-react";
 import { truncateUserId } from "../utils/userIdHelper";
-import { stringifyError } from "../utils/errorHelper";
+import { stringifyError, translateError } from "../utils/errorHelper";
 
 import { useNavigation } from "../context/NavigationContext";
 import { useContactResolver } from "../hooks/useContactResolver";
@@ -112,6 +112,7 @@ export function Dashboard() {
     }, [activeInfoPopover]);
 
     useEffect(() => {
+        let active = true;
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
@@ -126,6 +127,7 @@ export function Dashboard() {
                     settingsService.getSettings().catch(() => null),
                     marketService.getSyncOverviewStatus().catch(() => null),
                 ]);
+                if (!active) return;
                 setUserId(id);
                 setBalances(balanceList || []);
                 setRecentEvents(eventHistory || []);
@@ -178,11 +180,12 @@ export function Dashboard() {
                 const needsBackup = !userSettings?.backupSyncFolder && isBackupOutdatedOrMissing;
                 setShowBackupReminder(hasRealActiveVouchers && needsBackup);
             } catch (e) {
+                if (!active) return;
                 const msg = `Failed to fetch dashboard data: ${stringifyError(e)}`;
                 console.error(msg);
-                setFeedbackMsg(`Error: ${msg}`);
+                setFeedbackMsg(translateError(e, t));
             } finally {
-                setIsLoading(false);
+                if (active) setIsLoading(false);
             }
         }
         fetchData();
@@ -190,6 +193,7 @@ export function Dashboard() {
         const loadPostInbox = () => {
             postService.getPostInboxSummary()
                 .then(summary => {
+                    if (!active) return;
                     setPendingSignRequests(summary.pendingSignRequests || []);
                     setPendingWotHandshakes(summary.pendingWotHandshakes || []);
                 })
@@ -201,6 +205,7 @@ export function Dashboard() {
         window.addEventListener(POST_INBOX_UPDATED_EVENT, loadPostInbox);
 
         return () => {
+            active = false;
             window.removeEventListener(POST_INBOX_UPDATED_EVENT, loadPostInbox);
         };
     }, []);
@@ -221,6 +226,7 @@ export function Dashboard() {
             }
         } catch (e) {
             logger.error(`Failed to open signing request: ${stringifyError(e)}`);
+            setFeedbackMsg(translateError(e, t));
         } finally {
             setIsOpeningSignRequest(null);
         }
@@ -232,6 +238,7 @@ export function Dashboard() {
             setPendingSignRequests(prev => prev.filter(r => r.msgId !== msgId));
         } catch (e) {
             logger.error(`Failed to dismiss sign request: ${stringifyError(e)}`);
+            setFeedbackMsg(translateError(e, t));
         }
     };
 
@@ -257,12 +264,12 @@ export function Dashboard() {
                 setCopied(true);
                 setTimeout(() => setCopied(false), 2000);
             } else {
-                setFeedbackMsg("Error: Failed to copy User ID");
+                setFeedbackMsg(t('common.copyFailed', 'Fehler beim Kopieren'));
             }
         } catch (e) {
             const msg = `Failed to copy User ID: ${stringifyError(e)}`;
             console.error(msg);
-            setFeedbackMsg(`Error: ${msg}`);
+            setFeedbackMsg(translateError(e, t));
         }
     }
 

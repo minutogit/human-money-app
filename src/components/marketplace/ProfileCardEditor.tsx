@@ -257,6 +257,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
             isOpen={isOpen}
             onClose={onClose}
             maxWidth="2xl"
+            className="max-w-4xl"
             title={
                 <div className="flex items-center gap-2.5">
                     <div className="w-9 h-9 rounded-xl bg-theme-primary/10 text-theme-primary flex items-center justify-center">

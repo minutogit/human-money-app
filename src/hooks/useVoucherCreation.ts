@@ -42,17 +42,21 @@ export function useVoucherCreation() {
     const [errors, setErrors] = useState<Record<string, boolean>>({});
 
     useEffect(() => {
+        let active = true;
         async function fetchStandards() {
             try {
                 const fetchedStandards = await standardsService.getStandards();
+                if (!active) return;
                 setStandards(fetchedStandards);
             } catch (e) {
+                if (!active) return;
                 logger.error(`Failed to fetch standards: ${stringifyError(e)}`);
             } finally {
-                setIsLoading(false);
+                if (active) setIsLoading(false);
             }
         }
         fetchStandards();
+        return () => { active = false; };
     }, []);
 
     const handleStandardChange = useCallback(async (newId: string) => {
@@ -126,8 +130,55 @@ export function useVoucherCreation() {
     }, []);
 
     useEffect(() => {
-        void handleLoadProfile();
-    }, [handleLoadProfile]);
+        let active = true;
+        (async () => {
+            try {
+                const profile = await profileService.getProfile();
+                if (!active) return;
+                let serviceOffer = profile.serviceOffer;
+                if (!serviceOffer || serviceOffer.trim() === '') {
+                    try {
+                        const myMarket = await marketService.getMyMarketProfile();
+                        if (!active) return;
+                        if (myMarket.skills && myMarket.skills.length > 0) {
+                            serviceOffer = myMarket.skills.map(s => s.title.trim()).filter(Boolean).join(', ');
+                        }
+                    } catch {
+                        // Ignore if market profile cannot be loaded
+                    }
+                }
+
+                if (!active) return;
+                setIdentity(prev => ({
+                    ...prev,
+                    firstName: profile.firstName || prev.firstName,
+                    lastName: profile.lastName || prev.lastName,
+                    organization: profile.organization || prev.organization,
+                    community: profile.community || prev.community,
+                    gender: profile.gender || prev.gender,
+                    email: profile.email || prev.email,
+                    phone: profile.phone || prev.phone,
+                    url: profile.url || prev.url,
+                    coordinates: profile.coordinates || prev.coordinates,
+                    serviceOffer: serviceOffer || prev.serviceOffer,
+                    needs: profile.needs || prev.needs,
+                    pictureUrl: profile.pictureUrl || prev.pictureUrl,
+                    address: profile.address ? {
+                        street: profile.address.street || prev.address.street,
+                        houseNumber: profile.address.houseNumber || prev.address.houseNumber,
+                        zipCode: profile.address.zipCode || prev.address.zipCode,
+                        city: profile.address.city || prev.address.city,
+                        country: profile.address.country || prev.address.country,
+                    } : prev.address
+                }));
+                logger.info("CreateVoucher: Profile data synchronized.");
+            } catch (e) {
+                if (!active) return;
+                logger.error(`Failed to load profile: ${stringifyError(e)}`);
+            }
+        })();
+        return () => { active = false; };
+    }, []);
 
     const handleCoordBlur = useCallback(() => {
         if (!identity.coordinates) {

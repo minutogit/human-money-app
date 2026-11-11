@@ -34,9 +34,11 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
     const [trustByLocalId, setTrustByLocalId] = useState<Record<string, VoucherTrustDto>>({});
 
     useEffect(() => {
+        let active = true;
         if (payload.involvedVouchers && payload.involvedVouchers.length > 0) {
             voucherService.getSummaries()
                 .then(summaries => {
+                    if (!active) return;
                     const map: Record<string, VoucherTrustDto> = {};
                     for (const s of summaries) {
                         if (s.trust) {
@@ -47,6 +49,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                 })
                 .catch(e => logger.error(`Failed to fetch voucher trust summaries: ${stringifyError(e)}`));
         }
+        return () => { active = false; };
     }, [payload.involvedVouchers]);
 
     function formatAmount(amountStr: string): string {
@@ -64,12 +67,16 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
     const summaryString = [...summable, ...countable].join(', ') || t('transfer.receiveSuccess.noAssets');
 
     useEffect(() => {
+        let active = true;
         logger.info(`Receive success screen: ${summaryString}`);
         if (payload.senderId) {
             profileService.checkReputation(payload.senderId)
-                .then(setTrustStatus)
+                .then(res => {
+                    if (active) setTrustStatus(res);
+                })
                 .catch(e => logger.error(`Reputation check error: ${stringifyError(e)}`));
         }
+        return () => { active = false; };
     }, [payload, summaryString]);
 
     const [manualApprovalGranted, setManualApprovalGranted] = useState(false);

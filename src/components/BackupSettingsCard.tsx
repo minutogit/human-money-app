@@ -50,7 +50,13 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     const [backupStatus, setBackupStatus] = useState<FrontendAutoBackupStatusDto | null>(null);
 
     useEffect(() => {
-        backupService.getBackupStatus?.()?.then(setBackupStatus)?.catch(() => {});
+        let active = true;
+        backupService.getBackupStatus?.()?.then((st) => {
+            if (active) setBackupStatus(st);
+        })?.catch(() => {});
+        return () => {
+            active = false;
+        };
     }, []);
 
     useEffect(() => {
@@ -78,6 +84,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     };
 
     const handleToggleAutoBackup = async (enabled: boolean) => {
+        const prev = autoBackupEnabled;
         setAutoBackupEnabled(enabled);
         if (settings) {
             const updated: AppSettings = {
@@ -87,13 +94,15 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
             try {
                 await settingsService.saveSettings(updated);
                 if (onSettingsUpdated) onSettingsUpdated(updated);
-            } catch {
-                // best-effort
+            } catch (err) {
+                setAutoBackupEnabled(prev);
+                setFeedback({ type: 'error', message: translateError(err, t) });
             }
         }
     };
 
     const handleToggleSyncBackup = async (enabled: boolean) => {
+        const prev = syncBackupEnabled;
         setSyncBackupEnabled(enabled);
         if (settings) {
             const updated: AppSettings = {
@@ -103,13 +112,15 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
             try {
                 await settingsService.saveSettings(updated);
                 if (onSettingsUpdated) onSettingsUpdated(updated);
-            } catch {
-                // best-effort
+            } catch (err) {
+                setSyncBackupEnabled(prev);
+                setFeedback({ type: 'error', message: translateError(err, t) });
             }
         }
     };
 
     const handleFrequencyChange = async (freq: 'after_mutation' | 'on_close' | 'daily' | 'manual') => {
+        const prev = backupFrequency;
         setBackupFrequency(freq);
         if (settings) {
             const updated: AppSettings = {
@@ -119,8 +130,9 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
             try {
                 await settingsService.saveSettings(updated);
                 if (onSettingsUpdated) onSettingsUpdated(updated);
-            } catch {
-                // best-effort
+            } catch (err) {
+                setBackupFrequency(prev);
+                setFeedback({ type: 'error', message: translateError(err, t) });
             }
         }
     };

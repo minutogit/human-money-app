@@ -59,9 +59,38 @@ export function StandardsManager() {
     };
 
     useEffect(() => {
-        loadStandards();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+        let active = true;
+        const fetch = async () => {
+            setIsLoading(true);
+            setError('');
+            try {
+                const list = await standardsService.getStandards();
+                if (!active) return;
+                setStandards(list);
+
+                const defs: Record<string, VoucherStandardDefinition> = {};
+                await Promise.all(
+                    list.map(async (std) => {
+                        try {
+                            const parsed = await standardsService.parseStandard(std.content);
+                            if (active) defs[std.id] = parsed;
+                        } catch {
+                            // silently ignore parse errors so loading never fails
+                        }
+                    })
+                );
+                if (active) setDefinitionsMap(defs);
+            } catch (e) {
+                if (active) setError(translateError(e, t));
+            } finally {
+                if (active) setIsLoading(false);
+            }
+        };
+        fetch();
+        return () => {
+            active = false;
+        };
+    }, [t]);
 
     const handleImportClick = async () => {
         setError('');
@@ -95,7 +124,7 @@ export function StandardsManager() {
         try {
             await standardsService.deleteStandard(deleteTarget.id);
             logger.info(`Deleted standard ${deleteTarget.id}`);
-            setSuccessMsg(`Standard '${deleteTarget.displayName}' deleted successfully.`);
+            setSuccessMsg(t('standards.deleteSuccess', { name: deleteTarget.displayName, defaultValue: `Standard '${deleteTarget.displayName}' wurde gelöscht.` }));
             await loadStandards();
         } catch (e) {
             const translated = translateError(e, t);
@@ -148,7 +177,7 @@ export function StandardsManager() {
             ) : standards.length === 0 ? (
                 <div className="py-12 text-center bg-white/40 rounded-3xl border border-theme-subtle">
                     <FileCode size={36} className="mx-auto text-theme-light mb-3 opacity-40" />
-                    <p className="text-sm font-bold text-theme-secondary">No voucher standards found.</p>
+                    <p className="text-sm font-bold text-theme-secondary">{t('standards.noStandardsFound', 'Keine Gutschein-Standards gefunden.')}</p>
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -253,7 +282,7 @@ export function StandardsManager() {
                     standardName={exportTarget.name}
                     onClose={() => setExportTarget(null)}
                     onSuccess={() => {
-                        setSuccessMsg(`Standard exported successfully.`);
+                        setSuccessMsg(t('standards.exportSuccess', 'Standard erfolgreich exportiert.'));
                         setExportTarget(null);
                     }}
                 />

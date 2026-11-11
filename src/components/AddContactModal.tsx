@@ -49,11 +49,19 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
     const [cameraError, setCameraError] = useState<string | null>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const streamRef = useRef<MediaStream | null>(null);
+    const scanTimerRef = useRef<number | null>(null);
 
     const stopCamera = useCallback(() => {
+        if (scanTimerRef.current) {
+            clearTimeout(scanTimerRef.current);
+            scanTimerRef.current = null;
+        }
         if (streamRef.current) {
             streamRef.current.getTracks().forEach((track) => track.stop());
             streamRef.current = null;
+        }
+        if (videoRef.current) {
+            videoRef.current.srcObject = null;
         }
     }, []);
 
@@ -101,7 +109,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
         };
     }, [view, startCamera, stopCamera]);
 
-    const handleImportPayload = async (rawPayload: string) => {
+    const handleImportPayload = useCallback(async (rawPayload: string) => {
         const trimmed = rawPayload.trim();
         if (!trimmed) {
             onError(t('contacts.emptyClipboard'));
@@ -171,7 +179,54 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
         } finally {
             setIsProcessing(false);
         }
-    };
+    }, [onError, t, onClose, onOpenManualAdd, protectAction, onContactAdded, onSuccess]);
+
+    // QR Camera decoding loop
+    useEffect(() => {
+        let isScanning = true;
+        let detector: any = null;
+
+        if (view === 'qr_scanner' && typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+            try {
+                detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+            } catch (err) {
+                logger.info(`BarcodeDetector creation failed: ${stringifyError(err)}`);
+            }
+        }
+
+        const scanLoop = async () => {
+            if (!isScanning) return;
+            if (detector && videoRef.current && videoRef.current.readyState >= 2) {
+                try {
+                    const barcodes = await detector.detect(videoRef.current);
+                    if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+                        const raw = barcodes[0].rawValue;
+                        isScanning = false;
+                        stopCamera();
+                        handleImportPayload(raw);
+                        return;
+                    }
+                } catch {
+                    // Frame detection error, continue scanning
+                }
+            }
+            if (isScanning && view === 'qr_scanner') {
+                scanTimerRef.current = window.setTimeout(scanLoop, 250);
+            }
+        };
+
+        if (view === 'qr_scanner') {
+            scanTimerRef.current = window.setTimeout(scanLoop, 400);
+        }
+
+        return () => {
+            isScanning = false;
+            if (scanTimerRef.current) {
+                clearTimeout(scanTimerRef.current);
+                scanTimerRef.current = null;
+            }
+        };
+    }, [view, stopCamera, handleImportPayload]);
 
     // Tile 2: Clipboard
     const handleTileClipboard = async () => {
@@ -195,7 +250,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
                 multiple: false,
                 filters: [
                     { name: t('marketplace.cardFilterName', 'Visitenkarte (.hmcard)'), extensions: ['hmcard', 'json'] },
-                    { name: 'All Files', extensions: ['*'] },
+                    { name: t('common.allFiles', 'All Files'), extensions: ['*'] },
                 ],
             });
 

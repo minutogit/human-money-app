@@ -76,18 +76,22 @@ export function Activities() {
     const [error, setError] = useState('');
 
     useEffect(() => {
+        let active = true;
         async function fetchEvents() {
             try {
                 const data = await transferService.getEventHistory(0, 50);
+                if (!active) return;
                 setEvents(data);
             } catch (e) {
+                if (!active) return;
                 logger.error(`Failed to fetch activities: ${stringifyError(e)}`);
                 setError(t('history.loadActivitiesFailed'));
             } finally {
-                setIsLoading(false);
+                if (active) setIsLoading(false);
             }
         }
         fetchEvents();
+        return () => { active = false; };
     }, [t]);
 
     return (

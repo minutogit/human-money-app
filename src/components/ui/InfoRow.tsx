@@ -15,9 +15,9 @@ export const InfoRow: React.FC<InfoRowProps> = ({ label, children, isMono = fals
         {Icon && <Icon size={12} className="text-theme-light" />}
         <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">{label}</p>
       </div>
-      <p className={`${isMono ? 'font-mono text-xs' : 'text-sm font-bold'} text-theme-secondary break-words`}>
+      <div className={`${isMono ? 'font-mono text-xs' : 'text-sm font-bold'} text-theme-secondary break-words`}>
         {children}
-      </p>
+      </div>
     </div>
   );
 };

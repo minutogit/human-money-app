@@ -185,6 +185,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
     );
 
     useEffect(() => {
+        let active = true;
         async function fetchData() {
             try {
                 const [summaries, userId, profile, standards, settings, fetchedContacts, activeClasses] = await Promise.all([
@@ -197,10 +198,12 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     transferService.getActiveAssetClasses()
                 ]);
 
+                if (!active) return;
+
                 marketService.getMyMarketProfile().then(p => {
-                    setHasPublishedCard(!!p?.published);
+                    if (active) setHasPublishedCard(!!p?.published);
                 }).catch(() => {
-                    setHasPublishedCard(false);
+                    if (active) setHasPublishedCard(false);
                 });
 
                 const activeVouchers = summaries.filter((v: VoucherSummary) => {
@@ -234,6 +237,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     defaultName = "";
                 }
 
+                if (!active) return;
                 dispatch({ type: 'SET_SENDER_NAME', name: defaultName });
 
                 const newIdMap = new Map<string, string>();
@@ -252,10 +256,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                 await Promise.all(
                     standards.map(async (s) => {
                         try {
-                            const parseToml = (voucherService as unknown as { parseStandardToml?: (toml: string) => Promise<VoucherStandardDefinition> }).parseStandardToml
-                                ? (voucherService as unknown as { parseStandardToml: (toml: string) => Promise<VoucherStandardDefinition> }).parseStandardToml
-                                : standardsService.parseStandard;
-                            const def = await parseToml(s.content);
+                            const def = await standardsService.parseStandard(s.content);
                             if (def) {
                                 const uuidMatch = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
                                 const uuid = def.immutable?.identity?.uuid || (uuidMatch && uuidMatch[1]) || s.id;
@@ -267,6 +268,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     })
                 );
                 
+                if (!active) return;
                 setStandardsDict(parsedDict);
                 setStandardIdToUuidMap(newIdMap);
                 setUuidToPrecisionMap(newPrecisionMap);
@@ -290,11 +292,13 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     dispatch({ type: 'SET_STANDARD', id: stdId, isTest: firstClass.isTestVoucher });
                 }
             } catch (e) {
+                if (!active) return;
                 logger.error(`Failed to fetch data for SendView: ${stringifyError(e)}`);
                 dispatch({ type: 'SET_FEEDBACK', msg: `Error: ${translateError(e, t)}` });
             }
         }
         fetchData();
+        return () => { active = false; };
     }, [profileName, t, initialVoucherId, toggleVoucher]);
 
     useEffect(() => {
@@ -307,6 +311,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
     }, [detectedPrivacy, appSettings, state.privacyMode]);
 
     useEffect(() => {
+        let active = true;
         if (state.recipientId.length < 10) {
             setTrustStatus("clean");
             return;
@@ -314,12 +319,15 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
         const timer = setTimeout(async () => {
             try {
                 const status = await voucherService.checkReputation(state.recipientId);
-                setTrustStatus(status);
+                if (active) setTrustStatus(status);
             } catch (e) {
                 logger.error(`Reputation check failed: ${stringifyError(e)}`);
             }
         }, 500);
-        return () => clearTimeout(timer);
+        return () => {
+            active = false;
+            clearTimeout(timer);
+        };
     }, [state.recipientId]);
 
     const filteredVouchers = useMemo(() => {
@@ -335,6 +343,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
 
     // Gravitational auto-selection: bei gültigem Empfänger und Betrag optimale Auswahl automatisch vornehmen
     useEffect(() => {
+        let active = true;
         const amountStr = state.targetAmountStr.trim();
         const recipient = state.recipientId.trim();
         const amt = parseFloat(amountStr);
@@ -346,6 +355,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
         const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4) : 4;
         const timer = setTimeout(() => {
             autoSelectGravitational(amountStr, recipient, standardUuid, precision).catch((e) => {
+                if (!active) return;
                 logger.error(`Gravitational auto-select failed: ${stringifyError(e)}`);
                 // Fallback to legacy greedy selection on error
                 const val = parseFloat(amountStr);
@@ -354,7 +364,10 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                 }
             });
         }, 400);
-        return () => clearTimeout(timer);
+        return () => {
+            active = false;
+            clearTimeout(timer);
+        };
     }, [state.targetAmountStr, state.recipientId, state.selectedStandardId, state.selectedIsTest, filteredVouchers, standardIdToUuidMap, uuidToPrecisionMap, autoSelectGravitational, selectAmount]);
 
     const handleTargetAmountChange = (valStr: string) => {
@@ -492,7 +505,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                 });
             }) as CreateBundleResult;
 
-            if (!bundleResult) { dispatch({ type: 'SET_PROCESSING', value: false }); return; }
+            if (!bundleResult) { return; }
 
             const summableAmounts: Record<string, string> = {};
             const countableItems: Record<string, number> = {};
@@ -554,8 +567,9 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
             }), 1500);
         } catch (e) {
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferFailed', { error: translateError(e, t) }) });
-            dispatch({ type: 'SET_PROCESSING', value: false });
             dispatch({ type: 'TOGGLE_CONFIRM', value: false });
+        } finally {
+            dispatch({ type: 'SET_PROCESSING', value: false });
         }
     };
 
@@ -614,6 +628,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                                     });
                                 } catch (err) {
                                     logger.error(`Reconcile failed: ${stringifyError(err)}`);
+                                    dispatch({ type: 'SET_FEEDBACK', msg: translateError(err, t) });
                                 } finally {
                                     setIsReconcilingL2(false);
                                 }
@@ -792,15 +807,15 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                                 </div>
                                 <div className="grid grid-cols-3 gap-2 text-xs">
                                     <div className="bg-white rounded-xl p-2 border border-amber-100">
-                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Ziel</p>
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planTarget', 'Ziel')}</p>
                                         <p className="font-black text-slate-800">{formatAmount(currentPlan.target)} {filteredVouchers[0]?.displayCurrency ?? ''}</p>
                                     </div>
                                     <div className="bg-white rounded-xl p-2 border border-amber-100">
-                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Ausgewählt</p>
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planSelected', 'Ausgewählt')}</p>
                                         <p className="font-black text-slate-800">{formatAmount(currentPlan.totalSelected)} {filteredVouchers[0]?.displayCurrency ?? ''}</p>
                                     </div>
                                     <div className={`rounded-xl p-2 border ${currentPlan.needsSplit ? 'bg-white border-amber-200' : 'bg-slate-50 border-slate-100'}`}>
-                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Wechselgeld</p>
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planChange', 'Wechselgeld')}</p>
                                         <p className={`font-black ${currentPlan.needsSplit ? 'text-amber-700' : 'text-slate-400'}`}>
                                             {(() => {
                                                 const total = parseFloat(currentPlan.totalSelected);

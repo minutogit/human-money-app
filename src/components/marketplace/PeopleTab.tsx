@@ -89,8 +89,8 @@ export const PeopleTab: React.FC<PeopleTabProps> = ({
                             >
                                 <div className="space-y-3">
                                     {/* Header: Avatar, Name, Location & Trust Badge */}
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="flex items-center gap-3 min-w-0">
+                                    <div className="flex flex-wrap items-start justify-between gap-2">
+                                        <div className="flex items-center gap-3 min-w-[140px] flex-1">
                                             <div className="w-11 h-11 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center font-bold text-sm shrink-0 overflow-hidden">
                                                 {person.profile.pictureUrl ? (
                                                     <img
@@ -102,12 +102,12 @@ export const PeopleTab: React.FC<PeopleTabProps> = ({
                                                     displayName.charAt(0).toUpperCase() || <User size={18} />
                                                 )}
                                             </div>
-                                            <div className="min-w-0">
-                                                <h3 className="text-sm font-bold text-theme-secondary truncate">
+                                            <div className="min-w-0 flex-1">
+                                                <h3 className="text-sm font-bold text-theme-secondary truncate" title={displayName}>
                                                     {displayName}
                                                 </h3>
                                                 {locationText && (
-                                                    <p className="text-[11px] text-theme-light truncate flex items-center gap-1 mt-0.5">
+                                                    <p className="text-[11px] text-theme-light truncate flex items-center gap-1 mt-0.5" title={locationText}>
                                                         <MapPin size={11} className="shrink-0 text-theme-primary" />
                                                         <span>{locationText}</span>
                                                     </p>
@@ -115,18 +115,20 @@ export const PeopleTab: React.FC<PeopleTabProps> = ({
                                             </div>
                                         </div>
 
-                                        <TrustBadge
-                                            trust={{
-                                                score: person.trust === 'trusted' ? 0.85 : 0,
-                                                trustPercent: person.trust === 'trusted' ? 85 : 0,
-                                                isOwnVoucher: false,
-                                                blockedByOffender: false,
-                                                additionalPathsCount: 0,
-                                                viaGuarantor: false,
-                                                bestPathNames: [],
-                                            }}
-                                            size="sm"
-                                        />
+                                        <div className="shrink-0">
+                                            <TrustBadge
+                                                trust={{
+                                                    score: person.trust === 'trusted' ? 0.85 : 0,
+                                                    trustPercent: person.trust === 'trusted' ? 85 : 0,
+                                                    isOwnVoucher: false,
+                                                    blockedByOffender: false,
+                                                    additionalPathsCount: 0,
+                                                    viaGuarantor: false,
+                                                    bestPathNames: [],
+                                                }}
+                                                size="sm"
+                                            />
+                                        </div>
                                     </div>
 
                                     {/* Active ads badge */}

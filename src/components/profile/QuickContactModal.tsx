@@ -29,6 +29,7 @@ export const QuickContactModal: React.FC<QuickContactModalProps> = ({
     const [copied, setCopied] = useState(false);
 
     useEffect(() => {
+        let active = true;
         if (!isOpen) return;
         setIsLoading(true);
         setError(null);
@@ -36,15 +37,21 @@ export const QuickContactModal: React.FC<QuickContactModalProps> = ({
 
         profileService.getMyQuickContact()
             .then(data => {
-                setQuickContact(data);
+                if (active) setQuickContact(data);
             })
             .catch(err => {
-                setError(typeof err === 'string' ? err : err?.message || 'Fehler beim Laden des Schnellkontakts');
+                if (active) {
+                    setError(typeof err === 'string' ? err : err?.message || t('contacts.quickContactLoadError', 'Fehler beim Laden des Schnellkontakts'));
+                }
             })
             .finally(() => {
-                setIsLoading(false);
+                if (active) setIsLoading(false);
             });
-    }, [isOpen]);
+
+        return () => {
+            active = false;
+        };
+    }, [isOpen, t]);
 
     const handleCopy = async () => {
         if (!quickContact) return;

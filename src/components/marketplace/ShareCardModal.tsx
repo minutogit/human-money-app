@@ -1,5 +1,5 @@
 // src/components/marketplace/ShareCardModal.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { QrCode, Download, Copy, Check, AlertCircle, Share2, Info } from 'lucide-react';
 import { ModalShell } from '../ui/ModalShell';
@@ -38,6 +38,13 @@ export function ShareCardModal({
     const [copied, setCopied] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+    useEffect(() => {
+        if (!isOpen) {
+            setSaveStatus(null);
+            setCopied(false);
+        }
+    }, [isOpen]);
 
     const handleCopy = async () => {
         if (!shareUri) return;

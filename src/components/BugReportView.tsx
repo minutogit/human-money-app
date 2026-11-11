@@ -21,22 +21,29 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
     const [logs, setLogs] = useState<string>('');
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [error, setError] = useState<string>('');
+    const [actionError, setActionError] = useState<string>('');
     const [copied, setCopied] = useState<boolean>(false);
 
     useEffect(() => {
+        let active = true;
         async function fetchLogs() {
             try {
                 logger.info("BugReportView: Fetching application logs.");
                 const latestLogs = await invoke<string>("get_latest_logs");
-                setLogs(latestLogs);
+                if (active) setLogs(latestLogs);
             } catch (err) {
-                logger.error(`Failed to fetch logs: ${stringifyError(err)}`);
-                setError(translateError(err, t));
+                if (active) {
+                    logger.error(`Failed to fetch logs: ${stringifyError(err)}`);
+                    setError(translateError(err, t));
+                }
             } finally {
-                setIsLoading(false);
+                if (active) setIsLoading(false);
             }
         }
         fetchLogs();
+        return () => {
+            active = false;
+        };
     }, [t]);
 
     const handleCopy = async () => {
@@ -55,10 +62,12 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
     };
 
     const handleOpenGithub = async () => {
+        setActionError('');
         try {
             await openUrl('https://github.com/minutogit/human-money-app/issues/new');
         } catch (err) {
             logger.error(`Failed to open GitHub issues link: ${stringifyError(err)}`);
+            setActionError(translateError(err, t));
         }
     };
 
@@ -98,7 +107,7 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
                     {isLoading ? (
                         <div className="flex flex-col items-center justify-center py-20 space-y-4">
                             <Loader2 className="w-8 h-8 text-theme-primary animate-spin" />
-                            <p className="text-xs font-bold text-theme-light uppercase tracking-widest animate-pulse">Loading Logs...</p>
+                            <p className="text-xs font-bold text-theme-light uppercase tracking-widest animate-pulse">{t('common.loadingLogs', 'Loading Logs...')}</p>
                         </div>
                     ) : error ? (
                         <div className="p-8 text-center space-y-2">
@@ -107,10 +116,16 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
                         </div>
                     ) : (
                         <div className="relative rounded-2xl border border-theme-subtle bg-slate-950 p-5 font-mono text-[11px] text-slate-300 leading-relaxed overflow-auto max-h-[350px] shadow-inner select-text">
-                            <pre className="whitespace-pre">{logs || "No logs recorded."}</pre>
+                            <pre className="whitespace-pre">{logs || t('common.noLogsRecorded', 'No logs recorded.')}</pre>
                         </div>
                     )}
                 </Card>
+
+                {actionError && (
+                    <AlertBanner variant="danger" title={t('common.error', 'Fehler')}>
+                        {actionError}
+                    </AlertBanner>
+                )}
 
                 {/* External Actions Card */}
                 {!isLoading && !error && (

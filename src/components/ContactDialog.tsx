@@ -110,6 +110,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 setSyncs(initSyncs);
             }
         }
+        setError(null);
         setSyncInputUrl('');
         setSyncError(null);
         setConfirmDeleteUrl(null);

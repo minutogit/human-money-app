@@ -150,7 +150,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
         } md:translate-x-0 flex flex-col border-r border-theme-subtle`}
       >
         {/* Brand Header */}
-        <div className="px-6 py-4 flex items-center gap-3 border-b border-theme-subtle/50">
+        <div className="px-6 py-4 flex items-center gap-3 border-b border-theme-subtle/50 shrink-0">
           <div className="w-8 h-8 rounded-lg bg-white shadow-sm flex items-center justify-center overflow-hidden border border-theme-subtle">
             <img src={logo} alt="Logo" className="w-7 h-7 object-contain" />
           </div>
@@ -158,7 +158,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
         </div>
 
         {/* Profile Header */}
-        <div className="p-3 border-b border-theme-subtle bg-bg-app/30 flex items-center justify-between gap-2">
+        <div className="p-3 border-b border-theme-subtle bg-bg-app/30 flex items-center justify-between gap-2 shrink-0">
           <div 
             onClick={!isSessionActive ? () => { protectAction(async () => {}).catch(() => {}); } : undefined}
             onKeyDown={!isSessionActive ? (e) => {
@@ -213,7 +213,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
         </div>
 
         {/* Navigation Content */}
-        <div className="flex-1 overflow-y-auto py-6 px-4 space-y-6 scrollbar-hide">
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-4 pb-8 space-y-6 scrollbar-hide">
           {navGroups.map((group) => (
             <div key={group.label} className="space-y-2">
               <h3 className="px-4 text-[11px] font-bold text-theme-placeholder uppercase tracking-[0.15em]">
@@ -425,7 +425,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
         </div>
 
         {/* Footer Section */}
-        <div className="p-4 mt-auto border-t border-theme-subtle bg-bg-app/10 space-y-2">
+        <div className="p-4 mt-auto border-t border-theme-subtle bg-bg-app/10 space-y-2 shrink-0">
           <button 
             onClick={() => {
               navigate({ view: 'settings' });

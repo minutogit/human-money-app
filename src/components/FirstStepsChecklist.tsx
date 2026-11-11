@@ -167,7 +167,7 @@ export const FirstStepsChecklist: React.FC<FirstStepsChecklistProps> = ({
                                         <p
                                             className={`text-xs font-bold truncate ${
                                                 step.done
-                                                    ? "text-emerald-800 dark:text-emerald-200 line-through"
+                                                    ? "text-emerald-800 dark:text-emerald-200"
                                                     : "text-theme-primary group-hover:text-theme-primary"
                                             }`}
                                         >

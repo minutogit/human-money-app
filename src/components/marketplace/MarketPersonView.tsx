@@ -1,5 +1,5 @@
 // src/components/marketplace/MarketPersonView.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import Avatar from 'boring-avatars';
 import {
@@ -47,7 +47,8 @@ import { ShareCardModal } from './ShareCardModal';
 import { AdCard } from './AdCard';
 import { copyToClipboard } from '../../utils/clipboard';
 import { truncateUserId } from '../../utils/userIdHelper';
-import { translateError } from '../../utils/errorHelper';
+import { translateError, stringifyError } from '../../utils/errorHelper';
+import { logger } from '../../utils/log';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { ModalShell } from '../ui/ModalShell';
@@ -83,6 +84,16 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
     const [isSendingInquiry, setIsSendingInquiry] = useState(false);
     const [inquiryFeedback, setInquiryFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+    const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const inquiryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+            if (inquiryTimerRef.current) clearTimeout(inquiryTimerRef.current);
+        };
+    }, []);
+
     useEffect(() => {
         setCurrentPerson(person);
     }, [person]);
@@ -101,6 +112,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
                 setCurrentPerson(updated);
             }
         } catch (err) {
+            logger.error(`Manual sync failed in MarketPersonView: ${stringifyError(err)}`);
             checkAndTriggerCooldown(err);
         } finally {
             setIsManualSyncing(false);
@@ -128,7 +140,8 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
         const success = await copyToClipboard(currentPerson.did);
         if (success) {
             setCopiedDid(true);
-            setTimeout(() => setCopiedDid(false), 2000);
+            if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+            copiedTimerRef.current = setTimeout(() => setCopiedDid(false), 2000);
         }
     };
 
@@ -160,8 +173,8 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
         try {
             const fullUrl = url.startsWith('http://') || url.startsWith('https://') ? url : `https://${url}`;
             await openUrl(fullUrl);
-        } catch {
-            // fallback
+        } catch (err) {
+            logger.warn(`Failed to open website ${url}: ${stringifyError(err)}`);
         }
     };
 
@@ -200,7 +213,8 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
                 type: 'success',
                 message: t('marketplace.inquirySentSuccess', 'Anfrage erfolgreich gesendet!'),
             });
-            setTimeout(() => {
+            if (inquiryTimerRef.current) clearTimeout(inquiryTimerRef.current);
+            inquiryTimerRef.current = setTimeout(() => {
                 setInquiryModalOpen(false);
             }, 1500);
         } catch (err) {

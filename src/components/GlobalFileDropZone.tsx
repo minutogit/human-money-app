@@ -5,7 +5,7 @@ import { useNavigation } from '../context/NavigationContext';
 import { useSession } from '../context/SessionContext';
 import { marketService } from '../services/marketService';
 import { logger } from '../utils/log';
-import { stringifyError } from '../utils/errorHelper';
+import { stringifyError, translateError } from '../utils/errorHelper';
 
 interface GlobalFileDropZoneProps {
   children: React.ReactNode;
@@ -129,7 +129,7 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
           logger.error("Failed to import dropped .hmcard: " + stringifyError(err));
           setDropFeedback({
             status: 'error',
-            message: stringifyError(err),
+            message: translateError(err, t),
           });
         }
         return;
@@ -148,7 +148,8 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
             },
           });
         } catch (err) {
-          console.error("Failed to read dropped file globally:", err);
+          logger.error("Failed to read dropped file globally: " + stringifyError(err));
+          setDropFeedback({ status: 'error', message: translateError(err, t) });
         }
       }
     } else {
@@ -167,6 +168,7 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
           }
         } catch (err) {
           logger.error("Failed to import card from text drop: " + stringifyError(err));
+          setDropFeedback({ status: 'error', message: translateError(err, t) });
         }
       }
     }

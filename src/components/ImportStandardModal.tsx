@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { standardsService } from '../services/standardsService';
 import { VoucherStandardDefinition } from '../types';
@@ -29,6 +29,20 @@ export function ImportStandardModal({
     const [isInspecting, setIsInspecting] = useState(false);
     const [isImporting, setIsImporting] = useState(false);
     const [error, setError] = useState('');
+
+    useEffect(() => {
+        if (!isOpen) {
+            setPassword('');
+            setError('');
+            setIsInspecting(false);
+            setIsImporting(false);
+            setDefinition(initialDefinition || null);
+            setNeedsPassword(!initialDefinition);
+        } else {
+            setDefinition(initialDefinition || null);
+            setNeedsPassword(!initialDefinition);
+        }
+    }, [isOpen, initialDefinition]);
 
     const handleInspectWithPassword = async () => {
         setError('');

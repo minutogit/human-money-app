@@ -20,7 +20,7 @@ const truncateDid = (did: string | null | undefined) => {
 export const ContactBadge: React.FC<ContactBadgeProps> = ({ did, contacts, size = 'md', onEdit }) => {
     const { t } = useTranslation();
     if (!did) {
-        return <span className={`font-mono ${size === 'sm' ? 'text-[10px]' : 'text-xs'} text-theme-light italic`}>Anonymous</span>;
+        return <span className={`font-mono ${size === 'sm' ? 'text-[10px]' : 'text-xs'} text-theme-light italic`}>{t('common.anonymous', 'Anonymous')}</span>;
     }
     
     const contact = contacts.find(c => c.did === did);
@@ -54,7 +54,7 @@ export const ContactBadge: React.FC<ContactBadgeProps> = ({ did, contacts, size 
     if (contact) {
         const contactName = contact.profile.firstName || contact.profile.lastName
             ? `${contact.profile.firstName || ''} ${contact.profile.lastName || ''}`.trim()
-            : contact.profile.organization || 'Anonymous';
+            : contact.profile.organization || t('common.anonymous', 'Anonymous');
 
         return (
             <div className={`flex items-center ${config.gap} ${config.padding} bg-theme-primary/5 border border-theme-primary/10 rounded-2xl shadow-inner-soft`}>

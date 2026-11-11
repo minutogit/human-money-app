@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { CheckCircle2, AlertTriangle, Info, X } from 'lucide-react';
 
 export interface AlertBannerProps {
-    variant?: 'success' | 'error' | 'warning' | 'info';
+    variant?: 'success' | 'error' | 'warning' | 'info' | 'danger';
     title?: React.ReactNode;
     children: React.ReactNode;
     icon?: React.ReactNode;
@@ -23,6 +23,10 @@ const variantStyles: Record<
         defaultIcon: <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />,
     },
     error: {
+        container: 'bg-rose-50 border-rose-200 text-rose-800',
+        defaultIcon: <AlertTriangle size={18} className="text-rose-500 shrink-0" />,
+    },
+    danger: {
         container: 'bg-rose-50 border-rose-200 text-rose-800',
         defaultIcon: <AlertTriangle size={18} className="text-rose-500 shrink-0" />,
     },
