@@ -510,7 +510,7 @@ describe('RecreateProfile Component', () => {
       await waitFor(() => {
         expect(screen.getByLabelText(/Set local password for this device/i)).toBeInTheDocument();
         expect(screen.getByPlaceholderText('Minimum 8 characters')).toBeInTheDocument();
-        expect(screen.getByLabelText(/Device Abbreviation/i)).toBeInTheDocument();
+        expect(screen.getByLabelText(/Account \/ Device Prefix/i)).toBeInTheDocument();
       });
     });
 

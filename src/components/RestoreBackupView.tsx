@@ -605,7 +605,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                             </div>
                             <div>
                                 <label className="block text-[11px] font-bold text-theme-secondary mb-1">
-                                    {t('profile.backupRestoreUserPrefixLabel', 'User / Device Prefix (Optional)')}
+                                    {t('profile.backupRestoreUserPrefixLabel', 'Account / Device Prefix (Optional)')}
                                 </label>
                                 <Input
                                     data-testid="restore-sync-user-prefix-input"
@@ -839,7 +839,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                                     </div>
                                     <div>
                                         <label className="block text-[11px] font-bold text-theme-secondary mb-1">
-                                            {t('profile.backupRestoreUserPrefixLabel', 'User / Device Prefix (Optional)')}
+                                            {t('profile.backupRestoreUserPrefixLabel', 'Account / Device Prefix (Optional)')}
                                         </label>
                                         <Input
                                             data-testid="restore-unlock-user-prefix-input"
