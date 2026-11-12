@@ -1,6 +1,6 @@
 <?php
 /**
- * HuMoCo Sync-Dienst – Hardened Privacy-Preserving HTTP Sync (Multi-Channel V1)
+ * HuMoCo Sync-Dienst – Hardened Privacy-Preserving HTTP Sync v1.1.0 (Multi-Channel + Prefix Sub-Mailboxes)
  *
  * Requirements: PHP >= 7.4 with ext-sodium, zero database, zero Composer.
  * Strictly enforces 64-hex lowercase Ed25519 signatures, 1-inode rate limiting,
@@ -143,6 +143,48 @@ function verify_ed25519_detached($sigHex, $message, $pubkeyHex) {
         return false;
     }
     return sodium_crypto_sign_verify_detached($sigBytes, $message, $pkBytes);
+}
+
+// Extract and validate optional sub-mailbox prefix from X-Drop-Prefix header
+function extract_and_validate_prefix() {
+    if (!isset($_SERVER['HTTP_X_DROP_PREFIX'])) {
+        return '';
+    }
+    $prefix = trim((string)$_SERVER['HTTP_X_DROP_PREFIX']);
+    if ($prefix === '') {
+        return '';
+    }
+    if (strlen($prefix) > 63) {
+        return false;
+    }
+    if (strpos($prefix, '--') !== false) {
+        return false;
+    }
+    if (!preg_match('/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/', $prefix)) {
+        return false;
+    }
+    return $prefix;
+}
+
+// Build slot filename for standard channel
+function build_slot_filename($pubkey, $prefix, $channel) {
+    return $pubkey . ($prefix !== '' ? '_' . $prefix : '') . '.' . $channel . '.bin';
+}
+
+// Parse slot filename into id, prefix, and channel
+function parse_slot_filename($basename) {
+    if (!preg_match('/^([0-9a-f]{64})(?:_([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))?\.([a-z0-9_]{1,32})\.bin$/', $basename, $matches)) {
+        return null;
+    }
+    $prefix = isset($matches[2]) ? $matches[2] : '';
+    if ($prefix !== '' && strpos($prefix, '--') !== false) {
+        return null;
+    }
+    return [
+        'id'      => $matches[1],
+        'prefix'  => $prefix,
+        'channel' => $matches[3],
+    ];
 }
 
 // Load and manage .state.php
@@ -291,11 +333,11 @@ function rebuild_index($dataDir, array $channels) {
     if ($binFiles !== false) {
         foreach ($binFiles as $file) {
             $base = basename($file);
-            if (!preg_match('/^([0-9a-f]{64})\.([a-z0-9_]{1,32})\.bin$/', $base, $matches)) {
+            $parsed = parse_slot_filename($base);
+            if ($parsed === null) {
                 continue;
             }
-            $id = $matches[1];
-            $ch = $matches[2];
+            $ch = $parsed['channel'];
             if ($ch === 'media') {
                 continue;
             }
@@ -309,13 +351,17 @@ function rebuild_index($dataDir, array $channels) {
                 continue;
             }
             $etag = hash_file('sha256', $file);
-            $indexEntries[] = [
-                'id' => $id,
+            $entry = [
+                'id'      => $parsed['id'],
                 'channel' => $ch,
-                'mtime' => $mtime,
-                'size' => $size,
-                'etag' => $etag,
+                'mtime'   => $mtime,
+                'size'    => $size,
+                'etag'    => $etag,
             ];
+            if ($parsed['prefix'] !== '') {
+                $entry['prefix'] = $parsed['prefix'];
+            }
+            $indexEntries[] = $entry;
         }
     }
 
@@ -324,7 +370,13 @@ function rebuild_index($dataDir, array $channels) {
         if ($c !== 0) {
             return $c;
         }
-        return strcmp($a['id'], $b['id']);
+        $c = strcmp($a['id'], $b['id']);
+        if ($c !== 0) {
+            return $c;
+        }
+        $pa = isset($a['prefix']) ? $a['prefix'] : '';
+        $pb = isset($b['prefix']) ? $b['prefix'] : '';
+        return strcmp($pa, $pb);
     });
 
     $indexFile = $dataDir . DIRECTORY_SEPARATOR . 'index.json';
@@ -344,11 +396,12 @@ function lazy_prune_slots($dataDir, array $channels, array &$state, $now) {
     $changed = false;
     foreach ($binFiles as $file) {
         $base = basename($file);
-        if (!preg_match('/^([0-9a-f]{64})\.([a-z0-9_]{1,32})\.bin$/', $base, $matches)) {
+        $parsed = parse_slot_filename($base);
+        if ($parsed === null) {
             continue;
         }
-        $id = $matches[1];
-        $ch = $matches[2];
+        $id = $parsed['id'];
+        $ch = $parsed['channel'];
         if (!isset($channels[$ch]['ttl_days'])) {
             continue;
         }
@@ -511,8 +564,9 @@ if ($method === 'HEAD') {
 
     $pubkey = isset($_SERVER['HTTP_X_DROP_PUBKEY']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_PUBKEY'])) : '';
     $channel = isset($_SERVER['HTTP_X_CHANNEL']) ? trim((string)$_SERVER['HTTP_X_CHANNEL']) : '';
+    $prefix = extract_and_validate_prefix();
 
-    if (!preg_match('/^[0-9a-f]{64}$/', $pubkey) || !preg_match('/^[a-z0-9_]{1,32}$/', $channel) || !isset($channels[$channel])) {
+    if (!preg_match('/^[0-9a-f]{64}$/', $pubkey) || !preg_match('/^[a-z0-9_]{1,32}$/', $channel) || !isset($channels[$channel]) || $prefix === false || ($channel === 'media' && $prefix !== '')) {
         if (!$disableRateLimit) {
             $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
             write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
@@ -533,7 +587,7 @@ if ($method === 'HEAD') {
         write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
     }
 
-    $slotPath = $dataDir . DIRECTORY_SEPARATOR . $pubkey . '.' . $channel . '.bin';
+    $slotPath = $dataDir . DIRECTORY_SEPARATOR . build_slot_filename($pubkey, $prefix, $channel);
     $slotEtag = '';
     if (file_exists($slotPath)) {
         clearstatcache(true, $slotPath);
@@ -645,13 +699,11 @@ if ($method === 'PUT' && isset($_GET['members'])) {
     $memberSet = array_flip($newMemberPubkeys);
     $existingSlots = glob($dataDir . DIRECTORY_SEPARATOR . '*.' . $channel . '.bin');
     if ($existingSlots !== false) {
-        $suffix = '.' . $channel . '.bin';
-        $suffixLen = strlen($suffix);
         foreach ($existingSlots as $sFile) {
             $bName = basename($sFile);
-            if (strlen($bName) > $suffixLen && substr($bName, -$suffixLen) === $suffix) {
-                $slotPk = substr($bName, 0, -$suffixLen);
-                if (!isset($memberSet[$slotPk])) {
+            $parsed = parse_slot_filename($bName);
+            if ($parsed !== null && $parsed['channel'] === $channel) {
+                if (!isset($memberSet[$parsed['id']])) {
                     $sz = filesize($sFile);
                     @unlink($sFile);
                     if ($sz !== false) {
@@ -841,6 +893,15 @@ if ($method === 'PUT') {
         sync_respond(404, $lockFp, 'Not Found', $commonHeaders);
     }
 
+    $prefix = extract_and_validate_prefix();
+    if ($prefix === false || ($channel === 'media' && $prefix !== '')) {
+        if (!$disableRateLimit) {
+            $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
+            write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
+        }
+        sync_respond(400, $lockFp, 'Bad Request: Invalid X-Drop-Prefix', $commonHeaders);
+    }
+
     $channelCfg = $channels[$channel];
     $maxBytes = (int)$channelCfg['max_bytes'];
 
@@ -904,9 +965,9 @@ if ($method === 'PUT') {
             }
             sync_respond(400, $lockFp, 'Bad Request: Missing or invalid X-Media-Id', $commonHeaders);
         }
-        $canonicalMsg = "HUMOCO-DROP-REQ-V1\nPUT\nmedia:{$mediaId}\n{$timestamp}\n{$nonce}\n" . hash('sha256', $rawBody);
+        $canonicalMsg = "HUMOCO-DROP-REQ-V1\nPUT\nmedia:{$mediaId}\n\n{$timestamp}\n{$nonce}\n" . hash('sha256', $rawBody);
     } else {
-        $canonicalMsg = "HUMOCO-DROP-REQ-V1\nPUT\n{$channel}\n{$timestamp}\n{$nonce}\n" . hash('sha256', $rawBody);
+        $canonicalMsg = "HUMOCO-DROP-REQ-V1\nPUT\n{$channel}\n{$prefix}\n{$timestamp}\n{$nonce}\n" . hash('sha256', $rawBody);
     }
 
     if (!verify_ed25519_detached($signature, $canonicalMsg, $pubkey)) {
@@ -1013,7 +1074,7 @@ if ($method === 'PUT') {
     }
 
     // Standard slot channels (card, wot, backup, post)
-    $slotFile = $dataDir . DIRECTORY_SEPARATOR . $pubkey . '.' . $channel . '.bin';
+    $slotFile = $dataDir . DIRECTORY_SEPARATOR . build_slot_filename($pubkey, $prefix, $channel);
     $currentEtag = null;
     $oldSize = 0;
     if (file_exists($slotFile)) {
@@ -1081,6 +1142,15 @@ if ($method === 'DELETE') {
         sync_respond(404, $lockFp, 'Not Found', $commonHeaders);
     }
 
+    $prefix = extract_and_validate_prefix();
+    if ($prefix === false || ($channel === 'media' && $prefix !== '')) {
+        if (!$disableRateLimit) {
+            $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
+            write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
+        }
+        sync_respond(400, $lockFp, 'Bad Request: Invalid X-Drop-Prefix', $commonHeaders);
+    }
+
     $pubkey = isset($_SERVER['HTTP_X_DROP_PUBKEY']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_PUBKEY'])) : '';
     $timestamp = isset($_SERVER['HTTP_X_DROP_TIMESTAMP']) ? (int)$_SERVER['HTTP_X_DROP_TIMESTAMP'] : 0;
     $nonce = isset($_SERVER['HTTP_X_DROP_NONCE']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_NONCE'])) : '';
@@ -1107,9 +1177,9 @@ if ($method === 'DELETE') {
                 }
                 sync_respond(400, $lockFp, 'Bad Request: Invalid X-Media-Id', $commonHeaders);
             }
-            $canonicalMsg = "HUMOCO-DROP-REQ-V1\nDELETE\nmedia:{$mediaId}\n{$timestamp}\n{$nonce}\n" . hash('sha256', '');
+            $canonicalMsg = "HUMOCO-DROP-REQ-V1\nDELETE\nmedia:{$mediaId}\n\n{$timestamp}\n{$nonce}\n" . hash('sha256', '');
         } else {
-            $canonicalMsg = "HUMOCO-DROP-REQ-V1\nDELETE\nmedia\n{$timestamp}\n{$nonce}\n" . hash('sha256', '');
+            $canonicalMsg = "HUMOCO-DROP-REQ-V1\nDELETE\nmedia\n\n{$timestamp}\n{$nonce}\n" . hash('sha256', '');
         }
 
         if (!verify_ed25519_detached($signature, $canonicalMsg, $pubkey)) {
@@ -1215,7 +1285,7 @@ if ($method === 'DELETE') {
     }
 
     // Standard slot channels
-    $slotFile = $dataDir . DIRECTORY_SEPARATOR . $pubkey . '.' . $channel . '.bin';
+    $slotFile = $dataDir . DIRECTORY_SEPARATOR . build_slot_filename($pubkey, $prefix, $channel);
     $slotExists = file_exists($slotFile);
 
     if (!$isMember && !$slotExists) {
@@ -1226,7 +1296,7 @@ if ($method === 'DELETE') {
         sync_respond(404, $lockFp, 'Not Found', $commonHeaders);
     }
 
-    $canonicalMsg = "HUMOCO-DROP-REQ-V1\nDELETE\n{$channel}\n{$timestamp}\n{$nonce}\n" . hash('sha256', '');
+    $canonicalMsg = "HUMOCO-DROP-REQ-V1\nDELETE\n{$channel}\n{$prefix}\n{$timestamp}\n{$nonce}\n" . hash('sha256', '');
     if (!verify_ed25519_detached($signature, $canonicalMsg, $pubkey)) {
         if (!$disableRateLimit) {
             $bucket['failCount'] = min(100, $bucket['failCount'] + 1);

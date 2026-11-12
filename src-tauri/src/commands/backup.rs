@@ -954,16 +954,20 @@ pub async fn sync_backup(
         });
     }
 
-    let (my_ed_sk, master_seed) = {
+    let (my_ed_sk, master_seed, my_prefix) = {
         let service = state
             .service
             .lock()
             .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        let my_ed_sk = service
-            .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+        let (my_ed_sk, my_prefix) = service
+            .with_wallet_and_identity(|_w, id| {
+                let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                    .map(|s| s.to_string());
+                (id.signing_key.clone(), pfx)
+            })
             .map_err(FrontendError::from)?;
         let master_seed = my_ed_sk.to_bytes();
-        (my_ed_sk, master_seed)
+        (my_ed_sk, master_seed, my_prefix)
     };
 
     // Gather candidate backup drops: selected friend drops + own drop + enabled public drops
@@ -1040,6 +1044,7 @@ pub async fn sync_backup(
             &probe_client,
             &sync_desc.write_url,
             &cap_pubkey,
+            my_prefix.as_deref(),
             "backup",
         )
         .await
@@ -1114,6 +1119,7 @@ pub async fn sync_backup(
                     &r_sk,
                     "PUT",
                     "backup",
+                    my_prefix.as_deref(),
                     now_secs,
                     &nonce,
                     &padded_bytes,
@@ -1126,6 +1132,7 @@ pub async fn sync_backup(
                 &sync_desc.drop_pub,
                 "PUT",
                 "backup",
+                my_prefix.as_deref(),
                 now_secs,
                 &nonce,
                 &padded_bytes,
@@ -1317,9 +1324,10 @@ pub async fn fetch_and_inspect_backup(
     // Download first candidate that matches
     let fetch_client = crate::sync_client::create_sync_http_client();
     let mut downloaded_bytes: Option<(Vec<u8>, String, String)> = None;
+    let normalized_prefix = user_prefix.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_lowercase);
 
     for (read_url, pubkey_hex, kind) in candidates {
-        match crate::sync_client::get_slot(&fetch_client, &read_url, &pubkey_hex, "backup").await {
+        match crate::sync_client::get_slot(&fetch_client, &read_url, &pubkey_hex, normalized_prefix.as_deref(), "backup").await {
             Ok(Some(bytes)) => {
                 downloaded_bytes = Some((bytes, kind, read_url));
                 break;

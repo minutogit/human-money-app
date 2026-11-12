@@ -265,12 +265,16 @@ pub fn rebuild_and_sign_own_card(
 }
 
 async fn delete_remote_card_slots(state: &AppState, password: Option<&str>) {
-    let (my_ed_sk, master_seed, drops) = {
+    let (my_ed_sk, master_seed, my_prefix, drops) = {
         let mut service = match state.service.lock() {
             Ok(s) => s,
             Err(_) => return,
         };
-        let my_ed_sk = match service.with_wallet_and_identity(|_w, id| id.signing_key.clone()) {
+        let (my_ed_sk, my_prefix) = match service.with_wallet_and_identity(|_w, id| {
+            let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                .map(|s| s.to_string());
+            (id.signing_key.clone(), pfx)
+        }) {
             Ok(k) => k,
             Err(_) => return,
         };
@@ -295,7 +299,7 @@ async fn delete_remote_card_slots(state: &AppState, password: Option<&str>) {
                 });
             }
         }
-        (my_ed_sk, master_seed, drops)
+        (my_ed_sk, master_seed, my_prefix, drops)
     };
     let client = sync_client::create_sync_http_client();
     let now = sync_client::current_unix_timestamp();
@@ -304,7 +308,7 @@ async fn delete_remote_card_slots(state: &AppState, password: Option<&str>) {
         let signed_res = if drop_desc.slot_id.is_some() {
             match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
                 Ok((r_sk, _, _)) => {
-                    Ok(humoco_market::sign_member_request_direct(&r_sk, "DELETE", "card", now, &nonce, b""))
+                    Ok(humoco_market::sign_member_request_direct(&r_sk, "DELETE", "card", my_prefix.as_deref(), now, &nonce, b""))
                 }
                 Err(e) => Err(e.to_string()),
             }
@@ -314,6 +318,7 @@ async fn delete_remote_card_slots(state: &AppState, password: Option<&str>) {
                 &drop_desc.drop_pub,
                 "DELETE",
                 "card",
+                my_prefix.as_deref(),
                 now,
                 &nonce,
                 b"",

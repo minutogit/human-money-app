@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SyncIndexEntry {
     pub id: String, // 64-hex pubkey
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
     pub channel: String,
     pub mtime: u64,
     pub size: usize,
@@ -216,14 +218,21 @@ pub async fn head_slot_capability(
     client: &reqwest::Client,
     write_url: &str,
     pubkey_hex64: &str,
+    prefix: Option<&str>,
     channel: &str,
 ) -> Result<SyncCapabilityResult, String> {
     validate_sync_url(write_url)?;
 
-    let resp = client
+    let mut req = client
         .head(write_url)
         .header("X-Drop-Pubkey", pubkey_hex64)
-        .header("X-Channel", channel)
+        .header("X-Channel", channel);
+
+    if let Some(p) = prefix.filter(|s| !s.is_empty()) {
+        req = req.header("X-Drop-Prefix", p);
+    }
+
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("Network error checking capability on {}: {}", write_url, e))?;
@@ -322,6 +331,12 @@ pub async fn put_slot(
         .header("X-Drop-Signature", &signed_headers.signature_hex)
         .header("Content-Type", "application/octet-stream");
 
+    if let Some(ref p) = signed_headers.prefix {
+        if !p.is_empty() {
+            req = req.header("X-Drop-Prefix", p);
+        }
+    }
+
     if let Some(im) = if_match {
         if im == "none" {
             req = req.header("If-Match", "none");
@@ -371,13 +386,21 @@ pub async fn delete_slot(
 ) -> Result<(), String> {
     validate_sync_url(write_url)?;
 
-    let resp = client
+    let mut req = client
         .delete(write_url)
         .header("X-Drop-Pubkey", &signed_headers.pubkey_hex)
         .header("X-Channel", channel)
         .header("X-Drop-Timestamp", signed_headers.timestamp.to_string())
         .header("X-Drop-Nonce", &signed_headers.nonce_hex)
-        .header("X-Drop-Signature", &signed_headers.signature_hex)
+        .header("X-Drop-Signature", &signed_headers.signature_hex);
+
+    if let Some(ref p) = signed_headers.prefix {
+        if !p.is_empty() {
+            req = req.header("X-Drop-Prefix", p);
+        }
+    }
+
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("Network error deleting slot: {}", e))?;
@@ -716,11 +739,16 @@ pub async fn get_slot(
     client: &reqwest::Client,
     read_url: &str,
     id: &str,
+    prefix: Option<&str>,
     channel: &str,
 ) -> Result<Option<Vec<u8>>, String> {
     validate_sync_url(read_url)?;
     let base = read_url.trim().trim_end_matches('/');
-    let url = format!("{}/{}.{}.bin", base, id, channel);
+    let slot_key = match prefix.filter(|s| !s.is_empty()) {
+        Some(p) => format!("{}_{}", id, p),
+        None => id.to_string(),
+    };
+    let url = format!("{}/{}.{}.bin", base, slot_key, channel);
 
     let resp = client
         .get(&url)
@@ -764,7 +792,7 @@ pub async fn get_media_blob(
             blob_id
         ));
     }
-    get_slot(client, read_url, blob_id, "media").await
+    get_slot(client, read_url, blob_id, None, "media").await
 }
 
 #[cfg(test)]
@@ -808,5 +836,42 @@ mod tests {
         // Invalid characters (uppercase or non-hex)
         let err_chars = get_media_blob(&client, "https://example.com/sync", &"G".repeat(64)).await.unwrap_err();
         assert!(err_chars.contains("Invalid blob_id"));
+    }
+
+    #[test]
+    fn test_sync_index_entry_serde_prefix() {
+        // Without prefix
+        let entry_no_prefix = SyncIndexEntry {
+            id: "abc".to_string(),
+            prefix: None,
+            channel: "card".to_string(),
+            mtime: 1234,
+            size: 56,
+            etag: Some("tag1".to_string()),
+        };
+        let json_no_pfx = serde_json::to_string(&entry_no_prefix).unwrap();
+        assert!(!json_no_pfx.contains("\"prefix\""));
+        let de_no_pfx: SyncIndexEntry = serde_json::from_str(&json_no_pfx).unwrap();
+        assert_eq!(entry_no_prefix, de_no_pfx);
+
+        // With prefix
+        let entry_with_prefix = SyncIndexEntry {
+            id: "abc".to_string(),
+            prefix: Some("alice".to_string()),
+            channel: "card".to_string(),
+            mtime: 1234,
+            size: 56,
+            etag: None,
+        };
+        let json_with_pfx = serde_json::to_string(&entry_with_prefix).unwrap();
+        assert!(json_with_pfx.contains("\"prefix\":\"alice\""));
+        let de_with_pfx: SyncIndexEntry = serde_json::from_str(&json_with_pfx).unwrap();
+        assert_eq!(entry_with_prefix, de_with_pfx);
+
+        // Deserializing JSON without prefix field defaults to None
+        let raw_json = r#"{"id":"pub123","channel":"post","mtime":999,"size":100}"#;
+        let de_raw: SyncIndexEntry = serde_json::from_str(raw_json).unwrap();
+        assert_eq!(de_raw.prefix, None);
+        assert_eq!(de_raw.etag, None);
     }
 }

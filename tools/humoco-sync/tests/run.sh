@@ -313,7 +313,7 @@ SLOT_PAYLOAD="Human Money Voucher Card: Alice - Minuto 50"
 SLOT_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$SLOT_PAYLOAD")
 TS=$(date +%s)
 NONCE2="abcdef0123456789abcdef0123456789"
-CANON_PUT=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\n%s\n%s\n%s" "$TS" "$NONCE2" "$SLOT_HASH")
+CANON_PUT=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\n\n%s\n%s\n%s" "$TS" "$NONCE2" "$SLOT_HASH")
 SIG_PUT=$(php_sign "$CANON_PUT" "$MEMBER1_SK")
 
 # 4.1 Valid Member Slot Upload -> 204
@@ -339,7 +339,7 @@ fi
 # 4.2 If-Match "none" when slot already exists -> 412 Precondition Failed
 TS=$(date +%s)
 NONCE3="11111111222222223333333344444444"
-CANON_IFM=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\n%s\n%s\n%s" "$TS" "$NONCE3" "$SLOT_HASH")
+CANON_IFM=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\n\n%s\n%s\n%s" "$TS" "$NONCE3" "$SLOT_HASH")
 SIG_IFM=$(php_sign "$CANON_IFM" "$MEMBER1_SK")
 
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
@@ -398,7 +398,7 @@ echo "=== Test Group 6: Member Slot Delete (DELETE sync.php) ==="
 TS=$(date +%s)
 NONCE_DEL="99999999aaaaaaaa99999999aaaaaaaa"
 EMPTY_HASH="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-CANON_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\ncard\n%s\n%s\n%s" "$TS" "$NONCE_DEL" "$EMPTY_HASH")
+CANON_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\ncard\n\n%s\n%s\n%s" "$TS" "$NONCE_DEL" "$EMPTY_HASH")
 SIG_DEL=$(php_sign "$CANON_DEL" "$MEMBER1_SK")
 
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/sync.php" \
@@ -426,7 +426,7 @@ MEDIA_PAYLOAD1="ENCRYPTED_IMAGE_BLOB_MEMBER1_ALPHA"
 MEDIA_HASH1=$(php -r 'echo hash("sha256", $argv[1]);' "$MEDIA_PAYLOAD1")
 TS=$(date +%s)
 NONCE_M1="ba010101010101010101010101010101"
-CANON_PUT_M1=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID1" "$TS" "$NONCE_M1" "$MEDIA_HASH1")
+CANON_PUT_M1=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n\n%s\n%s\n%s" "$MEDIA_ID1" "$TS" "$NONCE_M1" "$MEDIA_HASH1")
 SIG_PUT_M1=$(php_sign "$CANON_PUT_M1" "$MEMBER1_SK")
 
 PUT_M1_RESP=$(curl -s -i -X PUT "$BASE_URL/sync.php" \
@@ -486,7 +486,7 @@ TS=$(date +%s)
 NONCE_M2_OW="ba020202020202020202020202020202"
 FORGED_BODY="MALICIOUS_OVERWRITE_ATTEMPT"
 FORGED_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$FORGED_BODY")
-CANON_M2_OW=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID1" "$TS" "$NONCE_M2_OW" "$FORGED_HASH")
+CANON_M2_OW=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n\n%s\n%s\n%s" "$MEDIA_ID1" "$TS" "$NONCE_M2_OW" "$FORGED_HASH")
 SIG_M2_OW=$(php_sign "$CANON_M2_OW" "$MEMBER2_SK")
 
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
@@ -501,7 +501,7 @@ assert_status "Another member cannot overwrite mediaId (returns 403)" "403" "$CO
 
 TS=$(date +%s)
 NONCE_M2_DEL="ba030303030303030303030303030303"
-CANON_M2_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID1" "$TS" "$NONCE_M2_DEL" "$EMPTY_HASH")
+CANON_M2_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\nmedia:%s\n\n%s\n%s\n%s" "$MEDIA_ID1" "$TS" "$NONCE_M2_DEL" "$EMPTY_HASH")
 SIG_M2_DEL=$(php_sign "$CANON_M2_DEL" "$MEMBER2_SK")
 
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/sync.php" \
@@ -520,7 +520,7 @@ MEDIA_PAYLOAD2="ENCRYPTED_IMAGE_BLOB_MEMBER1_BETA"
 MEDIA_HASH2=$(php -r 'echo hash("sha256", $argv[1]);' "$MEDIA_PAYLOAD2")
 TS=$(date +%s)
 NONCE_M1_2="ba040404040404040404040404040404"
-CANON_PUT_M2=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID2" "$TS" "$NONCE_M1_2" "$MEDIA_HASH2")
+CANON_PUT_M2=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n\n%s\n%s\n%s" "$MEDIA_ID2" "$TS" "$NONCE_M1_2" "$MEDIA_HASH2")
 SIG_PUT_M2=$(php_sign "$CANON_PUT_M2" "$MEMBER1_SK")
 
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
@@ -538,7 +538,7 @@ MEDIA_PAYLOAD3="ENCRYPTED_IMAGE_BLOB_MEMBER1_GAMMA"
 MEDIA_HASH3=$(php -r 'echo hash("sha256", $argv[1]);' "$MEDIA_PAYLOAD3")
 TS=$(date +%s)
 NONCE_M1_3="ba050505050505050505050505050505"
-CANON_PUT_M3=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID3" "$TS" "$NONCE_M1_3" "$MEDIA_HASH3")
+CANON_PUT_M3=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nmedia:%s\n\n%s\n%s\n%s" "$MEDIA_ID3" "$TS" "$NONCE_M1_3" "$MEDIA_HASH3")
 SIG_PUT_M3=$(php_sign "$CANON_PUT_M3" "$MEMBER1_SK")
 
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
@@ -574,7 +574,7 @@ WOT_PAYLOAD="WOT_TRUST_GRAPH_PAYLOAD_FOR_MEMBER1_PRIO1_EVIC_TEST_EXACTLY_70_BYTE
 WOT_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$WOT_PAYLOAD")
 TS=$(date +%s)
 NONCE_WOT="ba070707070707070707070707070707"
-CANON_WOT=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nwot\n%s\n%s\n%s" "$TS" "$NONCE_WOT" "$WOT_HASH")
+CANON_WOT=$(printf "HUMOCO-DROP-REQ-V1\nPUT\nwot\n\n%s\n%s\n%s" "$TS" "$NONCE_WOT" "$WOT_HASH")
 SIG_WOT=$(php_sign "$CANON_WOT" "$MEMBER1_SK")
 
 WOT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
@@ -605,7 +605,7 @@ fi
 # 7.7 Member DELETE of own media blob
 TS=$(date +%s)
 NONCE_M1_DEL="ba080808080808080808080808080808"
-CANON_M1_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\nmedia:%s\n%s\n%s\n%s" "$MEDIA_ID2" "$TS" "$NONCE_M1_DEL" "$EMPTY_HASH")
+CANON_M1_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\nmedia:%s\n\n%s\n%s\n%s" "$MEDIA_ID2" "$TS" "$NONCE_M1_DEL" "$EMPTY_HASH")
 SIG_M1_DEL=$(php_sign "$CANON_M1_DEL" "$MEMBER1_SK")
 
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/sync.php" \
@@ -622,6 +622,316 @@ if [ ! -f "$DATA_DIR/$MEDIA_ID2.media.bin" ]; then
 else
     echo "  [FAIL] Deleted media blob still exists on disk" >&2
     FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+echo ""
+echo "=== Test Group 8: Sub-Mailbox Prefix Isolation & Management (X-Drop-Prefix) ==="
+
+# Clean up wot slot from Test Group 7 to free storage budget (120 bytes max)
+TS=$(date +%s)
+NONCE_WOT_DEL="ca000000000000000000000000000000"
+CANON_WOT_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\nwot\n\n%s\n%s\n%s" "$TS" "$NONCE_WOT_DEL" "$EMPTY_HASH")
+SIG_WOT_DEL=$(php_sign "$CANON_WOT_DEL" "$MEMBER1_SK")
+curl -s -o /dev/null -X DELETE "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: wot" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_WOT_DEL" \
+    -H "X-Drop-Signature: $SIG_WOT_DEL"
+
+# 8.1 Upload prefixed slots: privat, firma, and root slot
+PAYLOAD_PRIVAT="CARD_ALICE_PRIVAT_100"
+HASH_PRIVAT=$(php -r 'echo hash("sha256", $argv[1]);' "$PAYLOAD_PRIVAT")
+TS=$(date +%s)
+NONCE_P="ca010101010101010101010101010101"
+CANON_P=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\nprivat\n%s\n%s\n%s" "$TS" "$NONCE_P" "$HASH_PRIVAT")
+SIG_P=$(php_sign "$CANON_P" "$MEMBER1_SK")
+
+PUT_P_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Prefix: privat" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_P" \
+    -H "X-Drop-Signature: $SIG_P" \
+    --data-binary "$PAYLOAD_PRIVAT")
+assert_status "Upload slot with X-Drop-Prefix: privat returns 204" "204" "$PUT_P_CODE"
+
+if [ -f "$DATA_DIR/${MEMBER1_PK}_privat.card.bin" ]; then
+    echo "  [PASS] File ${MEMBER1_PK}_privat.card.bin was created on disk"
+else
+    echo "  [FAIL] File ${MEMBER1_PK}_privat.card.bin was NOT created" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+PAYLOAD_FIRMA="CARD_ALICE_FIRMA_500"
+HASH_FIRMA=$(php -r 'echo hash("sha256", $argv[1]);' "$PAYLOAD_FIRMA")
+TS=$(date +%s)
+NONCE_F="ca020202020202020202020202020202"
+CANON_F=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\nfirma\n%s\n%s\n%s" "$TS" "$NONCE_F" "$HASH_FIRMA")
+SIG_F=$(php_sign "$CANON_F" "$MEMBER1_SK")
+
+PUT_F_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Prefix: firma" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_F" \
+    -H "X-Drop-Signature: $SIG_F" \
+    --data-binary "$PAYLOAD_FIRMA")
+assert_status "Upload slot with X-Drop-Prefix: firma returns 204" "204" "$PUT_F_CODE"
+
+if [ -f "$DATA_DIR/${MEMBER1_PK}_firma.card.bin" ]; then
+    echo "  [PASS] File ${MEMBER1_PK}_firma.card.bin was created on disk"
+else
+    echo "  [FAIL] File ${MEMBER1_PK}_firma.card.bin was NOT created" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+PAYLOAD_ROOT="CARD_ALICE_ROOT_50"
+HASH_ROOT=$(php -r 'echo hash("sha256", $argv[1]);' "$PAYLOAD_ROOT")
+TS=$(date +%s)
+NONCE_R="ca030303030303030303030303030303"
+CANON_R=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\n\n%s\n%s\n%s" "$TS" "$NONCE_R" "$HASH_ROOT")
+SIG_R=$(php_sign "$CANON_R" "$MEMBER1_SK")
+
+PUT_R_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_R" \
+    -H "X-Drop-Signature: $SIG_R" \
+    --data-binary "$PAYLOAD_ROOT")
+assert_status "Upload root slot (no prefix) returns 204" "204" "$PUT_R_CODE"
+
+if [ -f "$DATA_DIR/${MEMBER1_PK}.card.bin" ]; then
+    echo "  [PASS] File ${MEMBER1_PK}.card.bin was created on disk"
+else
+    echo "  [FAIL] File ${MEMBER1_PK}.card.bin was NOT created" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# 8.2 Verify index.json entries and prefix metadata
+INDEX_CHECK=$(php -r '
+    $content = file_get_contents($argv[1]);
+    $idx = json_decode($content, true);
+    if (!is_array($idx)) { echo "INVALID_JSON"; exit; }
+    $m1 = $argv[2];
+    $hasPrivat = false;
+    $hasFirma = false;
+    $hasRoot = false;
+    foreach ($idx as $e) {
+        if ($e["id"] === $m1 && $e["channel"] === "card") {
+            if (isset($e["prefix"]) && $e["prefix"] === "privat") $hasPrivat = true;
+            if (isset($e["prefix"]) && $e["prefix"] === "firma") $hasFirma = true;
+            if (!isset($e["prefix"])) $hasRoot = true;
+        }
+    }
+    if ($hasPrivat && $hasFirma && $hasRoot) {
+        echo "OK";
+    } else {
+        echo "MISSING_ENTRIES: privat=" . ($hasPrivat ? 1 : 0) . " firma=" . ($hasFirma ? 1 : 0) . " root=" . ($hasRoot ? 1 : 0);
+    }
+' "$BASE_URL/data/index.json" "$MEMBER1_PK")
+
+if [ "$INDEX_CHECK" = "OK" ]; then
+    echo "  [PASS] index.json correctly indexes privat, firma, and root slots with prefix metadata"
+else
+    echo "  [FAIL] index.json prefix verification failed: $INDEX_CHECK" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# 8.3 HEAD capability check with independent X-Drop-Slot-Etag
+HEAD_PRIV_RESP=$(curl -s -I "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Prefix: privat")
+ETAG_PRIV=$(echo "$HEAD_PRIV_RESP" | grep -i "X-Drop-Slot-Etag:" | awk '{print $2}' | tr -d '\r\n')
+
+HEAD_FIRM_RESP=$(curl -s -I "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Prefix: firma")
+ETAG_FIRM=$(echo "$HEAD_FIRM_RESP" | grep -i "X-Drop-Slot-Etag:" | awk '{print $2}' | tr -d '\r\n')
+
+HEAD_ROOT_RESP=$(curl -s -I "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card")
+ETAG_ROOT=$(echo "$HEAD_ROOT_RESP" | grep -i "X-Drop-Slot-Etag:" | awk '{print $2}' | tr -d '\r\n')
+
+if [ "$ETAG_PRIV" = "$HASH_PRIVAT" ] && [ "$ETAG_FIRM" = "$HASH_FIRMA" ] && [ "$ETAG_ROOT" = "$HASH_ROOT" ]; then
+    echo "  [PASS] HEAD returns independent X-Drop-Slot-Etag for privat, firma, and root mailboxes"
+else
+    echo "  [FAIL] HEAD ETag mismatch: priv=$ETAG_PRIV (exp $HASH_PRIVAT), firm=$ETAG_FIRM (exp $HASH_FIRMA), root=$ETAG_ROOT (exp $HASH_ROOT)" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# 8.4 Forging / mismatching X-Drop-Prefix header -> 403 Forbidden
+TS=$(date +%s)
+NONCE_FORGE1="ca040404040404040404040404040404"
+CANON_FORGE1=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\nprivat\n%s\n%s\n%s" "$TS" "$NONCE_FORGE1" "$HASH_PRIVAT")
+SIG_FORGE1=$(php_sign "$CANON_FORGE1" "$MEMBER1_SK")
+
+CODE_FORGE1=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Prefix: firma" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_FORGE1" \
+    -H "X-Drop-Signature: $SIG_FORGE1" \
+    --data-binary "$PAYLOAD_PRIVAT")
+assert_status "Signature for privat with X-Drop-Prefix: firma is rejected with 403" "403" "$CODE_FORGE1"
+
+TS=$(date +%s)
+NONCE_FORGE2="ca050505050505050505050505050505"
+CANON_FORGE2=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\n\n%s\n%s\n%s" "$TS" "$NONCE_FORGE2" "$HASH_ROOT")
+SIG_FORGE2=$(php_sign "$CANON_FORGE2" "$MEMBER1_SK")
+
+CODE_FORGE2=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Prefix: privat" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_FORGE2" \
+    -H "X-Drop-Signature: $SIG_FORGE2" \
+    --data-binary "$PAYLOAD_ROOT")
+assert_status "Signature for root with X-Drop-Prefix: privat is rejected with 403" "403" "$CODE_FORGE2"
+
+# 8.5 Invalid X-Drop-Prefix syntax rejected with 400 (PUT/DELETE) and 403 (HEAD)
+TS=$(date +%s)
+INVALID_PREFIXES=("UPPERCASE" "bad_underscore" "-leading" "double--dash")
+for bad_p in "${INVALID_PREFIXES[@]}"; do
+    CODE_BAD=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+        -H "X-Drop-Pubkey: $MEMBER1_PK" \
+        -H "X-Channel: card" \
+        -H "X-Drop-Prefix: $bad_p" \
+        -H "X-Drop-Timestamp: $TS" \
+        -H "X-Drop-Nonce: ca060606060606060606060606060606" \
+        -H "X-Drop-Signature: $SIG_P" \
+        --data-binary "$PAYLOAD_PRIVAT")
+    assert_status "PUT with invalid prefix '$bad_p' is rejected with 400" "400" "$CODE_BAD"
+done
+
+HEAD_BAD_CODE=$(curl -s -o /dev/null -w "%{http_code}" -I "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Prefix: INVALID_UPPER")
+assert_status "HEAD with invalid prefix is rejected with 403" "403" "$HEAD_BAD_CODE"
+
+PUT_MEDIA_PREFIX_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: media" \
+    -H "X-Drop-Prefix: privat" \
+    -H "X-Media-Id: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: ca070707070707070707070707070707" \
+    -H "X-Drop-Signature: $SIG_P" \
+    --data-binary "BLOB")
+assert_status "PUT on media with X-Drop-Prefix is rejected with 400" "400" "$PUT_MEDIA_PREFIX_CODE"
+
+HEAD_MEDIA_PREFIX_CODE=$(curl -s -o /dev/null -w "%{http_code}" -I "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: media" \
+    -H "X-Drop-Prefix: privat")
+assert_status "HEAD on media with X-Drop-Prefix is rejected with 403" "403" "$HEAD_MEDIA_PREFIX_CODE"
+
+# 8.6 If-Match update on privat does not touch firma or root slot
+PAYLOAD_PRIVAT2="CARD_ALICE_PRIVAT_200"
+HASH_PRIVAT2=$(php -r 'echo hash("sha256", $argv[1]);' "$PAYLOAD_PRIVAT2")
+TS=$(date +%s)
+NONCE_P2="ca080808080808080808080808080808"
+CANON_P2=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\nprivat\n%s\n%s\n%s" "$TS" "$NONCE_P2" "$HASH_PRIVAT2")
+SIG_P2=$(php_sign "$CANON_P2" "$MEMBER1_SK")
+
+CODE_IFM_STALE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Prefix: privat" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_P2" \
+    -H "X-Drop-Signature: $SIG_P2" \
+    -H 'If-Match: "0000000000000000000000000000000000000000000000000000000000000000"' \
+    --data-binary "$PAYLOAD_PRIVAT2")
+assert_status "PUT with stale If-Match on privat returns 412" "412" "$CODE_IFM_STALE"
+
+TS=$(date +%s)
+NONCE_P3="ca090909090909090909090909090909"
+CANON_P3=$(printf "HUMOCO-DROP-REQ-V1\nPUT\ncard\nprivat\n%s\n%s\n%s" "$TS" "$NONCE_P3" "$HASH_PRIVAT2")
+SIG_P3=$(php_sign "$CANON_P3" "$MEMBER1_SK")
+
+CODE_IFM_OK=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Prefix: privat" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_P3" \
+    -H "X-Drop-Signature: $SIG_P3" \
+    -H "If-Match: \"$HASH_PRIVAT\"" \
+    --data-binary "$PAYLOAD_PRIVAT2")
+assert_status "PUT with valid If-Match on privat returns 204" "204" "$CODE_IFM_OK"
+
+FETCHED_PRIV2=$(curl -s "$BASE_URL/data/${MEMBER1_PK}_privat.card.bin")
+FETCHED_FIRM=$(curl -s "$BASE_URL/data/${MEMBER1_PK}_firma.card.bin")
+FETCHED_ROOT=$(curl -s "$BASE_URL/data/${MEMBER1_PK}.card.bin")
+
+if [ "$FETCHED_PRIV2" = "$PAYLOAD_PRIVAT2" ] && [ "$FETCHED_FIRM" = "$PAYLOAD_FIRMA" ] && [ "$FETCHED_ROOT" = "$PAYLOAD_ROOT" ]; then
+    echo "  [PASS] privat update preserved firma and root slots intact"
+else
+    echo "  [FAIL] Slot data isolation failure during If-Match update" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# 8.7 DELETE on privat does not touch firma or root slot
+TS=$(date +%s)
+NONCE_P_DEL="ca0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+CANON_P_DEL=$(printf "HUMOCO-DROP-REQ-V1\nDELETE\ncard\nprivat\n%s\n%s\n%s" "$TS" "$NONCE_P_DEL" "$EMPTY_HASH")
+SIG_P_DEL=$(php_sign "$CANON_P_DEL" "$MEMBER1_SK")
+
+CODE_P_DEL=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER1_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Prefix: privat" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_P_DEL" \
+    -H "X-Drop-Signature: $SIG_P_DEL")
+assert_status "DELETE on privat sub-mailbox returns 204" "204" "$CODE_P_DEL"
+
+if [ ! -f "$DATA_DIR/${MEMBER1_PK}_privat.card.bin" ] && [ -f "$DATA_DIR/${MEMBER1_PK}_firma.card.bin" ] && [ -f "$DATA_DIR/${MEMBER1_PK}.card.bin" ]; then
+    echo "  [PASS] privat slot was deleted while firma and root slots remain intact"
+else
+    echo "  [FAIL] DELETE isolation failure: privat or other slots in unexpected state" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# 8.8 Removing member from members.{channel}.php prunes all remaining prefixed slots
+TS=$(date +%s)
+NONCE_ADMIN_DEL="ca0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
+BODY_REM="{\"pubkeys\":[\"$MEMBER2_PK\"]}"
+BODY_REM_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$BODY_REM")
+CANON_REM=$(printf "HUMOCO-DROP-ADMIN-V1\nPUT_MEMBERS\ncard\n%s\n%s\n%s" "$TS" "$NONCE_ADMIN_DEL" "$BODY_REM_HASH")
+SIG_REM=$(php_sign "$CANON_REM" "$ADMIN2_SK")
+
+CODE_REM=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php?members&channel=card" \
+    -H "X-Drop-Pubkey: $ADMIN2_PK" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_ADMIN_DEL" \
+    -H "X-Drop-Signature: $SIG_REM" \
+    -d "$BODY_REM")
+assert_status "Admin PUT_MEMBERS removing MEMBER1 returns 204" "204" "$CODE_REM"
+
+if [ ! -f "$DATA_DIR/${MEMBER1_PK}_firma.card.bin" ] && [ ! -f "$DATA_DIR/${MEMBER1_PK}.card.bin" ]; then
+    echo "  [PASS] Removing member pruned both root and all prefixed slots (_firma) from disk"
+else
+    echo "  [FAIL] Prefixed or root slot still on disk after member removal" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+INDEX_AFTER_REM=$(curl -s "$BASE_URL/data/index.json")
+if echo "$INDEX_AFTER_REM" | grep -q "$MEMBER1_PK"; then
+    echo "  [FAIL] index.json still contains entries for removed MEMBER1: $INDEX_AFTER_REM" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+else
+    echo "  [PASS] index.json contains zero entries for removed MEMBER1"
 fi
 
 echo ""

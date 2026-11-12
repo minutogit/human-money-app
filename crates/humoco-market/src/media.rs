@@ -481,6 +481,7 @@ pub fn sign_media_request(
         member_stealth_sk,
         method,
         &format!("media:{}", blob_id),
+        None,
         timestamp,
         nonce_hex,
         body,

@@ -51,6 +51,6 @@
     "retire_at": 1800000000,
     "cert_sig": "58908d008aa5faded626503432c54f13041a25cec619afd0027809ff3ff2511a52e4dfb362af509c9104ad2814188acbef6e45c5af48dcf7da40ab97453f510d"
   },
-  "sample_member_request_message": "HUMOCO-DROP-REQ-V1\nPUT\ncard\n1700000000\n0123456789abcdef0123456789abcdef\n93a23971a914e5eacbf0a8d25154cda309c3c1c72fbb9914d47c60f3cb681588",
+  "sample_member_request_message": "HUMOCO-DROP-REQ-V1\nPUT\ncard\n\n1700000000\n0123456789abcdef0123456789abcdef\n93a23971a914e5eacbf0a8d25154cda309c3c1c72fbb9914d47c60f3cb681588",
   "sample_admin_request_message": "HUMOCO-DROP-ADMIN-V1\nPUT_MEMBERS\ncard\n1700000000\n0123456789abcdef0123456789abcdef\n93a23971a914e5eacbf0a8d25154cda309c3c1c72fbb9914d47c60f3cb681588"
 }

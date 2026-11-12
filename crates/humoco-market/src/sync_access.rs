@@ -467,9 +467,43 @@ pub fn derive_public_drop_keypair(
 //  CANONICAL HTTP REQUEST SIGNING & VERIFICATION HELPERS
 // =========================================================================
 
+pub fn validate_sync_prefix(prefix: Option<&str>) -> Result<Option<String>, MarketError> {
+    match prefix {
+        None => Ok(None),
+        Some("") => Ok(None),
+        Some(p) => {
+            if p.is_empty() || p.len() > 63 {
+                return Err(MarketError::Validation(format!(
+                    "Sync prefix must be 1..=63 characters, got {}",
+                    p.len()
+                )));
+            }
+            if p.starts_with('-') || p.ends_with('-') {
+                return Err(MarketError::Validation(
+                    "Sync prefix must not start or end with a hyphen".to_string(),
+                ));
+            }
+            if p.contains("--") {
+                return Err(MarketError::Validation(
+                    "Sync prefix must not contain consecutive hyphens ('--')".to_string(),
+                ));
+            }
+            if !p.chars().all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-')) {
+                return Err(MarketError::Validation(format!(
+                    "Sync prefix contains invalid characters: '{}' (only lowercase a-z, 0-9, and hyphen allowed)",
+                    p
+                )));
+            }
+            Ok(Some(p.to_string()))
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedDropHeaders {
     pub pubkey_hex: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
     pub timestamp: u64,
     pub nonce_hex: String,
     pub signature_hex: String,
@@ -478,14 +512,17 @@ pub struct SignedDropHeaders {
 pub fn format_member_request_message(
     method: &str,
     channel: &str,
+    prefix: Option<&str>,
     timestamp: u64,
     nonce_hex: &str,
     body: &[u8],
 ) -> String {
+    let pfx = prefix.unwrap_or("");
     format!(
-        "HUMOCO-DROP-REQ-V1\n{}\n{}\n{}\n{}\n{}",
+        "HUMOCO-DROP-REQ-V1\n{}\n{}\n{}\n{}\n{}\n{}",
         method,
         channel,
+        pfx,
         timestamp,
         nonce_hex,
         sha256_hex(body)
@@ -533,20 +570,31 @@ pub fn verify_ed25519_detached_hex(
         .map_err(|e| MarketError::Crypto(format!("Invalid Ed25519 signature: {}", e)))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn sign_member_request_stealth(
     member_ed_sk: &SigningKey,
     drop_pub_hex64: &str,
     method: &str,
     channel: &str,
+    prefix: Option<&str>,
     timestamp: u64,
     nonce_hex: &str,
     body: &[u8],
 ) -> Result<SignedDropHeaders, MarketError> {
-    let msg = format_member_request_message(method, channel, timestamp, nonce_hex, body);
+    let normalized_prefix = validate_sync_prefix(prefix)?;
+    let msg = format_member_request_message(
+        method,
+        channel,
+        normalized_prefix.as_deref(),
+        timestamp,
+        nonce_hex,
+        body,
+    );
     let (pubkey_hex, signature_hex) =
         sign_member_stealth_message(member_ed_sk, drop_pub_hex64, msg.as_bytes())?;
     Ok(SignedDropHeaders {
         pubkey_hex,
+        prefix: normalized_prefix,
         timestamp,
         nonce_hex: nonce_hex.to_string(),
         signature_hex,
@@ -557,14 +605,24 @@ pub fn sign_member_request_direct(
     signing_key: &SigningKey,
     method: &str,
     channel: &str,
+    prefix: Option<&str>,
     timestamp: u64,
     nonce_hex: &str,
     body: &[u8],
 ) -> SignedDropHeaders {
-    let msg = format_member_request_message(method, channel, timestamp, nonce_hex, body);
+    let normalized_prefix = prefix.filter(|s| !s.is_empty()).map(str::to_string);
+    let msg = format_member_request_message(
+        method,
+        channel,
+        normalized_prefix.as_deref(),
+        timestamp,
+        nonce_hex,
+        body,
+    );
     let sig = signing_key.sign(msg.as_bytes());
     SignedDropHeaders {
         pubkey_hex: hex::encode(signing_key.verifying_key().as_bytes()),
+        prefix: normalized_prefix,
         timestamp,
         nonce_hex: nonce_hex.to_string(),
         signature_hex: hex::encode(sig.to_bytes()),
@@ -575,13 +633,15 @@ pub fn sign_member_request(
     member_stealth_sk: &[u8; 32],
     method: &str,
     channel: &str,
+    prefix: Option<&str>,
     timestamp: u64,
     nonce_hex: &str,
     body: &[u8],
 ) -> Result<SignedDropHeaders, MarketError> {
+    validate_sync_prefix(prefix)?;
     let sk = SigningKey::from_bytes(member_stealth_sk);
     Ok(sign_member_request_direct(
-        &sk, method, channel, timestamp, nonce_hex, body,
+        &sk, method, channel, prefix, timestamp, nonce_hex, body,
     ))
 }
 
@@ -597,6 +657,7 @@ pub fn sign_admin_request(
     let sig = admin_sk.sign(msg.as_bytes());
     SignedDropHeaders {
         pubkey_hex: hex::encode(admin_sk.verifying_key().as_bytes()),
+        prefix: None,
         timestamp,
         nonce_hex: nonce_hex.to_string(),
         signature_hex: hex::encode(sig.to_bytes()),

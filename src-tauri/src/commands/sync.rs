@@ -1047,10 +1047,14 @@ pub async fn probe_contact_syncs_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
-    let my_ed_sk = {
+    let (my_ed_sk, my_prefix) = {
         let service = state.service.lock().unwrap();
         service
-            .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+            .with_wallet_and_identity(|_w, id| {
+                let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                    .map(|s| s.to_string());
+                (id.signing_key.clone(), pfx)
+            })
             .map_err(FrontendError::from)?
     };
 
@@ -1189,11 +1193,11 @@ pub async fn probe_contact_syncs_impl(
                                 probe_cache.insert(sync_endpoint_key.clone(), (info.read_url, info.drop_pub, "unreachable".to_string(), false));
                             }
                             Ok(stealth_pk) => {
-                                let card_cap = sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, "card").await;
+                                let card_cap = sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, my_prefix.as_deref(), "card").await;
                                 let post_cap = if card_cap.as_ref().map(|c| c.authorized).unwrap_or(false) {
                                     Ok(sync_client::SyncCapabilityResult { authorized: true, ..Default::default() })
                                 } else {
-                                    sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, "post").await
+                                    sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, my_prefix.as_deref(), "post").await
                                 };
 
                                 let is_authorized = card_cap.as_ref().map(|c| c.authorized).unwrap_or(false)
@@ -1432,10 +1436,14 @@ pub async fn sync_market_channels_impl(
     }
 
     // 2. Upload check
-    let (my_ed_sk, master_seed, own_card_opt, own_profile_opt, readers, readers_hash) = {
+    let (my_ed_sk, master_seed, my_prefix, own_card_opt, own_profile_opt, readers, readers_hash) = {
         let mut service = state.service.lock().unwrap();
-        let my_ed_sk = service
-            .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+        let (my_ed_sk, my_prefix) = service
+            .with_wallet_and_identity(|_w, id| {
+                let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                    .map(|s| s.to_string());
+                (id.signing_key.clone(), pfx)
+            })
             .map_err(FrontendError::from)?;
         let master_seed = my_ed_sk.to_bytes();
 
@@ -1466,7 +1474,7 @@ pub async fn sync_market_channels_impl(
         }
         let readers_hash = hex::encode(hasher.finalize());
 
-        (my_ed_sk, master_seed, own_card, own_profile, reader_keys, readers_hash)
+        (my_ed_sk, master_seed, my_prefix, own_card, own_profile, reader_keys, readers_hash)
     };
 
     let mut sync_state: StoredSyncState = {
@@ -1567,6 +1575,7 @@ pub async fn sync_market_channels_impl(
                                             &r_sk,
                                             "PUT",
                                             "card",
+                                            my_prefix.as_deref(),
                                             now_secs,
                                             &nonce,
                                             &blob,
@@ -1581,6 +1590,7 @@ pub async fn sync_market_channels_impl(
                                     &drop_desc.drop_pub,
                                     "PUT",
                                     "card",
+                                    my_prefix.as_deref(),
                                     now_secs,
                                     &nonce,
                                     &blob,
@@ -1643,6 +1653,7 @@ pub async fn sync_market_channels_impl(
                                                 &r_sk,
                                                 "PUT",
                                                 &format!("media:{}", blob_id),
+                                                None,
                                                 now_secs,
                                                 &nonce,
                                                 ciphertext,
@@ -1656,6 +1667,7 @@ pub async fn sync_market_channels_impl(
                                         &drop_desc.drop_pub,
                                         "PUT",
                                         &format!("media:{}", blob_id),
+                                        None,
                                         now_secs,
                                         &nonce,
                                         ciphertext,
@@ -1843,6 +1855,7 @@ pub async fn sync_market_channels_impl(
                                                     &r_sk,
                                                     "PUT",
                                                     "wot",
+                                                    None,
                                                     now_secs,
                                                     &nonce,
                                                     &blob,
@@ -1856,6 +1869,7 @@ pub async fn sync_market_channels_impl(
                                             &drop_desc.drop_pub,
                                             "PUT",
                                             "wot",
+                                            None,
                                             now_secs,
                                             &nonce,
                                             &blob,
@@ -1935,14 +1949,14 @@ pub async fn sync_market_channels_impl(
     // Split into direct O(1) slot fetches (for drops with slot_id) and index-based fetches
     let (direct_slot_fetches, candidate_read_urls) = {
         let mut service = state.service.lock().unwrap();
-        let mut direct_fetches: Vec<(String, String)> = Vec::new(); // (read_url, slot_id)
+        let mut direct_fetches: Vec<(String, String, Option<String>)> = Vec::new(); // (read_url, slot_id, prefix)
         let mut index_urls = Vec::new();
 
         // Own selected drops
         for d in &settings.market_selected_syncs {
             if !d.read_url.is_empty() {
                 if let Some(ref sid) = d.slot_id {
-                    direct_fetches.push((d.read_url.clone(), sid.clone()));
+                    direct_fetches.push((d.read_url.clone(), sid.clone(), my_prefix.clone()));
                 } else {
                     index_urls.push(d.read_url.clone());
                 }
@@ -1970,7 +1984,7 @@ pub async fn sync_market_channels_impl(
                     for d in c.syncs {
                         if !d.read_url.is_empty() {
                             if let Some(ref sid) = d.slot_id {
-                                direct_fetches.push((d.read_url, sid.clone()));
+                                direct_fetches.push((d.read_url, sid.clone(), None));
                             } else {
                                 index_urls.push(d.read_url);
                             }
@@ -1993,7 +2007,7 @@ pub async fn sync_market_channels_impl(
                     for d in &sc.card.payload.drops {
                         if !d.read_url.is_empty() {
                             if let Some(ref sid) = d.slot_id {
-                                direct_fetches.push((d.read_url.clone(), sid.clone()));
+                                direct_fetches.push((d.read_url.clone(), sid.clone(), None));
                             } else {
                                 index_urls.push(d.read_url.clone());
                             }
@@ -2039,12 +2053,12 @@ pub async fn sync_market_channels_impl(
     let mut sync_health_updates: Vec<(String, bool)> = Vec::new();
 
     // 3a. Direct O(1) fetches
-    for (read_url, slot_id) in direct_slot_fetches {
+    for (read_url, slot_id, prefix_opt) in direct_slot_fetches {
         polled_syncs += 1;
 
         // Fetch card slot
         if settings.market_sync_enabled {
-            match sync_client::get_slot(&client, &read_url, &slot_id, "card").await {
+            match sync_client::get_slot(&client, &read_url, &slot_id, prefix_opt.as_deref(), "card").await {
                 Ok(Some(blob)) => {
                     sync_health_updates.push((read_url.clone(), true));
                     match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
@@ -2114,7 +2128,7 @@ pub async fn sync_market_channels_impl(
         }
 
         // Fetch wot slot
-        match sync_client::get_slot(&client, &read_url, &slot_id, "wot").await {
+        match sync_client::get_slot(&client, &read_url, &slot_id, None, "wot").await {
             Ok(Some(blob)) => {
                 sync_health_updates.push((read_url.clone(), true));
                 match humoco_market::open_multi_class_slot_blob(&blob, &my_x25519_sk) {
@@ -2193,13 +2207,14 @@ pub async fn sync_market_channels_impl(
                     if entry.channel == "card" && !settings.market_sync_enabled {
                         continue;
                     }
-                    let mtime_key = format!("{}:{}:{}", read_url, entry.channel, entry.id);
+                    let pfx_str = entry.prefix.as_deref().unwrap_or("");
+                    let mtime_key = format!("{}:{}:{}:{}", read_url, entry.channel, entry.id, pfx_str);
                     if sync_state.slot_mtimes.get(&mtime_key) == Some(&entry.mtime) {
                         continue;
                     }
 
                     if entry.channel == "card" {
-                        match sync_client::get_slot(&client, &read_url, &entry.id, "card").await {
+                        match sync_client::get_slot(&client, &read_url, &entry.id, entry.prefix.as_deref(), "card").await {
                             Ok(Some(blob)) => {
                                 sync_state.slot_mtimes.insert(mtime_key, entry.mtime);
                                 match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
@@ -2263,7 +2278,7 @@ pub async fn sync_market_channels_impl(
                             }
                         }
                     } else if entry.channel == "wot" {
-                        match sync_client::get_slot(&client, &read_url, &entry.id, "wot").await {
+                        match sync_client::get_slot(&client, &read_url, &entry.id, None, "wot").await {
                             Ok(Some(blob)) => {
                                 sync_state.slot_mtimes.insert(mtime_key, entry.mtime);
                                 match humoco_market::open_multi_class_slot_blob(&blob, &my_x25519_sk) {
@@ -2363,17 +2378,21 @@ pub async fn delete_own_sync_slots_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<usize, FrontendError> {
-    let (my_ed_sk, master_seed, drops) = {
+    let (my_ed_sk, master_seed, my_prefix, drops) = {
         let mut service = state.service.lock().unwrap();
-        let my_ed_sk = service
-            .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+        let (my_ed_sk, my_prefix) = service
+            .with_wallet_and_identity(|_w, id| {
+                let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                    .map(|s| s.to_string());
+                (id.signing_key.clone(), pfx)
+            })
             .map_err(FrontendError::from)?;
         let master_seed = my_ed_sk.to_bytes();
         let settings = state
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
-        (my_ed_sk, master_seed, settings.market_selected_syncs)
+        (my_ed_sk, master_seed, my_prefix, settings.market_selected_syncs)
     };
 
     let client = sync_client::create_sync_http_client();
@@ -2382,11 +2401,12 @@ pub async fn delete_own_sync_slots_impl(
 
     for drop_desc in &drops {
         for ch in ["card", "wot", "backup", "post"] {
+            let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
             let nonce = sync_client::generate_sync_nonce();
             let signed_res = if drop_desc.slot_id.is_some() {
                 match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
                     Ok((r_sk, _, _)) => {
-                        Ok(humoco_market::sign_member_request_direct(&r_sk, "DELETE", ch, now, &nonce, b""))
+                        Ok(humoco_market::sign_member_request_direct(&r_sk, "DELETE", ch, ch_prefix, now, &nonce, b""))
                     }
                     Err(e) => Err(e.to_string()),
                 }
@@ -2396,6 +2416,7 @@ pub async fn delete_own_sync_slots_impl(
                     &drop_desc.drop_pub,
                     "DELETE",
                     ch,
+                    ch_prefix,
                     now,
                     &nonce,
                     b"",
@@ -2573,10 +2594,18 @@ pub async fn probe_public_sync_impl(
         .await
         .map_err(FrontendError::from)?;
 
-    let master_seed = {
+    let (master_seed, my_prefix) = {
         let mut service = state.service.lock().unwrap();
         let _ = password; // kept for consistency
-        get_wallet_master_seed(&mut service)?
+        let seed = get_wallet_master_seed(&mut service)?;
+        let pfx = service
+            .with_wallet_and_identity(|_w, id| {
+                human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                    .map(|s| s.to_string())
+            })
+            .ok()
+            .flatten();
+        (seed, pfx)
     };
 
     let (_r_sk, _r_vk, access_pubkey) =
@@ -2585,8 +2614,9 @@ pub async fn probe_public_sync_impl(
 
     let mut authorized_channels = Vec::new();
     for ch in ["card", "wot", "backup", "post"] {
+        let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
         if let Ok(cap) =
-            sync_client::head_slot_capability(&probe_client, &canonical_url, &access_pubkey, ch).await
+            sync_client::head_slot_capability(&probe_client, &canonical_url, &access_pubkey, ch_prefix, ch).await
         {
             if cap.authorized {
                 authorized_channels.push(ch.to_string());
@@ -2629,9 +2659,17 @@ pub async fn save_public_sync_impl(
     humoco_market::parse_ed25519_pubkey_hex64(&drop_pub)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
-    let master_seed = {
+    let (master_seed, my_prefix) = {
         let mut service = state.service.lock().unwrap();
-        get_wallet_master_seed(&mut service)?
+        let seed = get_wallet_master_seed(&mut service)?;
+        let pfx = service
+            .with_wallet_and_identity(|_w, id| {
+                human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                    .map(|s| s.to_string())
+            })
+            .ok()
+            .flatten();
+        (seed, pfx)
     };
 
     let (_r_sk, _r_vk, access_pubkey) =
@@ -2641,8 +2679,9 @@ pub async fn save_public_sync_impl(
     let probe_client = sync_client::create_sync_probe_client();
     let mut authorized_channels = Vec::new();
     for ch in ["card", "wot", "backup", "post"] {
+        let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
         if let Ok(cap) =
-            sync_client::head_slot_capability(&probe_client, &canonical_url, &access_pubkey, ch).await
+            sync_client::head_slot_capability(&probe_client, &canonical_url, &access_pubkey, ch_prefix, ch).await
         {
             if cap.authorized {
                 authorized_channels.push(ch.to_string());
@@ -2711,16 +2750,25 @@ pub async fn remove_public_sync_impl(
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
     if delete_remote_slots {
-        let master_seed = {
+        let (master_seed, my_prefix) = {
             let mut service = state.service.lock().unwrap();
-            get_wallet_master_seed(&mut service)?
+            let seed = get_wallet_master_seed(&mut service)?;
+            let pfx = service
+                .with_wallet_and_identity(|_w, id| {
+                    human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                        .map(|s| s.to_string())
+                })
+                .ok()
+                .flatten();
+            (seed, pfx)
         };
         if let Ok((r_sk, _, _)) = humoco_market::derive_public_drop_keypair(&master_seed, &canonical_url) {
             let client = sync_client::create_sync_http_client();
             let now = sync_client::current_unix_timestamp();
             for ch in ["card", "wot", "backup", "post"] {
+                let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
                 let nonce = sync_client::generate_sync_nonce();
-                let signed = humoco_market::sign_member_request_direct(&r_sk, "DELETE", ch, now, &nonce, b"");
+                let signed = humoco_market::sign_member_request_direct(&r_sk, "DELETE", ch, ch_prefix, now, &nonce, b"");
                 let _ = sync_client::delete_slot(&client, &canonical_url, &signed, ch).await;
             }
         }

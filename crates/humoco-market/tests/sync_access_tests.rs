@@ -5,8 +5,9 @@ use humoco_market::{
     derive_drop_admin_seed, derive_drop_data_dir, derive_member_stealth_pubkey,
     derive_member_stealth_pubkey_admin, derive_public_drop_keypair, format_admin_request_message,
     format_member_request_message, sign_admin_request, sign_member_request_direct,
-    sign_member_request_stealth, sign_member_stealth_message, verify_drop_rotation_certificate,
-    verify_ed25519_detached_hex, DropRotationCertificate, MemberPolicy, DROP_ROTATION_GRACE_SECS,
+    sign_member_request_stealth, sign_member_stealth_message, validate_sync_prefix,
+    verify_drop_rotation_certificate, verify_ed25519_detached_hex, DropRotationCertificate,
+    MemberPolicy, SignedDropHeaders, DROP_ROTATION_GRACE_SECS,
 };
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -137,6 +138,7 @@ fn test_drop_access_deterministic_vectors() {
     let sample_member_request_message = format_member_request_message(
         "PUT",
         "card",
+        None,
         1700000000,
         "0123456789abcdef0123456789abcdef",
         sample_body,
@@ -292,12 +294,13 @@ fn test_http_request_signers() {
     let nonce = "11223344556677881122334455667788";
     let body = b"test payload";
 
-    // Stealth member signer
+    // Stealth member signer (None prefix)
     let stealth_headers = sign_member_request_stealth(
         &member_sk,
         &admin_pub,
         "PUT",
         "card",
+        None,
         timestamp,
         nonce,
         body,
@@ -305,8 +308,9 @@ fn test_http_request_signers() {
     .unwrap();
     assert_eq!(stealth_headers.timestamp, timestamp);
     assert_eq!(stealth_headers.nonce_hex, nonce);
+    assert_eq!(stealth_headers.prefix, None);
 
-    let expected_msg = format_member_request_message("PUT", "card", timestamp, nonce, body);
+    let expected_msg = format_member_request_message("PUT", "card", None, timestamp, nonce, body);
     assert!(verify_ed25519_detached_hex(
         &stealth_headers.pubkey_hex,
         expected_msg.as_bytes(),
@@ -314,15 +318,69 @@ fn test_http_request_signers() {
     )
     .is_ok());
 
-    // Direct member signer (for public drop user R)
-    let direct_headers = sign_member_request_direct(&member_sk, "PUT", "card", timestamp, nonce, body);
+    // Direct member signer (for public drop user R, None prefix)
+    let direct_headers = sign_member_request_direct(&member_sk, "PUT", "card", None, timestamp, nonce, body);
     assert_eq!(direct_headers.pubkey_hex, hex::encode(member_sk.verifying_key().as_bytes()));
+    assert_eq!(direct_headers.prefix, None);
     assert!(verify_ed25519_detached_hex(
         &direct_headers.pubkey_hex,
         expected_msg.as_bytes(),
         &direct_headers.signature_hex
     )
     .is_ok());
+
+    // Stealth member signer with Some("alice-1")
+    let stealth_pfx_headers = sign_member_request_stealth(
+        &member_sk,
+        &admin_pub,
+        "PUT",
+        "card",
+        Some("alice-1"),
+        timestamp,
+        nonce,
+        body,
+    )
+    .unwrap();
+    assert_eq!(stealth_pfx_headers.prefix, Some("alice-1".to_string()));
+    let expected_pfx_msg = format_member_request_message("PUT", "card", Some("alice-1"), timestamp, nonce, body);
+    assert!(expected_pfx_msg.contains("HUMOCO-DROP-REQ-V1\nPUT\ncard\nalice-1\n1700000000\n"));
+    assert!(verify_ed25519_detached_hex(
+        &stealth_pfx_headers.pubkey_hex,
+        expected_pfx_msg.as_bytes(),
+        &stealth_pfx_headers.signature_hex
+    )
+    .is_ok());
+
+    // Direct member signer with Some("bob-2")
+    let direct_pfx_headers = sign_member_request_direct(
+        &member_sk,
+        "PUT",
+        "card",
+        Some("bob-2"),
+        timestamp,
+        nonce,
+        body,
+    );
+    assert_eq!(direct_pfx_headers.prefix, Some("bob-2".to_string()));
+    let expected_bob_msg = format_member_request_message("PUT", "card", Some("bob-2"), timestamp, nonce, body);
+    assert!(expected_bob_msg.contains("HUMOCO-DROP-REQ-V1\nPUT\ncard\nbob-2\n1700000000\n"));
+    assert!(verify_ed25519_detached_hex(
+        &direct_pfx_headers.pubkey_hex,
+        expected_bob_msg.as_bytes(),
+        &direct_pfx_headers.signature_hex
+    )
+    .is_ok());
+
+    // JSON serialization / deserialization roundtrip and prefix omission
+    let json_none = serde_json::to_string(&direct_headers).unwrap();
+    assert!(!json_none.contains("\"prefix\""));
+    let de_none: SignedDropHeaders = serde_json::from_str(&json_none).unwrap();
+    assert_eq!(de_none.prefix, None);
+
+    let json_some = serde_json::to_string(&direct_pfx_headers).unwrap();
+    assert!(json_some.contains("\"prefix\":\"bob-2\""));
+    let de_some: SignedDropHeaders = serde_json::from_str(&json_some).unwrap();
+    assert_eq!(de_some.prefix, Some("bob-2".to_string()));
 
     // Admin request signer
     let admin_headers = sign_admin_request(&admin_sk, "PUT_MEMBERS", "card", timestamp, nonce, body);
@@ -334,6 +392,41 @@ fn test_http_request_signers() {
         &admin_headers.signature_hex
     )
     .is_ok());
+}
+
+#[test]
+fn test_validate_sync_prefix_rules() {
+    // None and empty string return Ok(None)
+    assert_eq!(validate_sync_prefix(None).unwrap(), None);
+    assert_eq!(validate_sync_prefix(Some("")).unwrap(), None);
+
+    // Valid prefixes
+    assert_eq!(validate_sync_prefix(Some("a")).unwrap(), Some("a".to_string()));
+    assert_eq!(validate_sync_prefix(Some("alice")).unwrap(), Some("alice".to_string()));
+    assert_eq!(validate_sync_prefix(Some("alice-123")).unwrap(), Some("alice-123".to_string()));
+    assert_eq!(validate_sync_prefix(Some("alice-bob-charlie")).unwrap(), Some("alice-bob-charlie".to_string()));
+
+    let max_len_63 = "a".repeat(63);
+    assert_eq!(validate_sync_prefix(Some(&max_len_63)).unwrap(), Some(max_len_63));
+
+    // > 63 chars rejected
+    let too_long_64 = "a".repeat(64);
+    assert!(validate_sync_prefix(Some(&too_long_64)).is_err());
+
+    // Leading and trailing hyphens rejected
+    assert!(validate_sync_prefix(Some("-alice")).is_err());
+    assert!(validate_sync_prefix(Some("alice-")).is_err());
+    assert!(validate_sync_prefix(Some("-")).is_err());
+
+    // Consecutive hyphens rejected
+    assert!(validate_sync_prefix(Some("alice--bob")).is_err());
+
+    // Invalid characters rejected
+    assert!(validate_sync_prefix(Some("Alice")).is_err());
+    assert!(validate_sync_prefix(Some("alice_bob")).is_err());
+    assert!(validate_sync_prefix(Some("alice.bob")).is_err());
+    assert!(validate_sync_prefix(Some("alice@bob")).is_err());
+    assert!(validate_sync_prefix(Some("alice bob")).is_err());
 }
 
 #[test]

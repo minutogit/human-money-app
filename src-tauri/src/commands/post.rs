@@ -297,9 +297,13 @@ pub(crate) async fn flush_post_slots_impl(
     post_state: &mut StoredPostState,
     password: Option<&str>,
 ) -> (usize, Vec<String>) {
-    let (my_ed_sk, master_seed, upload_targets, client, now_secs) = {
+    let (my_ed_sk, master_seed, my_prefix, upload_targets, client, now_secs) = {
         let mut service = state.service.lock().unwrap();
-        let my_ed_sk = match service.with_wallet_and_identity(|_w, id| id.signing_key.clone()) {
+        let (my_ed_sk, my_prefix) = match service.with_wallet_and_identity(|_w, id| {
+            let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                .map(|s| s.to_string());
+            (id.signing_key.clone(), pfx)
+        }) {
             Ok(k) => k,
             Err(e) => return (0, vec![format!("Failed to access wallet signing key: {}", e)]),
         };
@@ -342,7 +346,7 @@ pub(crate) async fn flush_post_slots_impl(
 
         let client = sync_client::create_sync_http_client();
         let now_secs = sync_client::current_unix_timestamp();
-        (my_ed_sk, master_seed, deduped_targets, client, now_secs)
+        (my_ed_sk, master_seed, my_prefix, deduped_targets, client, now_secs)
     };
 
     if upload_targets.is_empty() {
@@ -377,6 +381,7 @@ pub(crate) async fn flush_post_slots_impl(
                         &r_sk,
                         "PUT",
                         "post",
+                        my_prefix.as_deref(),
                         now_secs,
                         &nonce,
                         &initial_blob,
@@ -394,6 +399,7 @@ pub(crate) async fn flush_post_slots_impl(
                         &sync_desc.drop_pub,
                         "PUT",
                         "post",
+                        my_prefix.as_deref(),
                         now_secs,
                         &nonce,
                         &initial_blob,
@@ -439,7 +445,7 @@ pub(crate) async fn flush_post_slots_impl(
             }
             Ok(PutSlotOutcome::PreconditionFailed { current_etag }) => {
                 // Multi-device conflict! Fetch current remote slot, merge local additions, and retry.
-                let remote_bytes = match sync_client::get_slot(&client, &sync_desc.read_url, &id, "post").await {
+                let remote_bytes = match sync_client::get_slot(&client, &sync_desc.read_url, &id, my_prefix.as_deref(), "post").await {
                     Ok(b) => b,
                     Err(e) => {
                         health_updates.push((sync_desc.write_url.clone(), false));
@@ -474,6 +480,7 @@ pub(crate) async fn flush_post_slots_impl(
                                 &r_sk,
                                 "PUT",
                                 "post",
+                                my_prefix.as_deref(),
                                 now_secs,
                                 &nonce,
                                 &merged_blob,
@@ -488,6 +495,7 @@ pub(crate) async fn flush_post_slots_impl(
                         &sync_desc.drop_pub,
                         "PUT",
                         "post",
+                        my_prefix.as_deref(),
                         now_secs,
                         &nonce,
                         &merged_blob,
@@ -1424,15 +1432,17 @@ pub async fn sync_post_channels_impl(
     let mut new_inquiry_replies = 0;
     let mut pruned_boxes = 0;
 
-    let (my_identity, my_ed_sk, master_seed, own_reply_syncs) = {
+    let (my_identity, my_ed_sk, master_seed, my_prefix, own_reply_syncs) = {
         let service = state.service.lock().unwrap();
         let my_identity = service
             .with_wallet_and_identity(|_w, id| id.clone())
             .map_err(FrontendError::from)?;
         let my_ed_sk = my_identity.signing_key.clone();
         let master_seed = my_ed_sk.to_bytes();
+        let my_prefix = human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id)
+            .map(|s| s.to_string());
         let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
-        (my_identity, my_ed_sk, master_seed, reply_syncs)
+        (my_identity, my_ed_sk, master_seed, my_prefix, reply_syncs)
     };
 
     // 1. Pruning pass (§6.2)
@@ -1450,14 +1460,14 @@ pub async fn sync_post_channels_impl(
     // 2. Build candidate direct fetches and index URLs
     let (direct_slot_fetches, candidate_read_urls) = {
         let mut service = state.service.lock().unwrap();
-        let mut direct = Vec::new();
+        let mut direct: Vec<(String, String, Option<String>)> = Vec::new();
         let mut index_urls = Vec::new();
 
         // Selected drops
         for d in &settings.market_selected_syncs {
             if !d.read_url.is_empty() {
                 if let Some(ref sid) = d.slot_id {
-                    direct.push((d.read_url.clone(), sid.clone()));
+                    direct.push((d.read_url.clone(), sid.clone(), my_prefix.clone()));
                 } else {
                     index_urls.push(d.read_url.clone());
                 }
@@ -1467,7 +1477,7 @@ pub async fn sync_post_channels_impl(
         // Public drops
         for pd in &settings.public_syncs {
             if pd.enabled && !pd.read_url.is_empty() {
-                direct.push((pd.read_url.clone(), pd.access_pubkey.clone()));
+                direct.push((pd.read_url.clone(), pd.access_pubkey.clone(), my_prefix.clone()));
             }
         }
 
@@ -1477,7 +1487,7 @@ pub async fn sync_post_channels_impl(
                 for d in c.syncs {
                     if !d.read_url.is_empty() {
                         if let Some(ref sid) = d.slot_id {
-                            direct.push((d.read_url, sid.clone()));
+                            direct.push((d.read_url, sid.clone(), None));
                         } else {
                             index_urls.push(d.read_url);
                         }
@@ -1493,7 +1503,7 @@ pub async fn sync_post_channels_impl(
                     for d in &sc.card.payload.drops {
                         if !d.read_url.is_empty() {
                             if let Some(ref sid) = d.slot_id {
-                                direct.push((d.read_url.clone(), sid.clone()));
+                                direct.push((d.read_url.clone(), sid.clone(), None));
                             } else {
                                 index_urls.push(d.read_url.clone());
                             }
@@ -1508,7 +1518,7 @@ pub async fn sync_post_channels_impl(
             for d in &req.reply_syncs {
                 if !d.read_url.is_empty() {
                     if let Some(ref sid) = d.slot_id {
-                        direct.push((d.read_url.clone(), sid.clone()));
+                        direct.push((d.read_url.clone(), sid.clone(), None));
                     } else {
                         index_urls.push(d.read_url.clone());
                     }
@@ -1520,7 +1530,7 @@ pub async fn sync_post_channels_impl(
             for d in &inq.reply_syncs {
                 if !d.read_url.is_empty() {
                     if let Some(ref sid) = d.slot_id {
-                        direct.push((d.read_url.clone(), sid.clone()));
+                        direct.push((d.read_url.clone(), sid.clone(), None));
                     } else {
                         index_urls.push(d.read_url.clone());
                     }
@@ -1532,7 +1542,7 @@ pub async fn sync_post_channels_impl(
             for d in &inq.reply_syncs {
                 if !d.read_url.is_empty() {
                     if let Some(ref sid) = d.slot_id {
-                        direct.push((d.read_url.clone(), sid.clone()));
+                        direct.push((d.read_url.clone(), sid.clone(), None));
                     } else {
                         index_urls.push(d.read_url.clone());
                     }
@@ -1621,9 +1631,9 @@ pub async fn sync_post_channels_impl(
     let mut fetched_slots: Vec<Vec<u8>> = Vec::new();
     let mut post_sync_health_updates: Vec<(String, bool)> = Vec::new();
 
-    for (read_url, slot_id) in direct_slot_fetches {
+    for (read_url, slot_id, prefix_opt) in direct_slot_fetches {
         polled_syncs += 1;
-        match sync_client::get_slot(&client, &read_url, &slot_id, "post").await {
+        match sync_client::get_slot(&client, &read_url, &slot_id, prefix_opt.as_deref(), "post").await {
             Ok(Some(bytes)) => {
                 post_sync_health_updates.push((read_url.clone(), true));
                 fetched_slots.push(bytes);
@@ -1648,7 +1658,7 @@ pub async fn sync_post_channels_impl(
                     if entry.channel != "post" {
                         continue;
                     }
-                    match sync_client::get_slot(&client, &read_url, &entry.id, "post").await {
+                    match sync_client::get_slot(&client, &read_url, &entry.id, entry.prefix.as_deref(), "post").await {
                         Ok(Some(bytes)) => fetched_slots.push(bytes),
                         Ok(None) => {}
                         Err(e) => errors.push(format!("Failed to fetch post slot {} from {}: {}", entry.id, read_url, e)),
