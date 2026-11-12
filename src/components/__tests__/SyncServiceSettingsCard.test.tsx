@@ -308,9 +308,9 @@ describe('SyncServiceSettingsCard Component', () => {
         });
 
         // Select level 3
-        const level3Radio = screen.getByRole('radio', { name: /Engster Kreis|Inner Circle/i });
-        fireEvent.click(level3Radio);
-        expect(level3Radio).toBeChecked();
+        const directMinSelect = screen.getByRole('combobox', { name: /Welche deiner Kontakte|Which contacts/i });
+        fireEvent.change(directMinSelect, { target: { value: '3' } });
+        expect(directMinSelect).toHaveValue('3');
 
         // Click update rules
         const updateBtn = screen.getByRole('button', { name: /Zugriffsregeln.*aktualisieren|Update Access Rules on Server/i });

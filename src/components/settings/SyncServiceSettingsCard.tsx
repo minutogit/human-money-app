@@ -187,51 +187,27 @@ const PolicyEditor: React.FC<PolicyEditorProps> = ({ policy, onChange, idPrefix 
     return (
         <div className="space-y-4 text-xs">
             {/* Direct Contacts Selection */}
-            <div>
-                <label className="font-bold text-theme-secondary block mb-1.5">
+            <div className="space-y-1">
+                <label
+                    htmlFor={`${idPrefix}-directMin`}
+                    className="font-bold text-theme-secondary block"
+                >
                     {t('settings.syncHostDirectMinLabel')}
                 </label>
-                <div className="space-y-1.5">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                            type="radio"
-                            name={`${idPrefix}-directMin`}
-                            value={2}
-                            checked={policy.directMin === 2}
-                            onChange={() => onChange(p => ({ ...p, directMin: 2 }))}
-                            className="text-theme-primary focus:ring-theme-primary"
-                        />
-                        <span className="text-theme-secondary font-medium">
-                            {t('settings.syncHostDirectMinLevel2')}
-                        </span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                            type="radio"
-                            name={`${idPrefix}-directMin`}
-                            value={1}
-                            checked={policy.directMin === 1}
-                            onChange={() => onChange(p => ({ ...p, directMin: 1 }))}
-                            className="text-theme-primary focus:ring-theme-primary"
-                        />
-                        <span className="text-theme-secondary font-medium">
-                            {t('settings.syncHostDirectMinLevel1')}
-                        </span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                            type="radio"
-                            name={`${idPrefix}-directMin`}
-                            value={3}
-                            checked={policy.directMin === 3}
-                            onChange={() => onChange(p => ({ ...p, directMin: 3 }))}
-                            className="text-theme-primary focus:ring-theme-primary"
-                        />
-                        <span className="text-theme-secondary font-medium">
-                            {t('settings.syncHostDirectMinLevel3')}
-                        </span>
-                    </label>
-                </div>
+                <select
+                    id={`${idPrefix}-directMin`}
+                    aria-label={t('settings.syncHostDirectMinLabel')}
+                    value={policy.directMin}
+                    onChange={(e) => {
+                        const val = Number(e.target.value);
+                        onChange(p => ({ ...p, directMin: val }));
+                    }}
+                    className="w-full sm:w-64 rounded-xl border border-theme-subtle bg-bg-app px-2.5 py-1.5 text-xs text-theme-secondary focus:outline-none focus:ring-1 focus:ring-theme-primary"
+                >
+                    <option value={1}>{t('settings.syncHostDirectMinLevel1')}</option>
+                    <option value={2}>{t('settings.syncHostDirectMinLevel2')}</option>
+                    <option value={3}>{t('settings.syncHostDirectMinLevel3')}</option>
+                </select>
             </div>
 
             {/* Friends of Friends */}
