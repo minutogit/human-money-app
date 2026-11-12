@@ -78,7 +78,8 @@ export function MarketplaceView({
 
     // Modals
     const [isCreateAdOpen, setIsCreateAdOpen] = useState(false);
-    const [editingAd, setEditingAd] = useState<FrontendMyAd | null>(null);
+    const [editingAd, setEditingAd] = useState<Ad | FrontendMyAd | null>(null);
+    const [inquiryTargetAd, setInquiryTargetAd] = useState<Ad | null>(null);
     const [renewingAd, setRenewingAd] = useState<FrontendMyAd | null>(null);
     const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(initialOpenEditor);
     const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -320,7 +321,8 @@ export function MarketplaceView({
         navigate({ view: 'send_vouchers' });
     };
 
-    const handleBoardInquire = (_ad: Ad, ownerDid: string, _ownerName: string) => {
+    const handleBoardInquire = (ad: Ad, ownerDid: string, _ownerName: string) => {
+        setInquiryTargetAd(ad);
         setSelectedPersonDid(ownerDid);
     };
 
@@ -350,7 +352,11 @@ export function MarketplaceView({
         return (
             <MarketPersonView
                 person={selectedPerson}
-                onBack={() => setSelectedPersonDid(null)}
+                initialInquiryAd={inquiryTargetAd}
+                onBack={() => {
+                    setSelectedPersonDid(null);
+                    setInquiryTargetAd(null);
+                }}
             />
         );
     }
@@ -562,25 +568,7 @@ export function MarketplaceView({
                             }}
                             onEditOwnAd={(ad) => {
                                 const found = currentProfile?.ads.find((a) => a.id === ad.id);
-                                if (found) {
-                                    setEditingAd(found);
-                                } else {
-                                    setEditingAd({
-                                        id: ad.id,
-                                        kind: ad.kind,
-                                        title: ad.title,
-                                        text: ad.text,
-                                        pricing: ad.pricing,
-                                        publishedAt: ad.publishedAt,
-                                        renewedAt: ad.renewedAt,
-                                        expiresAt: ad.expiresAt,
-                                        allowInquiries: ad.allowInquiries,
-                                        isRemote: ad.isRemote,
-                                        status: 'active',
-                                        daysLeft: Math.max(0, Math.ceil((ad.expiresAt - Math.floor(Date.now() / 1000)) / 86400)),
-                                        imageToken: ad.imageToken,
-                                    });
-                                }
+                                setEditingAd(found || ad);
                                 setIsCreateAdOpen(true);
                             }}
                         />

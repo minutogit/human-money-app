@@ -920,14 +920,10 @@ pub async fn discover_available_syncs_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendDiscoveredSync>, FrontendError> {
-    let (my_ed_sk, known_descriptors) = {
+    let mut descriptors: Vec<(FrontendSyncDescriptor, String)> = Vec::new();
+
+    {
         let mut service = state.service.lock().unwrap();
-
-        let my_ed_sk = service
-            .with_wallet_and_identity(|_w, id| id.signing_key.clone())
-            .map_err(FrontendError::from)?;
-
-        let mut descriptors: Vec<(FrontendSyncDescriptor, String)> = Vec::new();
 
         // 1. From own drop admin
         if let Ok(admin_bytes) =
@@ -935,7 +931,9 @@ pub async fn discover_available_syncs_impl(
         {
             if let Ok(admin) = serde_json::from_slice::<StoredSyncAdmin>(&admin_bytes) {
                 if !admin.descriptor.read_url.is_empty() && !admin.descriptor.write_url.is_empty() {
-                    descriptors.push((admin.descriptor.into(), "Eigene Ablage".to_string()));
+                    let mut desc: FrontendSyncDescriptor = admin.descriptor.into();
+                    desc.status = "active".to_string();
+                    descriptors.push((desc, "Eigene Ablage".to_string()));
                 }
             }
         }
@@ -974,9 +972,7 @@ pub async fn discover_available_syncs_impl(
                 }
             }
         }
-
-        (my_ed_sk, descriptors)
-    };
+    }
 
     let settings = state
         .get_cached_settings()
@@ -986,13 +982,17 @@ pub async fn discover_available_syncs_impl(
         })
         .unwrap_or_default();
 
-    let client = sync_client::create_sync_probe_client();
+    // 4. From market_selected_syncs
+    for sel in &settings.market_selected_syncs {
+        descriptors.push((sel.clone(), "Ausgewählte Ablage".to_string()));
+    }
+
     let mut deduped: BTreeMap<String, (FrontendSyncDescriptor, String)> = BTreeMap::new();
-    for (d, label) in known_descriptors {
+    for (d, label) in descriptors {
         let key = if !d.write_url.is_empty() {
-            d.write_url.clone()
+            d.write_url.trim().trim_end_matches('/').to_lowercase()
         } else {
-            d.read_url.clone()
+            d.read_url.trim().trim_end_matches('/').to_lowercase()
         };
         if !key.is_empty() {
             deduped.entry(key).or_insert((d, label));
@@ -1001,40 +1001,25 @@ pub async fn discover_available_syncs_impl(
 
     let mut results = Vec::new();
     for (_, (mut desc, label)) in deduped {
+        let norm_read = desc.read_url.trim().trim_end_matches('/').to_lowercase();
+        let norm_write = desc.write_url.trim().trim_end_matches('/').to_lowercase();
+
         let is_selected = settings
             .market_selected_syncs
             .iter()
-            .any(|d| (!desc.read_url.is_empty() && d.read_url == desc.read_url)
-                || (!desc.write_url.is_empty() && d.write_url == desc.write_url));
+            .any(|d| {
+                let sr = d.read_url.trim().trim_end_matches('/').to_lowercase();
+                let sw = d.write_url.trim().trim_end_matches('/').to_lowercase();
+                (!norm_read.is_empty() && (sr == norm_read || sw == norm_read))
+                    || (!norm_write.is_empty() && (sr == norm_write || sw == norm_write))
+            });
 
-        let is_authorized = if desc.drop_pub.is_empty() {
-            false
-        } else if let Some(ref slot_id) = desc.slot_id {
-            match sync_client::head_slot_capability(&client, &desc.write_url, slot_id, "card").await {
-                Ok(cap) => cap.authorized,
-                Err(_) => false,
-            }
-        } else {
-            match humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &desc.drop_pub) {
-                Ok(stealth_pk) => {
-                    match sync_client::head_slot_capability(&client, &desc.write_url, &stealth_pk, "card").await {
-                        Ok(cap) => cap.authorized,
-                        Err(_) => false,
-                    }
-                }
-                Err(_) => false,
-            }
-        };
-
-        let status = if is_authorized {
-            "active".to_string()
-        } else if !desc.status.is_empty() && desc.status != "unverified" {
-            desc.status.clone()
-        } else if !desc.drop_pub.is_empty() {
-            "pending_auth".to_string()
-        } else {
+        let status = if desc.status.is_empty() {
             "unverified".to_string()
+        } else {
+            desc.status.clone()
         };
+        let is_authorized = status == "active";
         desc.status = status.clone();
 
         results.push(FrontendDiscoveredSync {
@@ -1107,6 +1092,8 @@ pub async fn probe_contact_syncs_impl(
     let client = sync_client::create_sync_probe_client();
     let mut contacts_modified = false;
     let mut settings_modified = false;
+    let mut auto_activated = false;
+    let mut probe_cache: std::collections::HashMap<String, (String, String, String, bool)> = std::collections::HashMap::new();
 
     for contact in address_book.contacts.values_mut() {
         for ep in &mut contact.syncs {
@@ -1148,62 +1135,86 @@ pub async fn probe_contact_syncs_impl(
             }
 
             let canonical_write = humoco_market::canonicalize_write_url(&target_url).unwrap_or(target_url);
+            let sync_endpoint_key = canonical_write.trim().trim_end_matches('/').to_lowercase();
 
-            // 1. Fetch server info via ?info
-            match sync_client::fetch_sync_info(&client, &canonical_write).await {
-                Err(_) => {
-                    ep.status = "unreachable".to_string();
+            if let Some((c_read, c_drop, c_status, c_ok)) = probe_cache.get(&sync_endpoint_key) {
+                if *c_ok {
+                    ep.write_url = canonical_write.clone();
+                    ep.read_url = c_read.clone();
+                    ep.drop_pub = c_drop.clone();
+                    ep.status = c_status.clone();
+                    ep.fail_count = 0;
+                    ep.last_seen_at = Some(now);
+                    ep.last_probed_at = Some(now);
+                    contacts_modified = true;
+                } else {
+                    ep.status = c_status.clone();
                     ep.fail_count = ep.fail_count.saturating_add(1);
                     ep.last_probed_at = Some(now);
                     contacts_modified = true;
                 }
-                Ok(info) => {
-                    ep.write_url = canonical_write.clone();
-                    ep.read_url = info.read_url.clone();
-                    ep.drop_pub = info.drop_pub.clone();
-                    ep.last_seen_at = Some(now);
-                    contacts_modified = true;
+            } else {
+                // 1. Fetch server info via ?info
+                match sync_client::fetch_sync_info(&client, &canonical_write).await {
+                    Err(_) => {
+                        ep.status = "unreachable".to_string();
+                        ep.fail_count = ep.fail_count.saturating_add(1);
+                        ep.last_probed_at = Some(now);
+                        contacts_modified = true;
+                        probe_cache.insert(sync_endpoint_key.clone(), (ep.read_url.clone(), ep.drop_pub.clone(), "unreachable".to_string(), false));
+                    }
+                    Ok(info) => {
+                        ep.write_url = canonical_write.clone();
+                        ep.read_url = info.read_url.clone();
+                        ep.drop_pub = info.drop_pub.clone();
+                        ep.last_seen_at = Some(now);
+                        contacts_modified = true;
 
-                    // 2. Check authorization on resolved drop
-                    let stealth_pk_res = if let Some(ref slot_id) = ep.slot_id {
-                        if !slot_id.is_empty() {
-                            Ok(slot_id.clone())
+                        // 2. Check authorization on resolved drop
+                        let stealth_pk_res = if let Some(ref slot_id) = ep.slot_id {
+                            if !slot_id.is_empty() {
+                                Ok(slot_id.clone())
+                            } else {
+                                humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &ep.drop_pub)
+                            }
                         } else {
                             humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &ep.drop_pub)
-                        }
-                    } else {
-                        humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &ep.drop_pub)
-                    };
+                        };
 
-                    match stealth_pk_res {
-                        Err(_) => {
-                            ep.status = "unreachable".to_string();
-                            ep.fail_count = ep.fail_count.saturating_add(1);
-                            ep.last_probed_at = Some(now);
-                        }
-                        Ok(stealth_pk) => {
-                            let card_cap = sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, "card").await;
-                            let post_cap = if card_cap.as_ref().map(|c| c.authorized).unwrap_or(false) {
-                                Ok(sync_client::SyncCapabilityResult { authorized: true, ..Default::default() })
-                            } else {
-                                sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, "post").await
-                            };
-
-                            let is_authorized = card_cap.as_ref().map(|c| c.authorized).unwrap_or(false)
-                                || post_cap.as_ref().map(|c| c.authorized).unwrap_or(false);
-
-                            if is_authorized {
-                                ep.status = "active".to_string();
-                                ep.fail_count = 0;
-                                ep.last_probed_at = Some(now);
-                            } else if card_cap.is_ok() || post_cap.is_ok() {
-                                ep.status = "pending_auth".to_string();
-                                ep.fail_count = 0;
-                                ep.last_probed_at = Some(now);
-                            } else {
+                        match stealth_pk_res {
+                            Err(_) => {
                                 ep.status = "unreachable".to_string();
                                 ep.fail_count = ep.fail_count.saturating_add(1);
                                 ep.last_probed_at = Some(now);
+                                probe_cache.insert(sync_endpoint_key.clone(), (info.read_url, info.drop_pub, "unreachable".to_string(), false));
+                            }
+                            Ok(stealth_pk) => {
+                                let card_cap = sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, "card").await;
+                                let post_cap = if card_cap.as_ref().map(|c| c.authorized).unwrap_or(false) {
+                                    Ok(sync_client::SyncCapabilityResult { authorized: true, ..Default::default() })
+                                } else {
+                                    sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, "post").await
+                                };
+
+                                let is_authorized = card_cap.as_ref().map(|c| c.authorized).unwrap_or(false)
+                                    || post_cap.as_ref().map(|c| c.authorized).unwrap_or(false);
+
+                                if is_authorized {
+                                    ep.status = "active".to_string();
+                                    ep.fail_count = 0;
+                                    ep.last_probed_at = Some(now);
+                                    probe_cache.insert(sync_endpoint_key.clone(), (info.read_url, info.drop_pub, "active".to_string(), true));
+                                } else if card_cap.is_ok() || post_cap.is_ok() {
+                                    ep.status = "pending_auth".to_string();
+                                    ep.fail_count = 0;
+                                    ep.last_probed_at = Some(now);
+                                    probe_cache.insert(sync_endpoint_key.clone(), (info.read_url, info.drop_pub, "pending_auth".to_string(), true));
+                                } else {
+                                    ep.status = "unreachable".to_string();
+                                    ep.fail_count = ep.fail_count.saturating_add(1);
+                                    ep.last_probed_at = Some(now);
+                                    probe_cache.insert(sync_endpoint_key.clone(), (info.read_url, info.drop_pub, "unreachable".to_string(), false));
+                                }
                             }
                         }
                     }
@@ -1211,9 +1222,13 @@ pub async fn probe_contact_syncs_impl(
             }
 
             // Update matching entries in settings.market_selected_syncs
+            let norm_ep_read = ep.read_url.trim().trim_end_matches('/').to_lowercase();
+            let norm_ep_write = ep.write_url.trim().trim_end_matches('/').to_lowercase();
             for sel in &mut settings.market_selected_syncs {
-                let match_read = !ep.read_url.is_empty() && sel.read_url == ep.read_url;
-                let match_write = !ep.write_url.is_empty() && sel.write_url == ep.write_url;
+                let norm_sel_read = sel.read_url.trim().trim_end_matches('/').to_lowercase();
+                let norm_sel_write = sel.write_url.trim().trim_end_matches('/').to_lowercase();
+                let match_read = !norm_ep_read.is_empty() && (norm_sel_read == norm_ep_read || norm_sel_write == norm_ep_read);
+                let match_write = !norm_ep_write.is_empty() && (norm_sel_read == norm_ep_write || norm_sel_write == norm_ep_write);
                 if match_read || match_write {
                     sel.write_url = ep.write_url.clone();
                     sel.read_url = ep.read_url.clone();
@@ -1232,7 +1247,10 @@ pub async fn probe_contact_syncs_impl(
                 && !ep.drop_pub.is_empty()
             {
                 let already_selected = settings.market_selected_syncs.iter().any(|s| {
-                    s.read_url == ep.read_url || (!ep.write_url.is_empty() && s.write_url == ep.write_url)
+                    let sr = s.read_url.trim().trim_end_matches('/').to_lowercase();
+                    let sw = s.write_url.trim().trim_end_matches('/').to_lowercase();
+                    (!norm_ep_read.is_empty() && (sr == norm_ep_read || sw == norm_ep_read))
+                        || (!norm_ep_write.is_empty() && (sr == norm_ep_write || sw == norm_ep_write))
                 });
                 if !already_selected && settings.market_selected_syncs.len() < 3 {
                     settings.market_selected_syncs.push(FrontendSyncDescriptor {
@@ -1248,6 +1266,7 @@ pub async fn probe_contact_syncs_impl(
                     });
                     has_healthy_sync = true;
                     settings_modified = true;
+                    auto_activated = true;
                 }
             }
         }
@@ -1263,7 +1282,14 @@ pub async fn probe_contact_syncs_impl(
 
     if settings_modified {
         let mut service = state.service.lock().unwrap();
-        let _ = state.save_settings(&mut service, settings, password.as_deref());
+        let _ = state.save_settings(&mut service, settings.clone(), password.as_deref());
+        if auto_activated {
+            crate::commands::market::sync_own_card_drops_on_settings_change(
+                &mut service,
+                &settings.market_selected_syncs,
+                password.as_deref(),
+            );
+        }
     }
 
     let mut all_syncs = Vec::new();
@@ -1313,23 +1339,11 @@ pub async fn set_selected_upload_syncs_impl(
             .save_settings(&mut service, settings, password.as_deref())
             .map_err(FrontendError::from)?;
 
-        let existing_opt: Option<crate::models::StoredOwnMarketProfile> = service
-            .load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password.as_deref())
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-
-        if let Some(mut existing) = existing_opt {
-            if existing.published {
-                let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
-                if let Some(ref mut last_card) = existing.last_card {
-                    last_card.payload.drops = syncs.iter().cloned().map(Into::into).collect();
-                }
-                let _ = crate::commands::market::rebuild_and_sign_own_card(&mut service, &mut existing, now_unix);
-                if let Ok(bytes) = serde_json::to_vec(&existing) {
-                    let _ = service.save_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, &bytes, password.as_deref());
-                }
-            }
-        }
+        crate::commands::market::sync_own_card_drops_on_settings_change(
+            &mut service,
+            &syncs,
+            password.as_deref(),
+        );
     }
 
     // Trigger upload to selected drops
@@ -3489,6 +3503,16 @@ pub(crate) mod tests {
             };
             charlie_state.save_contact(&mut s, alice_contact, Some(password)).unwrap();
         }
+
+        // Charlie probes contacts to check reachability and authorization on Server A
+        let probe_results = probe_contact_syncs_impl(
+            false,
+            Some(password.to_string()),
+            &charlie_state,
+        )
+        .await
+        .unwrap();
+        assert!(!probe_results.is_empty(), "Charlie should probe Server A");
 
         let charlie_discovered = discover_available_syncs_impl(
             Some(password.to_string()),

@@ -68,18 +68,17 @@ export const AdCard: React.FC<AdCardProps> = ({
             if (cached) {
                 setImageUri(cached);
                 setImageFailed(false);
-            } else {
-                setImageUri(null);
-                setImageFailed(true);
+                return;
             }
-            return;
         }
 
         let isMounted = true;
         marketService
             .getAdImage(ownerDid, imageToken)
             .then((res) => {
-                adImageCache.set(cacheKey, res);
+                if (res) {
+                    adImageCache.set(cacheKey, res);
+                }
                 if (!isMounted) return;
                 if (res) {
                     setImageUri(res);
@@ -90,7 +89,6 @@ export const AdCard: React.FC<AdCardProps> = ({
                 }
             })
             .catch(() => {
-                adImageCache.set(cacheKey, null);
                 if (!isMounted) return;
                 setImageUri(null);
                 setImageFailed(true);
@@ -112,7 +110,10 @@ export const AdCard: React.FC<AdCardProps> = ({
     const isOffer = ad.kind === 'offer';
     const isExpiringSoon = effectiveDaysLeft <= 14;
 
-    const displayName = ownerName.trim() || truncateUserId(ownerDid);
+    const trimmedName = ownerName.trim();
+    const displayName = trimmedName.startsWith('did:key:')
+        ? truncateUserId(trimmedName)
+        : (trimmedName || truncateUserId(ownerDid));
 
     const trustDto = useMemo(() => {
         if (!trust) return null;

@@ -258,6 +258,12 @@ impl AppState {
 
         let is_existing = address_book.contacts.contains_key(&contact.did) || !keys_to_remove.is_empty();
 
+        let mut old_contact_syncs: Vec<crate::models::FrontendSyncDescriptor> = address_book
+            .contacts
+            .get(&contact.did)
+            .map(|c| c.syncs.clone())
+            .unwrap_or_default();
+
         if let Some(old) = address_book.contacts.get(&contact.did) {
             if contact.added_at.is_empty() {
                 contact.added_at = old.added_at.clone();
@@ -266,6 +272,9 @@ impl AppState {
 
         for k in keys_to_remove {
             if let Some(old) = address_book.contacts.remove(&k) {
+                if old_contact_syncs.is_empty() {
+                    old_contact_syncs = old.syncs;
+                }
                 if contact.added_at.is_empty() {
                     contact.added_at = old.added_at;
                 }
@@ -328,6 +337,20 @@ impl AppState {
             }
         }
 
+        let removed_endpoints: Vec<crate::models::FrontendSyncDescriptor> = old_contact_syncs
+            .into_iter()
+            .filter(|old_ep| {
+                let old_r = old_ep.read_url.trim().trim_end_matches('/').to_lowercase();
+                let old_w = old_ep.write_url.trim().trim_end_matches('/').to_lowercase();
+                !contact.syncs.iter().any(|new_ep| {
+                    let new_r = new_ep.read_url.trim().trim_end_matches('/').to_lowercase();
+                    let new_w = new_ep.write_url.trim().trim_end_matches('/').to_lowercase();
+                    (!old_r.is_empty() && (new_r == old_r || new_w == old_r))
+                        || (!old_w.is_empty() && (new_r == old_w || new_w == old_w))
+                })
+            })
+            .collect();
+
         address_book.contacts.insert(contact.did.clone(), contact);
 
         let data = serde_json::to_vec(&address_book)
@@ -336,7 +359,8 @@ impl AppState {
         service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
             .map_err(|e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)))?;
 
-        *self.contacts.lock().unwrap() = Some(address_book);
+        *self.contacts.lock().unwrap() = Some(address_book.clone());
+        self.prune_orphaned_market_selected_syncs(service, &address_book, &removed_endpoints, password);
         Ok(())
     }
 
@@ -357,9 +381,11 @@ impl AppState {
             .cloned()
             .collect();
 
+        let mut removed_endpoints = Vec::new();
         let mut changed = false;
         for k in keys_to_remove {
-            if address_book.contacts.remove(&k).is_some() {
+            if let Some(removed_contact) = address_book.contacts.remove(&k) {
+                removed_endpoints.extend(removed_contact.syncs);
                 changed = true;
             }
         }
@@ -371,7 +397,8 @@ impl AppState {
             service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
                 .map_err(|e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)))?;
 
-            *self.contacts.lock().unwrap() = Some(address_book);
+            *self.contacts.lock().unwrap() = Some(address_book.clone());
+            self.prune_orphaned_market_selected_syncs(service, &address_book, &removed_endpoints, password);
         }
 
         if service.with_wallet(|_| ()).is_ok() {
@@ -923,6 +950,9 @@ impl AppState {
             Err(_) => return false,
         };
 
+        let settings_res = self.load_settings(service, password);
+        let settings_opt = settings_res.ok();
+
         let mut updated = false;
         for (url, success) in results {
             let norm_target = url.trim().trim_end_matches('/').to_lowercase();
@@ -937,7 +967,26 @@ impl AppState {
                         if *success {
                             sync_ep.last_seen_at = Some(now_secs);
                             sync_ep.fail_count = 0;
-                            sync_ep.status = "active".to_string();
+                            if sync_ep.status == "active" {
+                                // remains active
+                            } else if sync_ep.status == "unreachable" {
+                                let is_selected = settings_opt.as_ref().map(|s| {
+                                    s.market_selected_syncs.iter().any(|sel| {
+                                        let sr = sel.read_url.trim().trim_end_matches('/').to_lowercase();
+                                        let sw = sel.write_url.trim().trim_end_matches('/').to_lowercase();
+                                        (!sr.is_empty() && (sr == norm_read || sr == norm_write))
+                                            || (!sw.is_empty() && (sw == norm_read || sw == norm_write))
+                                    })
+                                }).unwrap_or(false);
+                                if is_selected {
+                                    sync_ep.status = "active".to_string();
+                                } else {
+                                    sync_ep.status = "unverified".to_string();
+                                }
+                            } else if sync_ep.status.is_empty() {
+                                sync_ep.status = "unverified".to_string();
+                            }
+                            // pending_auth and unverified remain unchanged on list_index read success!
                         } else {
                             sync_ep.last_error_at = Some(now_secs);
                             sync_ep.fail_count = sync_ep.fail_count.saturating_add(1);
@@ -956,7 +1005,7 @@ impl AppState {
             *self.contacts.lock().unwrap() = Some(address_book);
         }
 
-        if let Ok(mut settings) = self.load_settings(service, password) {
+        if let Some(mut settings) = settings_opt {
             let mut settings_updated = false;
             for (url, success) in results {
                 let norm_target = url.trim().trim_end_matches('/').to_lowercase();
@@ -985,6 +1034,90 @@ impl AppState {
             }
         }
         updated
+    }
+
+    pub fn prune_orphaned_market_selected_syncs(
+        &self,
+        service: &mut AppService,
+        address_book: &FrontendAddressBook,
+        removed_endpoints: &[crate::models::FrontendSyncDescriptor],
+        password: Option<&str>,
+    ) {
+        if removed_endpoints.is_empty() {
+            return;
+        }
+
+        let mut settings = match self.load_settings(service, password) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        if settings.market_selected_syncs.is_empty() {
+            return;
+        }
+
+        let admin_opt: Option<StoredSyncAdmin> = service
+            .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+
+        let initial_count = settings.market_selected_syncs.len();
+        settings.market_selected_syncs.retain(|sel| {
+            let sr = sel.read_url.trim().trim_end_matches('/').to_lowercase();
+            let sw = sel.write_url.trim().trim_end_matches('/').to_lowercase();
+            if sr.is_empty() && sw.is_empty() {
+                return false;
+            }
+
+            let was_removed = removed_endpoints.iter().any(|rem| {
+                let rr = rem.read_url.trim().trim_end_matches('/').to_lowercase();
+                let rw = rem.write_url.trim().trim_end_matches('/').to_lowercase();
+                (!rr.is_empty() && (rr == sr || rr == sw)) || (!rw.is_empty() && (rw == sr || rw == sw))
+            });
+
+            if !was_removed {
+                return true;
+            }
+
+            // 1. Matches StoredSyncAdmin?
+            let matches_admin = admin_opt.as_ref().map(|a| {
+                let ar = a.descriptor.read_url.trim().trim_end_matches('/').to_lowercase();
+                let aw = a.descriptor.write_url.trim().trim_end_matches('/').to_lowercase();
+                (!ar.is_empty() && (ar == sr || ar == sw)) || (!aw.is_empty() && (aw == sr || aw == sw))
+            }).unwrap_or(false);
+
+            if matches_admin {
+                return true;
+            }
+
+            // 2. Matches any remaining contact's syncs?
+            let matches_contact = address_book.contacts.values().any(|c| {
+                c.syncs.iter().any(|ep| {
+                    let er = ep.read_url.trim().trim_end_matches('/').to_lowercase();
+                    let ew = ep.write_url.trim().trim_end_matches('/').to_lowercase();
+                    (!er.is_empty() && (er == sr || er == sw)) || (!ew.is_empty() && (ew == sr || ew == sw))
+                })
+            });
+
+            if matches_contact {
+                return true;
+            }
+
+            // 3. Matches any settings.public_syncs?
+            let matches_public = settings.public_syncs.iter().any(|ps| {
+                let pr = ps.read_url.trim().trim_end_matches('/').to_lowercase();
+                let pw = ps.write_url.trim().trim_end_matches('/').to_lowercase();
+                (!pr.is_empty() && (pr == sr || pr == sw)) || (!pw.is_empty() && (pw == sr || pw == sw))
+            });
+
+            matches_public
+        });
+
+        if settings.market_selected_syncs.len() != initial_count {
+            let updated_syncs = settings.market_selected_syncs.clone();
+            let _ = self.save_settings(service, settings, password);
+            crate::commands::market::sync_own_card_drops_on_settings_change(service, &updated_syncs, password);
+        }
     }
 
     pub fn update_contact_sync_health(
@@ -1319,21 +1452,33 @@ mod tests {
         };
         state.save_contact(&mut service, contact, Some(password)).unwrap();
 
-        // 1. Success update
+        // 1. Success update preserves "unverified" (does NOT overwrite with "active")
         let updated = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", true, 1000, Some(password));
         assert!(updated);
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_eq!(bob.syncs[0].last_seen_at, Some(1000));
         assert_eq!(bob.syncs[0].fail_count, 0);
+        assert_eq!(bob.syncs[0].status, "unverified", "unverified status must not be overwritten with active on static read success");
 
-        // 2. Failure update (increments fail_count)
+        // 1b. Test that "pending_auth" is also preserved on read success
+        let mut bob_pending = bob.clone();
+        bob_pending.syncs[0].status = "pending_auth".to_string();
+        state.save_contact(&mut service, bob_pending, Some(password)).unwrap();
+        let updated_pending = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", true, 1050, Some(password));
+        assert!(updated_pending);
+        let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob.syncs[0].status, "pending_auth", "pending_auth status must not be overwritten with active on static read success");
+
+        // 2. Failure update (sets status to unreachable and increments fail_count)
         let updated2 = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1100, Some(password));
         assert!(updated2);
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_eq!(bob.syncs[0].last_error_at, Some(1100));
         assert_eq!(bob.syncs[0].fail_count, 1);
+        assert_eq!(bob.syncs[0].status, "unreachable");
 
         // 3. Second failure
         let updated3 = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1200, Some(password));
@@ -1342,14 +1487,126 @@ mod tests {
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_eq!(bob.syncs[0].last_error_at, Some(1200));
         assert_eq!(bob.syncs[0].fail_count, 2);
+        assert_eq!(bob.syncs[0].status, "unreachable");
 
-        // 4. Recovery success resets fail_count
+        // 4. Recovery success resets fail_count; since not in market_selected_syncs, transitions to "unverified"
         let updated4 = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", true, 1300, Some(password));
         assert!(updated4);
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_eq!(bob.syncs[0].last_seen_at, Some(1300));
         assert_eq!(bob.syncs[0].fail_count, 0);
+        assert_eq!(bob.syncs[0].status, "unverified", "unreachable contact sync transitions to unverified on read success when not in market_selected_syncs");
+
+        // 5. If sync is in market_selected_syncs, unreachable transitions to "active" on recovery
+        let mut settings = state.load_settings(&mut service, Some(password)).unwrap();
+        settings.market_selected_syncs = vec![FrontendSyncDescriptor {
+            read_url: "https://sync-endpoint.org/sync.php".to_string(),
+            write_url: "https://sync-endpoint.org/sync.php".to_string(),
+            drop_pub: "pub123".to_string(),
+            slot_id: None,
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "active".to_string(),
+            last_probed_at: None,
+        }];
+        state.save_settings(&mut service, settings, Some(password)).unwrap();
+
+        // Mark contact as unreachable again
+        let _ = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1400, Some(password));
+        let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+        assert_eq!(contacts.iter().find(|c| c.did == bob_did).unwrap().syncs[0].status, "unreachable");
+
+        // Now recover: should transition to "active" because it's in market_selected_syncs
+        let _ = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", true, 1500, Some(password));
+        let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+        assert_eq!(contacts.iter().find(|c| c.did == bob_did).unwrap().syncs[0].status, "active");
+    }
+
+    #[test]
+    fn test_prune_orphaned_market_selected_syncs() {
+        let temp_dir = std::env::temp_dir().join(format!("humoco_prune_test_{}", uuid::Uuid::new_v4()));
+        let password = "test-password-123";
+        let alice_service = crate::commands::sync::tests::setup_test_app(
+            &temp_dir.join("alice"),
+            "Test Alice",
+            crate::commands::sync::tests::ALICE_PHRASE,
+            password,
+        );
+        let bob_service = crate::commands::sync::tests::setup_test_app(
+            &temp_dir.join("bob"),
+            "Test Bob",
+            crate::commands::sync::tests::BOB_PHRASE,
+            password,
+        );
+        let bob_did = bob_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let mut service = state.service.lock().unwrap();
+
+        let bob_sync = FrontendSyncDescriptor {
+            read_url: "https://bob-sync.org/sync.php".to_string(),
+            write_url: "https://bob-sync.org/sync.php".to_string(),
+            drop_pub: "pub_bob".to_string(),
+            slot_id: None,
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "active".to_string(),
+            last_probed_at: None,
+        };
+
+        let contact = FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile {
+                id: Some(bob_did.clone()),
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(2),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![bob_sync.clone()],
+        };
+        state.save_contact(&mut service, contact.clone(), Some(password)).unwrap();
+
+        // Put Bob's sync into settings.market_selected_syncs
+        let mut settings = state.load_settings(&mut service, Some(password)).unwrap();
+        settings.market_selected_syncs = vec![bob_sync];
+        state.save_settings(&mut service, settings, Some(password)).unwrap();
+
+        // 1. Updating contact to remove sync should prune it from settings.market_selected_syncs
+        let mut updated_contact = contact.clone();
+        updated_contact.syncs = vec![];
+        state.save_contact(&mut service, updated_contact, Some(password)).unwrap();
+
+        let s_after = state.load_settings(&mut service, Some(password)).unwrap();
+        assert_eq!(s_after.market_selected_syncs.len(), 0, "Orphaned contact sync must be pruned from market_selected_syncs on save_contact");
+
+        // 2. Add contact back with sync, add to market_selected_syncs, then delete_contact
+        state.save_contact(&mut service, contact, Some(password)).unwrap();
+        let mut settings2 = state.load_settings(&mut service, Some(password)).unwrap();
+        settings2.market_selected_syncs = vec![FrontendSyncDescriptor {
+            read_url: "https://bob-sync.org/sync.php".to_string(),
+            write_url: "https://bob-sync.org/sync.php".to_string(),
+            drop_pub: "pub_bob".to_string(),
+            slot_id: None,
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "active".to_string(),
+            last_probed_at: None,
+        }];
+        state.save_settings(&mut service, settings2, Some(password)).unwrap();
+
+        state.delete_contact(&mut service, &bob_did, Some(password)).unwrap();
+        let s_after_del = state.load_settings(&mut service, Some(password)).unwrap();
+        assert_eq!(s_after_del.market_selected_syncs.len(), 0, "Orphaned contact sync must be pruned from market_selected_syncs on delete_contact");
     }
 
     #[test]

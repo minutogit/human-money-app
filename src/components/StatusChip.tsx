@@ -18,7 +18,7 @@ import { useNavigation } from "../context/NavigationContext";
 import { useSession } from "../context/SessionContext";
 import { FrontendAutoBackupStatusDto, FrontendSyncOverviewStatus } from "../types";
 import { BACKUP_UPDATED_EVENT } from "../utils/autoBackup";
-import { SYNC_STATUS_UPDATED_EVENT } from "../utils/syncEvents";
+import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from "../utils/syncEvents";
 import { useRateLimitCooldown } from "../hooks/useRateLimitCooldown";
 import { rateLimitManager } from "../utils/rateLimitManager";
 import { logger } from "../utils/log";
@@ -94,6 +94,13 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                     .then(() => marketService.getSyncOverviewStatus())
                     .then((fresh) => {
                         setSyncOverview(fresh);
+                        if (
+                            fresh.connectedCount !== current.connectedCount ||
+                            fresh.pendingAuthCount !== current.pendingAuthCount ||
+                            fresh.failingCount !== current.failingCount
+                        ) {
+                            notifySyncStatusUpdated(fresh);
+                        }
                     })
                     .catch(() => {});
             }

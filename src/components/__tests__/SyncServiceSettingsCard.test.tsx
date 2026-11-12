@@ -58,6 +58,7 @@ vi.mock('../../services/marketService', () => ({
         rotateSyncAdminKey: vi.fn(),
         deleteSyncAdmin: vi.fn(),
         getSyncOverviewStatus: vi.fn(),
+        probeContactSyncs: vi.fn().mockResolvedValue([]),
     },
 }));
 

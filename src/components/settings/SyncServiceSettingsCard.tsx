@@ -38,7 +38,7 @@ import { SegmentedTabs } from '../ui/SegmentedTabs';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { InfoHint } from '../ui/InfoHint';
 import { copyToClipboard } from '../../utils/clipboard';
-import { notifySyncStatusUpdated } from '../../utils/syncEvents';
+import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
 import { translateError } from '../../utils/errorHelper';
 import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
 
@@ -159,13 +159,19 @@ const PolicyHelpPopover: React.FC<PolicyHelpPopoverProps> = ({ title, content })
     );
 };
 
+const normalizeEndpointUrl = (u?: string) => (u || '').trim().replace(/\/+$/, '').toLowerCase();
+
 export const isSameSyncEndpoint = (
     a: { writeUrl?: string; readUrl?: string },
     b: { writeUrl?: string; readUrl?: string }
 ): boolean => {
+    const aWrite = normalizeEndpointUrl(a.writeUrl);
+    const bWrite = normalizeEndpointUrl(b.writeUrl);
+    const aRead = normalizeEndpointUrl(a.readUrl);
+    const bRead = normalizeEndpointUrl(b.readUrl);
     return (
-        (Boolean(a.writeUrl) && Boolean(b.writeUrl) && a.writeUrl === b.writeUrl) ||
-        (Boolean(a.readUrl) && Boolean(b.readUrl) && a.readUrl === b.readUrl)
+        (Boolean(aWrite) && Boolean(bWrite) && aWrite === bWrite) ||
+        (Boolean(aRead) && Boolean(bRead) && aRead === bRead)
     );
 };
 
@@ -383,7 +389,8 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 marketService.getSyncAdminStatus().catch(() => null),
                 settingsService.getSettings().catch(() => null),
             ]);
-            setDiscoveredDrops(Array.isArray(discovered) ? discovered : []);
+            const discList = Array.isArray(discovered) ? discovered : [];
+            setDiscoveredDrops(discList);
             setAdminStatus(admin || null);
             if (admin?.cardPolicy) {
                 setHostPolicy(admin.cardPolicy);
@@ -392,6 +399,14 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 setConfiguredPublicDrops(s.publicSyncs);
             } else if (!settings?.publicSyncs) {
                 setConfiguredPublicDrops([]);
+            }
+
+            if (discList.some(d => d.status === 'unverified') && typeof marketService.probeContactSyncs === 'function') {
+                marketService.probeContactSyncs(false).then(() => {
+                    marketService.discoverAvailableSyncs().then(refreshed => {
+                        if (Array.isArray(refreshed)) setDiscoveredDrops(refreshed);
+                    }).catch(() => {});
+                }).catch(() => {});
             }
         } catch {
             // Silently retain last known data
@@ -402,6 +417,20 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
 
     useEffect(() => {
         loadData();
+    }, [loadData]);
+
+    useEffect(() => {
+        if (typeof marketService.probeContactSyncs === 'function') {
+            marketService.probeContactSyncs(false).then(() => loadData()).catch(() => {});
+        }
+
+        const handleSyncUpdated = () => {
+            loadData();
+        };
+        window.addEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncUpdated);
+        return () => {
+            window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncUpdated);
+        };
     }, [loadData]);
 
     const updateFeatureToggle = async (key: keyof AppSettings, value: boolean) => {

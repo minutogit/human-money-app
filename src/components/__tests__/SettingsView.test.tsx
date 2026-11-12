@@ -97,6 +97,7 @@ vi.mock('../../services/marketService', () => ({
     getSyncAdminStatus: vi.fn().mockResolvedValue(null),
     probePublicSync: vi.fn(),
     savePublicSync: vi.fn(),
+    probeContactSyncs: vi.fn().mockResolvedValue([]),
   },
 }));
 

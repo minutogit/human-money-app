@@ -1223,18 +1223,19 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                                                 let statusLabel = t('contacts.syncUnverified', 'Ungeprüft');
                                                                 let tooltip = `${host} (${statusLabel})`;
 
-                                                                if (isPendingAuth) {
+                                                                if (isFailing) {
+                                                                    const isHardUnreachable = syncEp.status === 'unreachable' || (syncEp.failCount && syncEp.failCount >= 3);
+                                                                    badgeColor = isHardUnreachable
+                                                                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                                                        : 'bg-amber-50 text-amber-700 border-amber-200';
+                                                                    dotColor = isHardUnreachable ? 'bg-rose-500' : 'bg-amber-500';
+                                                                    statusLabel = isHardUnreachable ? t('contacts.syncUnreachable') : t('contacts.syncWarning');
+                                                                    tooltip = `${host} - ${statusLabel} (${t('contacts.syncFailCount')} ${syncEp.failCount ?? 0})`;
+                                                                } else if (isPendingAuth) {
                                                                     badgeColor = 'bg-amber-50 text-amber-700 border-amber-200';
                                                                     dotColor = 'bg-amber-500';
                                                                     statusLabel = t('contacts.syncPendingAuth', 'Wartet auf Freigabe');
                                                                     tooltip = `${host} - ${statusLabel}`;
-                                                                } else if (isFailing) {
-                                                                    badgeColor = syncEp.failCount && syncEp.failCount >= 3
-                                                                        ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                                                        : 'bg-amber-50 text-amber-700 border-amber-200';
-                                                                    dotColor = syncEp.failCount && syncEp.failCount >= 3 ? 'bg-rose-500' : 'bg-amber-500';
-                                                                    statusLabel = syncEp.failCount && syncEp.failCount >= 3 ? t('contacts.syncUnreachable') : t('contacts.syncWarning');
-                                                                    tooltip = `${host} - ${statusLabel} (${t('contacts.syncFailCount')} ${syncEp.failCount})`;
                                                                 } else if (isActive) {
                                                                     badgeColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
                                                                     dotColor = 'bg-emerald-500';

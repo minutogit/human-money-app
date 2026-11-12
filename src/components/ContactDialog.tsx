@@ -45,7 +45,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [syncInputUrl, setSyncInputUrl] = useState('');
     const [isProbingSync, setIsProbingSync] = useState(false);
     const [syncError, setSyncError] = useState<string | null>(null);
-    const [confirmDeleteUrl, setConfirmDeleteUrl] = useState<string | null>(null);
+    const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -115,7 +115,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         setError(null);
         setSyncInputUrl('');
         setSyncError(null);
-        setConfirmDeleteUrl(null);
+        setConfirmDeleteKey(null);
     }, [existingContact, initialProfile, initialDid, initialSyncUrls, isOpen]);
 
     const applyContactCard = async (rawText: string) => {
@@ -200,8 +200,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 dropPub: info.dropPub,
                 lastSeenAt: Math.floor(Date.now() / 1000),
                 failCount: 0,
-                status: 'active',
-                lastProbedAt: Math.floor(Date.now() / 1000),
+                status: 'unverified',
+                lastProbedAt: undefined,
             };
             setSyncs(prev => [...prev, newSync].slice(0, 2));
             setSyncInputUrl('');
@@ -213,9 +213,9 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         }
     };
 
-    const handleDeleteSync = (url: string) => {
-        setSyncs(prev => prev.filter(d => d.writeUrl !== url && d.readUrl !== url));
-        setConfirmDeleteUrl(null);
+    const handleDeleteSync = (targetKey: string) => {
+        setSyncs(prev => prev.filter(d => (d.writeUrl || d.readUrl) !== targetKey));
+        setConfirmDeleteKey(null);
     };
 
     if (!isOpen) return null;
@@ -387,26 +387,37 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                             return d.writeUrl || d.readUrl;
                                         }
                                     })();
-                                    const isFailing = (d.failCount ?? 0) > 0;
-                                    const isSeen = !isFailing && !!d.lastSeenAt;
-                                    const dotColor = isFailing
-                                        ? (d.failCount && d.failCount >= 3 ? 'bg-rose-500' : 'bg-amber-500')
-                                        : (isSeen ? 'bg-emerald-500' : 'bg-slate-400');
-                                    const statusLabel = isFailing
-                                        ? (d.failCount && d.failCount >= 3 ? t('contacts.syncUnreachable') : t('contacts.syncWarning'))
-                                        : (isSeen ? t('contacts.syncReachable') : t('contacts.syncUntested'));
+                                    const syncKey = d.writeUrl || d.readUrl;
+                                    const isUnreachable = d.status === 'unreachable' || (d.failCount ?? 0) > 0;
+                                    const isActive = d.status === 'active';
+                                    const isPendingAuth = d.status === 'pending_auth';
 
-                                    const isConfirming = confirmDeleteUrl === d.writeUrl;
+                                    const dotColor = isUnreachable
+                                        ? (d.failCount && d.failCount >= 3 ? 'bg-rose-500' : 'bg-amber-500')
+                                        : isActive
+                                        ? 'bg-emerald-500'
+                                        : isPendingAuth
+                                        ? 'bg-sky-500'
+                                        : 'bg-slate-400';
+                                    const statusLabel = isUnreachable
+                                        ? (d.failCount && d.failCount >= 3 ? t('contacts.syncUnreachable') : t('contacts.syncWarning'))
+                                        : isActive
+                                        ? t('contacts.syncReachable')
+                                        : isPendingAuth
+                                        ? t('contacts.syncPendingAuth')
+                                        : t('contacts.syncUntested');
+
+                                    const isConfirming = confirmDeleteKey === syncKey;
 
                                     return (
                                         <div
-                                            key={`${d.writeUrl}-${index}`}
+                                            key={`${syncKey}-${index}`}
                                             className="flex items-center justify-between p-2.5 bg-white border border-theme-subtle rounded-xl text-xs shadow-sm"
                                         >
                                             <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
                                                 <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
                                                 <div className="min-w-0 flex-1">
-                                                    <div className="font-mono text-xs font-semibold text-theme-secondary truncate" title={d.writeUrl}>
+                                                    <div className="font-mono text-xs font-semibold text-theme-secondary truncate" title={syncKey}>
                                                         {host}
                                                     </div>
                                                     <div className="text-[10px] text-theme-light truncate">
@@ -423,14 +434,14 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                                     </span>
                                                     <button
                                                         type="button"
-                                                        onClick={() => handleDeleteSync(d.writeUrl)}
+                                                        onClick={() => handleDeleteSync(syncKey)}
                                                         className="px-2 py-1 bg-rose-600 text-white text-[10px] font-bold rounded-lg hover:bg-rose-700 transition-colors"
                                                     >
                                                         {t('contacts.syncDeleteConfirmBtn')}
                                                     </button>
                                                     <button
                                                         type="button"
-                                                        onClick={() => setConfirmDeleteUrl(null)}
+                                                        onClick={() => setConfirmDeleteKey(null)}
                                                         className="px-2 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-lg hover:bg-slate-200 transition-colors"
                                                     >
                                                         {t('contacts.syncDeleteCancelBtn')}
@@ -439,7 +450,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                             ) : (
                                                 <button
                                                     type="button"
-                                                    onClick={() => setConfirmDeleteUrl(d.writeUrl)}
+                                                    onClick={() => setConfirmDeleteKey(syncKey)}
                                                     className="p-1.5 text-theme-light hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shrink-0"
                                                     title={t('contacts.syncDelete')}
                                                 >

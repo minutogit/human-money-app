@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Tag, HandHeart, Search, Calendar, Upload, Trash2 } from 'lucide-react';
-import { AdKind, FrontendAdInput, FrontendMyAd } from '../../types';
+import { Ad, AdKind, FrontendAdInput, FrontendMyAd } from '../../types';
 import { ModalShell } from '../ui/ModalShell';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -13,8 +13,8 @@ import { compressAdImageToWebpDataUri } from '../../utils/imageCompression';
 export interface AdEditorModalProps {
     isOpen: boolean;
     onClose: () => void;
-    initialAd?: FrontendMyAd | null;
-    editingAd?: FrontendMyAd | null;
+    initialAd?: Ad | FrontendMyAd | null;
+    editingAd?: Ad | FrontendMyAd | null;
     activeAdsCount?: number;
     maxAds?: number;
     onSave: (input: FrontendAdInput) => Promise<void>;

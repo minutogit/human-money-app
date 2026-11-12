@@ -57,9 +57,10 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 export interface MarketPersonViewProps {
     person: FrontendMarketPerson;
     onBack: () => void;
+    initialInquiryAd?: Ad | null;
 }
 
-export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBack }) => {
+export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBack, initialInquiryAd }) => {
     const { t } = useTranslation();
     const { navigate } = useNavigation();
     const { protectAction } = useSession();
@@ -197,6 +198,12 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
         setInquiryFeedback(null);
         setInquiryModalOpen(true);
     };
+
+    useEffect(() => {
+        if (initialInquiryAd) {
+            openInquiryForAd(initialInquiryAd);
+        }
+    }, [initialInquiryAd]);
 
     const handleSendInquiry = async (e: React.FormEvent) => {
         e.preventDefault();

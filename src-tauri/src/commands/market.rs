@@ -53,6 +53,30 @@ pub fn build_share_artifacts(card: &humoco_market::SdCard) -> Result<ShareArtifa
     })
 }
 
+pub fn sync_own_card_drops_on_settings_change(
+    service: &mut AppService,
+    syncs: &[crate::models::FrontendSyncDescriptor],
+    password: Option<&str>,
+) {
+    let existing_opt: Option<crate::models::StoredOwnMarketProfile> = service
+        .load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+
+    if let Some(mut existing) = existing_opt {
+        if existing.published {
+            let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
+            if let Some(ref mut last_card) = existing.last_card {
+                last_card.payload.drops = syncs.iter().cloned().map(Into::into).collect();
+            }
+            let _ = rebuild_and_sign_own_card(service, &mut existing, now_unix);
+            if let Ok(bytes) = serde_json::to_vec(&existing) {
+                let _ = service.save_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, &bytes, password);
+            }
+        }
+    }
+}
+
 pub fn rebuild_and_sign_own_card(
     service: &mut AppService,
     stored: &mut StoredOwnMarketProfile,
@@ -80,13 +104,12 @@ pub fn rebuild_and_sign_own_card(
     let mut items: Vec<(humoco_market::CardItem, u8)> = Vec::new();
 
     // Name
-    if profile.first_name.is_some() || profile.last_name.is_some() {
+    let first_name = profile.first_name.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let last_name = profile.last_name.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if first_name.is_some() || last_name.is_some() {
         if let Some(dist) = audience_dist(stored.visibility.name) {
             items.push((
-                humoco_market::CardItem::Name {
-                    first_name: profile.first_name.clone(),
-                    last_name: profile.last_name.clone(),
-                },
+                humoco_market::CardItem::Name { first_name, last_name },
                 dist,
             ));
         }
@@ -613,16 +636,24 @@ pub fn upsert_ad_impl(
         }
     };
 
+    let mut old_token_to_clean: Option<String> = None;
     if let Some(idx) = existing_idx {
         // Edit existing ad: MUST keep published_at, renewed_at, and expires_at unchanged!
         let existing = &mut stored.ads[idx];
+        let old_token = existing.image_token.clone();
         existing.kind = ad_input.kind;
         existing.title = title_trimmed.to_string();
         existing.text = ad_input.text;
         existing.pricing = ad_input.pricing;
         existing.allow_inquiries = ad_input.allow_inquiries;
         existing.is_remote = ad_input.is_remote;
-        existing.image_token = new_image_token;
+        existing.image_token = new_image_token.clone();
+
+        if let Some(ref old_t) = old_token {
+            if Some(old_t) != new_image_token.as_ref() {
+                old_token_to_clean = Some(old_t.clone());
+            }
+        }
     } else {
         // Create new ad: enforce active ads limit (max 5)
         let active_count = stored.ads.iter().filter(|a| a.expires_at > now).count();
@@ -657,6 +688,13 @@ pub fn upsert_ad_impl(
     service
         .save_encrypted_data(MARKET_OWN_PROFILE_KEY, &bytes, password.as_deref())
         .map_err(FrontendError::from)?;
+
+    if let Some(ref old_t) = old_token_to_clean {
+        let is_used = stored.ads.iter().any(|a| a.image_token.as_deref() == Some(old_t.as_str()));
+        if !is_used {
+            let _ = service.save_encrypted_data(&crate::state::own_media_storage_key(old_t), &[], password.as_deref());
+        }
+    }
 
     drop(service);
     get_my_market_profile_impl(password, state)
@@ -746,7 +784,15 @@ pub fn delete_ad_impl(
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
 
+    let old_token_opt = stored.ads.iter().find(|a| a.id == id).and_then(|a| a.image_token.clone());
     stored.ads.retain(|a| a.id != id);
+
+    if let Some(ref old_t) = old_token_opt {
+        let is_used = stored.ads.iter().any(|a| a.image_token.as_deref() == Some(old_t.as_str()));
+        if !is_used {
+            let _ = service.save_encrypted_data(&crate::state::own_media_storage_key(old_t), &[], password.as_deref());
+        }
+    }
 
     if stored.published {
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
@@ -1031,7 +1077,7 @@ pub fn get_market_view_impl(
         .collect();
 
     if let Some(ref stored) = stored_opt {
-        if stored.published || !stored.ads.is_empty() {
+        if stored.published {
             for ad in &stored.ads {
                 if ad.expires_at > now {
                     let days_left = ad.expires_at.saturating_sub(now).div_ceil(86_400);
@@ -1964,5 +2010,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(hit_neg_cache, None);
+    }
+
+    #[tokio::test]
+    async fn test_rebuild_and_sign_own_card_with_empty_or_none_name() {
+        let temp_dir = std::env::temp_dir().join(format!("humoco_empty_name_test_{}", uuid::Uuid::new_v4()));
+        let password = "test-password-123";
+        let mut alice_service = crate::commands::sync::tests::setup_test_app(
+            &temp_dir,
+            "Initial Name",
+            crate::commands::sync::tests::ALICE_PHRASE,
+            password,
+        );
+
+        let mut public_profile = alice_service.with_wallet(|w| w.profile.to_public_profile()).unwrap();
+        public_profile.first_name = Some("".to_string());
+        public_profile.last_name = Some("   ".to_string());
+        alice_service.update_public_profile(public_profile, Some(password)).unwrap();
+
+        let alice_state = crate::commands::sync::tests::create_test_state(alice_service);
+
+        let res = set_card_published_impl(true, false, Some(password.to_string()), &alice_state).await;
+        assert!(res.is_ok(), "Expected success publishing card with empty name, got: {:?}", res.err());
+        let prof = res.unwrap();
+        assert!(prof.published);
     }
 }
