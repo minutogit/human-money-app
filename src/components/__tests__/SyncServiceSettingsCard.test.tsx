@@ -384,4 +384,67 @@ describe('SyncServiceSettingsCard Component', () => {
         expect(normalizeSyncUrlInput('http://127.0.0.1:9000')).toBe('http://127.0.0.1:9000/sync.php');
         expect(normalizeSyncUrlInput('https://example.com:443/sync')).toBe('https://example.com/sync/sync.php');
     });
+
+    it('renders discovered drops with non-contradictory titles and status badges', async () => {
+        vi.mocked(marketService.discoverAvailableSyncs).mockResolvedValue([
+            {
+                descriptor: {
+                    readUrl: 'https://friend1.org/data',
+                    writeUrl: 'https://friend1.org/sync.php',
+                    dropPub: 'pk1',
+                    status: 'pending_auth',
+                    failCount: 0,
+                },
+                isAuthorized: false,
+                isSelected: false,
+                sourceLabel: 'Alice',
+                status: 'pending_auth',
+            },
+            {
+                descriptor: {
+                    readUrl: 'https://friend2.org/data',
+                    writeUrl: 'https://friend2.org/sync.php',
+                    dropPub: 'pk2',
+                    status: 'unreachable',
+                    failCount: 1,
+                },
+                isAuthorized: false,
+                isSelected: false,
+                sourceLabel: 'Bob',
+                status: 'unreachable',
+            },
+            {
+                descriptor: {
+                    readUrl: 'https://friend3.org/data',
+                    writeUrl: 'https://friend3.org/sync.php',
+                    dropPub: 'pk3',
+                    status: 'active',
+                    failCount: 0,
+                },
+                isAuthorized: true,
+                isSelected: true,
+                sourceLabel: 'Carol',
+                status: 'active',
+            },
+        ]);
+
+        render(
+            <SyncServiceSettingsCard
+                settings={defaultSettings}
+                onSettingsUpdated={vi.fn()}
+            />
+        );
+
+        await waitFor(() => {
+            // Check that the title does not contradict offline/pending status
+            expect(screen.getByText('Sync service of Alice')).toBeInTheDocument();
+            expect(screen.getByText('Sync service of Bob')).toBeInTheDocument();
+            expect(screen.getByText('Sync service of Carol')).toBeInTheDocument();
+
+            // Check badges
+            expect(screen.getByText('Reachable, not authorized')).toBeInTheDocument();
+            expect(screen.getByText('Unreachable (offline)')).toBeInTheDocument();
+            expect(screen.getAllByText('Connected').length).toBeGreaterThan(0);
+        });
+    });
 });

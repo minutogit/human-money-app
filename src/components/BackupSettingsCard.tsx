@@ -12,6 +12,7 @@ import { Input } from './ui/Input';
 import { InfoHint } from './ui/InfoHint';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { logger } from '../utils/log';
+import { dispatchBackupUpdated } from '../utils/autoBackup';
 import { 
     Archive, 
     KeyRound, 
@@ -151,7 +152,12 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                     onSettingsUpdated({ ...settings, lastSyncBackupAt: res.timestamp ?? new Date().toISOString() });
                 }
                 const updatedStatus = await backupService.getBackupStatus().catch(() => null);
-                if (updatedStatus) setBackupStatus(updatedStatus);
+                if (updatedStatus) {
+                    setBackupStatus(updatedStatus);
+                    dispatchBackupUpdated(updatedStatus);
+                } else {
+                    dispatchBackupUpdated();
+                }
             } else if (res.authorizedTargets === 0) {
                 setFeedback({
                     type: 'error',
@@ -218,6 +224,14 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                     backupDirty: false,
                 };
                 if (onSettingsUpdated) onSettingsUpdated(updatedSettings);
+
+                const updatedStatus = await backupService.getBackupStatus().catch(() => null);
+                if (updatedStatus) {
+                    setBackupStatus(updatedStatus);
+                    dispatchBackupUpdated(updatedStatus);
+                } else {
+                    dispatchBackupUpdated();
+                }
 
                 setFeedback({
                     type: 'success',
@@ -294,6 +308,14 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                     backupDirty: false,
                 };
                 if (onSettingsUpdated) onSettingsUpdated(updatedSettings);
+
+                const updatedStatus = await backupService.getBackupStatus().catch(() => null);
+                if (updatedStatus) {
+                    setBackupStatus(updatedStatus);
+                    dispatchBackupUpdated(updatedStatus);
+                } else {
+                    dispatchBackupUpdated();
+                }
 
                 const reused = Math.max(0, summary.totalBlobs - summary.changedBlobs);
                 setFeedback({

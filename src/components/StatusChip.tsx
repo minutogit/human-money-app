@@ -265,10 +265,12 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
 
     // Determine individual row levels
     // Row 1: Backup
+    const hasAnyBackup = !!backupStatus.lastBackupAt || !!backupStatus.lastSyncBackupAt;
+
     const backupIsCritical =
         backupStatus.status === "disconnected" ||
         backupStatus.status === "folderDisconnected" ||
-        (!backupStatus.lastBackupAt && backupStatus.status === "notConfigured");
+        (!hasAnyBackup && backupStatus.status === "notConfigured");
 
     const backupIsWarning =
         !backupIsCritical &&
@@ -276,13 +278,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
             backupStatus.status === "outdated" ||
             backupStatus.status === "warning" ||
             (backupStatus.changedBlobs != null && backupStatus.changedBlobs > 0) ||
-            backupStatus.status === "pending" ||
-            (() => {
-                if (!backupStatus.lastBackupAt) return false;
-                const backupDate = new Date(backupStatus.lastBackupAt);
-                const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-                return backupDate < fourteenDaysAgo;
-            })());
+            backupStatus.status === "pending");
 
     const backupLevel: StatusLevel = backupIsCritical
         ? "critical"
@@ -297,7 +293,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         if (backupStatus.status === "disconnected") {
             return t("statusChip.backupFailed", "Backup-Erstellung fehlgeschlagen.");
         }
-        if (!backupStatus.lastBackupAt && backupStatus.status === "notConfigured") {
+        if (!hasAnyBackup && backupStatus.status === "notConfigured") {
             return t("statusChip.backupNone", "Noch kein Backup vorhanden.");
         }
         if (backupIsWarning) {
@@ -480,7 +476,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                                 }}
                                 className="shrink-0"
                             >
-                                {backupStatus.status === "notConfigured" && !backupStatus.lastBackupAt
+                                {backupStatus.status === "notConfigured" && !hasAnyBackup
                                     ? t("statusChip.setup", "Einrichten")
                                     : t("statusChip.open", "Öffnen")}
                             </Button>

@@ -38,6 +38,7 @@ import { SegmentedTabs } from '../ui/SegmentedTabs';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { InfoHint } from '../ui/InfoHint';
 import { copyToClipboard } from '../../utils/clipboard';
+import { runSyncBackupPass } from '../../utils/autoBackup';
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
 import { translateError } from '../../utils/errorHelper';
 import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
@@ -483,6 +484,11 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                         status: 'success',
                         message: t('settings.syncProbeSuccess'),
                     });
+                    if (info.authorizedChannels.includes('backup')) {
+                        setTimeout(() => {
+                            runSyncBackupPass(true).catch(() => {});
+                        }, 1000);
+                    }
                 } else {
                     setProbeResult({
                         status: 'unauthorized',
@@ -596,6 +602,11 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             const refetched = await marketService.discoverAvailableSyncs().catch(() => []);
             setDiscoveredDrops(refetched);
             notifySyncStatusUpdated();
+            if (!isCurrentlySelected) {
+                setTimeout(() => {
+                    runSyncBackupPass(true).catch(() => {});
+                }, 1000);
+            }
         } catch (err) {
             setFeedback({ type: 'error', message: translateError(err, t) });
         }
@@ -653,6 +664,9 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 setAdminStatus(admin);
                 setSessionDraft(HOST_SYNC_DRAFT_KEY, '');
                 notifySyncStatusUpdated();
+                setTimeout(() => {
+                    runSyncBackupPass(true).catch(() => {});
+                }, 1000);
                 setFeedback({
                     type: 'success',
                     message: t('settings.syncHostActivatedSuccess'),
@@ -1042,18 +1056,25 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                 <div className="space-y-2">
                                     {(discoveredDrops || []).map((drop, idx) => {
                                         const status = drop.status || drop.descriptor.status || 'unverified';
-                                        let badgeColor = 'bg-slate-100 text-slate-700';
+                                        let badgeColor = 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
                                         let statusText = t('settings.syncStatusUnverified', 'Noch nicht geprüft');
+                                        let statusTooltip: string | undefined = undefined;
 
                                         if (status === 'active') {
-                                            badgeColor = 'bg-emerald-100 text-emerald-800';
-                                            statusText = t('settings.syncStatusActive', 'Bereit / Freigeschaltet');
+                                            if (drop.isSelected) {
+                                                badgeColor = 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300';
+                                                statusText = t('settings.syncStatusConnected', 'Verbunden');
+                                            } else {
+                                                badgeColor = 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-300 dark:border-emerald-800';
+                                                statusText = t('settings.syncStatusActiveInactive', 'Bereit (nicht aktiviert)');
+                                            }
                                         } else if (status === 'pending_auth') {
-                                            badgeColor = 'bg-amber-100 text-amber-800';
-                                            statusText = t('settings.syncStatusPendingAuth', 'Wartet auf Freigabe durch Kontakt');
+                                            badgeColor = 'bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800';
+                                            statusText = t('settings.syncStatusPendingAuthBadge', 'Erreichbar, nicht freigeschaltet');
+                                            statusTooltip = t('settings.syncStatusPendingAuthDesc', 'Server erreichbar, aber dein Schlüssel ist beim Betreiber noch nicht freigeschaltet.');
                                         } else if (status === 'unreachable') {
-                                            badgeColor = 'bg-rose-100 text-rose-800';
-                                            statusText = t('settings.syncStatusUnreachable', 'Nicht erreichbar');
+                                            badgeColor = 'bg-rose-100 text-rose-800 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800';
+                                            statusText = t('settings.syncStatusOffline', 'Nicht erreichbar (Offline)');
                                         }
 
                                         const displayUrl = drop.descriptor.writeUrl || drop.descriptor.readUrl;
@@ -1061,7 +1082,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         return (
                                             <div
                                                 key={drop.descriptor.writeUrl || drop.descriptor.readUrl || idx}
-                                                className="p-3 bg-white rounded-xl border border-theme-subtle flex items-center justify-between gap-3 text-xs"
+                                                className="p-3 bg-white dark:bg-slate-900 rounded-xl border border-theme-subtle flex items-center justify-between gap-3 text-xs"
                                             >
                                                 <div className="flex items-center gap-2.5 min-w-0">
                                                     <input
@@ -1076,18 +1097,28 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                                         }
                                                     />
                                                     <div className="min-w-0">
-                                                        <span className="font-bold text-theme-primary truncate block">
-                                                            {t('settings.syncConnectedVia', {
-                                                                name: drop.sourceLabel || displayUrl,
-                                                            })}
-                                                        </span>
+                                                        <div className="flex items-center gap-1.5 min-w-0">
+                                                            <span className="font-bold text-theme-primary truncate block">
+                                                                {t('settings.syncServiceOf', {
+                                                                    name: drop.sourceLabel || displayUrl,
+                                                                })}
+                                                            </span>
+                                                            {drop.isSelected && status === 'active' && (
+                                                                <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 shrink-0">
+                                                                    {t('settings.syncStatusConnected', 'Verbunden')}
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                         <span className="font-mono text-[10px] text-theme-light truncate block">
                                                             {displayUrl}
                                                         </span>
                                                     </div>
                                                 </div>
 
-                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${badgeColor}`}>
+                                                <span
+                                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${badgeColor}`}
+                                                    title={statusTooltip}
+                                                >
                                                     {statusText}
                                                 </span>
                                             </div>

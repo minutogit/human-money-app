@@ -286,4 +286,36 @@ describe('BackupSettingsCard', () => {
             expect(screen.getByRole('button', { name: /Choose Folder/i })).toBeInTheDocument();
         });
     });
+
+    it('dispatches BACKUP_UPDATED_EVENT when folder backup is synced manually', async () => {
+        const eventSpy = vi.fn();
+        window.addEventListener('humoco:backup-updated', eventSpy);
+
+        vi.mocked(open).mockResolvedValue('/media/usb/backups');
+        vi.mocked(backupService.syncBackupFolder).mockResolvedValue({
+            totalBlobs: 10,
+            changedBlobs: 2,
+            deletedBlobs: 0,
+            uploadBytes: 512,
+            timestamp: new Date().toISOString(),
+            destinationPath: '/media/usb/backups',
+            customStandardCount: 0,
+        });
+
+        const settingsWithFolder: AppSettings = {
+            ...defaultSettings,
+            backupSyncFolder: '/media/usb/backups',
+        };
+        render(<BackupSettingsCard settings={settingsWithFolder} onSettingsUpdated={vi.fn()} />);
+
+        const syncNowBtn = screen.getByRole('button', { name: /Sync Folder Now/i });
+        fireEvent.click(syncNowBtn);
+
+        await waitFor(() => {
+            expect(backupService.syncBackupFolder).toHaveBeenCalled();
+            expect(eventSpy).toHaveBeenCalled();
+        });
+
+        window.removeEventListener('humoco:backup-updated', eventSpy);
+    });
 });
