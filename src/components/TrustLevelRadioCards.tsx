@@ -1,7 +1,7 @@
 // src/components/TrustLevelRadioCards.tsx
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, Info } from 'lucide-react';
+import { Check, Info, ShieldCheck } from 'lucide-react';
 
 export interface TrustLevelRadioCardsProps {
     value: number | null;
@@ -140,13 +140,22 @@ export const TrustLevelRadioCards: React.FC<TrustLevelRadioCardsProps> = ({
                         )}
 
                         {isSelected && opt.level !== null && opt.level >= 1 && (
-                            <div
-                                data-testid="trust-hint-levels-1-to-3"
-                                className="mt-1 ml-6.5 p-2.5 rounded-xl bg-amber-100/70 border border-amber-200 text-amber-950 text-[11px] leading-relaxed flex items-start gap-2 animate-in fade-in duration-150"
-                            >
-                                <Info size={14} className="text-amber-700 shrink-0 mt-0.5" />
-                                <span>{t('contacts.trustLevels1To3Hint')}</span>
-                            </div>
+                            <>
+                                <div
+                                    data-testid="trust-hint-levels-1-to-3"
+                                    className="mt-1 ml-6.5 p-2.5 rounded-xl bg-amber-100/70 border border-amber-200 text-amber-950 text-[11px] leading-relaxed flex items-start gap-2 animate-in fade-in duration-150"
+                                >
+                                    <Info size={14} className="text-amber-700 shrink-0 mt-0.5" />
+                                    <span>{t('contacts.trustLevels1To3Hint')}</span>
+                                </div>
+                                <div
+                                    data-testid="trust-privacy-disclosure-note"
+                                    className="mt-1 ml-6.5 p-2.5 rounded-xl bg-emerald-50/80 border border-emerald-200/80 text-emerald-950 text-[11px] leading-relaxed flex items-start gap-2 animate-in fade-in duration-150"
+                                >
+                                    <ShieldCheck size={14} className="text-emerald-700 shrink-0 mt-0.5" />
+                                    <span>{t('contacts.trustPrivacyDisclaimer')}</span>
+                                </div>
+                            </>
                         )}
                     </button>
                 );

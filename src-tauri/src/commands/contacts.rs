@@ -9,16 +9,35 @@ pub fn get_contacts(state: tauri::State<AppState>) -> Result<Vec<FrontendContact
 }
 
 #[tauri::command]
-pub fn save_contact(
+pub async fn save_contact(
     contact: FrontendContact,
     password: Option<String>,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<(), FrontendError> {
     let mut contact = contact;
     contact.did = contact.did.trim().to_string();
-    info!("Saving contact for DID: {}", contact.did);
-    let mut service = state.service.lock().unwrap();
-    state.save_contact(&mut service, contact, password.as_deref()).map_err(FrontendError::from)
+    let contact_did = contact.did.clone();
+    let trust_level = contact.trust_level;
+    info!("Saving contact for DID: {}", contact_did);
+    {
+        let mut service = state.service.lock().unwrap();
+        state.save_contact(&mut service, contact, password.as_deref()).map_err(FrontendError::from)?;
+    }
+
+    // Automatically send / sync WoT trust package in the background if trust level >= 1
+    if let Some(lvl) = trust_level {
+        if lvl >= 1 {
+            let _ = crate::commands::post::send_wot_handshake_via_post_impl(
+                contact_did,
+                lvl.min(1),
+                true,
+                password,
+                &state,
+            ).await;
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

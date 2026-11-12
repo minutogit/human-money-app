@@ -1945,30 +1945,126 @@ pub async fn sync_post_channels_impl(
                             if let Err(e) = validate_wot_handshake_assertion(&assertion) {
                                 errors.push(format!("Invalid WoT handshake assertion: {}", e));
                             } else {
-                                post_state.pending_wot_packages_by_msg_id.insert(
-                                    envelope.msg_id.clone(),
-                                    assertion.wot_sync_json.clone(),
-                                );
-                                post_state.pending_wot_handshakes.push(FrontendPendingWotHandshake {
-                                    msg_id: envelope.msg_id.clone(),
-                                    sender_did: assertion.sender_did.clone(),
-                                    sender_name: assertion.sender_name.clone(),
-                                    proposed_level: assertion.proposed_level,
-                                    reply_requested: assertion.reply_requested,
-                                    created_at: assertion.created_at,
-                                });
-                                new_wot_handshakes += 1;
-                                queue_receipt(
-                                    &mut post_state,
-                                    &my_identity,
-                                    &my_ed_sk,
-                                    &sender_did,
-                                    &envelope.msg_id,
-                                    &box_entry.tag16,
-                                    None,
-                                    &own_reply_syncs,
-                                    now_secs,
-                                );
+                                let is_known_trusted_contact = {
+                                    let mut service = state.service.lock().unwrap();
+                                    state
+                                        .load_contacts(&mut service, password.as_deref())
+                                        .map(|list| {
+                                            list.iter().any(|c| {
+                                                are_dids_equal(&c.did, &assertion.sender_did)
+                                                    && c.trust_level.unwrap_or(0) >= 1
+                                            })
+                                        })
+                                        .unwrap_or(false)
+                                };
+
+                                if is_known_trusted_contact {
+                                    // Silent auto-accept for established contacts (KISS / Zero-Click)
+                                    if let Ok(pkg) = serde_json::from_str::<humoco_wot::WotSyncPackage>(&assertion.wot_sync_json) {
+                                        let mut service = state.service.lock().unwrap();
+                                        if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
+                                            let can_sender_did = crate::state::canonicalize_did(&assertion.sender_did)
+                                                .unwrap_or_else(|_| assertion.sender_did.clone());
+                                            let _ = reg.import_sync_package(&pkg, Some(&can_sender_did), now_secs);
+                                            let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
+                                            let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
+                                        }
+                                    }
+
+                                    queue_receipt(
+                                        &mut post_state,
+                                        &my_identity,
+                                        &my_ed_sk,
+                                        &sender_did,
+                                        &envelope.msg_id,
+                                        &box_entry.tag16,
+                                        None,
+                                        &own_reply_syncs,
+                                        now_secs,
+                                    );
+
+                                    // If counterparty requested mutual sync package, automatically queue return package
+                                    if assertion.reply_requested {
+                                        let can_recipient = crate::state::canonicalize_did(&sender_did)
+                                            .unwrap_or_else(|_| sender_did.clone());
+                                        let mut service = state.service.lock().unwrap();
+                                        if let Ok(reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
+                                            if let Ok((pkg, _)) = reg.prepare_sync_package(Some(&can_recipient), None, true) {
+                                                if let Ok(wot_sync_json) = serde_json::to_string(&pkg) {
+                                                    let my_name = service
+                                                        .with_wallet(|w| w.profile.first_name.clone())
+                                                        .ok()
+                                                        .flatten();
+                                                    let auto_reply_assertion = WotHandshakeAssertion {
+                                                        sender_did: my_identity.user_id.clone(),
+                                                        sender_name: my_name,
+                                                        proposed_level: 1,
+                                                        wot_sync_json,
+                                                        reply_requested: false,
+                                                        created_at: now_secs,
+                                                    };
+                                                    if let Ok(assertion_bytes) = serde_json::to_vec(&auto_reply_assertion) {
+                                                        if let Ok(container) = SecureContainer::seal(
+                                                            &my_identity,
+                                                            &ContainerConfig::TargetDid(sender_did.clone(), PrivacyMode::HashedRouting),
+                                                            &assertion_bytes,
+                                                            PayloadType::TrustAssertion,
+                                                        ) {
+                                                            if let Ok(container_bytes) = serde_json::to_vec(&container) {
+                                                                if let Ok(sender_ed_pk) = get_pubkey_from_user_id(&sender_did) {
+                                                                    let return_msg_id = uuid::Uuid::new_v4().to_string();
+                                                                    let env = PostEnvelope::new(
+                                                                        return_msg_id.clone(),
+                                                                        now_secs,
+                                                                        own_reply_syncs.iter().cloned().map(Into::into).collect(),
+                                                                        container_bytes,
+                                                                    );
+                                                                    if let Ok(return_box) = seal_post_box(&my_ed_sk, &sender_ed_pk, &env) {
+                                                                        post_state.processed_msg_ids.insert(return_msg_id.clone());
+                                                                        post_state.outbox_entries.push(PostOutboxEntry {
+                                                                            msg_id: return_msg_id,
+                                                                            recipient_did: sender_did.clone(),
+                                                                            tag16_hex: hex::encode(return_box.tag16),
+                                                                            bundle_id: None,
+                                                                            entry: return_box,
+                                                                            created_at: now_secs,
+                                                                        });
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Unknown or unrated contact: require conscious user confirmation
+                                    post_state.pending_wot_packages_by_msg_id.insert(
+                                        envelope.msg_id.clone(),
+                                        assertion.wot_sync_json.clone(),
+                                    );
+                                    post_state.pending_wot_handshakes.push(FrontendPendingWotHandshake {
+                                        msg_id: envelope.msg_id.clone(),
+                                        sender_did: assertion.sender_did.clone(),
+                                        sender_name: assertion.sender_name.clone(),
+                                        proposed_level: assertion.proposed_level,
+                                        reply_requested: assertion.reply_requested,
+                                        created_at: assertion.created_at,
+                                    });
+                                    new_wot_handshakes += 1;
+                                    queue_receipt(
+                                        &mut post_state,
+                                        &my_identity,
+                                        &my_ed_sk,
+                                        &sender_did,
+                                        &envelope.msg_id,
+                                        &box_entry.tag16,
+                                        None,
+                                        &own_reply_syncs,
+                                        now_secs,
+                                    );
+                                }
                             }
                         }
                         Err(e) => {
@@ -3016,6 +3112,11 @@ mod tests {
         let (server_a_url, alice_drop) = setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
         let (server_b_url, bob_drop) = setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
 
+        let alice_probe_b = probe_public_sync_impl(server_b_url.clone(), Some(password.to_string()), &alice_state).await.unwrap();
+        server_b.members.lock().unwrap().push(alice_probe_b.access_pubkey.clone());
+        let bob_probe_a = probe_public_sync_impl(server_a_url.clone(), Some(password.to_string()), &bob_state).await.unwrap();
+        server_a.members.lock().unwrap().push(bob_probe_a.access_pubkey.clone());
+
         let alice_syncs = vec![FrontendSyncDescriptor {
             write_url: server_a_url.clone(),
             read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
@@ -3083,16 +3184,27 @@ mod tests {
         // Part A: WoT Handshake
         send_wot_handshake_via_post_impl(bob_did.clone(), 1, true, Some(password.to_string()), &alice_state).await.unwrap();
 
+        // Bob syncs post drops: since Bob already has Alice in contacts as trust_level 1, it is SILENTLY auto-accepted! (Zero-Click)
         let bob_sync_1 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state).await.unwrap();
-        assert_eq!(bob_sync_1.new_wot_handshakes, 1);
+        assert_eq!(bob_sync_1.new_wot_handshakes, 0, "Known trusted contacts must be silently auto-accepted without pending handshake banner");
 
-        let bob_post = load_post_state(&bob_state, Some(password)).unwrap();
-        let handshake = &bob_post.pending_wot_handshakes[0];
+        // Verify Bob's WoT register now contains Alice's list
+        {
+            let mut s_bob = bob_state.service.lock().unwrap();
+            let reg = bob_state.get_or_load_wot_register(&mut s_bob, Some(password)).unwrap();
+            assert!(reg.raw_list_store.contains_key(&alice_did) || reg.raw_list_store.contains_key(&crate::state::canonicalize_did(&alice_did).unwrap()));
+        }
 
-        accept_wot_handshake_impl(handshake.msg_id.clone(), 1, true, Some(password.to_string()), &bob_state).await.unwrap();
-
+        // Alice already has Bob rated as trust_level 1, so Bob's auto-replied handshake is also silently auto-accepted!
         let alice_sync_1 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state).await.unwrap();
-        assert_eq!(alice_sync_1.new_wot_handshakes, 1);
+        assert_eq!(alice_sync_1.new_wot_handshakes, 0);
+
+        // Verify Alice's WoT register now contains Bob's list
+        {
+            let mut s_alice = alice_state.service.lock().unwrap();
+            let reg = alice_state.get_or_load_wot_register(&mut s_alice, Some(password)).unwrap();
+            assert!(reg.raw_list_store.contains_key(&bob_did) || reg.raw_list_store.contains_key(&crate::state::canonicalize_did(&bob_did).unwrap()));
+        }
 
         // Part B: 1-Step Marketplace Inquiry
         // Bob creates and saves profile with allow_inquiries: true and adds an ad

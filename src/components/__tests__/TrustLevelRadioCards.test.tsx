@@ -56,6 +56,11 @@ describe('TrustLevelRadioCards Component', () => {
     // Also holds for level 3
     rerender(<TrustLevelRadioCards value={3} onChange={onChange} allowUnrated={true} />);
     expect(screen.getByTestId('trust-hint-levels-1-to-3')).toBeInTheDocument();
+
+    // Verifies privacy disclosure note is shown for level >= 1
+    const privacyNote = screen.getByTestId('trust-privacy-disclosure-note');
+    expect(privacyNote).toBeInTheDocument();
+    expect(privacyNote.textContent).toMatch(/contacts\.trustPrivacyDisclaimer|kryptografisch geschützt|shared cryptographically/i);
   });
 
   it('hides unrated option when allowUnrated is false', () => {

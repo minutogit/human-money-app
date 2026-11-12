@@ -118,9 +118,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
     const [handshakeAcceptedLevels, setHandshakeAcceptedLevels] = useState<{ [msgId: string]: number }>({});
     const [handshakeReturnFlags, setHandshakeReturnFlags] = useState<{ [msgId: string]: boolean }>({});
     const [isAcceptingHandshake, setIsAcceptingHandshake] = useState<string | null>(null);
-    const [sendHandshakeContact, setSendHandshakeContact] = useState<Contact | null>(null);
-    const [sendHandshakeLevel, setSendHandshakeLevel] = useState<number>(1);
-    const [isSendingHandshake, setIsSendingHandshake] = useState(false);
 
     const hasSyncService = (syncOverview?.connectedCount ?? 0) > 0;
 
@@ -573,39 +570,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
             setPendingHandshakes(prev => prev.filter(h => h.msgId !== msgId));
         } catch (e) {
             setFeedbackMsg({ type: 'error', message: translateError(e, t) });
-        }
-    };
-
-    const handleExecuteSendHandshake = async () => {
-        if (!sendHandshakeContact) return;
-        setIsSendingHandshake(true);
-        try {
-            const res = await protectAction(async (pwd) => {
-                return await postService.sendWotHandshakeViaPost(
-                    sendHandshakeContact.did,
-                    sendHandshakeLevel,
-                    true,
-                    pwd || undefined
-                );
-            });
-            if (res && res.depositedTo > 0) {
-                setFeedbackMsg({
-                    type: 'success',
-                    message: t('contacts.handshakeSentSuccess', 'Vertrauensbestätigung über Sync-Dienst gesendet')
-                });
-                setSendHandshakeContact(null);
-            } else if (res && res.errors && res.errors.length > 0) {
-                setFeedbackMsg({ type: 'error', message: res.errors.join('; ') });
-            } else {
-                setFeedbackMsg({
-                    type: 'error',
-                    message: t('contacts.handshakeNoSync', 'Kein gemeinsamer Sync-Dienst für diesen Kontakt erreichbar.')
-                });
-            }
-        } catch (e) {
-            setFeedbackMsg({ type: 'error', message: translateError(e, t) });
-        } finally {
-            setIsSendingHandshake(false);
         }
     };
 
@@ -1094,18 +1058,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                                 </div>
                                                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                                     <button
-                                                        onClick={() => {
-                                                            setSendHandshakeContact(contact);
-                                                            const lvl = contact.trustLevel ?? 0;
-                                                            setSendHandshakeLevel(lvl >= 1 ? Math.min(lvl, 1) : 1);
-                                                        }}
-                                                        className="p-2 hover:bg-theme-subtle/20 rounded-xl text-theme-light hover:text-sky-600 transition-all cursor-pointer"
-                                                        title={t('contacts.sendWotHandshakeButton', 'Vertrauensbestätigung über Sync-Dienst senden')}
-                                                        data-testid="send-wot-handshake-button"
-                                                    >
-                                                        <Handshake size={18} />
-                                                    </button>
-                                                    <button
                                                         onClick={() => handleShareContactWot(contact)}
                                                         className="p-2 hover:bg-theme-subtle/20 rounded-xl text-theme-light hover:text-theme-primary transition-all cursor-pointer"
                                                         title={t('contacts.shareWotForContact')}
@@ -1576,37 +1528,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                     />
                 </div>
             </ModalShell>
-
-            {/* Send Trust Confirmation Modal */}
-            <ConfirmationModal
-                isOpen={!!sendHandshakeContact}
-                title={t('contacts.sendHandshakeModalTitle', 'Vertrauensbestätigung senden')}
-                description={
-                    <div className="space-y-4 pt-2">
-                        <p className="text-xs text-theme-secondary leading-relaxed">
-                            {t('contacts.sendHandshakeModalDesc', 'Bestätige die Vertrauensstufe mit {{name}} direkt über den Sync-Dienst.', {
-                                name: sendHandshakeContact ? ([sendHandshakeContact.profile.firstName, sendHandshakeContact.profile.lastName].filter(Boolean).join(' ') || sendHandshakeContact.profile.organization || truncateUserId(sendHandshakeContact.did)) : ''
-                            })}
-                        </p>
-                        <div className="space-y-2">
-                            <label className="text-xs font-bold text-theme-secondary">
-                                {t('contacts.chooseProposedLevel', 'Zu bestätigende Vertrauensstufe:')}
-                            </label>
-                            <TrustLevelRadioCards
-                                value={sendHandshakeLevel}
-                                onChange={(lvl) => setSendHandshakeLevel(lvl ?? 1)}
-                                allowUnrated={false}
-                                allowedLevels={[0, 1]}
-                                idPrefix="send-handshake"
-                            />
-                        </div>
-                    </div>
-                }
-                confirmText={t('contacts.sendHandshakeConfirm', 'Bestätigung senden')}
-                onConfirm={handleExecuteSendHandshake}
-                onCancel={() => setSendHandshakeContact(null)}
-                isProcessing={isSendingHandshake}
-            />
         </PageLayout>
     );
 };
