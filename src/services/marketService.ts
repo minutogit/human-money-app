@@ -256,23 +256,14 @@ export const marketService = {
     },
 };
 
-let channelMembersDebounceTimer: number | null = null;
+export { channelMembersSyncManager } from './channelMembersSyncManager';
+import { channelMembersSyncManager } from './channelMembersSyncManager';
 
 /**
- * Triggers a 1.5s (1500ms) debounced call to sync_channel_members.
+ * Triggers a debounced call to sync_channel_members with retry and quota handling.
  * Rapid consecutive edits to contacts/trust levels coalesce into a single upload.
+ * Defaults to 1500ms when called via legacy signature, or custom delayMs (e.g. 250ms for snappy single edits).
  */
 export function triggerDebouncedChannelMembersSync(delayMs: number = 1500): void {
-    if (typeof window === 'undefined') return;
-    if (channelMembersDebounceTimer !== null) {
-        window.clearTimeout(channelMembersDebounceTimer);
-    }
-    channelMembersDebounceTimer = window.setTimeout(async () => {
-        channelMembersDebounceTimer = null;
-        try {
-            await marketService.syncChannelMembers();
-        } catch {
-            // Background upload errors handled silently
-        }
-    }, delayMs);
+    channelMembersSyncManager.trigger({ delayMs, resetQuota: true });
 }

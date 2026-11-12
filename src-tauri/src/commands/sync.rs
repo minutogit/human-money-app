@@ -190,6 +190,8 @@ pub(crate) async fn push_all_channel_members(
     };
 
     let mut pushed_count = 0;
+    let mut first_error: Option<FrontendError> = None;
+
     for (ch, pks) in pks_by_channel {
         let key = format!("{}::{}", &admin.descriptor.write_url, ch);
         let hash = compute_channel_members_hash(&pks);
@@ -198,12 +200,18 @@ pub(crate) async fn push_all_channel_members(
             continue;
         }
 
-        sync_client::push_members(client, &admin.descriptor.write_url, admin_sk, ch, &pks)
-            .await
-            .map_err(FrontendError::from)?;
-
-        admin.last_members_hash.insert(key, hash);
-        pushed_count += 1;
+        match sync_client::push_members(client, &admin.descriptor.write_url, admin_sk, ch, &pks).await {
+            Ok(()) => {
+                admin.last_members_hash.insert(key, hash);
+                pushed_count += 1;
+            }
+            Err(e) => {
+                log::warn!("Failed to push members for channel {}: {}", ch, e);
+                if first_error.is_none() {
+                    first_error = Some(FrontendError::from(e));
+                }
+            }
+        }
     }
 
     if pushed_count > 0 {
@@ -214,6 +222,10 @@ pub(crate) async fn push_all_channel_members(
         service
             .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, &admin_bytes, password)
             .map_err(FrontendError::from)?;
+    }
+
+    if let Some(err) = first_error {
+        return Err(err);
     }
 
     Ok(pushed_count)
