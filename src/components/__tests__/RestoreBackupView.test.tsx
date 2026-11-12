@@ -338,4 +338,105 @@ describe('RestoreBackupView', () => {
             expect(screen.getByText(/Online security reconciliation completed successfully/i)).toBeInTheDocument();
         });
     });
+
+    it('allows restoring from a sync service using full phrase textarea, optional passphrase and user prefix', async () => {
+        vi.mocked(backupService.fetchAndInspectBackup).mockResolvedValue({
+            stagedPath: '/tmp/drop_restore_789.hmcbackup',
+            inspection: {
+                profileName: 'Charlie',
+                userId: 'hmc1charlie1234567890',
+                epoch: 1,
+                txNonce: 3,
+                sealTimestamp: '2026-11-01T10:00:00Z',
+                blobCount: 5,
+                customStandardCount: 0,
+                protectionMode: 'mnemonic_only',
+            },
+            sourceUrl: 'https://sync.example.org',
+            matchedKeyKind: 'public',
+        });
+
+        vi.mocked(authService.getLocalInstanceId).mockResolvedValue('device-uuid-789');
+        vi.mocked(backupService.restoreBackup).mockResolvedValue({
+            folderName: 'profile_charlie',
+            profileName: 'Charlie',
+            activeVoucherQueriesCount: 0,
+            reconciledSpentCount: 0,
+            restoredStandardsCount: 0,
+            l2ReconciliationStatus: 'reconciled',
+        });
+
+        render(
+            <RestoreBackupView
+                onRestoreSuccess={onRestoreSuccess}
+                onSwitchToRecreate={onSwitchToRecreate}
+                onBack={onBack}
+            />
+        );
+
+        // Click "Restore from Sync Service"
+        fireEvent.click(screen.getByText('Restore from Sync Service'));
+
+        await waitFor(() => {
+            expect(screen.getByText('Load Backup from Sync Service')).toBeInTheDocument();
+        });
+
+        // Switch to full phrase mode
+        fireEvent.click(screen.getByText(/enter full phrase/i));
+
+        // Enter mnemonic into textarea
+        const textarea = screen.getByTestId('restore-sync-phrase-textarea');
+        fireEvent.change(textarea, {
+            target: {
+                value: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+            },
+        });
+
+        // Enter passphrase
+        const passphraseInput = screen.getByTestId('restore-sync-passphrase-input');
+        fireEvent.change(passphraseInput, { target: { value: 'my-secret-bip39-pass' } });
+
+        // Enter user prefix
+        const prefixInput = screen.getByTestId('restore-sync-user-prefix-input');
+        fireEvent.change(prefixInput, { target: { value: 'mobile-app' } });
+
+        // Enter sync address
+        const dropAddressInput = screen.getByTestId('restore-sync-input');
+        fireEvent.change(dropAddressInput, { target: { value: 'https://sync.example.org' } });
+
+        // Submit fetch
+        fireEvent.click(screen.getByText('Find & Load Backup'));
+
+        await waitFor(() => {
+            expect(backupService.fetchAndInspectBackup).toHaveBeenCalledWith({
+                syncInput: 'https://sync.example.org',
+                mnemonic: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+                passphrase: 'my-secret-bip39-pass',
+                userPrefix: 'mobile-app',
+                language: 'english',
+            });
+            expect(screen.getByText('Charlie')).toBeInTheDocument();
+        });
+
+        // Set device password and restore
+        const newPasswordInput = screen.getByTestId('new-device-password-input');
+        const confirmNewPasswordInput = screen.getByTestId('confirm-device-password-input');
+
+        fireEvent.change(newPasswordInput, { target: { value: 'devicePassword456' } });
+        fireEvent.change(confirmNewPasswordInput, { target: { value: 'devicePassword456' } });
+
+        fireEvent.click(screen.getByTestId('restore-submit-btn'));
+
+        await waitFor(() => {
+            expect(backupService.restoreBackup).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    sourcePath: '/tmp/drop_restore_789.hmcbackup',
+                    credentialMode: 'mnemonic',
+                    passphrase: 'my-secret-bip39-pass',
+                    userPrefix: 'mobile-app',
+                    newPassword: 'devicePassword456',
+                })
+            );
+        });
+    });
 });

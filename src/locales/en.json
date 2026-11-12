@@ -1228,6 +1228,8 @@
   "profile.backupRestoreSyncSubtitle": "Enter your seed phrase and your sync service address.",
   "profile.backupRestoreTitle": "Restore Profile from Backup",
   "profile.backupRestoreUnlockTitle": "Unlock & Preview Backup",
+  "profile.backupRestoreUserPrefixLabel": "Device / Identity Prefix (optional)",
+  "profile.backupRestoreUserPrefixPlaceholder": "Leave blank to use default from backup",
   "profile.backupRestoreVerifiedBadge": "Verified Backup Manifest",
   "profile.backupRestoreVerifyButton": "Verify & Preview Backup",
   "profile.backupRestoreVerifying": "Decrypting manifest...",

@@ -1051,6 +1051,8 @@
   "profile.backupRestoreSyncSubtitle": "Saisissez votre phrase de récupération et l'adresse de votre dépôt.",
   "profile.backupRestoreTitle": "Restaurer le portefeuille à partir d'une sauvegarde",
   "profile.backupRestoreUnlockTitle": "Déverrouiller et prévisualiser la sauvegarde",
+  "profile.backupRestoreUserPrefixLabel": "Préfixe d'appareil / identité (facultatif)",
+  "profile.backupRestoreUserPrefixPlaceholder": "Laisser vide pour utiliser la valeur par défaut",
   "profile.backupRestoreVerifiedBadge": "Manifeste de sauvegarde vérifié",
   "profile.backupRestoreVerifyButton": "Vérifier et prévisualiser la sauvegarde",
   "profile.backupRestoreVerifying": "Déchiffrement du manifeste...",

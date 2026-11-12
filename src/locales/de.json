@@ -1228,6 +1228,8 @@
   "profile.backupRestoreSyncSubtitle": "Geben Sie Ihre Seed-Phrase und die Adresse Ihres Sync-Dienstes ein.",
   "profile.backupRestoreTitle": "Profil aus Backup wiederherstellen",
   "profile.backupRestoreUnlockTitle": "Entsperren & Backup-Vorschau",
+  "profile.backupRestoreUserPrefixLabel": "Geräte- / Identitäts-Kürzel (optional)",
+  "profile.backupRestoreUserPrefixPlaceholder": "Leer lassen für Standard aus Sicherung",
   "profile.backupRestoreVerifiedBadge": "Verifiziertes Backup-Manifest",
   "profile.backupRestoreVerifyButton": "Backup prüfen & anzeigen",
   "profile.backupRestoreVerifying": "Manifest wird entschlüsselt...",

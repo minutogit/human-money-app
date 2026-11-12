@@ -1051,6 +1051,8 @@
   "profile.backupRestoreSyncSubtitle": "Introduzca su frase semilla y la dirección de su buzón.",
   "profile.backupRestoreTitle": "Restaurar monedero desde copia de seguridad",
   "profile.backupRestoreUnlockTitle": "Desbloquear y previsualizar copia de seguridad",
+  "profile.backupRestoreUserPrefixLabel": "Prefijo de dispositivo / identidad (opcional)",
+  "profile.backupRestoreUserPrefixPlaceholder": "Dejar en blanco para usar el valor predeterminado",
   "profile.backupRestoreVerifiedBadge": "Manifiesto de copia de seguridad verificado",
   "profile.backupRestoreVerifyButton": "Verificar y previsualizar copia de seguridad",
   "profile.backupRestoreVerifying": "Descifrando manifiesto...",

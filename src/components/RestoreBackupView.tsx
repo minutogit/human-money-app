@@ -9,6 +9,7 @@ import { BackButton } from './ui/BackButton';
 import { AlertBanner } from './ui/AlertBanner';
 import { Input } from './ui/Input';
 import { Textarea } from './ui/Textarea';
+import { HelpIcon } from './ui/HelpIcon';
 import { backupService } from '../services/backupService';
 import { authService } from '../services/authService';
 import { BackupProbeDto, BackupInspectionDto, RestoreOutcomeDto, MnemonicLanguage } from '../types';
@@ -543,28 +544,78 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                                         24
                                     </button>
                                 </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setInputMode(inputMode === 'words' ? 'phrase' : 'words')}
+                                    className="text-xs font-semibold text-theme-primary hover:underline ml-1"
+                                >
+                                    {inputMode === 'words' ? t('auth.enterFullPhrase') : t('auth.useSingleFields')}
+                                </button>
                             </div>
                         </div>
 
-                        {/* Words grid */}
-                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 pt-1">
-                            {mnemonicWords.map((word, idx) => (
-                                <div key={idx} className="relative flex items-center">
-                                    <span className="absolute left-2.5 text-[10px] font-mono text-slate-400 select-none">
-                                        {idx + 1}.
-                                    </span>
-                                    <input
-                                        id={`restore-sync-word-${idx}`}
-                                        data-testid={`restore-sync-word-${idx}`}
-                                        type="text"
-                                        value={word}
-                                        onChange={(e) => handleWordChange(idx, e.target.value)}
-                                        className="w-full pl-7 pr-2 py-1.5 text-xs font-mono bg-slate-50 border border-slate-200 focus:bg-white focus:border-theme-primary rounded-xl outline-hidden transition-all"
-                                        autoCapitalize="none"
-                                        autoCorrect="off"
-                                    />
-                                </div>
-                            ))}
+                        {/* Words grid OR Textarea */}
+                        {inputMode === 'words' ? (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 pt-1">
+                                {mnemonicWords.map((word, idx) => (
+                                    <div key={idx} className="relative flex items-center">
+                                        <span className="absolute left-2.5 text-[10px] font-mono text-slate-400 select-none">
+                                            {idx + 1}.
+                                        </span>
+                                        <input
+                                            id={`restore-sync-word-${idx}`}
+                                            data-testid={`restore-sync-word-${idx}`}
+                                            type="text"
+                                            value={word}
+                                            onChange={(e) => handleWordChange(idx, e.target.value)}
+                                            className="w-full pl-7 pr-2 py-1.5 text-xs font-mono bg-slate-50 border border-slate-200 focus:bg-white focus:border-theme-primary rounded-xl outline-hidden transition-all"
+                                            autoCapitalize="none"
+                                            autoCorrect="off"
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <Textarea
+                                data-testid="restore-sync-phrase-textarea"
+                                value={rawPhrase}
+                                onChange={(e) => setRawPhrase(e.target.value)}
+                                placeholder={t('profile.pasteSeedPhrasePlaceholder')}
+                                rows={4}
+                                className="font-mono text-xs"
+                            />
+                        )}
+
+                        {/* Optional Passphrase & User/Device Prefix */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                            <div>
+                                <label className="text-[11px] font-bold text-theme-secondary mb-1 flex items-center gap-1.5">
+                                    <span>{t('profile.optionalPassphraseLabel', 'Optionale Passphrase (13./25. Wort)')}</span>
+                                    <HelpIcon topic="passphrase" size={12} />
+                                </label>
+                                <Input
+                                    data-testid="restore-sync-passphrase-input"
+                                    type="password"
+                                    value={passphrase}
+                                    onChange={(e) => setPassphrase(e.target.value)}
+                                    placeholder={t('auth.passphrasePlaceholder', 'Zusätzliches Wort eingeben, falls bei der Erstellung verwendet')}
+                                    className="text-xs"
+                                    autoComplete="off"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-[11px] font-bold text-theme-secondary mb-1">
+                                    {t('profile.backupRestoreUserPrefixLabel', 'User / Device Prefix (Optional)')}
+                                </label>
+                                <Input
+                                    data-testid="restore-sync-user-prefix-input"
+                                    type="text"
+                                    value={userPrefix}
+                                    onChange={(e) => setUserPrefix(e.target.value)}
+                                    placeholder={t('profile.backupRestoreUserPrefixPlaceholder', 'Standard (leer lassen)')}
+                                    className="text-xs font-mono"
+                                />
+                            </div>
                         </div>
 
                         {/* Sync Address Input */}
@@ -772,26 +823,30 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
 
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                                     <div>
-                                        <label className="block text-[11px] font-bold text-theme-secondary mb-1">
-                                            {t('profile.optionalPassphraseLabel')}
+                                        <label className="text-[11px] font-bold text-theme-secondary mb-1 flex items-center gap-1.5">
+                                            <span>{t('profile.optionalPassphraseLabel', 'Optionale Passphrase (13./25. Wort)')}</span>
+                                            <HelpIcon topic="passphrase" size={12} />
                                         </label>
                                         <Input
+                                            data-testid="restore-unlock-passphrase-input"
                                             type="password"
                                             value={passphrase}
                                             onChange={(e) => setPassphrase(e.target.value)}
-                                            placeholder="Optional BIP-39 passphrase"
+                                            placeholder={t('auth.passphrasePlaceholder', 'Zusätzliches Wort eingeben, falls bei der Erstellung verwendet')}
                                             className="text-xs"
+                                            autoComplete="off"
                                         />
                                     </div>
                                     <div>
                                         <label className="block text-[11px] font-bold text-theme-secondary mb-1">
-                                            User / Device Prefix (Optional)
+                                            {t('profile.backupRestoreUserPrefixLabel', 'User / Device Prefix (Optional)')}
                                         </label>
                                         <Input
+                                            data-testid="restore-unlock-user-prefix-input"
                                             type="text"
                                             value={userPrefix}
                                             onChange={(e) => setUserPrefix(e.target.value)}
-                                            placeholder="Leave blank to use manifest"
+                                            placeholder={t('profile.backupRestoreUserPrefixPlaceholder', 'Standard (leer lassen)')}
                                             className="text-xs font-mono"
                                         />
                                     </div>

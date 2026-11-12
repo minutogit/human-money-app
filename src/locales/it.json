@@ -1051,6 +1051,8 @@
   "profile.backupRestoreSyncSubtitle": "Inserisci la tua frase seme e l'indirizzo del tuo deposito.",
   "profile.backupRestoreTitle": "Ripristina portafoglio da backup",
   "profile.backupRestoreUnlockTitle": "Sblocca e visualizza anteprima del backup",
+  "profile.backupRestoreUserPrefixLabel": "Prefisso dispositivo / identità (opzionale)",
+  "profile.backupRestoreUserPrefixPlaceholder": "Lascia vuoto per utilizzare l'impostazione predefinita",
   "profile.backupRestoreVerifiedBadge": "Manifesto di backup verificato",
   "profile.backupRestoreVerifyButton": "Verifica e anteprima del backup",
   "profile.backupRestoreVerifying": "Decifrazione del manifesto...",
