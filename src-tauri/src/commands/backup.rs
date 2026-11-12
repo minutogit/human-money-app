@@ -1233,9 +1233,9 @@ pub async fn fetch_and_inspect_backup(
 
     let (pasted_write_url, pasted_read_url, pasted_drop_pub) = if trimmed.starts_with('{') {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            let w = val.get("writeUrl").or_else(|| val.get("write_url")).and_then(|v| v.as_str()).map(|s| s.to_string());
-            let r = val.get("readUrl").or_else(|| val.get("read_url")).and_then(|v| v.as_str()).map(|s| s.to_string());
-            let d = val.get("dropPub").or_else(|| val.get("drop_pub")).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let w = val.get("writeUrl").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let r = val.get("readUrl").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let d = val.get("dropPub").and_then(|v| v.as_str()).map(|s| s.to_string());
             (w, r, d)
         } else {
             (None, None, None)

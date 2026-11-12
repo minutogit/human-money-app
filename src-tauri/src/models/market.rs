@@ -258,6 +258,7 @@ pub struct FrontendBoardItem {
     pub trust: FrontendTrustTier,
     pub ad: humoco_market::Ad,
     pub days_left: u64,
+    pub is_own: bool,
 }
 
 impl FrontendBoardItem {
@@ -273,6 +274,7 @@ impl FrontendBoardItem {
             trust: bi.trust.into(),
             ad: bi.ad,
             days_left,
+            is_own: false,
         }
     }
 }
@@ -344,6 +346,14 @@ pub struct FrontendSyncDescriptor {
     pub last_error_at: Option<u64>,
     #[serde(default)]
     pub fail_count: u32,
+    #[serde(default = "default_sync_status")]
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_probed_at: Option<u64>,
+}
+
+pub fn default_sync_status() -> String {
+    "unverified".to_string()
 }
 
 impl From<humoco_market::DropDescriptor> for FrontendSyncDescriptor {
@@ -356,6 +366,8 @@ impl From<humoco_market::DropDescriptor> for FrontendSyncDescriptor {
             last_seen_at: None,
             last_error_at: None,
             fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
         }
     }
 }
@@ -541,6 +553,10 @@ pub struct FrontendSyncOverviewStatus {
     pub has_own_sync: bool,
     pub own_sync_soft_warning: bool,
     pub last_sync_at: Option<u64>,
+    #[serde(default)]
+    pub pending_auth_count: usize,
+    #[serde(default)]
+    pub failing_count: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -559,6 +575,8 @@ pub struct FrontendDiscoveredSync {
     pub is_authorized: bool,
     pub is_selected: bool,
     pub source_label: String,
+    #[serde(default = "default_sync_status")]
+    pub status: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

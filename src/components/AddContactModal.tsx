@@ -16,6 +16,7 @@ import { Textarea } from './ui/Textarea';
 import { readFromClipboard } from '../utils/clipboard';
 import { marketService } from '../services/marketService';
 import { parseContactCard } from '../utils/humocoUri';
+import { notifySyncStatusUpdated } from '../utils/syncEvents';
 import { useSession } from '../context/SessionContext';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
@@ -32,6 +33,27 @@ export interface AddContactModalProps {
 }
 
 type ModalView = 'tiles' | 'qr_scanner' | 'paste_input';
+
+function isCardEnvelopePayload(trimmed: string): boolean {
+    if (trimmed.startsWith('humoco://card') || trimmed.includes('?env=')) {
+        return true;
+    }
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (typeof parsed === 'object' && parsed !== null) {
+                return (
+                    'card_wire' in parsed ||
+                    ('card' in parsed && 'sig' in parsed) ||
+                    'envelope' in parsed
+                );
+            }
+        } catch {
+            return false;
+        }
+    }
+    return false;
+}
 
 export const AddContactModal: React.FC<AddContactModalProps> = ({
     isOpen,
@@ -116,36 +138,37 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
             return;
         }
 
-        // 1. Check if it's a direct DID
-        if (trimmed.startsWith('did:key:')) {
+        // 1. Check if it's a contact card or DID via canonical parseContactCard
+        const parsedContact = parseContactCard(trimmed);
+        if (parsedContact && parsedContact.did) {
+            let initialProfile: { firstName?: string; lastName?: string } | undefined;
+            if (parsedContact.name) {
+                const parts = parsedContact.name.trim().split(/\s+/);
+                if (parts.length > 1) {
+                    initialProfile = {
+                        firstName: parts.slice(0, -1).join(' '),
+                        lastName: parts[parts.length - 1],
+                    };
+                } else if (parts.length === 1 && parts[0]) {
+                    initialProfile = { firstName: parts[0] };
+                }
+            }
             onClose();
-            onOpenManualAdd(trimmed);
+            if (initialProfile || parsedContact.syncUrls) {
+                onOpenManualAdd(parsedContact.did, initialProfile, parsedContact.syncUrls);
+            } else {
+                onOpenManualAdd(parsedContact.did);
+            }
             return;
         }
 
-        // 2. Check if it's a humoco://contact URI
-        if (trimmed.startsWith('humoco://contact') || trimmed.includes('did%3Akey%3A')) {
-            const parsed = parseContactCard(trimmed);
-            if (parsed && parsed.did) {
-                let initialProfile: { firstName?: string; lastName?: string } | undefined;
-                if (parsed.name) {
-                    const parts = parsed.name.trim().split(/\s+/);
-                    if (parts.length > 1) {
-                        initialProfile = {
-                            firstName: parts.slice(0, -1).join(' '),
-                            lastName: parts[parts.length - 1],
-                        };
-                    } else if (parts.length === 1 && parts[0]) {
-                        initialProfile = { firstName: parts[0] };
-                    }
-                }
-                onClose();
-                onOpenManualAdd(parsed.did, initialProfile, parsed.syncUrls);
-                return;
-            }
+        // 2. Verify that payload looks like a signed card envelope before attempting import
+        if (!isCardEnvelopePayload(trimmed)) {
+            onError(t('contacts.invalidContactPayload', 'Ungültiges Kontakt- oder Visitenkarten-Format.'));
+            return;
         }
 
-        // 3. Otherwise try importing as a signed card (.hmcard, JSON, or card URI)
+        // 3. Import as signed card envelope (.hmcard, JSON, or card URI)
         setIsProcessing(true);
         try {
             const res = await protectAction(async (pwd) => {
@@ -154,6 +177,9 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
 
             if (res && res.status === 'accepted') {
                 await onContactAdded();
+                marketService.probeContactSyncs?.(false)
+                    ?.then(() => notifySyncStatusUpdated())
+                    ?.catch(() => {});
                 onSuccess(
                     res.replaced
                         ? t('marketplace.importUpdatedDesc', 'Visitenkarte erfolgreich aktualisiert.')
@@ -165,13 +191,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
             } else if (res && res.status === 'rejected_offender') {
                 onError(t('marketplace.importOffenderDesc', 'Diese Visitenkarte wurde wegen Betrugsverdacht blockiert.'));
             } else {
-                // If direct card import failed, but text is a plain string, let user edit it manually
-                if (trimmed.length > 20 && !trimmed.startsWith('{')) {
-                    onClose();
-                    onOpenManualAdd(trimmed);
-                } else {
-                    onError(t('contacts.invalidClipboardContent'));
-                }
+                onError(t('contacts.invalidContactPayload', 'Ungültiges Kontakt- oder Visitenkarten-Format.'));
             }
         } catch (err) {
             logger.error(`Import card error: ${stringifyError(err)}`);
@@ -233,12 +253,22 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
         try {
             const { text, error } = await readFromClipboard();
             if (error || !text || !text.trim()) {
-                // Open paste input view if direct read is empty or restricted
+                setPasteText('');
                 setView('paste_input');
                 return;
             }
-            await handleImportPayload(text);
+            const trimmed = text.trim();
+            const parsedContact = parseContactCard(trimmed);
+            const isCard = isCardEnvelopePayload(trimmed);
+            if (!parsedContact && !isCard) {
+                // Clipboard does not contain a valid contact card or envelope: switch to paste input without error
+                setPasteText('');
+                setView('paste_input');
+                return;
+            }
+            await handleImportPayload(trimmed);
         } catch {
+            setPasteText('');
             setView('paste_input');
         }
     };

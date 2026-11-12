@@ -1214,27 +1214,38 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                                                         return syncEp.writeUrl || syncEp.readUrl;
                                                                     }
                                                                 })();
-                                                                const isFailing = (syncEp.failCount ?? 0) > 0;
-                                                                const isSeen = !isFailing && !!syncEp.lastSeenAt;
+                                                                const isFailing = syncEp.status === 'unreachable' || (syncEp.failCount ?? 0) > 0;
+                                                                const isPendingAuth = syncEp.status === 'pending_auth';
+                                                                const isActive = syncEp.status === 'active';
 
                                                                 let badgeColor = 'bg-slate-50 text-slate-600 border-slate-200';
                                                                 let dotColor = 'bg-slate-400';
-                                                                let statusLabel = t('contacts.syncUntested');
-                                                                let tooltip = `${host} (${t('contacts.syncUntested')})`;
+                                                                let statusLabel = t('contacts.syncUnverified', 'Ungeprüft');
+                                                                let tooltip = `${host} (${statusLabel})`;
 
-                                                                if (isFailing) {
+                                                                if (isPendingAuth) {
+                                                                    badgeColor = 'bg-amber-50 text-amber-700 border-amber-200';
+                                                                    dotColor = 'bg-amber-500';
+                                                                    statusLabel = t('contacts.syncPendingAuth', 'Wartet auf Freigabe');
+                                                                    tooltip = `${host} - ${statusLabel}`;
+                                                                } else if (isFailing) {
                                                                     badgeColor = syncEp.failCount && syncEp.failCount >= 3
                                                                         ? 'bg-rose-50 text-rose-700 border-rose-200'
                                                                         : 'bg-amber-50 text-amber-700 border-amber-200';
                                                                     dotColor = syncEp.failCount && syncEp.failCount >= 3 ? 'bg-rose-500' : 'bg-amber-500';
                                                                     statusLabel = syncEp.failCount && syncEp.failCount >= 3 ? t('contacts.syncUnreachable') : t('contacts.syncWarning');
                                                                     tooltip = `${host} - ${statusLabel} (${t('contacts.syncFailCount')} ${syncEp.failCount})`;
-                                                                } else if (isSeen) {
+                                                                } else if (isActive) {
                                                                     badgeColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
                                                                     dotColor = 'bg-emerald-500';
-                                                                    statusLabel = t('contacts.syncReachable');
+                                                                    statusLabel = t('contacts.syncAvailable', 'Abgleich bereit');
                                                                     const dateStr = syncEp.lastSeenAt ? new Date(syncEp.lastSeenAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
                                                                     tooltip = `${host} - ${statusLabel}${dateStr ? ` (${t('contacts.syncLastSeen')} ${dateStr})` : ''}`;
+                                                                } else {
+                                                                    badgeColor = 'bg-slate-50 text-slate-600 border-slate-200';
+                                                                    dotColor = 'bg-slate-400';
+                                                                    statusLabel = t('contacts.syncUnverified', 'Ungeprüft');
+                                                                    tooltip = `${host} (${statusLabel})`;
                                                                 }
 
                                                                 return (

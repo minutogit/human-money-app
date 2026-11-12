@@ -578,7 +578,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
                                             {skill.title}
                                         </h4>
                                         <div className="flex items-center gap-1.5 flex-wrap shrink-0">
-                                            {(skill.isRemote || (skill as any).is_remote) && (
+                                            {skill.isRemote && (
                                                 <span
                                                     className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md"
                                                     data-testid="skill-remote-badge"
@@ -651,7 +651,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
                         {(currentPerson.activeAds || []).map((ad) => {
                             const nowSecs = Math.floor(Date.now() / 1000);
                             const daysLeft =
-                                ad.expires_at > nowSecs ? Math.ceil((ad.expires_at - nowSecs) / 86400) : 0;
+                                ad.expiresAt > nowSecs ? Math.ceil((ad.expiresAt - nowSecs) / 86400) : 0;
 
                             return (
                                 <AdCard

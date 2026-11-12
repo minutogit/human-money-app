@@ -67,12 +67,15 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         setInitialOpenSection('standards');
                     }
                 }
-                setTimeout(() => {
-                    const el = document.getElementById(`settings-${sec}-section`);
-                    if (el && typeof el.scrollIntoView === 'function') {
-                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const timer = setTimeout(() => {
+                    if (typeof document !== 'undefined') {
+                        const el = document.getElementById(`settings-${sec}-section`);
+                        if (el && typeof el.scrollIntoView === 'function') {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
                     }
                 }, 100);
+                return () => clearTimeout(timer);
             }
         }
     }, [nav?.appState]);

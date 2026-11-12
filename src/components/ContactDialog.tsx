@@ -9,6 +9,7 @@ import { HelpIcon } from './ui/HelpIcon';
 import { TrustLevelRadioCards } from './TrustLevelRadioCards';
 import { readFromClipboard } from '../utils/clipboard';
 import { parseContactCard } from '../utils/humocoUri';
+import { notifySyncStatusUpdated } from '../utils/syncEvents';
 import { Clipboard, CheckCircle2, AlertCircle, Server, Trash2 } from 'lucide-react';
 
 interface ContactDialogProps {
@@ -85,9 +86,10 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         } else {
             const initSyncs: FrontendSyncDescriptor[] = (initialSyncUrls || []).slice(0, 2).map(url => ({
                 writeUrl: url,
-                readUrl: url,
+                readUrl: '',
                 dropPub: '',
                 failCount: 0,
+                status: 'unverified',
             }));
             if (initialProfile) {
                 setFirstName(initialProfile.firstName || '');
@@ -136,9 +138,10 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                         if (newSyncs.length < 2 && !newSyncs.some(d => d.writeUrl === url || d.readUrl === url)) {
                             newSyncs.push({
                                 writeUrl: url,
-                                readUrl: url,
+                                readUrl: '',
                                 dropPub: '',
                                 failCount: 0,
+                                status: 'unverified',
                             });
                         }
                     }
@@ -197,6 +200,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 dropPub: info.dropPub,
                 lastSeenAt: Math.floor(Date.now() / 1000),
                 failCount: 0,
+                status: 'active',
+                lastProbedAt: Math.floor(Date.now() / 1000),
             };
             setSyncs(prev => [...prev, newSync].slice(0, 2));
             setSyncInputUrl('');
@@ -239,6 +244,9 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 syncs: syncs.length > 0 ? syncs : [],
             };
             await onSave(contact);
+            marketService.probeContactSyncs?.(false)
+                ?.then(() => notifySyncStatusUpdated())
+                ?.catch(() => {});
             onClose();
         } catch (e: unknown) {
             console.error("Failed to save contact:", e);

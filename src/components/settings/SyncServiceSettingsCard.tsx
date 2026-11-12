@@ -41,6 +41,93 @@ import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { translateError } from '../../utils/errorHelper';
 import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
 
+export const HOST_SYNC_DRAFT_KEY = 'humoco_draft_host_webspace_url';
+export const CONSUMER_SYNC_DRAFT_KEY = 'humoco_draft_consumer_sync_url';
+
+const getSessionDraft = (key: string): string => {
+    try {
+        if (typeof window !== 'undefined' && window.sessionStorage) {
+            return window.sessionStorage.getItem(key) || '';
+        }
+    } catch {
+        // ignore
+    }
+    return '';
+};
+
+const setSessionDraft = (key: string, value: string): void => {
+    try {
+        if (typeof window !== 'undefined' && window.sessionStorage) {
+            if (value) {
+                window.sessionStorage.setItem(key, value);
+            } else {
+                window.sessionStorage.removeItem(key);
+            }
+        }
+    } catch {
+        // ignore
+    }
+};
+
+/**
+ * Intelligently normalizes a user-entered Sync URL:
+ * - Trims whitespace
+ * - Prepends 'https://' if scheme is missing
+ * - Upgrades 'http://' to 'https://' unless it's a local development loopback (localhost, 127.0.0.1, [::1])
+ * - Removes query strings and fragments
+ * - Normalizes path so that 'sync.php' is automatically recognized and appended if omitted,
+ *   without duplicating it if the user already entered it.
+ */
+export function normalizeSyncUrlInput(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+
+    let s = trimmed;
+    if (!s.includes('://')) {
+        s = 'https://' + s;
+    } else if (s.startsWith('http://')) {
+        const after = s.slice(7);
+        const host = after.split(/[/:]/)[0].toLowerCase();
+        if (host !== 'localhost' && host !== '127.0.0.1' && host !== '[::1]') {
+            s = 'https://' + after;
+        }
+    }
+
+    // Strip fragment and query
+    s = s.replace(/[#?].*$/, '');
+
+    const schemeIdx = s.indexOf('://');
+    const scheme = s.substring(0, schemeIdx + 3);
+    const rest = s.substring(schemeIdx + 3);
+
+    const firstSlash = rest.indexOf('/');
+    let authority = firstSlash === -1 ? rest : rest.substring(0, firstSlash);
+    const rawPath = firstSlash === -1 ? '/' : rest.substring(firstSlash);
+
+    // Lowercase host/authority
+    authority = authority.toLowerCase();
+
+    // Strip default port 443 for https, 80 for http
+    if (scheme === 'https://' && authority.endsWith(':443')) {
+        authority = authority.slice(0, -4);
+    } else if (scheme === 'http://' && authority.endsWith(':80')) {
+        authority = authority.slice(0, -3);
+    }
+
+    // Normalize path: trim trailing slashes
+    const cleanPath = rawPath.replace(/\/+$/, '');
+    let canonicalPath: string;
+    if (!cleanPath || cleanPath === '') {
+        canonicalPath = '/sync.php';
+    } else if (cleanPath.endsWith('/sync.php') || cleanPath === '/sync.php') {
+        canonicalPath = cleanPath;
+    } else {
+        canonicalPath = `${cleanPath}/sync.php`;
+    }
+
+    return `${scheme}${authority}${canonicalPath}`;
+}
+
 interface PolicyHelpPopoverProps {
     title: string;
     content: string;
@@ -216,13 +303,18 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
     const activeTab = mode === 'consumer' ? 'connected' : mode === 'host' ? 'host' : tabState;
 
     const [isLoading, setIsLoading] = useState(false);
-    const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+    const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
     // Tab 1 state: Connected services & features
     const [discoveredDrops, setDiscoveredDrops] = useState<FrontendDiscoveredSync[]>([]);
     const [configuredPublicDrops, setConfiguredPublicDrops] = useState<StoredPublicSync[]>([]);
-    const [inputUrl, setInputUrl] = useState('');
+    const [inputUrl, setInputUrlState] = useState(() => getSessionDraft(CONSUMER_SYNC_DRAFT_KEY));
+    const setInputUrl = (val: string) => {
+        setInputUrlState(val);
+        setSessionDraft(CONSUMER_SYNC_DRAFT_KEY, val);
+    };
     const [isProbing, setIsProbing] = useState(false);
+    const [isProbingContacts, setIsProbingContacts] = useState(false);
     const [probeResult, setProbeResult] = useState<{ status: 'success' | 'unauthorized' | 'error'; message: string } | null>(null);
     const { cooldownSeconds, isCoolingDown, checkAndTriggerCooldown } = useRateLimitCooldown();
 
@@ -244,7 +336,11 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
     });
     const hostMaxMembers = 300;
     const hostMaxStorageMb = 50;
-    const [hostWebspaceUrl, setHostWebspaceUrl] = useState('');
+    const [hostWebspaceUrl, setHostWebspaceUrlState] = useState(() => getSessionDraft(HOST_SYNC_DRAFT_KEY));
+    const setHostWebspaceUrl = (val: string) => {
+        setHostWebspaceUrlState(val);
+        setSessionDraft(HOST_SYNC_DRAFT_KEY, val);
+    };
     const [isDownloadingZip, setIsDownloadingZip] = useState(false);
     const [isTestingHost, setIsTestingHost] = useState(false);
     const [isUpdatingPolicy, setIsUpdatingPolicy] = useState(false);
@@ -336,10 +432,16 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
     const handleProbeAndAdd = async () => {
         const trimmed = inputUrl.trim();
         if (!trimmed) return;
+        const normalized = normalizeSyncUrlInput(trimmed);
+        if (normalized && normalized !== inputUrl) {
+            setInputUrl(normalized);
+        }
+        const targetUrl = normalized || trimmed;
+
         setIsProbing(true);
         setProbeResult(null);
         try {
-            const info = await marketService.probePublicSync(trimmed);
+            const info = await marketService.probePublicSync(targetUrl);
             if (info) {
                 // Check if key is authorized
                 const hasAuth = info.authorizedChannels.length > 0;
@@ -421,10 +523,53 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         }
     };
 
+    const handleProbeContactSyncs = async () => {
+        setIsProbingContacts(true);
+        setFeedback(null);
+        try {
+            await marketService.probeContactSyncs(true);
+            const refetched = await marketService.discoverAvailableSyncs().catch(() => []);
+            setDiscoveredDrops(refetched);
+            notifySyncStatusUpdated();
+            setFeedback({
+                type: 'success',
+                message: t('settings.syncProbeSuccess', 'Sync-Dienste erfolgreich geprüft.'),
+            });
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsProbingContacts(false);
+        }
+    };
+
     const handleToggleDiscoveredDrop = async (discovered: FrontendDiscoveredSync) => {
         try {
             const currentSelected = discoveredDrops.filter(d => d.isSelected).map(d => d.descriptor);
             const isCurrentlySelected = discovered.isSelected;
+
+            if (!isCurrentlySelected && (discovered.status || discovered.descriptor.status) !== 'active') {
+                setIsProbingContacts(true);
+                try {
+                    await marketService.probeContactSyncs(true);
+                    const fresh = await marketService.discoverAvailableSyncs().catch(() => []);
+                    setDiscoveredDrops(fresh);
+                    notifySyncStatusUpdated();
+                    const match = fresh.find(d =>
+                        (d.descriptor.readUrl && d.descriptor.readUrl === discovered.descriptor.readUrl) ||
+                        (d.descriptor.writeUrl && d.descriptor.writeUrl === discovered.descriptor.writeUrl)
+                    );
+                    if (!match || (match.status || match.descriptor.status) !== 'active') {
+                        setFeedback({
+                            type: 'info',
+                            message: t('settings.syncStatusPendingAuthDesc', 'Dieser Dienst wartet noch auf die Freigabe durch den Kontakt.'),
+                        });
+                        return;
+                    }
+                } finally {
+                    setIsProbingContacts(false);
+                }
+            }
+
             let updatedList = [];
             if (isCurrentlySelected) {
                 updatedList = currentSelected.filter(d => d.readUrl !== discovered.descriptor.readUrl);
@@ -474,16 +619,23 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
     const handleTestAndActivateHost = async () => {
         const trimmed = hostWebspaceUrl.trim();
         if (!trimmed) return;
+        const normalized = normalizeSyncUrlInput(trimmed);
+        if (normalized && normalized !== hostWebspaceUrl) {
+            setHostWebspaceUrl(normalized);
+        }
+        const targetUrl = normalized || trimmed;
+
         setIsTestingHost(true);
         setFeedback(null);
         try {
             await protectAction(async (pwd) => {
-                const testRes = await marketService.testSyncConnection(trimmed, pwd || undefined);
+                const testRes = await marketService.testSyncConnection(targetUrl, pwd || undefined);
                 if (!testRes.success || !testRes.writeOk || !testRes.readOk) {
                     throw new Error(testRes.message || 'Verbindung zum Webspace konnte nicht verifiziert werden.');
                 }
-                const admin = await marketService.finalizeSyncSetup(trimmed, pwd || undefined);
+                const admin = await marketService.finalizeSyncSetup(targetUrl, pwd || undefined);
                 setAdminStatus(admin);
+                setSessionDraft(HOST_SYNC_DRAFT_KEY, '');
                 notifySyncStatusUpdated();
                 setFeedback({
                     type: 'success',
@@ -597,6 +749,8 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                     <div className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
                         feedback.type === 'success'
                             ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+                            : feedback.type === 'info'
+                            ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800'
                             : 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800'
                     }`}>
                         {feedback.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
@@ -775,36 +929,55 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                 </p>
                             </div>
 
-                            <div className="flex flex-col sm:flex-row gap-2">
-                                <Input
-                                    value={inputUrl}
-                                    onChange={(e) => setInputUrl(e.target.value)}
-                                    placeholder={t('settings.syncAddPlaceholder')}
-                                    className="text-xs flex-1"
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter') {
-                                            e.preventDefault();
-                                            handleProbeAndAdd();
-                                        }
-                                    }}
-                                />
-                                <Button
-                                    type="button"
-                                    variant="primary"
-                                    size="sm"
-                                    onClick={handleProbeAndAdd}
-                                    disabled={isProbing || !inputUrl.trim() || isCoolingDown}
-                                    className="gap-1.5 shrink-0"
-                                >
-                                    <RefreshCw size={13} className={isProbing ? 'animate-spin' : ''} />
-                                    <span>
-                                        {isCoolingDown
-                                            ? t('settings.syncRateLimitWait', { seconds: cooldownSeconds })
-                                            : isProbing
-                                            ? t('common.testing')
-                                            : t('settings.syncAddBtn')}
-                                    </span>
-                                </Button>
+                            <div className="flex flex-col gap-2">
+                                <div className="flex flex-col sm:flex-row gap-2">
+                                    <Input
+                                        value={inputUrl}
+                                        onChange={(e) => setInputUrl(e.target.value)}
+                                        onBlur={() => {
+                                            if (inputUrl.trim()) {
+                                                const norm = normalizeSyncUrlInput(inputUrl);
+                                                if (norm && norm !== inputUrl) {
+                                                    setInputUrl(norm);
+                                                }
+                                            }
+                                        }}
+                                        placeholder={t('settings.syncAddPlaceholder')}
+                                        className="text-xs flex-1 font-mono"
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                handleProbeAndAdd();
+                                            }
+                                        }}
+                                    />
+                                    <Button
+                                        type="button"
+                                        variant="primary"
+                                        size="sm"
+                                        onClick={handleProbeAndAdd}
+                                        disabled={isProbing || !inputUrl.trim() || isCoolingDown}
+                                        className="gap-1.5 shrink-0"
+                                    >
+                                        <RefreshCw size={13} className={isProbing ? 'animate-spin' : ''} />
+                                        <span>
+                                            {isCoolingDown
+                                                ? t('settings.syncRateLimitWait', { seconds: cooldownSeconds })
+                                                : isProbing
+                                                ? t('common.testing')
+                                                : t('settings.syncAddBtn')}
+                                        </span>
+                                    </Button>
+                                </div>
+
+                                {inputUrl.trim() && (
+                                    <div className="flex items-center gap-1.5 text-[11px] text-theme-light pl-1">
+                                        <span className="font-semibold text-theme-secondary">{t('settings.syncDetectedUrl')}</span>
+                                        <span className="font-mono text-theme-primary bg-bg-app px-2 py-0.5 rounded-lg border border-theme-subtle break-all">
+                                            {normalizeSyncUrlInput(inputUrl)}
+                                        </span>
+                                    </div>
+                                )}
                             </div>
 
                             {probeResult && (
@@ -827,10 +1000,23 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
 
                         {/* 3. Discovered Friend Drops (Auto-Discovery) */}
                         <div className="space-y-3">
-                            <h4 className="text-xs font-bold text-theme-secondary uppercase tracking-wider flex items-center gap-1.5">
-                                <Users size={14} className="text-theme-primary" />
-                                <span>{t('settings.syncDiscoveredTitle')}</span>
-                            </h4>
+                            <div className="flex items-center justify-between gap-2">
+                                <h4 className="text-xs font-bold text-theme-secondary uppercase tracking-wider flex items-center gap-1.5">
+                                    <Users size={14} className="text-theme-primary" />
+                                    <span>{t('settings.syncDiscoveredTitle')}</span>
+                                </h4>
+                                <Button
+                                    size="xs"
+                                    variant="outline"
+                                    disabled={isProbingContacts}
+                                    onClick={handleProbeContactSyncs}
+                                    className="text-[11px] h-7 px-2 flex items-center gap-1"
+                                    data-testid="probe-contact-syncs-btn"
+                                >
+                                    <RefreshCw size={12} className={isProbingContacts ? 'animate-spin' : ''} />
+                                    <span>{t('settings.syncProbeNow', 'Jetzt prüfen')}</span>
+                                </Button>
+                            </div>
 
                             {(discoveredDrops || []).length === 0 ? (
                                 <div className="p-4 bg-bg-app rounded-2xl border border-theme-subtle text-xs text-theme-light text-center leading-relaxed">
@@ -838,36 +1024,59 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                 </div>
                             ) : (
                                 <div className="space-y-2">
-                                    {(discoveredDrops || []).map((drop, idx) => (
-                                        <div
-                                            key={idx}
-                                            className="p-3 bg-white rounded-xl border border-theme-subtle flex items-center justify-between gap-3 text-xs"
-                                        >
-                                            <div className="flex items-center gap-2.5 min-w-0">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={drop.isSelected}
-                                                    onChange={() => handleToggleDiscoveredDrop(drop)}
-                                                    className="rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
-                                                    title={t('settings.syncActivateTooltip', 'Für Synchronisation aktivieren')}
-                                                />
-                                                <div className="min-w-0">
-                                                    <span className="font-bold text-theme-primary truncate block">
-                                                        {t('settings.syncConnectedVia', {
-                                                            name: drop.sourceLabel || drop.descriptor.readUrl,
-                                                        })}
-                                                    </span>
-                                                    <span className="font-mono text-[10px] text-theme-light truncate block">
-                                                        {drop.descriptor.readUrl}
-                                                    </span>
-                                                </div>
-                                            </div>
+                                    {(discoveredDrops || []).map((drop, idx) => {
+                                        const status = drop.status || drop.descriptor.status || 'unverified';
+                                        let badgeColor = 'bg-slate-100 text-slate-700';
+                                        let statusText = t('settings.syncStatusUnverified', 'Noch nicht geprüft');
 
-                                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 shrink-0">
-                                                Verbunden
-                                            </span>
-                                        </div>
-                                    ))}
+                                        if (status === 'active') {
+                                            badgeColor = 'bg-emerald-100 text-emerald-800';
+                                            statusText = t('settings.syncStatusActive', 'Bereit / Freigeschaltet');
+                                        } else if (status === 'pending_auth') {
+                                            badgeColor = 'bg-amber-100 text-amber-800';
+                                            statusText = t('settings.syncStatusPendingAuth', 'Wartet auf Freigabe durch Kontakt');
+                                        } else if (status === 'unreachable') {
+                                            badgeColor = 'bg-rose-100 text-rose-800';
+                                            statusText = t('settings.syncStatusUnreachable', 'Nicht erreichbar');
+                                        }
+
+                                        const displayUrl = drop.descriptor.writeUrl || drop.descriptor.readUrl;
+
+                                        return (
+                                            <div
+                                                key={idx}
+                                                className="p-3 bg-white rounded-xl border border-theme-subtle flex items-center justify-between gap-3 text-xs"
+                                            >
+                                                <div className="flex items-center gap-2.5 min-w-0">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={drop.isSelected}
+                                                        onChange={() => handleToggleDiscoveredDrop(drop)}
+                                                        className="rounded border-theme-subtle text-theme-primary focus:ring-theme-primary cursor-pointer"
+                                                        title={
+                                                            status === 'active'
+                                                                ? t('settings.syncActivateTooltip', 'Für Synchronisation aktivieren')
+                                                                : t('settings.syncStatusPendingAuth', 'Wartet auf Freigabe durch Kontakt')
+                                                        }
+                                                    />
+                                                    <div className="min-w-0">
+                                                        <span className="font-bold text-theme-primary truncate block">
+                                                            {t('settings.syncConnectedVia', {
+                                                                name: drop.sourceLabel || displayUrl,
+                                                            })}
+                                                        </span>
+                                                        <span className="font-mono text-[10px] text-theme-light truncate block">
+                                                            {displayUrl}
+                                                        </span>
+                                                    </div>
+                                                </div>
+
+                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${badgeColor}`}>
+                                                    {statusText}
+                                                </span>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>
@@ -1000,24 +1209,53 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         </h4>
                                     </div>
 
-                                    <div className="flex flex-col sm:flex-row gap-2">
-                                        <Input
-                                            value={hostWebspaceUrl}
-                                            onChange={(e) => setHostWebspaceUrl(e.target.value)}
-                                            placeholder={t('settings.syncHostUrlPlaceholder')}
-                                            className="text-xs flex-1"
-                                        />
-                                        <Button
-                                            type="button"
-                                            variant="primary"
-                                            size="sm"
-                                            onClick={handleTestAndActivateHost}
-                                            disabled={isTestingHost || !hostWebspaceUrl.trim()}
-                                            className="gap-1.5 shrink-0"
-                                        >
-                                            <RefreshCw size={13} className={isTestingHost ? 'animate-spin' : ''} />
-                                            <span>{isTestingHost ? t('common.testing') : t('settings.syncHostTestActivate')}</span>
-                                        </Button>
+                                    <p className="text-[11px] text-theme-light leading-relaxed">
+                                        {t('settings.syncHostSetupStep2Desc')}
+                                    </p>
+
+                                    <div className="flex flex-col gap-2">
+                                        <div className="flex flex-col sm:flex-row gap-2">
+                                            <Input
+                                                value={hostWebspaceUrl}
+                                                onChange={(e) => setHostWebspaceUrl(e.target.value)}
+                                                onBlur={() => {
+                                                    if (hostWebspaceUrl.trim()) {
+                                                        const norm = normalizeSyncUrlInput(hostWebspaceUrl);
+                                                        if (norm && norm !== hostWebspaceUrl) {
+                                                            setHostWebspaceUrl(norm);
+                                                        }
+                                                    }
+                                                }}
+                                                placeholder={t('settings.syncHostUrlPlaceholder')}
+                                                className="text-xs flex-1 font-mono"
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        e.preventDefault();
+                                                        handleTestAndActivateHost();
+                                                    }
+                                                }}
+                                            />
+                                            <Button
+                                                type="button"
+                                                variant="primary"
+                                                size="sm"
+                                                onClick={handleTestAndActivateHost}
+                                                disabled={isTestingHost || !hostWebspaceUrl.trim()}
+                                                className="gap-1.5 shrink-0"
+                                            >
+                                                <RefreshCw size={13} className={isTestingHost ? 'animate-spin' : ''} />
+                                                <span>{isTestingHost ? t('common.testing') : t('settings.syncHostTestActivate')}</span>
+                                            </Button>
+                                        </div>
+
+                                        {hostWebspaceUrl.trim() && (
+                                            <div className="flex items-center gap-1.5 text-[11px] text-theme-light pl-1">
+                                                <span className="font-semibold text-theme-secondary">{t('settings.syncDetectedUrl')}</span>
+                                                <span className="font-mono text-theme-primary bg-bg-app px-2 py-0.5 rounded-lg border border-theme-subtle break-all">
+                                                    {normalizeSyncUrlInput(hostWebspaceUrl)}
+                                                </span>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>

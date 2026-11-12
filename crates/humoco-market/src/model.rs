@@ -39,6 +39,7 @@ pub fn is_false(v: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Skill {
     pub title: String, // 1..=MAX_SKILL_TITLE_CHARS
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -57,6 +58,7 @@ pub enum AdKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Ad {
     pub id: String, // 16 lowercase hex chars, CSPRNG, stable across edits & renewals
     pub kind: AdKind,

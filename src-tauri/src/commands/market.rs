@@ -5,7 +5,7 @@ use crate::models::{
     FieldAudience, FrontendAdInput, FrontendBoardItem,
     FrontendError, FrontendForwardCardExport, FrontendImportCardResult,
     FrontendMarketPerson, FrontendMarketSnapshot, FrontendMyMarketProfile,
-    FrontendSaveMyMarketProfileRequest, StoredOwnMarketProfile,
+    FrontendSaveMyMarketProfileRequest, FrontendTrustTier, StoredOwnMarketProfile,
 };
 use crate::state::{AppState, MARKET_CARD_STORE_KEY, MARKET_OWN_PROFILE_KEY};
 use crate::sync_client;
@@ -267,6 +267,8 @@ async fn delete_remote_card_slots(state: &AppState, password: Option<&str>) {
                     last_seen_at: None,
                     last_error_at: None,
                     fail_count: 0,
+                    status: "active".to_string(),
+                    last_probed_at: None,
                 });
             }
         }
@@ -873,24 +875,21 @@ pub async fn get_ad_image_impl(
 
     let client = sync_client::create_sync_http_client();
     for read_url in &read_urls {
-        match sync_client::get_media_blob(&client, read_url, &blob_id).await {
-            Ok(Some(ciphertext)) => {
-                if let Ok(media_bytes) = humoco_market::open_media_blob(&image_token, &ciphertext) {
-                    let cache_key = crate::state::cached_media_storage_key(&blob_id);
-                    if let Ok(mut service) = state.service.lock() {
-                        let _ = service.save_encrypted_data(&cache_key, &media_bytes, password.as_deref());
-                    }
-                    use base64::engine::general_purpose::STANDARD;
-                    use base64::Engine;
-                    let prefix = humoco_market::detect_media_data_uri_prefix(&media_bytes);
-                    return Ok(Some(format!(
-                        "{}{}",
-                        prefix,
-                        STANDARD.encode(&media_bytes)
-                    )));
+        if let Ok(Some(ciphertext)) = sync_client::get_media_blob(&client, read_url, &blob_id).await {
+            if let Ok(media_bytes) = humoco_market::open_media_blob(&image_token, &ciphertext) {
+                let cache_key = crate::state::cached_media_storage_key(&blob_id);
+                if let Ok(mut service) = state.service.lock() {
+                    let _ = service.save_encrypted_data(&cache_key, &media_bytes, password.as_deref());
                 }
+                use base64::engine::general_purpose::STANDARD;
+                use base64::Engine;
+                let prefix = humoco_market::detect_media_data_uri_prefix(&media_bytes);
+                return Ok(Some(format!(
+                    "{}{}",
+                    prefix,
+                    STANDARD.encode(&media_bytes)
+                )));
             }
-            _ => {}
         }
     }
 
@@ -969,9 +968,25 @@ pub fn get_market_view_impl(
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
 
-    let raw_persons = service
+    let (raw_persons, own_did, wallet_owner_name) = service
         .with_wallet(|wallet| {
             let own_did = wallet.get_user_id().to_string();
+            let prof = wallet.profile.to_public_profile();
+            let name = [prof.first_name.as_deref(), prof.last_name.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let owner_name = if !name.is_empty() {
+                name
+            } else if let Some(ref org) = prof.organization {
+                org.clone()
+            } else if let Some(ref com) = prof.community {
+                com.clone()
+            } else {
+                "Ich".to_string()
+            };
+
             let vouchers: Vec<&human_money_core::Voucher> = wallet
                 .voucher_store
                 .vouchers
@@ -1000,17 +1015,45 @@ pub fn get_market_view_impl(
                 humoco_market::TrustTier::Unknown
             };
 
-            humoco_market::build_market_view(vouchers, &cards_vec, &own_did, &classify, now)
+            let persons = humoco_market::build_market_view(vouchers, &cards_vec, &own_did, &classify, now);
+            (persons, own_did, owner_name)
         })
         .map_err(FrontendError::from)?;
 
+    let canonical_own_did = crate::state::canonicalize_did(&own_did).unwrap_or(own_did);
+
     let raw_board = humoco_market::build_ad_board(&raw_persons);
 
-    let board: Vec<FrontendBoardItem> = raw_board
+    let mut board: Vec<FrontendBoardItem> = raw_board
         .into_iter()
         .filter(|bi| settings.market_show_unknown || bi.trust == humoco_market::TrustTier::Trusted)
         .map(|bi| FrontendBoardItem::from_board_item(bi, now))
         .collect();
+
+    if let Some(ref stored) = stored_opt {
+        if stored.published || !stored.ads.is_empty() {
+            for ad in &stored.ads {
+                if ad.expires_at > now {
+                    let days_left = ad.expires_at.saturating_sub(now).div_ceil(86_400);
+                    board.push(FrontendBoardItem {
+                        owner_did: canonical_own_did.clone(),
+                        owner_name: wallet_owner_name.clone(),
+                        trust: FrontendTrustTier::Trusted,
+                        ad: ad.clone(),
+                        days_left,
+                        is_own: true,
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort combined board vector descending by renewed_at / published_at
+    board.sort_by(|a, b| {
+        let time_a = a.ad.renewed_at.unwrap_or(a.ad.published_at);
+        let time_b = b.ad.renewed_at.unwrap_or(b.ad.published_at);
+        time_b.cmp(&time_a).then_with(|| a.ad.id.cmp(&b.ad.id))
+    });
 
     let mut persons: Vec<FrontendMarketPerson> = raw_persons
         .into_iter()
@@ -1130,7 +1173,12 @@ pub fn import_contact_card_impl(
         payload
     };
 
-    let env: humoco_market::CardEnvelope = serde_json::from_str(&json_str)
+    let json_trimmed = json_str.trim();
+    if !json_trimmed.starts_with('{') {
+        return Err(FrontendError::from("Payload is not a valid CardEnvelope JSON".to_string()));
+    }
+
+    let env: humoco_market::CardEnvelope = serde_json::from_str(json_trimmed)
         .map_err(|e| FrontendError::from(format!("Failed to parse CardEnvelope: {}", e)))?;
 
     let settings = state
@@ -1627,6 +1675,12 @@ mod tests {
         assert!(alice_profile.share_uri.is_some());
         let _share_uri = alice_profile.share_uri.unwrap();
 
+        // Alice's own active ad must appear on her own board with is_own = true
+        let alice_view = get_market_view_impl(Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(alice_view.board.len(), 1);
+        assert!(alice_view.board[0].is_own);
+        assert_eq!(alice_view.board[0].ad.title, "Fresh Baguettes");
+
         // 2. Bob imports Alice's full card via file envelope (since QR share_uri is 100% ad-free & image-free)
         let file_wire = alice_profile.file_wire.expect("file_wire must be present");
         let file_env = humoco_market::own_envelope(file_wire);
@@ -1643,6 +1697,7 @@ mod tests {
         assert_eq!(bob_view.board.len(), 1);
         assert_eq!(bob_view.board[0].owner_did, alice_did);
         assert_eq!(bob_view.board[0].ad.title, "Fresh Baguettes");
+        assert!(!bob_view.board[0].is_own);
 
         // 3. Bob forwards Alice's card to Charlie (hops = 2)
         let bob_export = export_forward_card_impl(alice_did.clone(), Some(password.to_string()), &bob_state).unwrap();
@@ -1711,7 +1766,7 @@ mod tests {
         // 2. Avatar validation in save_my_market_profile_impl
         let bad_avatar_req = FrontendSaveMyMarketProfileRequest {
             profile: FrontendUserProfile {
-                picture_url: Some(format!("data:image/webp;base64,{}", STANDARD.encode(&make_test_vp8_webp(120, 120)))),
+                picture_url: Some(format!("data:image/webp;base64,{}", STANDARD.encode(make_test_vp8_webp(120, 120)))),
                 ..Default::default()
             },
             visibility: CardFieldVisibility::default(),
@@ -1724,7 +1779,7 @@ mod tests {
 
         let good_avatar_req = FrontendSaveMyMarketProfileRequest {
             profile: FrontendUserProfile {
-                picture_url: Some(format!("data:image/webp;base64,{}", STANDARD.encode(&make_test_vp8_webp(96, 96)))),
+                picture_url: Some(format!("data:image/webp;base64,{}", STANDARD.encode(make_test_vp8_webp(96, 96)))),
                 ..Default::default()
             },
             visibility: CardFieldVisibility::default(),
@@ -1739,7 +1794,7 @@ mod tests {
         // Also test JPEG avatar (WebKitGTK fallback)
         let good_jpeg_avatar_req = FrontendSaveMyMarketProfileRequest {
             profile: FrontendUserProfile {
-                picture_url: Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(&make_test_jpeg(96, 96)))),
+                picture_url: Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(make_test_jpeg(96, 96)))),
                 ..Default::default()
             },
             visibility: CardFieldVisibility::default(),
@@ -1854,6 +1909,8 @@ mod tests {
                     last_seen_at: None,
                     last_error_at: None,
                     fail_count: 0,
+                    status: "active".to_string(),
+                    last_probed_at: None,
                 }],
                 ..Default::default()
             });

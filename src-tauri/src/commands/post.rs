@@ -97,6 +97,8 @@ pub(crate) fn collect_own_reply_syncs(
                 last_seen_at: None,
                 last_error_at: None,
                 fail_count: 0,
+                status: "active".to_string(),
+                last_probed_at: None,
             });
         }
     }
@@ -2307,6 +2309,8 @@ mod tests {
                     last_seen_at: None,
                     last_error_at: None,
                     fail_count: 0,
+                    status: "active".to_string(),
+                    last_probed_at: None,
                 }],
             };
             alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
@@ -2335,6 +2339,8 @@ mod tests {
                     last_seen_at: None,
                     last_error_at: None,
                     fail_count: 0,
+                    status: "active".to_string(),
+                    last_probed_at: None,
                 }],
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
@@ -2495,6 +2501,8 @@ mod tests {
                     last_seen_at: None,
                     last_error_at: None,
                     fail_count: 0,
+                    status: "active".to_string(),
+                    last_probed_at: None,
                 }],
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
@@ -2640,6 +2648,8 @@ mod tests {
                     last_seen_at: None,
                     last_error_at: None,
                     fail_count: 0,
+                    status: "active".to_string(),
+                    last_probed_at: None,
                 }],
             };
             alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
@@ -2669,6 +2679,8 @@ mod tests {
                     last_seen_at: None,
                     last_error_at: None,
                     fail_count: 0,
+                    status: "active".to_string(),
+                    last_probed_at: None,
                 }],
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
@@ -2843,6 +2855,8 @@ mod tests {
                     last_seen_at: None,
                     last_error_at: None,
                     fail_count: 0,
+                    status: "active".to_string(),
+                    last_probed_at: None,
                 }],
             };
             alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
@@ -2871,6 +2885,8 @@ mod tests {
                     last_seen_at: None,
                     last_error_at: None,
                     fail_count: 0,
+                    status: "active".to_string(),
+                    last_probed_at: None,
                 }],
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
@@ -2998,6 +3014,8 @@ mod tests {
             last_seen_at: None,
             last_error_at: None,
             fail_count: 0,
+            status: "active".to_string(),
+            last_probed_at: None,
         }];
 
         let bob_syncs = vec![FrontendSyncDescriptor {
@@ -3008,6 +3026,8 @@ mod tests {
             last_seen_at: None,
             last_error_at: None,
             fail_count: 0,
+            status: "active".to_string(),
+            last_probed_at: None,
         }];
 
         {

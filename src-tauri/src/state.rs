@@ -298,33 +298,6 @@ impl AppState {
             contact.syncs.truncate(2);
         }
 
-        // Zero-Config comfort: if user has no friend sync service enabled yet, auto-activate the first candidate
-        if !contact.syncs.is_empty() {
-            if let Ok(mut settings) = self.load_settings(service, password) {
-                let own_sync_url = service
-                    .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<StoredSyncAdmin>(&bytes).ok())
-                    .map(|admin| admin.descriptor.read_url);
-
-                let has_friend_sync = settings.market_selected_syncs.iter()
-                    .any(|d| Some(&d.read_url) != own_sync_url.as_ref());
-
-                if !has_friend_sync {
-                    if let Some(candidate) = contact.syncs.iter().find(|d| {
-                        !d.read_url.is_empty()
-                            && Some(&d.read_url) != own_sync_url.as_ref()
-                            && !settings.market_selected_syncs.iter().any(|sd| sd.read_url == d.read_url)
-                    }) {
-                        if settings.market_selected_syncs.len() < 3 {
-                            settings.market_selected_syncs.push(candidate.clone());
-                            let _ = self.save_settings(service, settings, password);
-                        }
-                    }
-                }
-            }
-        }
-
         // Synchronize TrustRegister if wallet is unlocked
         if service.with_wallet(|_| ()).is_ok() {
             let mut reg = self.get_or_load_wot_register(service, password)?;
@@ -988,9 +961,11 @@ impl AppState {
                         if *success {
                             sync_ep.last_seen_at = Some(now_secs);
                             sync_ep.fail_count = 0;
+                            sync_ep.status = "active".to_string();
                         } else {
                             sync_ep.last_error_at = Some(now_secs);
                             sync_ep.fail_count = sync_ep.fail_count.saturating_add(1);
+                            sync_ep.status = "unreachable".to_string();
                         }
                         updated = true;
                     }
@@ -1003,6 +978,35 @@ impl AppState {
                 let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password);
             }
             *self.contacts.lock().unwrap() = Some(address_book);
+        }
+
+        if let Ok(mut settings) = self.load_settings(service, password) {
+            let mut settings_updated = false;
+            for (url, success) in results {
+                let norm_target = url.trim().trim_end_matches('/').to_lowercase();
+                if norm_target.is_empty() {
+                    continue;
+                }
+                for sel in &mut settings.market_selected_syncs {
+                    let norm_read = sel.read_url.trim().trim_end_matches('/').to_lowercase();
+                    let norm_write = sel.write_url.trim().trim_end_matches('/').to_lowercase();
+                    if norm_read == norm_target || norm_write == norm_target {
+                        if *success {
+                            sel.last_seen_at = Some(now_secs);
+                            sel.fail_count = 0;
+                            sel.status = "active".to_string();
+                        } else {
+                            sel.last_error_at = Some(now_secs);
+                            sel.fail_count = sel.fail_count.saturating_add(1);
+                            sel.status = "unreachable".to_string();
+                        }
+                        settings_updated = true;
+                    }
+                }
+            }
+            if settings_updated {
+                let _ = self.save_settings(service, settings, password);
+            }
         }
         updated
     }
@@ -1161,6 +1165,8 @@ mod tests {
             last_seen_at: None,
             last_error_at: None,
             fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
         };
         let sync2 = FrontendSyncDescriptor {
             read_url: "https://sync2.example.org/sync.php".to_string(),
@@ -1170,6 +1176,8 @@ mod tests {
             last_seen_at: None,
             last_error_at: None,
             fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
         };
 
         // 1. Initial contact with 2 sync endpoints
@@ -1277,6 +1285,8 @@ mod tests {
             last_seen_at: None,
             last_error_at: None,
             fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
         };
 
         let contact = FrontendContact {

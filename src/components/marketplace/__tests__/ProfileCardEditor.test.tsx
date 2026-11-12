@@ -103,7 +103,7 @@ describe('ProfileCardEditor Component', () => {
         organization: 'everyone',
       }),
       skills: expect.arrayContaining([
-        expect.objectContaining({ title: 'Möbelbau', is_remote: false }),
+        expect.objectContaining({ title: 'Möbelbau', isRemote: false }),
       ]),
       validityYears: 2,
     }));
@@ -214,7 +214,7 @@ describe('ProfileCardEditor Component', () => {
     expect(screen.queryByTestId('coordinates-recommended-hint')).not.toBeInTheDocument();
   });
 
-  it('supports toggling is_remote on skills', () => {
+  it('supports toggling isRemote on skills', () => {
     const onSave = vi.fn();
     render(
       <ProfileCardEditor
@@ -237,7 +237,7 @@ describe('ProfileCardEditor Component', () => {
       skills: [
         expect.objectContaining({
           title: 'Möbelbau',
-          is_remote: true,
+          isRemote: true,
         }),
       ],
     }));

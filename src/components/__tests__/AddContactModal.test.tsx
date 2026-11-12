@@ -14,6 +14,7 @@ vi.mock('../../utils/clipboard', () => ({
 vi.mock('../../services/marketService', () => ({
   marketService: {
     importContactCard: vi.fn(),
+    probeContactSyncs: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -164,5 +165,58 @@ describe('AddContactModal Component', () => {
 
     expect(mockOnClose).toHaveBeenCalled();
     expect(mockOnOpenManualAdd).toHaveBeenCalled();
+  });
+
+  it('switches to paste input without error if clipboard has invalid/unrelated content', async () => {
+    (readFromClipboard as Mock).mockResolvedValue({ text: 'https://random-website.example.org' });
+
+    render(
+      <AddContactModal
+        isOpen={true}
+        onClose={mockOnClose}
+        onOpenManualAdd={mockOnOpenManualAdd}
+        onContactAdded={mockOnContactAdded}
+        onSuccess={mockOnSuccess}
+        onError={mockOnError}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('add-tile-clipboard'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('paste-input-view')).toBeInTheDocument();
+      expect(mockOnError).not.toHaveBeenCalled();
+    });
+  });
+
+  it('shows error when submitting invalid content in paste input view', async () => {
+    render(
+      <AddContactModal
+        isOpen={true}
+        onClose={mockOnClose}
+        onOpenManualAdd={mockOnOpenManualAdd}
+        onContactAdded={mockOnContactAdded}
+        onSuccess={mockOnSuccess}
+        onError={mockOnError}
+      />
+    );
+
+    // Switch to paste view
+    fireEvent.click(screen.getByTestId('add-tile-clipboard'));
+    await waitFor(() => {
+      expect(screen.getByTestId('paste-input-view')).toBeInTheDocument();
+    });
+
+    const textarea = screen.getByRole('textbox');
+    fireEvent.change(textarea, { target: { value: 'not-a-valid-contact-or-card' } });
+
+    const submitBtn = screen.getByRole('button', { name: /übernehmen|apply|import/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockOnError).toHaveBeenCalledWith(
+        expect.stringMatching(/Ungültiges Kontaktkarten- oder Visitenkarten-Format|Invalid contact card or business card format/i)
+      );
+    });
   });
 });

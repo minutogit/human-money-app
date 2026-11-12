@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports, no-undef, @typescript-eslint/no-explicit-any */
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { SyncServiceSettingsCard } from '../settings/SyncServiceSettingsCard';
+import { SyncServiceSettingsCard, normalizeSyncUrlInput } from '../settings/SyncServiceSettingsCard';
 import { marketService } from '../../services/marketService';
 import { settingsService } from '../../services/settingsService';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -326,5 +326,61 @@ describe('SyncServiceSettingsCard Component', () => {
                 'mock-wallet-pw'
             );
         });
+    });
+
+    it('intelligently auto-completes https and sync.php in host setup and does not remove url on failure', async () => {
+        vi.mocked(marketService.testSyncConnection).mockResolvedValueOnce({
+            success: false,
+            message: 'Server unreachable',
+            writeOk: false,
+            readOk: false,
+        });
+
+        render(
+            <SyncServiceSettingsCard
+                settings={defaultSettings}
+                onSettingsUpdated={vi.fn()}
+                mode="host"
+            />
+        );
+
+        // Find the host url input
+        const input = screen.getByPlaceholderText(/your-domain\.com\/sync|dein-webspace\.de\/sync/i);
+        expect(input).toBeInTheDocument();
+
+        // Enter domain without https and without sync.php
+        fireEvent.change(input, { target: { value: 'my-custom-host.org/sync' } });
+
+        // Check that detected sync url preview is displayed
+        await waitFor(() => {
+            expect(screen.getByText('https://my-custom-host.org/sync/sync.php')).toBeInTheDocument();
+        });
+
+        // Click test connection & activate
+        const testBtn = screen.getByRole('button', { name: /Test Connection & Activate|Verbindung testen & aktivieren/i });
+        fireEvent.click(testBtn);
+
+        await waitFor(() => {
+            expect(marketService.testSyncConnection).toHaveBeenCalledWith('https://my-custom-host.org/sync/sync.php', 'mock-wallet-pw');
+        });
+
+        // Verify the input still contains the entered/normalized URL (NOT cleared/removed!)
+        expect(input).toHaveValue('https://my-custom-host.org/sync/sync.php');
+        expect(screen.getByText(/Server unreachable/i)).toBeInTheDocument();
+    });
+
+    it('normalizes various input formats with normalizeSyncUrlInput helper', () => {
+        expect(normalizeSyncUrlInput('')).toBe('');
+        expect(normalizeSyncUrlInput('   ')).toBe('');
+        expect(normalizeSyncUrlInput('dein-webspace.de')).toBe('https://dein-webspace.de/sync.php');
+        expect(normalizeSyncUrlInput('dein-webspace.de/')).toBe('https://dein-webspace.de/sync.php');
+        expect(normalizeSyncUrlInput('dein-webspace.de/sync')).toBe('https://dein-webspace.de/sync/sync.php');
+        expect(normalizeSyncUrlInput('dein-webspace.de/sync/')).toBe('https://dein-webspace.de/sync/sync.php');
+        expect(normalizeSyncUrlInput('https://dein-webspace.de/sync/sync.php')).toBe('https://dein-webspace.de/sync/sync.php');
+        expect(normalizeSyncUrlInput('https://dein-webspace.de/sync/sync.php/')).toBe('https://dein-webspace.de/sync/sync.php');
+        expect(normalizeSyncUrlInput('http://mein-server.de/sync')).toBe('https://mein-server.de/sync/sync.php');
+        expect(normalizeSyncUrlInput('http://localhost:8080/sync')).toBe('http://localhost:8080/sync/sync.php');
+        expect(normalizeSyncUrlInput('http://127.0.0.1:9000')).toBe('http://127.0.0.1:9000/sync.php');
+        expect(normalizeSyncUrlInput('https://example.com:443/sync')).toBe('https://example.com/sync/sync.php');
     });
 });

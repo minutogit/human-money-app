@@ -178,6 +178,7 @@ pub fn run() {
             block_sync_slot,
             delete_sync_admin,
             discover_available_syncs,
+            probe_contact_syncs,
             set_selected_upload_syncs,
             sync_market_channels,
             sync_channel_members,

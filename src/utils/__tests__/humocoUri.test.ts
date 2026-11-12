@@ -156,18 +156,18 @@ describe('humocoUri Utilities', () => {
       expect(result?.isTest).toBe(true);
     });
 
-    it('handles alternate parameter names standardUuid and notes', () => {
+    it('ignores non-canonical legacy parameter names standardUuid and notes under zero-compat', () => {
       const raw = `humoco://pay?to=${encodeURIComponent(sampleDid)}&standardUuid=custom-std&notes=Miete%20Werkstatt&isTest=true`;
       const result = parsePaymentRequest(raw);
       expect(result).toEqual({
         to: sampleDid,
         name: undefined,
-        standardUuid: 'custom-std',
+        standardUuid: undefined,
         standardName: undefined,
         unit: undefined,
         amount: undefined,
-        note: 'Miete Werkstatt',
-        isTest: true,
+        note: undefined,
+        isTest: undefined,
       });
     });
 

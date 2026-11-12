@@ -22,7 +22,7 @@ export interface Skill {
     title: string;
     text?: string | null;
     pricing?: string | null;
-    is_remote?: boolean;
+    isRemote?: boolean;
 }
 
 export type AdKind = 'offer' | 'request';
@@ -33,12 +33,12 @@ export interface Ad {
     title: string;
     text?: string | null;
     pricing?: string | null;
-    published_at: number;
-    renewed_at?: number | null;
-    expires_at: number;
-    allow_inquiries: boolean;
-    is_remote?: boolean;
-    image_token?: string | null;
+    publishedAt: number;
+    renewedAt?: number | null;
+    expiresAt: number;
+    allowInquiries: boolean;
+    isRemote?: boolean;
+    imageToken?: string | null;
 }
 
 export interface FrontendMyAd {
@@ -104,6 +104,7 @@ export interface FrontendBoardItem {
     trust: FrontendTrustTier;
     ad: Ad;
     daysLeft: number;
+    isOwn?: boolean;
 }
 
 export type FrontendSkillOrigin = 'card' | 'voucher';
@@ -126,6 +127,8 @@ export interface FrontendStandardRef {
     uuid: string;
 }
 
+export type SyncEndpointStatus = 'unverified' | 'pending_auth' | 'active' | 'unreachable';
+
 export interface FrontendSyncDescriptor {
     writeUrl: string;
     readUrl: string;
@@ -134,6 +137,8 @@ export interface FrontendSyncDescriptor {
     lastSeenAt?: number | null;
     lastErrorAt?: number | null;
     failCount?: number;
+    status?: SyncEndpointStatus | string;
+    lastProbedAt?: number | null;
 }
 
 export interface FrontendMarketPerson {
@@ -237,6 +242,8 @@ export interface FrontendSyncOverviewStatus {
     hasOwnSync: boolean;
     ownSyncSoftWarning: boolean;
     lastSyncAt?: number | null;
+    pendingAuthCount?: number;
+    failingCount?: number;
 }
 
 export interface StoredPublicSync {
@@ -261,6 +268,7 @@ export interface FrontendDiscoveredSync {
     isAuthorized: boolean;
     isSelected: boolean;
     sourceLabel: string;
+    status?: SyncEndpointStatus | string;
 }
 
 export interface FrontendMarketSyncResult {

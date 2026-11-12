@@ -553,7 +553,36 @@ export function MarketplaceView({
                             onNavigateToSyncSettings={() => navigateToSettingsSection('sync')}
                             onInquire={handleBoardInquire}
                             onPay={handleBoardPay}
-                            onOwnerClick={(ownerDid) => setSelectedPersonDid(ownerDid)}
+                            onOwnerClick={(ownerDid, isOwn) => {
+                                if (isOwn || (currentProfile?.profile?.id && ownerDid === currentProfile.profile.id)) {
+                                    setActiveTab('mine');
+                                } else {
+                                    setSelectedPersonDid(ownerDid);
+                                }
+                            }}
+                            onEditOwnAd={(ad) => {
+                                const found = currentProfile?.ads.find((a) => a.id === ad.id);
+                                if (found) {
+                                    setEditingAd(found);
+                                } else {
+                                    setEditingAd({
+                                        id: ad.id,
+                                        kind: ad.kind,
+                                        title: ad.title,
+                                        text: ad.text,
+                                        pricing: ad.pricing,
+                                        publishedAt: ad.publishedAt,
+                                        renewedAt: ad.renewedAt,
+                                        expiresAt: ad.expiresAt,
+                                        allowInquiries: ad.allowInquiries,
+                                        isRemote: ad.isRemote,
+                                        status: 'active',
+                                        daysLeft: Math.max(0, Math.ceil((ad.expiresAt - Math.floor(Date.now() / 1000)) / 86400)),
+                                        imageToken: ad.imageToken,
+                                    });
+                                }
+                                setIsCreateAdOpen(true);
+                            }}
                         />
                     )}
 

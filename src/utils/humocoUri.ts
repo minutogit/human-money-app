@@ -206,13 +206,13 @@ export function parsePaymentRequest(input: string): ParsedPaymentRequest | null 
     }
 
     const name = searchParams.get('name')?.trim() || undefined;
-    const standardUuid = searchParams.get('std')?.trim() || searchParams.get('standardUuid')?.trim() || undefined;
-    const standardName = searchParams.get('stdName')?.trim() || searchParams.get('standardName')?.trim() || undefined;
+    const standardUuid = searchParams.get('std')?.trim() || undefined;
+    const standardName = searchParams.get('stdName')?.trim() || undefined;
     const unit = searchParams.get('unit')?.trim() || undefined;
     const amount = searchParams.get('amount')?.trim() || undefined;
-    const note = searchParams.get('note')?.trim() || searchParams.get('notes')?.trim() || undefined;
+    const note = searchParams.get('note')?.trim() || undefined;
 
-    const testParam = searchParams.get('test') ?? searchParams.get('isTest');
+    const testParam = searchParams.get('test');
     const isTest = testParam !== null ? (testParam === 'true' || testParam === '1') : undefined;
 
     return {

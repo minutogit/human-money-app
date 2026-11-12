@@ -89,6 +89,15 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
             const current = await marketService.getSyncOverviewStatus();
             setSyncOverview(current);
 
+            if (current.connectedCount === 0) {
+                marketService.probeContactSyncs(false)
+                    .then(() => marketService.getSyncOverviewStatus())
+                    .then((fresh) => {
+                        setSyncOverview(fresh);
+                    })
+                    .catch(() => {});
+            }
+
             // Gentle Daily Sync on App Open (§3.2)
             if (!hasTriggeredDailySyncRef.current && current.connectedCount > 0 && navigator.onLine) {
                 const nowSecs = Math.floor(Date.now() / 1000);
@@ -296,6 +305,9 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
 
     const getSyncSummary = (): string => {
         if (syncOverview.connectedCount === 0) {
+            if ((syncOverview.pendingAuthCount ?? 0) > 0) {
+                return t("statusChip.syncPendingAuth", "Sync wartet auf Freigabe.");
+            }
             return t("statusChip.syncNotConfigured", "Kein Sync-Dienst verbunden.");
         }
         if (syncOverview.ownSyncSoftWarning) {

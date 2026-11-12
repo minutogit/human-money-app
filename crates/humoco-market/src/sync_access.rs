@@ -342,7 +342,7 @@ pub fn canonicalize_write_url(raw_url: &str) -> Result<String, MarketError> {
     let (scheme, rest) = url_string
         .split_once("://")
         .ok_or_else(|| MarketError::Validation("Missing URL scheme".to_string()))?;
-    let scheme_lower = scheme.to_ascii_lowercase();
+    let mut scheme_lower = scheme.to_ascii_lowercase();
 
     // Strip fragment (#) and query (?)
     let before_fragment = rest.split_once('#').map(|(a, _)| a).unwrap_or(rest);
@@ -407,10 +407,8 @@ pub fn canonicalize_write_url(raw_url: &str) -> Result<String, MarketError> {
         "https" => {}
         "http" => {
             if !is_loopback {
-                return Err(MarketError::Validation(format!(
-                    "http:// is only allowed for loopback addresses (127.0.0.1, localhost, [::1]), got host '{}'",
-                    host_lower
-                )));
+                // Auto-upgrade remote HTTP to HTTPS for user forgiveness
+                scheme_lower = "https".to_string();
             }
         }
         other => {
@@ -433,13 +431,15 @@ pub fn canonicalize_write_url(raw_url: &str) -> Result<String, MarketError> {
         None => host_lower,
     };
 
-    // Normalize path
-    let canonical_path = if raw_path.is_empty() || raw_path == "/" {
+    // Normalize path: always ensure the endpoint ends in /sync.php, whether
+    // user passed "example.com", "example.com/sync", "example.com/sync/", or "example.com/sync/sync.php"
+    let clean_path = raw_path.trim_end_matches('/');
+    let canonical_path = if clean_path.is_empty() {
         "/sync.php".to_string()
-    } else if raw_path.ends_with('/') {
-        format!("{}sync.php", raw_path)
+    } else if clean_path.ends_with("/sync.php") || clean_path == "/sync.php" {
+        clean_path.to_string()
     } else {
-        raw_path
+        format!("{}/sync.php", clean_path)
     };
 
     Ok(format!(

@@ -20,7 +20,8 @@ export interface BoardTabProps {
     onNavigateToSyncSettings: () => void;
     onInquire?: (ad: Ad, ownerDid: string, ownerName: string) => void;
     onPay?: (ownerDid: string) => void;
-    onOwnerClick?: (ownerDid: string) => void;
+    onOwnerClick?: (ownerDid: string, isOwn?: boolean) => void;
+    onEditOwnAd?: (ad: Ad) => void;
 }
 
 export type BoardFilter = 'all' | 'offer' | 'request';
@@ -38,6 +39,7 @@ export const BoardTab: React.FC<BoardTabProps> = ({
     onInquire,
     onPay,
     onOwnerClick,
+    onEditOwnAd,
 }) => {
     const { t } = useTranslation();
     const [searchQuery, setSearchQuery] = useState('');
@@ -65,7 +67,10 @@ export const BoardTab: React.FC<BoardTabProps> = ({
             }
             // Distance filter
             if (effectiveMaxDistance !== null && effectiveMaxDistance > 0 && myCoordinates) {
-                if (!item.ad.is_remote) {
+                if (item.isOwn) {
+                    return true;
+                }
+                if (!item.ad.isRemote) {
                     const ownerPerson = (people || []).find((p) => p.did === item.ownerDid);
                     const ownerCoords = ownerPerson?.profile.coordinates;
                     if (!ownerCoords) {
@@ -187,6 +192,8 @@ export const BoardTab: React.FC<BoardTabProps> = ({
                             ownerName={item.ownerName}
                             trust={item.trust}
                             daysLeft={item.daysLeft}
+                            isOwn={item.isOwn}
+                            onEditOwnAd={onEditOwnAd}
                             onInquire={onInquire}
                             onPay={onPay}
                             onOwnerClick={onOwnerClick}

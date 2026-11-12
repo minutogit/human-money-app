@@ -64,7 +64,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             setText(targetAd.text || '');
             setPricing(targetAd.pricing || '');
             setAllowInquiries(targetAd.allowInquiries);
-            setIsRemote(targetAd.isRemote ?? (targetAd as any).is_remote ?? false);
+            setIsRemote(targetAd.isRemote ?? false);
             setError(null);
         } else {
             setKind('offer');
@@ -80,7 +80,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
 
     useEffect(() => {
         setImageWebpDataUri(undefined);
-        const token = targetAd?.imageToken || (targetAd as any)?.image_token;
+        const token = targetAd?.imageToken;
         if (isOpen && token) {
             let isMounted = true;
             marketService

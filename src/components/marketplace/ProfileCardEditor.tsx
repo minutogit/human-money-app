@@ -227,7 +227,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
     // Skills management
     const handleAddSkill = () => {
         if (skills.length >= 8) return;
-        setSkills([...skills, { title: '', text: '', pricing: '', is_remote: false }]);
+        setSkills([...skills, { title: '', text: '', pricing: '', isRemote: false }]);
     };
 
     const handleRemoveSkill = (index: number) => {
@@ -287,7 +287,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                     title: s.title.trim(),
                     text: s.text?.trim() || undefined,
                     pricing: s.pricing?.trim() || undefined,
-                    is_remote: s.is_remote ?? false,
+                    isRemote: s.isRemote ?? false,
                 })),
                 maxHops: myProfile.maxHops,
                 validityYears: myProfile.validityYears ?? 2,
@@ -825,8 +825,8 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                                             <label className="flex items-center gap-2 pt-1 cursor-pointer">
                                                 <input
                                                     type="checkbox"
-                                                    checked={skill.is_remote ?? false}
-                                                    onChange={(e) => handleSkillChange(index, 'is_remote', e.target.checked)}
+                                                    checked={skill.isRemote ?? false}
+                                                    onChange={(e) => handleSkillChange(index, 'isRemote', e.target.checked)}
                                                     className="rounded text-theme-primary focus:ring-theme-primary cursor-pointer"
                                                     data-testid={`skill-remote-checkbox-${index}`}
                                                 />
@@ -940,7 +940,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                                                 <div className="font-bold text-theme-secondary flex items-center justify-between gap-1">
                                                     <div className="flex items-center gap-1.5 min-w-0">
                                                         <span className="truncate">{s.title || t('marketplace.untitled', 'Ohne Titel')}</span>
-                                                        {s.is_remote && (
+                                                        {s.isRemote && (
                                                             <span className="text-[9px] px-1 py-0.2 rounded font-semibold bg-sky-50 text-sky-700 border border-sky-200 shrink-0">
                                                                 🌐 {t('marketplace.remoteBadgeShort', 'Online')}
                                                             </span>

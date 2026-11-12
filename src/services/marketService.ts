@@ -207,6 +207,13 @@ export const marketService = {
         return await invoke<FrontendDiscoveredSync[]>("discover_available_syncs", password ? { password } : {});
     },
 
+    probeContactSyncs: async (force: boolean = false, password?: string): Promise<FrontendSyncDescriptor[]> => {
+        return await invoke<FrontendSyncDescriptor[]>("probe_contact_syncs", {
+            force,
+            password: password || undefined,
+        });
+    },
+
     setSelectedUploadSyncs: async (
         syncs: FrontendSyncDescriptor[],
         password?: string

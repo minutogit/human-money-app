@@ -228,6 +228,8 @@ mod tests {
             last_seen_at: None,
             last_error_at: None,
             fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
         };
 
         // 1. Initial contact with sync1
@@ -250,10 +252,9 @@ mod tests {
 
         state.save_contact(&mut service, initial_contact, Some(password)).unwrap();
 
-        // Check settings: sync1 was auto-activated into market_selected_syncs
+        // Check settings: saving contact does not blindly auto-activate unverified syncs
         let settings = state.load_settings(&mut service, Some(password)).unwrap();
-        assert_eq!(settings.market_selected_syncs.len(), 1);
-        assert_eq!(settings.market_selected_syncs[0].read_url, "https://alice-drop.com/sync.php");
+        assert_eq!(settings.market_selected_syncs.len(), 0);
 
         // 2. Overwrite contact with EMPTY drops (user deleted drop)
         let updated_contact = FrontendContact {

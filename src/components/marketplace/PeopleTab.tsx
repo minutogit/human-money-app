@@ -72,8 +72,8 @@ export const PeopleTab: React.FC<PeopleTabProps> = ({
 
             // Distance filter
             if (effectiveMaxDistance !== null && effectiveMaxDistance > 0 && myCoordinates) {
-                const hasRemoteSkill = p.skills.some((s) => s.isRemote || (s as any).is_remote);
-                const hasRemoteAd = p.activeAds.some((a) => a.is_remote || (a as any).isRemote);
+                const hasRemoteSkill = p.skills.some((s) => s.isRemote);
+                const hasRemoteAd = p.activeAds.some((a) => a.isRemote);
                 if (!hasRemoteSkill && !hasRemoteAd) {
                     const coords = p.profile.coordinates;
                     if (!coords) return false;

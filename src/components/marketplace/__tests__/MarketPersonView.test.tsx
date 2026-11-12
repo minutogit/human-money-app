@@ -121,9 +121,9 @@ describe('MarketPersonView Component', () => {
           title: 'Frisches Eichenbrennholz',
           text: '2 Ster trockenes Holz',
           pricing: '120 Minuto',
-          published_at: nowSecs - 3600,
-          expires_at: nowSecs + 86400 * 30,
-          allow_inquiries: true,
+          publishedAt: nowSecs - 3600,
+          expiresAt: nowSecs + 86400 * 30,
+          allowInquiries: true,
         },
       ],
     };

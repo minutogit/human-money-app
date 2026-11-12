@@ -8,6 +8,7 @@ vi.mock('../../services/marketService', () => ({
   marketService: {
     previewContactTrustChange: vi.fn().mockResolvedValue(null),
     probePublicSync: vi.fn(),
+    probeContactSyncs: vi.fn().mockResolvedValue([]),
   },
 }));
 

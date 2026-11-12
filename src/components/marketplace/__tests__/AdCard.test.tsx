@@ -17,9 +17,9 @@ describe('AdCard Component', () => {
     title: 'Apfelsaft frisch gepresst',
     text: '5 Liter Bag-in-Box Bio-Apfelsaft aus Streuobstanbau',
     pricing: '10 Minuto',
-    published_at: nowSecs - 3600,
-    expires_at: nowSecs + 86400 * 30,
-    allow_inquiries: true,
+    publishedAt: nowSecs - 3600,
+    expiresAt: nowSecs + 86400 * 30,
+    allowInquiries: true,
   };
 
   const mockAdRequest: Ad = {
@@ -27,9 +27,9 @@ describe('AdCard Component', () => {
     kind: 'request',
     title: 'Suche Anhänger für Samstag',
     text: 'Brauche einen PKW-Anhänger für Grünschnitt',
-    published_at: nowSecs - 7200,
-    expires_at: nowSecs + 86400 * 5,
-    allow_inquiries: true,
+    publishedAt: nowSecs - 7200,
+    expiresAt: nowSecs + 86400 * 5,
+    allowInquiries: true,
   };
 
   it('renders offer badge, title, text, pricing, owner, and days left', () => {
@@ -97,7 +97,7 @@ describe('AdCard Component', () => {
   it('renders remote badge when ad is remote', () => {
     render(
       <AdCard
-        ad={{ ...mockAdOffer, is_remote: true }}
+        ad={{ ...mockAdOffer, isRemote: true }}
         ownerDid="did:key:z6MkuAlice"
         ownerName="Alice Imkerei"
       />
@@ -113,7 +113,7 @@ describe('AdCard Component', () => {
 
     render(
       <AdCard
-        ad={{ ...mockAdOffer, image_token: 'img-tok-123' }}
+        ad={{ ...mockAdOffer, imageToken: 'img-tok-123' }}
         ownerDid="did:key:z6MkuAlice"
         ownerName="Alice Imkerei"
       />
@@ -130,7 +130,7 @@ describe('AdCard Component', () => {
 
     render(
       <AdCard
-        ad={{ ...mockAdOffer, image_token: 'img-tok-404' }}
+        ad={{ ...mockAdOffer, imageToken: 'img-tok-404' }}
         ownerDid="did:key:z6MkuAlice"
         ownerName="Alice Imkerei"
       />
@@ -147,7 +147,7 @@ describe('AdCard Component', () => {
 
     render(
       <AdCard
-        ad={{ ...mockAdOffer, image_token: 'img-tok-broken' }}
+        ad={{ ...mockAdOffer, imageToken: 'img-tok-broken' }}
         ownerDid="did:key:z6MkuAlice"
         ownerName="Alice Imkerei"
       />
@@ -159,5 +159,40 @@ describe('AdCard Component', () => {
     const unavailableElement = await screen.findByTestId('ad-card-image-unavailable');
     expect(unavailableElement).toBeInTheDocument();
     expect(screen.queryByTestId('ad-card-image')).not.toBeInTheDocument();
+  });
+
+  it('handles own ads correctly: displays myAd badge, hides inquiry/pay, renders edit button, passes isOwn to onOwnerClick', () => {
+    const onEditOwnAd = vi.fn();
+    const onInquire = vi.fn();
+    const onPay = vi.fn();
+    const onOwnerClick = vi.fn();
+
+    render(
+      <AdCard
+        ad={mockAdOffer}
+        ownerDid="did:key:z6MkuAlice"
+        ownerName="Alice"
+        isOwn={true}
+        onEditOwnAd={onEditOwnAd}
+        onInquire={onInquire}
+        onPay={onPay}
+        onOwnerClick={onOwnerClick}
+      />
+    );
+
+    expect(screen.getByTestId('ad-own-badge')).toBeInTheDocument();
+    expect(screen.getByText(/Mein Inserat|My Ad/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Anfragen|Inquire/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Bezahlen|Pay/i })).not.toBeInTheDocument();
+
+    const editBtn = screen.getByTestId('ad-edit-own-btn');
+    expect(editBtn).toBeInTheDocument();
+    fireEvent.click(editBtn);
+    expect(onEditOwnAd).toHaveBeenCalledWith(mockAdOffer);
+
+    // Clicking owner button passes isOwn = true
+    const ownerBtn = screen.getByRole('button', { name: /Mein Angebot|My Offer|Alice/i });
+    fireEvent.click(ownerBtn);
+    expect(onOwnerClick).toHaveBeenCalledWith('did:key:z6MkuAlice', true);
   });
 });

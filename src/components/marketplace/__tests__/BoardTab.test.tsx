@@ -17,9 +17,9 @@ describe('BoardTab Component', () => {
         title: 'Bio-Honig 500g',
         text: 'Regionaler Blütenhonig',
         pricing: '5 FreeTaler',
-        published_at: nowSecs - 3600,
-        expires_at: nowSecs + 86400 * 20,
-        allow_inquiries: true,
+        publishedAt: nowSecs - 3600,
+        expiresAt: nowSecs + 86400 * 20,
+        allowInquiries: true,
       },
       daysLeft: 20,
     },
@@ -33,9 +33,9 @@ describe('BoardTab Component', () => {
         title: 'Suche Balken',
         text: 'Alte Eichenbalken gesucht',
         pricing: 'Tausch möglich',
-        published_at: nowSecs - 7200,
-        expires_at: nowSecs + 86400 * 10,
-        allow_inquiries: true,
+        publishedAt: nowSecs - 7200,
+        expiresAt: nowSecs + 86400 * 10,
+        allowInquiries: true,
       },
       daysLeft: 10,
     },
@@ -133,10 +133,10 @@ describe('BoardTab Component', () => {
         id: 'ad-3',
         kind: 'offer',
         title: 'Online Beratung',
-        published_at: nowSecs,
-        expires_at: nowSecs + 86400 * 10,
-        allow_inquiries: true,
-        is_remote: true,
+        publishedAt: nowSecs,
+        expiresAt: nowSecs + 86400 * 10,
+        allowInquiries: true,
+        isRemote: true,
       },
       daysLeft: 10,
     };
@@ -181,5 +181,40 @@ describe('BoardTab Component', () => {
     );
 
     expect(screen.getByTestId('missing-coordinates-hint')).toBeInTheDocument();
+  });
+
+  it('always retains own ads in distance filter regardless of distance or missing person entry', () => {
+    const ownAdItem: FrontendBoardItem = {
+      ownerDid: 'did:key:z6MkuMe',
+      ownerName: 'Ich',
+      trust: 'trusted',
+      isOwn: true,
+      ad: {
+        id: 'ad-own',
+        kind: 'offer',
+        title: 'Mein eigenes Angebot',
+        publishedAt: nowSecs,
+        expiresAt: nowSecs + 86400 * 30,
+        allowInquiries: true,
+        isRemote: false,
+      },
+      daysLeft: 30,
+    };
+
+    render(
+      <BoardTab
+        items={[ownAdItem]}
+        people={[]}
+        myCoordinates="52.52, 13.40"
+        maxDistanceKm={10}
+        hasSyncService={true}
+        onCreateAd={vi.fn()}
+        onImportCard={vi.fn()}
+        onNavigateToSyncSettings={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Mein eigenes Angebot')).toBeInTheDocument();
+    expect(screen.getByTestId('ad-own-badge')).toBeInTheDocument();
   });
 });

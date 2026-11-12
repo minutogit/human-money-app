@@ -80,8 +80,8 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 let syncs = existing?.syncs;
                 if (!profile) {
                     const snap = await marketService.getMarketView().catch(() => null);
-                    const people = snap ? (Array.isArray(snap) ? (snap as any) : snap.people) : [];
-                    const p = (people || []).find((x: any) => x.did === did);
+                    const people = snap?.people ?? [];
+                    const p = people.find((x) => x.did === did);
                     profile = p?.profile;
                     syncs = p?.cardSyncs;
                 }
@@ -150,8 +150,8 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
 
                 if (res.did) {
                     marketService.getMarketView().then(snap => {
-                        const people = snap ? (Array.isArray(snap) ? (snap as any) : snap.people) : [];
-                        const p = (people || []).find((x: any) => x.did === res.did);
+                        const people = snap?.people ?? [];
+                        const p = people.find((x) => x.did === res.did);
                         if (p) {
                             const name = [p.profile.firstName, p.profile.lastName].filter(Boolean).join(' ') || p.profile.organization || p.profile.community;
                             if (name) setPartnerName(name);

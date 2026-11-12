@@ -34,7 +34,7 @@ pub struct SyncServerInfo {
     pub rotation: Option<DropRotationCertificate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SyncCapabilityResult {
     pub authorized: bool,
     pub max_bytes: Option<usize>,

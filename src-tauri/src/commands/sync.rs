@@ -13,7 +13,7 @@ use crate::models::{
 use crate::settings::{StoredPublicSync, SYNC_CARD_MAX_BYTES, SYNC_HEARTBEAT_SECS, MAX_POLLED_SYNCS};
 use crate::state::{
     canonicalize_did, AppState, StoredSyncAdmin, StoredSyncState,
-    MARKET_CARD_STORE_KEY, MARKET_SYNC_ADMIN_KEY, MARKET_SYNC_KEY,
+    CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY, MARKET_SYNC_ADMIN_KEY, MARKET_SYNC_KEY,
 };
 use human_money_core::app_service::AppService;
 use sha2::Digest;
@@ -414,9 +414,9 @@ pub async fn finalize_sync_setup_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncAdminStatus, FrontendError> {
-    let base_url = humoco_market::canonicalize_write_url(&base_url)
+    let canonical_url = humoco_market::canonicalize_write_url(&base_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
-    sync_client::validate_sync_url(&base_url).map_err(FrontendError::from)?;
+    sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
 
     let (mut admin, admin_sk) = {
         let mut service = state.service.lock().unwrap();
@@ -431,13 +431,8 @@ pub async fn finalize_sync_setup_impl(
         (admin, admin_sk)
     };
 
-    let trimmed = base_url.trim_end_matches('/');
-    let write_url = if trimmed.ends_with("/sync.php") {
-        trimmed.to_string()
-    } else {
-        format!("{}/sync.php", trimmed)
-    };
-    let read_base = write_url.strip_suffix("/sync.php").unwrap_or(trimmed);
+    let write_url = canonical_url;
+    let read_base = write_url.strip_suffix("/sync.php").unwrap_or(&write_url);
     let read_url = format!("{}/{}", read_base, admin.data_dir);
     admin.descriptor.write_url = write_url.clone();
     admin.descriptor.read_url = read_url.clone();
@@ -529,8 +524,18 @@ pub async fn test_sync_connection_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncConnectionTestResult, FrontendError> {
-    let base_url = base_url.trim().trim_end_matches('/').to_string();
-    if let Err(e) = sync_client::validate_sync_url(&base_url) {
+    let canonical_url = match humoco_market::canonicalize_write_url(&base_url) {
+        Ok(u) => u,
+        Err(e) => {
+            return Ok(FrontendSyncConnectionTestResult {
+                success: false,
+                message: format!("Ungültige Sync-Adresse: {}", e),
+                write_ok: false,
+                read_ok: false,
+            });
+        }
+    };
+    if let Err(e) = sync_client::validate_sync_url(&canonical_url) {
         return Ok(FrontendSyncConnectionTestResult {
             success: false,
             message: e,
@@ -580,11 +585,7 @@ pub async fn test_sync_connection_impl(
     };
 
     let client = sync_client::create_sync_http_client();
-    let write_url = if base_url.ends_with("/sync.php") {
-        base_url.clone()
-    } else {
-        format!("{}/sync.php", base_url)
-    };
+    let write_url = canonical_url;
 
     // Test write via push_members
     let (stats, member_pubkeys) = {
@@ -988,19 +989,27 @@ pub async fn discover_available_syncs_impl(
     let client = sync_client::create_sync_probe_client();
     let mut deduped: BTreeMap<String, (FrontendSyncDescriptor, String)> = BTreeMap::new();
     for (d, label) in known_descriptors {
-        if !d.read_url.is_empty() && !d.drop_pub.is_empty() {
-            deduped.entry(d.read_url.clone()).or_insert((d, label));
+        let key = if !d.write_url.is_empty() {
+            d.write_url.clone()
+        } else {
+            d.read_url.clone()
+        };
+        if !key.is_empty() {
+            deduped.entry(key).or_insert((d, label));
         }
     }
 
     let mut results = Vec::new();
-    for (_, (desc, label)) in deduped {
+    for (_, (mut desc, label)) in deduped {
         let is_selected = settings
             .market_selected_syncs
             .iter()
-            .any(|d| d.read_url == desc.read_url);
+            .any(|d| (!desc.read_url.is_empty() && d.read_url == desc.read_url)
+                || (!desc.write_url.is_empty() && d.write_url == desc.write_url));
 
-        let is_authorized = if let Some(ref slot_id) = desc.slot_id {
+        let is_authorized = if desc.drop_pub.is_empty() {
+            false
+        } else if let Some(ref slot_id) = desc.slot_id {
             match sync_client::head_slot_capability(&client, &desc.write_url, slot_id, "card").await {
                 Ok(cap) => cap.authorized,
                 Err(_) => false,
@@ -1017,11 +1026,23 @@ pub async fn discover_available_syncs_impl(
             }
         };
 
+        let status = if is_authorized {
+            "active".to_string()
+        } else if !desc.status.is_empty() && desc.status != "unverified" {
+            desc.status.clone()
+        } else if !desc.drop_pub.is_empty() {
+            "pending_auth".to_string()
+        } else {
+            "unverified".to_string()
+        };
+        desc.status = status.clone();
+
         results.push(FrontendDiscoveredSync {
             descriptor: desc,
             is_authorized,
             is_selected,
             source_label: label,
+            status,
         });
     }
 
@@ -1034,6 +1055,231 @@ pub async fn discover_available_syncs(
     state: State<'_, AppState>,
 ) -> Result<Vec<FrontendDiscoveredSync>, FrontendError> {
     discover_available_syncs_impl(password, &state).await
+}
+
+pub async fn probe_contact_syncs_impl(
+    force: bool,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
+    let my_ed_sk = {
+        let service = state.service.lock().unwrap();
+        service
+            .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+            .map_err(FrontendError::from)?
+    };
+
+    let (mut settings, has_own_sync) = {
+        let mut service = state.service.lock().unwrap();
+        let s = state
+            .get_cached_settings()
+            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
+            .unwrap_or_default();
+        let own = service
+            .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
+            .is_ok();
+        (s, own)
+    };
+
+    let has_active_friend_sync = settings.market_selected_syncs.iter().any(|d| {
+        !d.read_url.is_empty()
+            && !d.drop_pub.is_empty()
+            && (d.status == "active" || (d.fail_count == 0 && d.status != "pending_auth" && d.status != "unreachable"))
+    });
+
+    let has_healthy_public_sync = settings.public_syncs.iter().any(|pd| {
+        pd.enabled && !pd.authorized_channels.is_empty() && !pd.read_url.is_empty()
+    });
+
+    let mut has_healthy_sync = has_own_sync || has_active_friend_sync || has_healthy_public_sync;
+
+    let mut address_book = {
+        let mut service = state.service.lock().unwrap();
+        match service.load_encrypted_data(CONTACTS_DATA_NAME, password.as_deref()) {
+            Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data).unwrap_or_default(),
+            Err(_) => crate::models::FrontendAddressBook::default(),
+        }
+    };
+
+    if has_healthy_sync && !force {
+        let mut all_syncs = Vec::new();
+        for c in address_book.contacts.values() {
+            all_syncs.extend(c.syncs.clone());
+        }
+        return Ok(all_syncs);
+    }
+
+    let now = chrono::Utc::now().timestamp() as u64;
+    let client = sync_client::create_sync_probe_client();
+    let mut contacts_modified = false;
+    let mut settings_modified = false;
+
+    for contact in address_book.contacts.values_mut() {
+        for ep in &mut contact.syncs {
+            if !force {
+                if let Some(last_probed) = ep.last_probed_at {
+                    let elapsed = now.saturating_sub(last_probed);
+                    let skip = match ep.status.as_str() {
+                        "unverified" => false,
+                        "pending_auth" => {
+                            let min_wait = if ep.fail_count > 3 { 300 } else { 60 };
+                            elapsed < min_wait
+                        }
+                        "unreachable" => {
+                            let exp = ep.fail_count.min(4);
+                            let backoff = (60u64 * (1u64 << exp)).min(900);
+                            elapsed < backoff
+                        }
+                        _ => elapsed < 60,
+                    };
+                    if skip {
+                        continue;
+                    }
+                }
+            }
+
+            let target_url = if !ep.write_url.is_empty() {
+                ep.write_url.clone()
+            } else {
+                ep.read_url.clone()
+            };
+            if target_url.is_empty() {
+                continue;
+            }
+
+            let canonical_write = humoco_market::canonicalize_write_url(&target_url).unwrap_or(target_url);
+
+            // 1. Fetch server info via ?info
+            match sync_client::fetch_sync_info(&client, &canonical_write).await {
+                Err(_) => {
+                    ep.status = "unreachable".to_string();
+                    ep.fail_count = ep.fail_count.saturating_add(1);
+                    ep.last_probed_at = Some(now);
+                    contacts_modified = true;
+                }
+                Ok(info) => {
+                    ep.write_url = canonical_write.clone();
+                    ep.read_url = info.read_url.clone();
+                    ep.drop_pub = info.drop_pub.clone();
+                    ep.last_seen_at = Some(now);
+                    contacts_modified = true;
+
+                    // 2. Check authorization on resolved drop
+                    let stealth_pk_res = if let Some(ref slot_id) = ep.slot_id {
+                        if !slot_id.is_empty() {
+                            Ok(slot_id.clone())
+                        } else {
+                            humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &ep.drop_pub)
+                        }
+                    } else {
+                        humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &ep.drop_pub)
+                    };
+
+                    match stealth_pk_res {
+                        Err(_) => {
+                            ep.status = "unreachable".to_string();
+                            ep.fail_count = ep.fail_count.saturating_add(1);
+                            ep.last_probed_at = Some(now);
+                        }
+                        Ok(stealth_pk) => {
+                            let card_cap = sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, "card").await;
+                            let post_cap = if card_cap.as_ref().map(|c| c.authorized).unwrap_or(false) {
+                                Ok(sync_client::SyncCapabilityResult { authorized: true, ..Default::default() })
+                            } else {
+                                sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, "post").await
+                            };
+
+                            let is_authorized = card_cap.as_ref().map(|c| c.authorized).unwrap_or(false)
+                                || post_cap.as_ref().map(|c| c.authorized).unwrap_or(false);
+
+                            if is_authorized {
+                                ep.status = "active".to_string();
+                                ep.fail_count = 0;
+                                ep.last_probed_at = Some(now);
+                            } else if card_cap.is_ok() || post_cap.is_ok() {
+                                ep.status = "pending_auth".to_string();
+                                ep.fail_count = 0;
+                                ep.last_probed_at = Some(now);
+                            } else {
+                                ep.status = "unreachable".to_string();
+                                ep.fail_count = ep.fail_count.saturating_add(1);
+                                ep.last_probed_at = Some(now);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Update matching entries in settings.market_selected_syncs
+            for sel in &mut settings.market_selected_syncs {
+                let match_read = !ep.read_url.is_empty() && sel.read_url == ep.read_url;
+                let match_write = !ep.write_url.is_empty() && sel.write_url == ep.write_url;
+                if match_read || match_write {
+                    sel.write_url = ep.write_url.clone();
+                    sel.read_url = ep.read_url.clone();
+                    sel.drop_pub = ep.drop_pub.clone();
+                    sel.status = ep.status.clone();
+                    sel.fail_count = ep.fail_count;
+                    sel.last_probed_at = ep.last_probed_at;
+                    settings_modified = true;
+                }
+            }
+
+            // Auto-activation when !has_healthy_sync
+            if !has_healthy_sync
+                && ep.status == "active"
+                && !ep.read_url.is_empty()
+                && !ep.drop_pub.is_empty()
+            {
+                let already_selected = settings.market_selected_syncs.iter().any(|s| {
+                    s.read_url == ep.read_url || (!ep.write_url.is_empty() && s.write_url == ep.write_url)
+                });
+                if !already_selected && settings.market_selected_syncs.len() < 3 {
+                    settings.market_selected_syncs.push(FrontendSyncDescriptor {
+                        write_url: ep.write_url.clone(),
+                        read_url: ep.read_url.clone(),
+                        slot_id: ep.slot_id.clone(),
+                        drop_pub: ep.drop_pub.clone(),
+                        last_seen_at: ep.last_seen_at,
+                        last_error_at: None,
+                        fail_count: 0,
+                        status: "active".to_string(),
+                        last_probed_at: Some(now),
+                    });
+                    has_healthy_sync = true;
+                    settings_modified = true;
+                }
+            }
+        }
+    }
+
+    if contacts_modified {
+        let mut service = state.service.lock().unwrap();
+        if let Ok(bytes) = serde_json::to_vec(&address_book) {
+            let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password.as_deref());
+        }
+        *state.contacts.lock().unwrap() = Some(address_book.clone());
+    }
+
+    if settings_modified {
+        let mut service = state.service.lock().unwrap();
+        let _ = state.save_settings(&mut service, settings, password.as_deref());
+    }
+
+    let mut all_syncs = Vec::new();
+    for c in address_book.contacts.values() {
+        all_syncs.extend(c.syncs.clone());
+    }
+    Ok(all_syncs)
+}
+
+#[tauri::command]
+pub async fn probe_contact_syncs(
+    force: Option<bool>,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
+    probe_contact_syncs_impl(force.unwrap_or(false), password, &state).await
 }
 
 pub async fn set_selected_upload_syncs_impl(
@@ -2644,7 +2890,14 @@ pub fn get_sync_overview_status_impl(
     let friend_syncs = settings
         .market_selected_syncs
         .iter()
-        .filter(|d| d.read_url != own_read_url)
+        .filter(|d| {
+            d.read_url != own_read_url
+                && !d.read_url.is_empty()
+                && !d.drop_pub.is_empty()
+                && d.fail_count == 0
+                && d.status != "pending_auth"
+                && d.status != "unreachable"
+        })
         .count();
 
     let public_syncs = settings
@@ -2658,6 +2911,28 @@ pub fn get_sync_overview_status_impl(
         .iter()
         .filter(|d| d.authorized_channels.is_empty())
         .count();
+
+    let contacts = state.load_contacts(&mut service, password.as_deref()).unwrap_or_default();
+    let mut pending_auth_count = 0;
+    for c in &contacts {
+        for ep in &c.syncs {
+            if ep.status == "pending_auth" {
+                pending_auth_count += 1;
+            }
+        }
+    }
+    for sel in &settings.market_selected_syncs {
+        if sel.status == "pending_auth" && !contacts.iter().any(|c| c.syncs.iter().any(|ep| ep.read_url == sel.read_url)) {
+            pending_auth_count += 1;
+        }
+    }
+
+    let failing_selected = settings
+        .market_selected_syncs
+        .iter()
+        .filter(|d| d.fail_count > 0 || d.status == "unreachable")
+        .count();
+    let failing_count = failing_selected;
 
     let connected_count = (if has_own_sync { 1 } else { 0 }) + friend_syncs + public_syncs;
     let pending_count = (if pending_own_sync { 1 } else { 0 }) + pending_public_syncs;
@@ -2677,6 +2952,8 @@ pub fn get_sync_overview_status_impl(
         has_own_sync,
         own_sync_soft_warning: false,
         last_sync_at,
+        pending_auth_count,
+        failing_count,
     })
 }
 
@@ -3462,6 +3739,140 @@ pub(crate) mod tests {
         assert_eq!(connected_overview.connected_count, 1);
         assert_eq!(connected_overview.pending_count, 0);
         assert_eq!(connected_overview.public_syncs, 1);
+    }
+
+    #[tokio::test]
+    async fn test_probe_contact_syncs_lifecycle_and_auto_activation() {
+        let base_dir = temp_test_dir("probe_lifecycle");
+        let password = "TestPassword123!";
+        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+        let bob_state = create_test_state(bob_service);
+
+        let server_admin_pub = "11".repeat(32);
+        let server = MockSyncServer::start("alice_data".to_string(), server_admin_pub.clone()).await;
+
+        // 1. Initially Bob has no syncs in settings
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let settings = bob_state.load_settings(&mut s, Some(password)).unwrap();
+            assert!(settings.market_selected_syncs.is_empty());
+        }
+
+        // 2. Add Alice contact with unverified sync
+        let alice_did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        let unverified_sync = FrontendSyncDescriptor {
+            write_url: format!("{}/sync.php", server.base_url),
+            read_url: String::new(),
+            slot_id: None,
+            drop_pub: String::new(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
+        };
+        let alice_contact = FrontendContact {
+            did: alice_did.to_string(),
+            profile: FrontendUserProfile::default(),
+            tags: vec![],
+            added_at: chrono::Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(1),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![unverified_sync],
+        };
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            bob_state.save_contact(&mut s, alice_contact, Some(password)).unwrap();
+        }
+
+        // 3. First probe: Bob not in server members -> becomes pending_auth, NOT auto-activated
+        let probed = probe_contact_syncs_impl(false, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+        assert_eq!(probed.len(), 1);
+        assert_eq!(probed[0].status, "pending_auth");
+        assert_eq!(probed[0].drop_pub, server_admin_pub);
+        assert!(probed[0].last_probed_at.is_some());
+
+        // Verify settings still empty (no auto-activation for pending_auth)
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let settings = bob_state.load_settings(&mut s, Some(password)).unwrap();
+            assert!(settings.market_selected_syncs.is_empty());
+        }
+
+        // 4. Backoff check: immediate re-probe with force=false skips pending_auth
+        let initial_probed_at = probed[0].last_probed_at;
+        let reprobed = probe_contact_syncs_impl(false, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+        assert_eq!(reprobed[0].status, "pending_auth");
+        assert_eq!(reprobed[0].last_probed_at, initial_probed_at);
+
+        // 5. Authorize Bob on the mock drop server
+        let bob_signing_key = {
+            let s = bob_state.service.lock().unwrap();
+            s.with_wallet_and_identity(|_w, id| id.signing_key.clone()).unwrap()
+        };
+        let stealth_pk = humoco_market::derive_member_stealth_pubkey(&bob_signing_key, &server_admin_pub).unwrap();
+        server.members.lock().unwrap().push(stealth_pk);
+
+        // 6. Force probe: Bob is now authorized -> becomes active and auto-activates into selected syncs
+        let active_probed = probe_contact_syncs_impl(true, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+        assert_eq!(active_probed.len(), 1);
+        assert_eq!(active_probed[0].status, "active");
+
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let settings = bob_state.load_settings(&mut s, Some(password)).unwrap();
+            assert_eq!(settings.market_selected_syncs.len(), 1);
+            assert_eq!(settings.market_selected_syncs[0].status, "active");
+            assert_eq!(settings.market_selected_syncs[0].drop_pub, server_admin_pub);
+        }
+
+        // 7. Test unreachable handling with invalid endpoint
+        let charlie_service = setup_test_app(&base_dir.join("charlie"), "Charlie", CHARLIE_PHRASE, password);
+        let charlie_did = charlie_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let unreachable_sync = FrontendSyncDescriptor {
+            write_url: "http://127.0.0.1:9/sync.php".to_string(),
+            read_url: String::new(),
+            slot_id: None,
+            drop_pub: String::new(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
+        };
+        let charlie_contact = FrontendContact {
+            did: charlie_did,
+            profile: FrontendUserProfile::default(),
+            tags: vec![],
+            added_at: chrono::Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(1),
+            desired_hops: Some(1),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![unreachable_sync],
+        };
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            bob_state.save_contact(&mut s, charlie_contact, Some(password)).unwrap();
+        }
+
+        let all_probed = probe_contact_syncs_impl(true, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+        let unreach = all_probed.iter().find(|s| s.write_url.contains(":9/sync.php")).unwrap();
+        assert_eq!(unreach.status, "unreachable");
+        assert_eq!(unreach.fail_count, 1);
+        assert!(unreach.last_probed_at.is_some());
     }
 
     #[test]

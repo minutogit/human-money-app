@@ -1,7 +1,7 @@
 // src/components/marketplace/AdCard.tsx
 import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MessageSquare, ArrowRight, Clock, Tag, ChevronDown, ChevronUp, User, Globe, ImageOff } from 'lucide-react';
+import { MessageSquare, ArrowRight, Clock, Tag, ChevronDown, ChevronUp, User, Globe, ImageOff, Edit3 } from 'lucide-react';
 import { Ad, FrontendTrustTier } from '../../types';
 import { Button } from '../ui/Button';
 import { TrustBadge } from '../ui/TrustBadge';
@@ -21,9 +21,11 @@ export interface AdCardProps {
     trust?: FrontendTrustTier;
     daysLeft?: number;
     allowInquiries?: boolean;
+    isOwn?: boolean;
+    onEditOwnAd?: (ad: Ad) => void;
     onInquire?: (ad: Ad, ownerDid: string, ownerName: string) => void;
     onPay?: (ownerDid: string) => void;
-    onOwnerClick?: (ownerDid: string) => void;
+    onOwnerClick?: (ownerDid: string, isOwn?: boolean) => void;
 }
 
 export const AdCard: React.FC<AdCardProps> = ({
@@ -33,6 +35,8 @@ export const AdCard: React.FC<AdCardProps> = ({
     trust,
     daysLeft,
     allowInquiries,
+    isOwn,
+    onEditOwnAd,
     onInquire,
     onPay,
     onOwnerClick,
@@ -40,7 +44,7 @@ export const AdCard: React.FC<AdCardProps> = ({
     const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState(false);
 
-    const imageToken = ad.image_token || (ad as any).imageToken;
+    const imageToken = ad.imageToken;
     const [imageUri, setImageUri] = useState<string | null>(() => {
         if (!imageToken) return null;
         return adImageCache.get(`${ownerDid}:${imageToken}`) ?? null;
@@ -101,8 +105,8 @@ export const AdCard: React.FC<AdCardProps> = ({
     const effectiveDaysLeft =
         daysLeft !== undefined
             ? daysLeft
-            : ad.expires_at > nowSecs
-            ? Math.ceil((ad.expires_at - nowSecs) / 86400)
+            : ad.expiresAt > nowSecs
+            ? Math.ceil((ad.expiresAt - nowSecs) / 86400)
             : 0;
 
     const isOffer = ad.kind === 'offer';
@@ -142,7 +146,15 @@ export const AdCard: React.FC<AdCardProps> = ({
                         >
                             {isOffer ? t('marketplace.adKindOffer', 'Angebot') : t('marketplace.adKindRequest', 'Gesuch')}
                         </span>
-                        {(ad.is_remote || (ad as any).isRemote) && (
+                        {isOwn && (
+                            <span
+                                className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200"
+                                data-testid="ad-own-badge"
+                            >
+                                {t('marketplace.myAdBadge', 'Mein Inserat')}
+                            </span>
+                        )}
+                        {ad.isRemote && (
                             <span
                                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200"
                                 data-testid="ad-remote-badge"
@@ -228,9 +240,9 @@ export const AdCard: React.FC<AdCardProps> = ({
             <div className="pt-3 border-t border-theme-subtle/40 flex flex-wrap items-center justify-between gap-3">
                 <button
                     type="button"
-                    onClick={() => onOwnerClick?.(ownerDid)}
+                    onClick={() => (isOwn ? onOwnerClick?.(ownerDid, true) : onOwnerClick?.(ownerDid))}
                     className="flex items-center gap-2 group text-left min-w-0"
-                    title={t('marketplace.viewPersonCard', 'Visitenkarte ansehen')}
+                    title={isOwn ? t('marketplace.myOfferBtn', 'Mein Angebot') : t('marketplace.viewPersonCard', 'Visitenkarte ansehen')}
                 >
                     <div className="w-7 h-7 rounded-full bg-theme-subtle/50 text-theme-primary flex items-center justify-center shrink-0">
                         <User size={14} />
@@ -240,31 +252,48 @@ export const AdCard: React.FC<AdCardProps> = ({
                             {displayName}
                         </span>
                     </div>
-                    <TrustBadge trust={trustDto} size="sm" />
+                    {!isOwn && <TrustBadge trust={trustDto} size="sm" />}
                 </button>
 
                 <div className="flex items-center gap-2 shrink-0 ml-auto">
-                    {(ad.allow_inquiries ?? allowInquiries ?? true) && onInquire && (
-                        <Button
-                            size="xs"
-                            variant="outline"
-                            onClick={() => onInquire(ad, ownerDid, displayName)}
-                            className="flex items-center gap-1.5"
-                        >
-                            <MessageSquare size={13} />
-                            <span>{t('marketplace.inquireBtn', 'Anfragen')}</span>
-                        </Button>
-                    )}
-                    {onPay && (
-                        <Button
-                            size="xs"
-                            variant="primary"
-                            onClick={() => onPay(ownerDid)}
-                            className="flex items-center gap-1"
-                        >
-                            <span>{t('marketplace.payBtn', 'Bezahlen')}</span>
-                            <ArrowRight size={13} />
-                        </Button>
+                    {isOwn ? (
+                        onEditOwnAd && (
+                            <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => onEditOwnAd(ad)}
+                                className="flex items-center gap-1.5"
+                                data-testid="ad-edit-own-btn"
+                            >
+                                <Edit3 size={13} />
+                                <span>{t('common.edit', 'Bearbeiten')}</span>
+                            </Button>
+                        )
+                    ) : (
+                        <>
+                            {(ad.allowInquiries ?? allowInquiries ?? true) && onInquire && (
+                                <Button
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={() => onInquire(ad, ownerDid, displayName)}
+                                    className="flex items-center gap-1.5"
+                                >
+                                    <MessageSquare size={13} />
+                                    <span>{t('marketplace.inquireBtn', 'Anfragen')}</span>
+                                </Button>
+                            )}
+                            {onPay && (
+                                <Button
+                                    size="xs"
+                                    variant="primary"
+                                    onClick={() => onPay(ownerDid)}
+                                    className="flex items-center gap-1"
+                                >
+                                    <span>{t('marketplace.payBtn', 'Bezahlen')}</span>
+                                    <ArrowRight size={13} />
+                                </Button>
+                            )}
+                        </>
                     )}
                 </div>
             </div>

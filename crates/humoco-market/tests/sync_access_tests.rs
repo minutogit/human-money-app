@@ -190,6 +190,20 @@ fn test_canonicalize_write_url_edge_cases() {
         canonicalize_write_url("https://example.com/my-sync/").unwrap(),
         "https://example.com/my-sync/sync.php"
     );
+    // Missing trailing slash and missing sync.php automatically appends sync.php
+    assert_eq!(
+        canonicalize_write_url("https://example.com/my-sync").unwrap(),
+        "https://example.com/my-sync/sync.php"
+    );
+    assert_eq!(
+        canonicalize_write_url("example.com/my-sync").unwrap(),
+        "https://example.com/my-sync/sync.php"
+    );
+    // Trailing slash after sync.php is trimmed
+    assert_eq!(
+        canonicalize_write_url("https://example.com/my-sync/sync.php/").unwrap(),
+        "https://example.com/my-sync/sync.php"
+    );
     // Port 443 stripped on https
     assert_eq!(
         canonicalize_write_url("https://EXAMPLE.COM:443/sync.php?query=1#frag").unwrap(),
@@ -216,9 +230,15 @@ fn test_canonicalize_write_url_edge_cases() {
         "http://[::1]:9000/sync.php"
     );
 
-    // Non-loopback http rejected
-    assert!(canonicalize_write_url("http://example.com/sync.php").is_err());
-    assert!(canonicalize_write_url("http://192.168.1.1/sync.php").is_err());
+    // Non-loopback http auto-upgrades to https
+    assert_eq!(
+        canonicalize_write_url("http://example.com/sync.php").unwrap(),
+        "https://example.com/sync.php"
+    );
+    assert_eq!(
+        canonicalize_write_url("http://192.168.1.1/sync").unwrap(),
+        "https://192.168.1.1/sync/sync.php"
+    );
 
     // Unsupported scheme rejected
     assert!(canonicalize_write_url("ftp://example.com/sync.php").is_err());
