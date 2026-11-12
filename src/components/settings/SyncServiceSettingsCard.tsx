@@ -25,6 +25,7 @@ import {
     FrontendDiscoveredSync,
     FrontendSyncAdminStatus,
     FrontendMemberPolicyDto,
+    FrontendSyncDescriptor,
     StoredPublicSync,
 } from '../../types';
 import { marketService } from '../../services/marketService';
@@ -155,6 +156,16 @@ const PolicyHelpPopover: React.FC<PolicyHelpPopoverProps> = ({ title, content })
                 </span>
             )}
         </span>
+    );
+};
+
+export const isSameSyncEndpoint = (
+    a: { writeUrl?: string; readUrl?: string },
+    b: { writeUrl?: string; readUrl?: string }
+): boolean => {
+    return (
+        (Boolean(a.writeUrl) && Boolean(b.writeUrl) && a.writeUrl === b.writeUrl) ||
+        (Boolean(a.readUrl) && Boolean(b.readUrl) && a.readUrl === b.readUrl)
     );
 };
 
@@ -547,6 +558,8 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             const currentSelected = discoveredDrops.filter(d => d.isSelected).map(d => d.descriptor);
             const isCurrentlySelected = discovered.isSelected;
 
+            let descriptorToActivate = discovered.descriptor;
+
             if (!isCurrentlySelected && (discovered.status || discovered.descriptor.status) !== 'active') {
                 setIsProbingContacts(true);
                 try {
@@ -554,10 +567,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                     const fresh = await marketService.discoverAvailableSyncs().catch(() => []);
                     setDiscoveredDrops(fresh);
                     notifySyncStatusUpdated();
-                    const match = fresh.find(d =>
-                        (d.descriptor.readUrl && d.descriptor.readUrl === discovered.descriptor.readUrl) ||
-                        (d.descriptor.writeUrl && d.descriptor.writeUrl === discovered.descriptor.writeUrl)
-                    );
+                    const match = fresh.find(d => isSameSyncEndpoint(d.descriptor, discovered.descriptor));
                     if (!match || (match.status || match.descriptor.status) !== 'active') {
                         setFeedback({
                             type: 'info',
@@ -565,16 +575,17 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                         });
                         return;
                     }
+                    descriptorToActivate = match.descriptor;
                 } finally {
                     setIsProbingContacts(false);
                 }
             }
 
-            let updatedList = [];
+            let updatedList: FrontendSyncDescriptor[] = [];
             if (isCurrentlySelected) {
-                updatedList = currentSelected.filter(d => d.readUrl !== discovered.descriptor.readUrl);
+                updatedList = currentSelected.filter(d => !isSameSyncEndpoint(d, discovered.descriptor));
             } else {
-                updatedList = [...currentSelected, discovered.descriptor];
+                updatedList = [...currentSelected.filter(d => !isSameSyncEndpoint(d, descriptorToActivate)), descriptorToActivate];
             }
             await marketService.setSelectedUploadSyncs(updatedList);
             const refetched = await marketService.discoverAvailableSyncs().catch(() => []);
@@ -1044,7 +1055,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
 
                                         return (
                                             <div
-                                                key={idx}
+                                                key={drop.descriptor.writeUrl || drop.descriptor.readUrl || idx}
                                                 className="p-3 bg-white rounded-xl border border-theme-subtle flex items-center justify-between gap-3 text-xs"
                                             >
                                                 <div className="flex items-center gap-2.5 min-w-0">

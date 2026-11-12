@@ -1077,14 +1077,15 @@ pub async fn probe_contact_syncs_impl(
             .unwrap_or_default();
         let own = service
             .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
-            .is_ok();
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<StoredSyncAdmin>(&bytes).ok())
+            .map(|a| !a.descriptor.write_url.is_empty() && !a.descriptor.read_url.is_empty())
+            .unwrap_or(false);
         (s, own)
     };
 
     let has_active_friend_sync = settings.market_selected_syncs.iter().any(|d| {
-        !d.read_url.is_empty()
-            && !d.drop_pub.is_empty()
-            && (d.status == "active" || (d.fail_count == 0 && d.status != "pending_auth" && d.status != "unreachable"))
+        d.status == "active" && d.fail_count == 0 && !d.read_url.is_empty() && !d.drop_pub.is_empty()
     });
 
     let has_healthy_public_sync = settings.public_syncs.iter().any(|pd| {
@@ -1092,6 +1093,7 @@ pub async fn probe_contact_syncs_impl(
     });
 
     let mut has_healthy_sync = has_own_sync || has_active_friend_sync || has_healthy_public_sync;
+    let initial_has_healthy = has_healthy_sync;
 
     let mut address_book = {
         let mut service = state.service.lock().unwrap();
@@ -1101,14 +1103,6 @@ pub async fn probe_contact_syncs_impl(
         }
     };
 
-    if has_healthy_sync && !force {
-        let mut all_syncs = Vec::new();
-        for c in address_book.contacts.values() {
-            all_syncs.extend(c.syncs.clone());
-        }
-        return Ok(all_syncs);
-    }
-
     let now = chrono::Utc::now().timestamp() as u64;
     let client = sync_client::create_sync_probe_client();
     let mut contacts_modified = false;
@@ -1116,7 +1110,13 @@ pub async fn probe_contact_syncs_impl(
 
     for contact in address_book.contacts.values_mut() {
         for ep in &mut contact.syncs {
-            if !force {
+            if initial_has_healthy && !force {
+                let needs_initial_probe = ep.last_probed_at.is_none()
+                    && (ep.status == "unverified" || ep.read_url.is_empty() || ep.drop_pub.is_empty());
+                if !needs_initial_probe {
+                    continue;
+                }
+            } else if !force {
                 if let Some(last_probed) = ep.last_probed_at {
                     let elapsed = now.saturating_sub(last_probed);
                     let skip = match ep.status.as_str() {
@@ -2895,8 +2895,7 @@ pub fn get_sync_overview_status_impl(
                 && !d.read_url.is_empty()
                 && !d.drop_pub.is_empty()
                 && d.fail_count == 0
-                && d.status != "pending_auth"
-                && d.status != "unreachable"
+                && d.status == "active"
         })
         .count();
 
@@ -2913,19 +2912,26 @@ pub fn get_sync_overview_status_impl(
         .count();
 
     let contacts = state.load_contacts(&mut service, password.as_deref()).unwrap_or_default();
-    let mut pending_auth_count = 0;
+    let mut pending_keys = std::collections::HashSet::new();
     for c in &contacts {
         for ep in &c.syncs {
             if ep.status == "pending_auth" {
-                pending_auth_count += 1;
+                let key = crate::state::sync_endpoint_key(ep);
+                if !key.is_empty() {
+                    pending_keys.insert(key);
+                }
             }
         }
     }
     for sel in &settings.market_selected_syncs {
-        if sel.status == "pending_auth" && !contacts.iter().any(|c| c.syncs.iter().any(|ep| ep.read_url == sel.read_url)) {
-            pending_auth_count += 1;
+        if sel.status == "pending_auth" {
+            let key = crate::state::sync_endpoint_key(sel);
+            if !key.is_empty() {
+                pending_keys.insert(key);
+            }
         }
     }
+    let pending_auth_count = pending_keys.len();
 
     let failing_selected = settings
         .market_selected_syncs
@@ -3873,6 +3879,112 @@ pub(crate) mod tests {
         assert_eq!(unreach.status, "unreachable");
         assert_eq!(unreach.fail_count, 1);
         assert!(unreach.last_probed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_probe_contact_syncs_healthy_sync_probes_unverified_once_without_reprobing_pending() {
+        let base_dir = temp_test_dir("healthy_probe_unverified");
+        let password = "TestPassword123!";
+        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+        let bob_state = create_test_state(bob_service);
+
+        let server_admin_pub = "22".repeat(32);
+        let server = MockSyncServer::start("server_data".to_string(), server_admin_pub.clone()).await;
+
+        // 1. Give Bob an active, healthy friend sync in settings
+        let healthy_sync = FrontendSyncDescriptor {
+            write_url: "https://healthy.example.com/sync.php".to_string(),
+            read_url: "https://healthy.example.com/read".to_string(),
+            slot_id: None,
+            drop_pub: "healthy_drop_pub".to_string(),
+            last_seen_at: Some(chrono::Utc::now().timestamp() as u64),
+            last_error_at: None,
+            fail_count: 0,
+            status: "active".to_string(),
+            last_probed_at: Some(chrono::Utc::now().timestamp() as u64),
+        };
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let mut settings = bob_state.load_settings(&mut s, Some(password)).unwrap();
+            settings.market_selected_syncs.push(healthy_sync);
+            bob_state.save_settings(&mut s, settings, Some(password)).unwrap();
+        }
+
+        // 2. Add Alice contact with an already-probed "pending_auth" sync
+        let alice_did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        let pending_sync = FrontendSyncDescriptor {
+            write_url: "http://127.0.0.1:9/pending.php".to_string(),
+            read_url: "http://127.0.0.1:9/pending_read".to_string(),
+            slot_id: None,
+            drop_pub: "pending_drop_pub".to_string(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "pending_auth".to_string(),
+            last_probed_at: Some(1000),
+        };
+
+        // 3. Add Charlie contact with a newly added "unverified" sync (last_probed_at == None, read_url == "")
+        let charlie_service = setup_test_app(&base_dir.join("charlie"), "Charlie", CHARLIE_PHRASE, password);
+        let charlie_did = charlie_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let unverified_sync = FrontendSyncDescriptor {
+            write_url: format!("{}/sync.php", server.base_url),
+            read_url: String::new(),
+            slot_id: None,
+            drop_pub: String::new(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
+        };
+
+        let alice_contact = FrontendContact {
+            did: alice_did.to_string(),
+            profile: FrontendUserProfile::default(),
+            tags: vec![],
+            added_at: chrono::Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(1),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![pending_sync],
+        };
+        let charlie_contact = FrontendContact {
+            did: charlie_did.to_string(),
+            profile: FrontendUserProfile::default(),
+            tags: vec![],
+            added_at: chrono::Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(1),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![unverified_sync],
+        };
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            bob_state.save_contact(&mut s, alice_contact, Some(password)).unwrap();
+            bob_state.save_contact(&mut s, charlie_contact, Some(password)).unwrap();
+        }
+
+        // 4. Probe with force=false.
+        // Even though Bob already has a healthy sync, Charlie's unverified sync MUST be probed once!
+        // Meanwhile, Alice's already-probed pending_auth sync must NOT be re-probed (retaining last_probed_at == 1000).
+        let probed = probe_contact_syncs_impl(false, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+
+        let alice_probed = probed.iter().find(|s| s.write_url.contains("pending.php")).unwrap();
+        assert_eq!(alice_probed.status, "pending_auth");
+        assert_eq!(alice_probed.last_probed_at, Some(1000), "Already probed pending sync should not be re-probed when has_healthy_sync");
+
+        let charlie_probed = probed.iter().find(|s| s.write_url.contains(&server.base_url)).unwrap();
+        assert_ne!(charlie_probed.status, "unverified", "Newly added unverified sync must be probed");
+        assert_eq!(charlie_probed.drop_pub, server_admin_pub, "Drop pub must be populated from probe info");
+        assert!(!charlie_probed.read_url.is_empty(), "Read URL must be populated from probe info");
+        assert!(charlie_probed.last_probed_at.is_some(), "last_probed_at must be populated");
     }
 
     #[test]

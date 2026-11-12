@@ -904,30 +904,6 @@ impl AppState {
                 let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password);
             }
             *self.contacts.lock().unwrap() = Some(address_book);
-
-            if let Ok(mut settings) = self.load_settings(service, password) {
-                let own_sync_url = service
-                    .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<StoredSyncAdmin>(&bytes).ok())
-                    .map(|admin| admin.descriptor.read_url);
-
-                let has_friend_sync = settings.market_selected_syncs.iter()
-                    .any(|d| Some(&d.read_url) != own_sync_url.as_ref());
-
-                if !has_friend_sync {
-                    if let Some(candidate) = card_syncs.iter().find(|d| {
-                        !d.read_url.is_empty()
-                            && Some(&d.read_url) != own_sync_url.as_ref()
-                            && !settings.market_selected_syncs.iter().any(|sd| sd.read_url == d.read_url)
-                    }) {
-                        if settings.market_selected_syncs.len() < 3 {
-                            settings.market_selected_syncs.push(candidate.clone());
-                            let _ = self.save_settings(service, settings, password);
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -1104,30 +1080,66 @@ fn truncate_did(did: &str) -> String {
     }
 }
 
+pub fn sync_endpoint_key(d: &crate::models::FrontendSyncDescriptor) -> String {
+    let w = d.write_url.trim().trim_end_matches('/');
+    if !w.is_empty() {
+        w.to_string()
+    } else {
+        d.read_url.trim().trim_end_matches('/').to_string()
+    }
+}
+
 pub fn merge_contact_syncs(
     existing: &[crate::models::FrontendSyncDescriptor],
     card_syncs: &[crate::models::FrontendSyncDescriptor],
 ) -> Vec<crate::models::FrontendSyncDescriptor> {
-    let mut result = Vec::with_capacity(2);
-    let mut seen = std::collections::HashSet::new();
+    let mut result: Vec<crate::models::FrontendSyncDescriptor> = Vec::with_capacity(2);
+
+    let merge_entry = |res: &mut Vec<crate::models::FrontendSyncDescriptor>, d: &crate::models::FrontendSyncDescriptor| {
+        let w = d.write_url.trim().trim_end_matches('/');
+        let r = d.read_url.trim().trim_end_matches('/');
+        if w.is_empty() && r.is_empty() {
+            return;
+        }
+
+        if let Some(target) = res.iter_mut().find(|existing_entry| {
+            let ew = existing_entry.write_url.trim().trim_end_matches('/');
+            let er = existing_entry.read_url.trim().trim_end_matches('/');
+            (!w.is_empty() && !ew.is_empty() && w == ew)
+                || (!r.is_empty() && !er.is_empty() && r == er)
+        }) {
+            if target.read_url.is_empty() && !d.read_url.is_empty() {
+                target.read_url = d.read_url.clone();
+            }
+            if target.drop_pub.is_empty() && !d.drop_pub.is_empty() {
+                target.drop_pub = d.drop_pub.clone();
+            }
+            if target.write_url.is_empty() && !d.write_url.is_empty() {
+                target.write_url = d.write_url.clone();
+            }
+            if target.slot_id.is_none() && d.slot_id.is_some() {
+                target.slot_id = d.slot_id.clone();
+            }
+            if target.status == "unverified" && d.status != "unverified" {
+                target.status = d.status.clone();
+                target.last_probed_at = d.last_probed_at;
+                target.last_seen_at = d.last_seen_at;
+                target.last_error_at = d.last_error_at;
+                target.fail_count = d.fail_count;
+            }
+        } else if res.len() < 2 {
+            res.push(d.clone());
+        }
+    };
 
     // Newest card sync endpoints take precedence, preserving priority order
     for d in card_syncs {
-        if seen.insert(d.read_url.clone()) {
-            result.push(d.clone());
-            if result.len() == 2 {
-                return result;
-            }
-        }
+        merge_entry(&mut result, d);
     }
     for d in existing {
-        if seen.insert(d.read_url.clone()) {
-            result.push(d.clone());
-            if result.len() == 2 {
-                return result;
-            }
-        }
+        merge_entry(&mut result, d);
     }
+
     result
 }
 
@@ -1338,5 +1350,55 @@ mod tests {
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_eq!(bob.syncs[0].last_seen_at, Some(1300));
         assert_eq!(bob.syncs[0].fail_count, 0);
+    }
+
+    #[test]
+    fn test_merge_contact_syncs_unprobed_distinct_write_urls() {
+        let ep1 = FrontendSyncDescriptor {
+            write_url: "https://sync-a.example.com/sync.php".to_string(),
+            read_url: String::new(),
+            slot_id: None,
+            drop_pub: String::new(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
+        };
+        let ep2 = FrontendSyncDescriptor {
+            write_url: "https://sync-b.example.com/sync.php".to_string(),
+            read_url: String::new(),
+            slot_id: None,
+            drop_pub: String::new(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
+        };
+
+        // Merge two unprobed syncs with distinct write URLs: neither should be dropped
+        let merged = super::merge_contact_syncs(std::slice::from_ref(&ep1), std::slice::from_ref(&ep2));
+        assert_eq!(merged.len(), 2, "Both distinct unprobed syncs must be kept");
+        assert_eq!(merged[0].write_url, "https://sync-b.example.com/sync.php");
+        assert_eq!(merged[1].write_url, "https://sync-a.example.com/sync.php");
+
+        // Merge populated card sync into an existing unprobed sync with same write_url
+        let populated_card = FrontendSyncDescriptor {
+            write_url: "https://sync-a.example.com/sync.php/".to_string(),
+            read_url: "https://sync-a.example.com/read".to_string(),
+            slot_id: Some("slot123".to_string()),
+            drop_pub: "pubkey_a".to_string(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
+        };
+        let merged2 = super::merge_contact_syncs(&[ep1], &[populated_card]);
+        assert_eq!(merged2.len(), 1, "Matching write_url should be merged into single entry");
+        assert_eq!(merged2[0].read_url, "https://sync-a.example.com/read");
+        assert_eq!(merged2[0].drop_pub, "pubkey_a");
+        assert_eq!(merged2[0].slot_id, Some("slot123".to_string()));
     }
 }

@@ -683,6 +683,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
                 existingContact={existingContact}
                 initialDid={currentPerson.did}
                 initialProfile={currentPerson.profile}
+                initialSyncUrls={currentPerson.cardSyncs?.map((s) => s.writeUrl || s.readUrl).filter(Boolean)}
                 onSave={async (saved) => {
                     await protectAction(async (pwd) => {
                         await contactService.saveContact(saved, pwd || undefined);

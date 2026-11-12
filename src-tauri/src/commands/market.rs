@@ -7,7 +7,7 @@ use crate::models::{
     FrontendMarketPerson, FrontendMarketSnapshot, FrontendMyMarketProfile,
     FrontendSaveMyMarketProfileRequest, FrontendTrustTier, StoredOwnMarketProfile,
 };
-use crate::state::{AppState, MARKET_CARD_STORE_KEY, MARKET_OWN_PROFILE_KEY};
+use crate::state::{AppState, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY, MARKET_OWN_PROFILE_KEY};
 use crate::sync_client;
 
 // =========================================================================
@@ -1226,12 +1226,45 @@ pub fn import_contact_card_impl(
             if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
                 let card_syncs: Vec<crate::models::FrontendSyncDescriptor> =
                     stored.card.payload.drops.iter().cloned().map(Into::into).collect();
-                state.update_contact_syncs_from_card(
-                    &mut service,
-                    &did,
-                    &card_syncs,
-                    password.as_deref(),
-                );
+
+                let can_card_did = crate::state::canonicalize_did(&did).unwrap_or_else(|_| did.clone());
+                let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password.as_deref()) {
+                    Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data).unwrap_or_default(),
+                    Err(_) => crate::models::FrontendAddressBook::default(),
+                };
+
+                let exists = address_book.contacts.iter().any(|(k, _)| {
+                    k == &did || crate::state::canonicalize_did(k).ok().as_deref() == Some(&can_card_did)
+                });
+
+                if exists {
+                    state.update_contact_syncs_from_card(
+                        &mut service,
+                        &did,
+                        &card_syncs,
+                        password.as_deref(),
+                    );
+                } else {
+                    let pub_profile = humoco_market::extract_public_profile(&stored.card);
+                    let profile = crate::models::FrontendUserProfile::from(pub_profile);
+                    let contact = crate::models::FrontendContact {
+                        did: did.clone(),
+                        profile,
+                        tags: vec![],
+                        added_at: chrono::Utc::now().to_rfc3339(),
+                        notes: None,
+                        trust_level: None,
+                        desired_hops: None,
+                        has_peer_list: false,
+                        peer_list_updated_at: None,
+                        syncs: crate::state::merge_contact_syncs(&[], &card_syncs),
+                    };
+                    address_book.contacts.insert(did.clone(), contact);
+                    if let Ok(bytes) = serde_json::to_vec(&address_book) {
+                        let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password.as_deref());
+                    }
+                    *state.contacts.lock().unwrap() = Some(address_book);
+                }
             }
             Ok(FrontendImportCardResult {
                 status: "accepted".to_string(),
