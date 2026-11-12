@@ -62,12 +62,6 @@ pub struct StoredSyncAdmin {
     pub descriptor: humoco_market::DropDescriptor,
     #[serde(default)]
     pub sync_index: u32,
-    #[serde(default)]
-    pub generation: u32,
-    #[serde(default)]
-    pub previous_generation: Option<u32>,
-    #[serde(default)]
-    pub rotation_retire_at: Option<u64>,
     pub data_dir: String,
     pub max_members: usize,
     #[serde(default = "default_max_total_storage_mb")]

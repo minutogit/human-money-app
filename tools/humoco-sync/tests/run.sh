@@ -99,15 +99,6 @@ ADMIN_KP="$(php -r '
 ADMIN_SK="$(echo "$ADMIN_KP" | cut -d: -f1)"
 ADMIN_PK="$(echo "$ADMIN_KP" | cut -d: -f2)"
 
-ADMIN2_KP="$(php -r '
-    $kp = sodium_crypto_sign_keypair();
-    $sk = sodium_crypto_sign_secretkey($kp);
-    $pk = sodium_crypto_sign_publickey($kp);
-    echo bin2hex($sk) . ":" . bin2hex($pk);
-')"
-ADMIN2_SK="$(echo "$ADMIN2_KP" | cut -d: -f1)"
-ADMIN2_PK="$(echo "$ADMIN2_KP" | cut -d: -f2)"
-
 MEMBER1_KP="$(php -r '
     $kp = sodium_crypto_sign_keypair();
     $sk = sodium_crypto_sign_secretkey($kp);
@@ -362,35 +353,10 @@ else
 fi
 
 echo ""
-echo "=== Test Group 5: 180-Day Key Rotation (POST sync.php?rotate) ==="
+echo "=== Test Group 5: POST Rejection (POST sync.php) ==="
 
-RETIRE_AT=$((TS + 180 * 86400))
-CERT_CANON=$(printf "HUMOCO-DROP-ROTATE-V1\n%s\n%s\n%d" "$ADMIN_PK" "$ADMIN2_PK" "$RETIRE_AT")
-CERT_SIG=$(php_sign "$CERT_CANON" "$ADMIN_SK")
-
-ROT_BODY=$(printf '{"old_pubkey":"%s","new_pubkey":"%s","retire_at":%d,"cert_sig":"%s"}' \
-    "$ADMIN_PK" "$ADMIN2_PK" "$RETIRE_AT" "$CERT_SIG")
-ROT_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$ROT_BODY")
-NONCE_ROT="55555555666666667777777788888888"
-CANON_ROT=$(printf "HUMOCO-DROP-ADMIN-V1\nROTATE\n\n%s\n%s\n%s" "$TS" "$NONCE_ROT" "$ROT_HASH")
-SIG_ROT=$(php_sign "$CANON_ROT" "$ADMIN2_SK")
-
-CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/sync.php?rotate" \
-    -H "X-Drop-Pubkey: $ADMIN2_PK" \
-    -H "X-Drop-Timestamp: $TS" \
-    -H "X-Drop-Nonce: $NONCE_ROT" \
-    -H "X-Drop-Signature: $SIG_ROT" \
-    -d "$ROT_BODY")
-assert_status "Admin key rotation returns 200" "200" "$CODE"
-
-# Verify GET ?info now returns ADMIN2_PK and rotation header
-INFO_AFTER=$(curl -s -i "$BASE_URL/sync.php?info")
-if echo "$INFO_AFTER" | grep -q "$ADMIN2_PK" && echo "$INFO_AFTER" | grep -qi "X-Humoco-Sync-Rotation:"; then
-    echo "  [PASS] Rotation header present and new admin_pubkey active"
-else
-    echo "  [FAIL] Rotation header or admin_pubkey invalid: $INFO_AFTER" >&2
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/sync.php?rotate" -d "{}")
+assert_status "POST sync.php is rejected with 405" "405" "$CODE"
 
 echo ""
 echo "=== Test Group 6: Member Slot Delete (DELETE sync.php) ==="
@@ -558,10 +524,10 @@ NONCE_WOT_MEM="ba060606060606060606060606060606"
 WOT_MEM_BODY="{\"pubkeys\":[\"$MEMBER1_PK\"]}"
 WOT_MEM_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$WOT_MEM_BODY")
 CANON_WOT_MEM=$(printf "HUMOCO-DROP-ADMIN-V1\nPUT_MEMBERS\nwot\n%s\n%s\n%s" "$TS" "$NONCE_WOT_MEM" "$WOT_MEM_HASH")
-SIG_WOT_MEM=$(php_sign "$CANON_WOT_MEM" "$ADMIN2_SK")
+SIG_WOT_MEM=$(php_sign "$CANON_WOT_MEM" "$ADMIN_SK")
 
 curl -s -o /dev/null -X PUT "$BASE_URL/sync.php?members&channel=wot" \
-    -H "X-Drop-Pubkey: $ADMIN2_PK" \
+    -H "X-Drop-Pubkey: $ADMIN_PK" \
     -H "X-Drop-Timestamp: $TS" \
     -H "X-Drop-Nonce: $NONCE_WOT_MEM" \
     -H "X-Drop-Signature: $SIG_WOT_MEM" \
@@ -909,10 +875,10 @@ NONCE_ADMIN_DEL="ca0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
 BODY_REM="{\"pubkeys\":[\"$MEMBER2_PK\"]}"
 BODY_REM_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$BODY_REM")
 CANON_REM=$(printf "HUMOCO-DROP-ADMIN-V1\nPUT_MEMBERS\ncard\n%s\n%s\n%s" "$TS" "$NONCE_ADMIN_DEL" "$BODY_REM_HASH")
-SIG_REM=$(php_sign "$CANON_REM" "$ADMIN2_SK")
+SIG_REM=$(php_sign "$CANON_REM" "$ADMIN_SK")
 
 CODE_REM=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php?members&channel=card" \
-    -H "X-Drop-Pubkey: $ADMIN2_PK" \
+    -H "X-Drop-Pubkey: $ADMIN_PK" \
     -H "X-Drop-Timestamp: $TS" \
     -H "X-Drop-Nonce: $NONCE_ADMIN_DEL" \
     -H "X-Drop-Signature: $SIG_REM" \

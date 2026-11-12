@@ -187,7 +187,6 @@ pub fn run() {
             probe_public_sync,
             save_public_sync,
             remove_public_sync,
-            rotate_sync_admin_key,
             get_sync_overview_status,
             deposit_transfer_to_post,
             send_signing_request_via_post,

@@ -14,7 +14,6 @@ import {
     Check,
     Shield,
     HardDrive,
-    KeyRound,
     FileArchive,
     HelpCircle,
     HeartHandshake,
@@ -338,7 +337,6 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
     const [isDownloadingZip, setIsDownloadingZip] = useState(false);
     const [isTestingHost, setIsTestingHost] = useState(false);
     const [isUpdatingPolicy, setIsUpdatingPolicy] = useState(false);
-    const [isRotatingKey, setIsRotatingKey] = useState(false);
     const [isDeletingAdmin, setIsDeletingAdmin] = useState(false);
     const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
     const [copiedLink, setCopiedLink] = useState(false);
@@ -699,25 +697,6 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             setFeedback({ type: 'error', message: translateError(err, t) });
         } finally {
             setIsUpdatingPolicy(false);
-        }
-    };
-
-    const handleRotateKey = async () => {
-        setIsRotatingKey(true);
-        setFeedback(null);
-        try {
-            await protectAction(async (pwd) => {
-                const updated = await marketService.rotateSyncAdminKey(pwd || undefined);
-                setAdminStatus(updated);
-                setFeedback({
-                    type: 'success',
-                    message: t('settings.syncHostKeyRotated'),
-                });
-            });
-        } catch (err) {
-            setFeedback({ type: 'error', message: translateError(err, t) });
-        } finally {
-            setIsRotatingKey(false);
         }
     };
 
@@ -1411,18 +1390,6 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
 
                                 {/* Danger / Management Actions */}
                                 <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-theme-subtle/50">
-                                    <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={handleRotateKey}
-                                        disabled={isRotatingKey}
-                                        className="gap-1.5 text-xs"
-                                    >
-                                        <KeyRound size={13} />
-                                        <span>{t('settings.syncHostRotateKey')}</span>
-                                    </Button>
-
                                     <Button
                                         type="button"
                                         variant="danger"

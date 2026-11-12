@@ -1,31 +1,25 @@
 {
   "master_seed_hex": "0101010101010101010101010101010101010101010101010101010101010101",
   "drop_index": 0,
-  "generation_0": {
-    "generation": 0,
-    "seed_hex": "a9cef6a634aa6800a96ffa9d539a210adb348d35e35e9eb74b56057d74cb798c",
-    "admin_pubkey_hex": "e9aca6e52f5444a81b4046efd78f902d9b94548d5a4556ec20e3303fbc6023cf"
+  "admin_key": {
+    "seed_hex": "852c6f3c0278650d438f0da5e6c0b46c0f647869c13cb4db1040b2dfbb47daaa",
+    "admin_pubkey_hex": "eab52bbab73a30d4d534ea3b1e0d266e2a6ef28a506ac81f157b3998adf93cd1"
   },
-  "generation_1": {
-    "generation": 1,
-    "seed_hex": "dafdf85e1d70df2e2c76790b5e0608094e716cd714b2081a9966bd05b1b0d36e",
-    "admin_pubkey_hex": "26aa56b4706c0bddc8976d7f2b185eaf79d5c3d9f6ffb8dc3d0a49cb6e54c491"
-  },
-  "data_dir": "d-d86422b9f891b322",
+  "data_dir": "d-1cc3b6bc18ffda47",
   "members": [
     {
       "member_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
       "member_did": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
-      "stealth_pubkey_hex": "0ecbc5b8ed9254b450bcde7ddf7124b77e9a64105d14313610da213ee348e2e8",
+      "stealth_pubkey_hex": "135ac0024dcf147b30fa22616f9e50aaaeb827cc341b6c28a0ca728a86c5a3d1",
       "test_message": "Humoco Stealth Protocol Test Message V1",
-      "stealth_signature_hex": "f665d9bc65d4c632bb36a7715db66e0f60f409b3c9dc50cbc4535360f546e59cd585014b2db24d4c446aeb5b40980c6532817a909bae45ef4677a37af4256801"
+      "stealth_signature_hex": "1a837eedcf4ec67d0f5c3569d6da890f46b7369bdaae2fa4325f7952af509a22f473cc9141cb72e93613da189b23aabdc10dbce349bf8bab7421ed3bc786f40a"
     },
     {
       "member_seed_hex": "2222222222222222222222222222222222222222222222222222222222222222",
       "member_did": "did:key:z6MkqGC3nWZhYieEVTVDKW5v588CiGfsDSmRVG9ZwwWTvLSK",
-      "stealth_pubkey_hex": "a3c285bff47dbc98fbf5664dc53603d47b474f07aa87241b064d8cadc93098ed",
+      "stealth_pubkey_hex": "79cf609e05e27a9f99f7290bf45f35b9525094bca4bf31f69658f3df61e6ad70",
       "test_message": "Humoco Stealth Protocol Test Message V1",
-      "stealth_signature_hex": "af30299d8ccc1a4603d78bc5fedc4e193475da8ce1f145a48b42daf0af833d76032d88896aafaefa146dfe25d65db32ef5cdbf8924ae8589b984b5e47adc890c"
+      "stealth_signature_hex": "a20b433433c2e2792db752c590f1e57551ae096192cbf1ab15f56cbda6449e30c789a51be5b7eb9e89cdc5b281f88baade52090dc34b40bed2fb4c766178190e"
     }
   ],
   "public_drops": [
@@ -45,12 +39,6 @@
       "public_user_pubkey_hex": "3a209b0059d53c4b12aeaa4ea5eb3053fae2e55456c1d6ea95b463142ef0f243"
     }
   ],
-  "rotation_certificate": {
-    "old_pubkey": "e9aca6e52f5444a81b4046efd78f902d9b94548d5a4556ec20e3303fbc6023cf",
-    "new_pubkey": "26aa56b4706c0bddc8976d7f2b185eaf79d5c3d9f6ffb8dc3d0a49cb6e54c491",
-    "retire_at": 1800000000,
-    "cert_sig": "58908d008aa5faded626503432c54f13041a25cec619afd0027809ff3ff2511a52e4dfb362af509c9104ad2814188acbef6e45c5af48dcf7da40ab97453f510d"
-  },
   "sample_member_request_message": "HUMOCO-DROP-REQ-V1\nPUT\ncard\n\n1700000000\n0123456789abcdef0123456789abcdef\n93a23971a914e5eacbf0a8d25154cda309c3c1c72fbb9914d47c60f3cb681588",
   "sample_admin_request_message": "HUMOCO-DROP-ADMIN-V1\nPUT_MEMBERS\ncard\n1700000000\n0123456789abcdef0123456789abcdef\n93a23971a914e5eacbf0a8d25154cda309c3c1c72fbb9914d47c60f3cb681588"
 }

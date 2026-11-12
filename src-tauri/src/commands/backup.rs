@@ -1111,7 +1111,7 @@ pub async fn sync_backup(
     let mut settings_updated = false;
     let mut current_settings = settings;
 
-    for (mut sync_desc, _cap_pubkey, is_public) in authorized_targets {
+    for (sync_desc, _cap_pubkey, is_public) in authorized_targets {
         let nonce = crate::sync_client::generate_sync_nonce();
         let signed_res = if is_public {
             match humoco_market::derive_public_drop_keypair(&master_seed, &sync_desc.write_url) {
@@ -1152,18 +1152,8 @@ pub async fn sync_backup(
                 )
                 .await
                 {
-                    Ok(crate::sync_client::PutSlotOutcome::Saved { rotation, .. }) => {
+                    Ok(crate::sync_client::PutSlotOutcome::Saved { .. }) => {
                         uploaded_to += 1;
-                        if let Some(ref cert) = rotation {
-                            if crate::sync_client::apply_verified_rotation(&mut sync_desc, cert, now_secs) {
-                                for s_sync in &mut current_settings.market_selected_syncs {
-                                    if s_sync.read_url == sync_desc.read_url {
-                                        s_sync.drop_pub = sync_desc.drop_pub.clone();
-                                        settings_updated = true;
-                                    }
-                                }
-                            }
-                        }
                     }
                     Ok(crate::sync_client::PutSlotOutcome::PreconditionFailed { .. }) => {
                         errors.push(format!("Upload to {} failed: precondition failed", sync_desc.write_url));
@@ -1258,22 +1248,11 @@ pub async fn fetch_and_inspect_backup(
     let client = crate::sync_client::create_sync_probe_client();
     let info_opt = crate::sync_client::fetch_sync_info(&client, &canonical_write_url).await.ok();
 
-    let (current_drop_pub, current_read_url, old_pubkeys) = match info_opt {
-        Some(info) => {
-            let mut old_keys = Vec::new();
-            if let Some(rot) = info.rotation {
-                old_keys.push(rot.old_pubkey);
-            }
-            if let Some(ref pasted_pub) = pasted_drop_pub {
-                if pasted_pub != &info.drop_pub && !old_keys.contains(pasted_pub) {
-                    old_keys.push(pasted_pub.clone());
-                }
-            }
-            (info.drop_pub, info.read_url, old_keys)
-        }
+    let (current_drop_pub, current_read_url) = match info_opt {
+        Some(info) => (info.drop_pub, info.read_url),
         None => {
             if let (Some(r_url), Some(d_pub)) = (pasted_read_url, pasted_drop_pub) {
-                (d_pub, r_url, Vec::new())
+                (d_pub, r_url)
             } else {
                 return Err(FrontendError::from(format!(
                     "Sync-Dienst unter '{}' konnte nicht erreicht werden und keine gültigen Sync-Deskriptor-Daten übergeben.",
@@ -1296,28 +1275,19 @@ pub async fn fetch_and_inspect_backup(
         candidates.push((current_read_url.clone(), r_hex, "public".to_string()));
     }
 
-    // 3. Grace-period stealth ($P_{alt}$)
-    for old_pub in &old_pubkeys {
-        if let Ok(old_stealth) = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, old_pub) {
-            candidates.push((current_read_url.clone(), old_stealth, "grace".to_string()));
-        }
-    }
-
-    // 4. Deterministic Own-Drop fallback
+    // 3. Deterministic Own-Drop fallback
     let own_data_dir = humoco_market::derive_drop_data_dir(&master_seed, 0);
     let origin_dir = canonical_write_url.rsplit_once('/').map(|(b, _)| b).unwrap_or(&canonical_write_url);
     let own_read_url = format!("{}/{}", origin_dir.trim_end_matches('/'), own_data_dir);
-    for gen in 0..=3 {
-        let (admin_sk, admin_vk, _) = humoco_market::derive_drop_admin_keypair(&master_seed, 0, gen);
-        if let Ok(own_stealth) = humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &admin_vk) {
-            if !candidates.iter().any(|(r, k, _)| r == &own_read_url && k == &own_stealth) {
-                candidates.push((own_read_url.clone(), own_stealth.clone(), "own".to_string()));
-            }
-            if current_read_url != own_read_url
-                && !candidates.iter().any(|(r, k, _)| r == &current_read_url && k == &own_stealth)
-            {
-                candidates.push((current_read_url.clone(), own_stealth, "own".to_string()));
-            }
+    let (admin_sk, admin_vk, _) = humoco_market::derive_drop_admin_keypair(&master_seed, 0);
+    if let Ok(own_stealth) = humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &admin_vk) {
+        if !candidates.iter().any(|(r, k, _)| r == &own_read_url && k == &own_stealth) {
+            candidates.push((own_read_url.clone(), own_stealth.clone(), "own".to_string()));
+        }
+        if current_read_url != own_read_url
+            && !candidates.iter().any(|(r, k, _)| r == &current_read_url && k == &own_stealth)
+        {
+            candidates.push((current_read_url.clone(), own_stealth, "own".to_string()));
         }
     }
 
@@ -1847,17 +1817,9 @@ mod tests {
         assert_eq!(stealth_pk.len(), 64);
 
         // 2. Candidate keys generation in restore:
-        // Candidate 1: stealth key matching drop_pub
         let candidate_stealth = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &drop_pub_hex)
             .expect("candidate derivation failed");
         assert_eq!(candidate_stealth, stealth_pk);
-
-        // Candidate 2: grace key matching an older rotated drop key
-        let old_sync_sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
-        let old_drop_pub_hex = hex::encode(old_sync_sk.verifying_key().as_bytes());
-        let candidate_grace = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &old_drop_pub_hex)
-            .expect("candidate grace derivation failed");
-        assert_ne!(candidate_grace, stealth_pk);
     }
 
     #[test]

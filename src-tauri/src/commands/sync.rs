@@ -113,20 +113,7 @@ pub fn compute_admin_sync_members_with_stats(
     // Derive admin keys
     let master_seed = get_wallet_master_seed(service)?;
     let (admin_sk, _admin_vk, _admin_pub) =
-        humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
-
-    let now = sync_client::current_unix_timestamp();
-    let is_grace_active = admin.previous_generation.is_some()
-        && admin.rotation_retire_at.is_some_and(|retire| now < retire);
-    let prev_admin_sk = if is_grace_active {
-        admin.previous_generation.map(|prev_gen| {
-            let (prev_sk, _, _) =
-                humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, prev_gen);
-            prev_sk
-        })
-    } else {
-        None
-    };
+        humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
 
     let blocked_set: HashSet<&str> = admin.blocked_pubkeys.iter().map(|s| s.as_str()).collect();
 
@@ -138,16 +125,6 @@ pub fn compute_admin_sync_members_with_stats(
             {
                 if !blocked_set.contains(stealth_pk.as_str()) {
                     member_pubkeys.push(stealth_pk);
-                }
-            }
-
-            if let Some(ref prev_sk) = prev_admin_sk {
-                if let Ok(prev_stealth_pk) =
-                    humoco_market::derive_member_stealth_pubkey_admin(prev_sk, &member_vk)
-                {
-                    if !blocked_set.contains(prev_stealth_pk.as_str()) {
-                        member_pubkeys.push(prev_stealth_pk);
-                    }
                 }
             }
         }
@@ -260,7 +237,6 @@ pub async fn sync_channel_members_impl(
         let (admin_sk, _, _) = humoco_market::derive_drop_admin_keypair(
             &master_seed,
             admin.sync_index,
-            admin.generation,
         );
         (admin, admin_sk)
     };
@@ -284,9 +260,8 @@ pub fn prepare_sync_setup_impl(
     let master_seed = get_wallet_master_seed(&mut service)?;
 
     let drop_index = 0u32;
-    let generation = 0u32;
     let (_admin_sk, _admin_vk, admin_pubkey) =
-        humoco_market::derive_drop_admin_keypair(&master_seed, drop_index, generation);
+        humoco_market::derive_drop_admin_keypair(&master_seed, drop_index);
     let data_dir = humoco_market::derive_drop_data_dir(&master_seed, drop_index);
 
     let card_policy = policy.unwrap_or_default();
@@ -331,9 +306,6 @@ pub fn prepare_sync_setup_impl(
             drop_pub: admin_pubkey.clone(),
         },
         sync_index: drop_index,
-        generation,
-        previous_generation: None,
-        rotation_retire_at: None,
         data_dir: data_dir.clone(),
         max_members: max_mem,
         max_total_storage_mb: max_storage_mb,
@@ -364,7 +336,6 @@ pub fn prepare_sync_setup_impl(
         descriptor: stored_admin.descriptor.into(),
         data_dir,
         admin_pubkey,
-        generation,
         max_members: max_mem,
         max_total_storage_mb: max_storage_mb,
         policy: card_policy,
@@ -439,7 +410,7 @@ pub async fn finalize_sync_setup_impl(
             .map_err(|e| FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e)))?;
         let master_seed = get_wallet_master_seed(&mut service)?;
         let (admin_sk, _, _) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
+            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
         (admin, admin_sk)
     };
 
@@ -502,8 +473,6 @@ pub async fn finalize_sync_setup_impl(
     Ok(FrontendSyncAdminStatus {
         descriptor: admin.descriptor.clone().into(),
         admin_pubkey: admin.descriptor.drop_pub.clone(),
-        generation: admin.generation,
-        rotation_retire_at: admin.rotation_retire_at,
         data_dir: admin.data_dir,
         max_members: admin.max_members,
         max_total_storage_mb: admin.max_total_storage_mb,
@@ -592,7 +561,7 @@ pub async fn test_sync_connection_impl(
         };
 
         let (admin_sk, _, _) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
+            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
         (admin, admin_sk)
     };
 
@@ -676,7 +645,7 @@ pub async fn get_sync_admin_status_impl(
             Err(_) => return Ok(None),
         };
         let (admin_sk, _, _) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
+            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
         (admin, admin_sk)
     };
 
@@ -718,8 +687,6 @@ pub async fn get_sync_admin_status_impl(
     Ok(Some(FrontendSyncAdminStatus {
         descriptor: admin.descriptor.clone().into(),
         admin_pubkey: admin.descriptor.drop_pub.clone(),
-        generation: admin.generation,
-        rotation_retire_at: admin.rotation_retire_at,
         data_dir: admin.data_dir,
         max_members: admin.max_members,
         max_total_storage_mb: admin.max_total_storage_mb,
@@ -761,7 +728,7 @@ pub async fn update_sync_admin_config_impl(
             .map_err(|e| FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e)))?;
         let master_seed = get_wallet_master_seed(&mut service)?;
         let (admin_sk, _, _) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
+            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
         (admin, admin_sk)
     };
 
@@ -820,8 +787,6 @@ pub async fn update_sync_admin_config_impl(
     Ok(FrontendSyncAdminStatus {
         descriptor: admin.descriptor.clone().into(),
         admin_pubkey: admin.descriptor.drop_pub.clone(),
-        generation: admin.generation,
-        rotation_retire_at: admin.rotation_retire_at,
         data_dir: admin.data_dir,
         max_members: admin.max_members,
         max_total_storage_mb: admin.max_total_storage_mb,
@@ -1383,7 +1348,7 @@ pub async fn sync_market_channels_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMarketSyncResult, FrontendError> {
-    let mut settings = {
+    let settings = {
         let mut service = state.service.lock().unwrap();
         state
             .get_cached_settings()
@@ -1425,7 +1390,7 @@ pub async fn sync_market_channels_impl(
             if let Some(admin) = admin_opt {
                 if let Ok(seed) = get_wallet_master_seed(&mut service) {
                     let (admin_sk, _, _) =
-                        humoco_market::derive_drop_admin_keypair(&seed, admin.sync_index, admin.generation);
+                        humoco_market::derive_drop_admin_keypair(&seed, admin.sync_index);
                     Some((admin, admin_sk))
                 } else {
                     None
@@ -1576,7 +1541,6 @@ pub async fn sync_market_channels_impl(
 
                 match humoco_market::seal_slot_blob(&bundle, &readers, SYNC_CARD_MAX_BYTES) {
                     Ok(blob) => {
-                        let mut settings_changed = false;
                         for drop_desc in &mut upload_targets {
                             let nonce = sync_client::generate_sync_nonce();
                             let signed_res = if drop_desc.slot_id.is_some() {
@@ -1622,19 +1586,8 @@ pub async fn sync_market_channels_impl(
                                     )
                                     .await
                                     {
-                                        Ok(PutSlotOutcome::Saved { rotation, .. }) => {
+                                        Ok(PutSlotOutcome::Saved { .. }) => {
                                             uploaded_to += 1;
-                                            if let Some(ref cert) = rotation {
-                                                if sync_client::apply_verified_rotation(drop_desc, cert, now_secs) {
-                                                    // Update in settings
-                                                    for s_sync in &mut settings.market_selected_syncs {
-                                                        if s_sync.read_url == drop_desc.read_url {
-                                                            s_sync.drop_pub = drop_desc.drop_pub.clone();
-                                                            settings_changed = true;
-                                                        }
-                                                    }
-                                                }
-                                            }
                                         }
                                         Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
                                             errors.push(format!("Upload to {}: Precondition failed (ETag)", drop_desc.write_url));
@@ -1698,18 +1651,8 @@ pub async fn sync_market_channels_impl(
                                         )
                                         .await
                                         {
-                                            Ok(PutSlotOutcome::Saved { rotation, .. }) => {
+                                            Ok(PutSlotOutcome::Saved { .. }) => {
                                                 sync_state.uploaded_media_blobs.insert(upload_key);
-                                                if let Some(ref cert) = rotation {
-                                                    if sync_client::apply_verified_rotation(drop_desc, cert, now_secs) {
-                                                        for s_sync in &mut settings.market_selected_syncs {
-                                                            if s_sync.read_url == drop_desc.read_url {
-                                                                s_sync.drop_pub = drop_desc.drop_pub.clone();
-                                                                settings_changed = true;
-                                                            }
-                                                        }
-                                                    }
-                                                }
                                             }
                                             Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
                                                 log::warn!("Media upload to {} precondition failed", drop_desc.write_url);
@@ -1726,10 +1669,6 @@ pub async fn sync_market_channels_impl(
                             }
                         }
 
-                        if settings_changed {
-                            let mut service = state.service.lock().unwrap();
-                            let _ = state.save_settings(&mut service, settings.clone(), password.as_deref());
-                        }
 
                         if uploaded_to > 0 {
                             sync_state.last_upload_at = Some(now_secs);
@@ -1811,7 +1750,6 @@ pub async fn sync_market_channels_impl(
 
                 let class_budget = crate::settings::SYNC_WOT_MAX_BYTES / 3;
                 let mut reg_modified = false;
-                let mut settings_changed = false;
 
                 for drop_desc in &mut wot_upload_targets {
                     if drop_desc.write_url.is_empty() {
@@ -1901,21 +1839,10 @@ pub async fn sync_market_channels_impl(
                                             )
                                             .await
                                             {
-                                                Ok(PutSlotOutcome::Saved { rotation, .. }) => {
+                                                Ok(PutSlotOutcome::Saved { .. }) => {
                                                     uploaded_to += 1;
                                                     reg.commit_drop_sync_receipt(receipt, now_secs);
                                                     reg_modified = true;
-
-                                                    if let Some(ref cert) = rotation {
-                                                        if sync_client::apply_verified_rotation(drop_desc, cert, now_secs) {
-                                                            for s_sync in &mut settings.market_selected_syncs {
-                                                                if s_sync.read_url == drop_desc.read_url {
-                                                                    s_sync.drop_pub = drop_desc.drop_pub.clone();
-                                                                    settings_changed = true;
-                                                                }
-                                                            }
-                                                        }
-                                                    }
                                                 }
                                                 Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
                                                     errors.push(format!("Upload wot to {}: Precondition failed (ETag)", drop_desc.write_url));
@@ -1944,10 +1871,6 @@ pub async fn sync_market_channels_impl(
                     }
                 }
 
-                if settings_changed {
-                    let mut service = state.service.lock().unwrap();
-                    let _ = state.save_settings(&mut service, settings.clone(), password.as_deref());
-                }
 
                 if reg_modified {
                     let mut service = state.service.lock().unwrap();
@@ -2832,116 +2755,6 @@ pub async fn remove_public_sync(
     remove_public_sync_impl(write_url, delete_remote_slots, password, &state).await
 }
 
-pub async fn rotate_sync_admin_key_impl(
-    password: Option<String>,
-    state: &AppState,
-) -> Result<FrontendSyncAdminStatus, FrontendError> {
-    let (mut admin, _old_admin_sk, new_admin_sk, _new_admin_vk, new_admin_pubkey, retire_at, cert) = {
-        let mut service = state.service.lock().unwrap();
-        let bytes = service
-            .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
-            .map_err(FrontendError::from)?;
-        let admin: StoredSyncAdmin = serde_json::from_slice(&bytes)
-            .map_err(|e| FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e)))?;
-
-        let master_seed = get_wallet_master_seed(&mut service)?;
-        let (old_sk, _, _) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, admin.generation);
-        let next_gen = admin.generation + 1;
-        let (new_sk, new_vk, new_pub) =
-            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index, next_gen);
-
-        let now = sync_client::current_unix_timestamp();
-        let retire_at = now + humoco_market::DROP_ROTATION_GRACE_SECS;
-        let cert = humoco_market::create_drop_rotation_certificate(&old_sk, &new_vk, retire_at);
-
-        (admin, old_sk, new_sk, new_vk, new_pub, retire_at, cert)
-    };
-
-    let client = sync_client::create_sync_http_client();
-    sync_client::rotate_admin_key(&client, &admin.descriptor.write_url, &new_admin_sk, &cert)
-        .await
-        .map_err(FrontendError::from)?;
-
-    admin.previous_generation = Some(admin.generation);
-    admin.generation += 1;
-    admin.rotation_retire_at = Some(retire_at);
-    admin.descriptor.drop_pub = new_admin_pubkey.clone();
-
-    // Push dual-key member lists (P_k + P_{k+1}) to drop server
-    push_all_channel_members(
-        &client,
-        state,
-        &mut admin,
-        &new_admin_sk,
-        password.as_deref(),
-    )
-    .await?;
-
-    {
-        let mut service = state.service.lock().unwrap();
-        let admin_bytes = serde_json::to_vec(&admin).map_err(|e| {
-            FrontendError::from(format!("Failed to serialize StoredSyncAdmin: {}", e))
-        })?;
-        service
-            .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, &admin_bytes, password.as_deref())
-            .map_err(FrontendError::from)?;
-
-        // Update own drop in settings if present
-        let mut settings = state
-            .get_cached_settings()
-            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-            .unwrap_or_default();
-        for d in &mut settings.market_selected_syncs {
-            if d.read_url == admin.descriptor.read_url {
-                d.drop_pub = new_admin_pubkey.clone();
-            }
-        }
-        let _ = state.save_settings(&mut service, settings, password.as_deref());
-    }
-
-    let (stats, active_slot_ids) = {
-        let mut service = state.service.lock().unwrap();
-        compute_admin_sync_members_with_stats(state, &mut service, &admin, "card", password.as_deref())?
-    };
-
-    let card_policy = admin
-        .policies
-        .get("card")
-        .cloned()
-        .unwrap_or_default();
-
-    Ok(FrontendSyncAdminStatus {
-        descriptor: admin.descriptor.clone().into(),
-        admin_pubkey: new_admin_pubkey,
-        generation: admin.generation,
-        rotation_retire_at: admin.rotation_retire_at,
-        data_dir: admin.data_dir,
-        max_members: admin.max_members,
-        max_total_storage_mb: admin.max_total_storage_mb,
-        used_bytes: None,
-        max_bytes: Some((admin.max_total_storage_mb as u64) * 1024 * 1024),
-        soft_warning: false,
-        card_policy: card_policy.into(),
-        allow: admin.allow,
-        deny: admin.deny,
-        blocked_pubkeys: admin.blocked_pubkeys,
-        direct_member_count: stats.direct_count,
-        hop2_member_count: stats.hop2_count,
-        total_member_count: stats.total_count,
-        active_slot_ids,
-        channel_counts: BTreeMap::new(),
-    })
-}
-
-#[tauri::command]
-pub async fn rotate_sync_admin_key(
-    password: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<FrontendSyncAdminStatus, FrontendError> {
-    rotate_sync_admin_key_impl(password, &state).await
-}
-
 pub fn get_sync_overview_status_impl(
     password: Option<String>,
     state: &AppState,
@@ -3267,17 +3080,6 @@ pub(crate) mod tests {
                                             }
                                         });
                                         format!("HTTP/1.1 204 No Content\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
-                                    } else {
-                                        b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n".to_vec()
-                                    }
-                                } else if method == "POST" && path.starts_with("/sync.php") && path.contains("rotate") {
-                                    if let Ok(cert) = serde_json::from_slice::<humoco_market::DropRotationCertificate>(&body) {
-                                        *admin_pub.lock().unwrap() = cert.new_pubkey.clone();
-                                        *rotation.lock().unwrap() = Some(cert.to_header_value());
-                                        format!(
-                                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Humoco-Sync-Rotation: {}\r\nContent-Length: 11\r\n\r\n{{\"ok\":true}}",
-                                            cert.to_header_value()
-                                        ).into_bytes()
                                     } else {
                                         b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n".to_vec()
                                     }
@@ -3741,7 +3543,7 @@ pub(crate) mod tests {
         let bob_stealth_pk_a = {
             let mut s = alice_state.service.lock().unwrap();
             let seed = get_wallet_master_seed(&mut s).unwrap();
-            let (admin_sk, _, _) = humoco_market::derive_drop_admin_keypair(&seed, 0, 0);
+            let (admin_sk, _, _) = humoco_market::derive_drop_admin_keypair(&seed, 0);
             let bob_vk = human_money_core::crypto::get_pubkey_from_user_id(&bob_did).unwrap();
             humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &bob_vk).unwrap()
         };
@@ -3760,18 +3562,7 @@ pub(crate) mod tests {
         assert!(!server_a.slots.lock().unwrap().contains_key(&format!("{}.card", bob_stealth_pk_a)), "Slot file should be purged on Server A");
         assert!(!server_a.slots.lock().unwrap().contains_key(&format!("{}.wot", bob_stealth_pk_a)), "WoT slot file should be purged on Server A");
 
-        // 9. Admin rotates key to generation 1
-        let rot_status = rotate_sync_admin_key_impl(
-            Some(password.to_string()),
-            &alice_state,
-        )
-        .await
-        .unwrap();
-        assert_eq!(rot_status.generation, 1);
-        assert_ne!(rot_status.admin_pubkey, finalize_status.admin_pubkey);
-        assert!(rot_status.rotation_retire_at.is_some());
-
-        // 10. Check overview status
+        // 9. Check overview status
         let overview = get_sync_overview_status_impl(
             Some(password.to_string()),
             &alice_state,

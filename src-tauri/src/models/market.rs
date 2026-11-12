@@ -489,7 +489,6 @@ pub struct FrontendSyncSetupDraft {
     pub descriptor: FrontendSyncDescriptor,
     pub data_dir: String,
     pub admin_pubkey: String,
-    pub generation: u32,
     pub max_members: usize,
     pub max_total_storage_mb: usize,
     pub policy: FrontendMemberPolicyDto,
@@ -501,8 +500,6 @@ pub struct FrontendSyncSetupDraft {
 pub struct FrontendSyncAdminStatus {
     pub descriptor: FrontendSyncDescriptor,
     pub admin_pubkey: String,
-    pub generation: u32,
-    pub rotation_retire_at: Option<u64>,
     pub data_dir: String,
     pub max_members: usize,
     pub max_total_storage_mb: usize,

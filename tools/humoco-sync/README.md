@@ -14,7 +14,6 @@ The **HuMoCo Sync-Dienst** is an ultra-lightweight, zero-dependency PHP script d
 * **Direct Static Reads (Zero PHP overhead on reads):** Clients poll `<read_url>/index.json` and `<read_url>/<pubkey64>.<channel>.bin` directly via static web server delivery (Apache / Nginx / Caddy), completely bypassing PHP execution.
 * **Fixed 1-Inode IP Rate Limiter (`ratelimit.bin.php`):** A single 65,564-byte file with 4,096 buckets (16 bytes each) handles IP lockout under `flock`. It never allocates extra files, preventing inode exhaustion on shared web hosting.
 * **Proxy-Safe Member Exemption:** Authenticated Ed25519-signed requests bypass IP failure throttling (avoiding Cloudflare/Carrier-NAT lockout) and are rate-limited per pubkey via a dedicated token bucket.
-* **Tamper-Resistant 180-Day Key Rotation:** Admins can rotate keys ($D_{\text{alt}} \to D_{\text{neu}}$) using a cryptographically signed rotation certificate broadcast in the `X-Humoco-Sync-Rotation` header during a 180-day grace period.
 
 ---
 
@@ -25,7 +24,7 @@ tools/humoco-sync/
 ├── sync.php             # Core API endpoint
 ├── config.php           # Server configuration (admin pubkey, storage limits, channels)
 ├── .htaccess            # Hardening: directory indexing off, internal files protected
-├── .state.php           # Internal server state (salt, admin pubkey, rotation, nonces)
+├── .state.php           # Internal server state (salt, admin pubkey, nonces)
 ├── ratelimit.bin.php    # Fixed 64 KiB 1-inode rate limiter storage
 ├── members.<ch>.php     # Authorized member pubkey lists per channel
 ├── robots.txt           # Crawling prevention (User-agent: * / Disallow: /)
@@ -84,5 +83,4 @@ All mutating requests must use custom HTTP headers:
 | `PUT sync.php` | `X-Drop-Pubkey`, `X-Channel`, `X-Drop-Timestamp`, `X-Drop-Nonce`, `X-Drop-Signature`, optional `If-Match` | Raw binary slot upload. Enforces content length, replay nonce, `If-Match` concurrency, and global quota. |
 | `DELETE sync.php` | `X-Drop-Pubkey`, `X-Channel`, `X-Drop-Timestamp`, `X-Drop-Nonce`, `X-Drop-Signature` | Member slot deletion. |
 | `PUT sync.php?members&channel=<name>` | `X-Drop-Pubkey`, `X-Drop-Timestamp`, `X-Drop-Nonce`, `X-Drop-Signature`, Body: `{"pubkeys": [...]}` | Admin updates member list. Prunes slots for removed keys. |
-| `POST sync.php?rotate` | `X-Drop-Pubkey: <new>`, `X-Drop-Timestamp`, `X-Drop-Nonce`, `X-Drop-Signature`, Body: `DropRotationCertificate` | Admin activates 180-day key rotation with old admin signature. |
 | `GET sync.php?status` | `X-Drop-Pubkey`, `X-Drop-Timestamp`, `X-Drop-Nonce`, `X-Drop-Signature` | Admin dashboard status (used bytes, quotas, slot counts). |

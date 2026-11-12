@@ -1,20 +1,18 @@
 use ed25519_dalek::SigningKey;
 use human_money_core::crypto::create_user_id;
 use humoco_market::{
-    canonicalize_write_url, create_drop_rotation_certificate, derive_drop_admin_keypair,
-    derive_drop_admin_seed, derive_drop_data_dir, derive_member_stealth_pubkey,
-    derive_member_stealth_pubkey_admin, derive_public_drop_keypair, format_admin_request_message,
-    format_member_request_message, sign_admin_request, sign_member_request_direct,
-    sign_member_request_stealth, sign_member_stealth_message, validate_sync_prefix,
-    verify_drop_rotation_certificate, verify_ed25519_detached_hex, DropRotationCertificate,
-    MemberPolicy, SignedDropHeaders, DROP_ROTATION_GRACE_SECS,
+    canonicalize_write_url, derive_drop_admin_keypair, derive_drop_admin_seed,
+    derive_drop_data_dir, derive_member_stealth_pubkey, derive_member_stealth_pubkey_admin,
+    derive_public_drop_keypair, format_admin_request_message, format_member_request_message,
+    sign_admin_request, sign_member_request_direct, sign_member_request_stealth,
+    sign_member_stealth_message, validate_sync_prefix, verify_ed25519_detached_hex,
+    MemberPolicy, SignedDropHeaders,
 };
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 struct AdminKeyVector {
-    generation: u32,
     seed_hex: String,
     admin_pubkey_hex: String,
 }
@@ -39,12 +37,10 @@ struct PublicDropVector {
 struct DropAccessVectors {
     master_seed_hex: String,
     drop_index: u32,
-    generation_0: AdminKeyVector,
-    generation_1: AdminKeyVector,
+    admin_key: AdminKeyVector,
     data_dir: String,
     members: Vec<StealthMemberVector>,
     public_drops: Vec<PublicDropVector>,
-    rotation_certificate: DropRotationCertificate,
     sample_member_request_message: String,
     sample_admin_request_message: String,
 }
@@ -55,21 +51,12 @@ fn test_drop_access_deterministic_vectors() {
     let master_seed_hex = hex::encode(master_seed);
     let drop_index = 0u32;
 
-    // Generation 0 & 1 admin keypairs
-    let (admin_sk_0, _admin_vk_0, admin_pub_0) = derive_drop_admin_keypair(&master_seed, drop_index, 0);
-    let seed_0 = derive_drop_admin_seed(&master_seed, drop_index, 0);
-    let gen_0 = AdminKeyVector {
-        generation: 0,
-        seed_hex: hex::encode(seed_0),
-        admin_pubkey_hex: admin_pub_0.clone(),
-    };
-
-    let (_admin_sk_1, admin_vk_1, admin_pub_1) = derive_drop_admin_keypair(&master_seed, drop_index, 1);
-    let seed_1 = derive_drop_admin_seed(&master_seed, drop_index, 1);
-    let gen_1 = AdminKeyVector {
-        generation: 1,
-        seed_hex: hex::encode(seed_1),
-        admin_pubkey_hex: admin_pub_1.clone(),
+    // Admin keypair
+    let (admin_sk, _admin_vk, admin_pub) = derive_drop_admin_keypair(&master_seed, drop_index);
+    let seed = derive_drop_admin_seed(&master_seed, drop_index);
+    let admin_key = AdminKeyVector {
+        seed_hex: hex::encode(seed),
+        admin_pubkey_hex: admin_pub.clone(),
     };
 
     let data_dir = derive_drop_data_dir(&master_seed, drop_index);
@@ -90,12 +77,12 @@ fn test_drop_access_deterministic_vectors() {
         let member_vk = member_sk.verifying_key();
         let member_did = create_user_id(&member_vk, None).unwrap();
 
-        let stealth_pk_admin = derive_member_stealth_pubkey_admin(&admin_sk_0, &member_vk).unwrap();
-        let stealth_pk_member = derive_member_stealth_pubkey(&member_sk, &admin_pub_0).unwrap();
+        let stealth_pk_admin = derive_member_stealth_pubkey_admin(&admin_sk, &member_vk).unwrap();
+        let stealth_pk_member = derive_member_stealth_pubkey(&member_sk, &admin_pub).unwrap();
         assert_eq!(stealth_pk_admin, stealth_pk_member);
 
         let (p_pub_hex, sig_hex) =
-            sign_member_stealth_message(&member_sk, &admin_pub_0, test_message).unwrap();
+            sign_member_stealth_message(&member_sk, &admin_pub, test_message).unwrap();
         assert_eq!(p_pub_hex, stealth_pk_admin);
 
         // Verify with strict detached Ed25519
@@ -128,11 +115,6 @@ fn test_drop_access_deterministic_vectors() {
         });
     }
 
-    // Rotation certificate
-    let retire_at = 1800000000u64;
-    let rotation_certificate = create_drop_rotation_certificate(&admin_sk_0, &admin_vk_1, retire_at);
-    verify_drop_rotation_certificate(&rotation_certificate, &admin_pub_0, 1700000000u64).unwrap();
-
     // Canonical request messages
     let sample_body = b"{\"hello\":\"world\"}";
     let sample_member_request_message = format_member_request_message(
@@ -154,12 +136,10 @@ fn test_drop_access_deterministic_vectors() {
     let vectors = DropAccessVectors {
         master_seed_hex,
         drop_index,
-        generation_0: gen_0,
-        generation_1: gen_1,
+        admin_key,
         data_dir,
         members,
         public_drops,
-        rotation_certificate,
         sample_member_request_message,
         sample_admin_request_message,
     };
@@ -250,44 +230,9 @@ fn test_canonicalize_write_url_edge_cases() {
 }
 
 #[test]
-fn test_rotation_certificate_header_roundtrip_and_verification() {
-    let old_sk = SigningKey::from_bytes(&[55u8; 32]);
-    let new_sk = SigningKey::from_bytes(&[66u8; 32]);
-    let old_pk_hex = hex::encode(old_sk.verifying_key().as_bytes());
-
-    let now = 1000u64;
-    let retire_at = now + DROP_ROTATION_GRACE_SECS;
-    let cert = create_drop_rotation_certificate(&old_sk, &new_sk.verifying_key(), retire_at);
-
-    // Verify valid cert
-    assert!(verify_drop_rotation_certificate(&cert, &old_pk_hex, now).is_ok());
-
-    // Header serialization & deserialization roundtrip
-    let header_val = cert.to_header_value();
-    let parsed_cert = DropRotationCertificate::from_header_value(&header_val).unwrap();
-    assert_eq!(cert, parsed_cert);
-
-    // Expired cert fails
-    assert!(verify_drop_rotation_certificate(&cert, &old_pk_hex, retire_at).is_err());
-    assert!(verify_drop_rotation_certificate(&cert, &old_pk_hex, retire_at + 1).is_err());
-
-    // Wrong expected old pubkey fails
-    assert!(verify_drop_rotation_certificate(&cert, "0000000000000000000000000000000000000000000000000000000000000000", now).is_err());
-
-    // Tampered signature fails
-    let mut tampered = cert.clone();
-    tampered.cert_sig = hex::encode([0u8; 64]);
-    assert!(verify_drop_rotation_certificate(&tampered, &old_pk_hex, now).is_err());
-
-    // Identical old and new fails
-    let self_cert = create_drop_rotation_certificate(&old_sk, &old_sk.verifying_key(), retire_at);
-    assert!(verify_drop_rotation_certificate(&self_cert, &old_pk_hex, now).is_err());
-}
-
-#[test]
 fn test_http_request_signers() {
     let master_seed = [42u8; 32];
-    let (admin_sk, _admin_vk, admin_pub) = derive_drop_admin_keypair(&master_seed, 0, 0);
+    let (admin_sk, _admin_vk, admin_pub) = derive_drop_admin_keypair(&master_seed, 0);
 
     let member_sk = SigningKey::from_bytes(&[99u8; 32]);
     let timestamp = 1700000000u64;
@@ -547,28 +492,5 @@ proptest! {
         let (_r2, _r2_pk, r2_hex) = derive_public_drop_keypair(&master_seed, &url_2).unwrap();
 
         prop_assert_ne!(r1_hex, r2_hex);
-    }
-
-    #[test]
-    fn proptest_rotation_certificate_mitm_rejection(
-        old_seed in prop::array::uniform32(1u8..=127u8),
-        new_seed in prop::array::uniform32(128u8..=255u8),
-        attacker_seed in prop::array::uniform32(1u8..=255u8),
-        now in 1000u64..10000u64,
-        delta in 1u64..10000u64,
-    ) {
-        let old_sk = SigningKey::from_bytes(&old_seed);
-        let new_sk = SigningKey::from_bytes(&new_seed);
-        let attacker_sk = SigningKey::from_bytes(&attacker_seed);
-
-        let retire_at = now + delta;
-        let valid_cert = create_drop_rotation_certificate(&old_sk, &new_sk.verifying_key(), retire_at);
-
-        let old_pk_hex = hex::encode(old_sk.verifying_key().as_bytes());
-        prop_assert!(verify_drop_rotation_certificate(&valid_cert, &old_pk_hex, now).is_ok());
-
-        // Forged with attacker key must be rejected
-        let forged_cert = create_drop_rotation_certificate(&attacker_sk, &new_sk.verifying_key(), retire_at);
-        prop_assert!(verify_drop_rotation_certificate(&forged_cert, &old_pk_hex, now).is_err());
     }
 }

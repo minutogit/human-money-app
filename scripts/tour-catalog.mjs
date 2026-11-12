@@ -1035,7 +1035,6 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         "probe_public_sync": () => ({ name: "Public HuMoCo Relay Frankfurt", url: "https://sync.humoco.org", latencyMs: 18 }),
         "save_public_sync": () => ({ name: "Public HuMoCo Relay Frankfurt", url: "https://sync.humoco.org" }),
         "remove_public_sync": () => null,
-        "rotate_sync_admin_key": () => handlers["get_sync_admin_status"](),
         "delete_sync_admin": () => null,
         "discover_available_syncs": () => [
             {

@@ -4,7 +4,7 @@
  *
  * Requirements: PHP >= 7.4 with ext-sodium, zero database, zero Composer.
  * Strictly enforces 64-hex lowercase Ed25519 signatures, 1-inode rate limiting,
- * atomic index rebuilds, and tamper-resistant key rotation.
+ * atomic index rebuilds.
  */
 
 // Load configuration
@@ -209,9 +209,6 @@ if (!isset($state['pepper']) || !is_string($state['pepper']) || strlen($state['p
 if (!isset($state['admin_pubkey']) || !is_string($state['admin_pubkey']) || strlen($state['admin_pubkey']) !== 64) {
     $state['admin_pubkey'] = isset($config['admin_pubkey']) ? strtolower(trim((string)$config['admin_pubkey'])) : str_repeat('0', 64);
 }
-if (!isset($state['rotation']) || !is_array($state['rotation'])) {
-    $state['rotation'] = null;
-}
 if (!isset($state['nonces']) || !is_array($state['nonces'])) {
     $state['nonces'] = [];
 }
@@ -235,13 +232,6 @@ if (!isset($state['used_bytes'])) {
     $state['used_bytes'] = $totalUsed;
 }
 
-// Rotation expiration check
-if ($state['rotation'] !== null) {
-    $retireAt = isset($state['rotation']['retire_at']) ? (int)$state['rotation']['retire_at'] : 0;
-    if ($now >= $retireAt) {
-        $state['rotation'] = null;
-    }
-}
 
 // Prune nonces older than 120 seconds
 foreach ($state['nonces'] as $n => $ts) {
@@ -478,12 +468,7 @@ function evict_oldest_media_for_space($dataDir, array &$state, $neededBytes, $ma
     }
 }
 
-// Rotation header helper
 $commonHeaders = [];
-if ($state['rotation'] !== null && $now < $state['rotation']['retire_at']) {
-    $rot = $state['rotation'];
-    $commonHeaders['X-Humoco-Sync-Rotation'] = "{$rot['old_pubkey']}:{$rot['new_pubkey']}:{$rot['retire_at']}:{$rot['cert_sig']}";
-}
 
 // Load members for a channel
 function load_channel_members($configFile, $channel) {
@@ -645,9 +630,8 @@ if ($method === 'PUT' && isset($_GET['members'])) {
     }
 
     $isCurrentAdmin = hash_equals($state['admin_pubkey'], $adminPub);
-    $isGraceAdmin = ($state['rotation'] !== null && $now < $state['rotation']['retire_at'] && hash_equals($state['rotation']['old_pubkey'], $adminPub));
 
-    if (!$isCurrentAdmin && !$isGraceAdmin) {
+    if (!$isCurrentAdmin) {
         $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
         write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
         sync_respond(403, $lockFp, 'Forbidden: Unauthorized admin pubkey', $commonHeaders);
@@ -744,79 +728,6 @@ if ($method === 'PUT' && isset($_GET['members'])) {
 }
 
 // =========================================================================
-// ROUTE 4: POST sync.php?rotate (Admin 180-Day Key Rotation)
-// =========================================================================
-if ($method === 'POST' && isset($_GET['rotate'])) {
-    $outerPubkey = isset($_SERVER['HTTP_X_DROP_PUBKEY']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_PUBKEY'])) : '';
-    $timestamp = isset($_SERVER['HTTP_X_DROP_TIMESTAMP']) ? (int)$_SERVER['HTTP_X_DROP_TIMESTAMP'] : 0;
-    $nonce = isset($_SERVER['HTTP_X_DROP_NONCE']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_NONCE'])) : '';
-    $signature = isset($_SERVER['HTTP_X_DROP_SIGNATURE']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_SIGNATURE'])) : '';
-
-    if (abs($now - $timestamp) > 60 || !preg_match('/^[0-9a-f]{32}$/', $nonce) || !preg_match('/^[0-9a-f]{128}$/', $signature)) {
-        $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
-        write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
-        sync_respond(400, $lockFp, 'Bad Request: Invalid headers', $commonHeaders);
-    }
-
-    $rawInput = file_get_contents('php://input');
-    $canonicalMsg = "HUMOCO-DROP-ADMIN-V1\nROTATE\n\n{$timestamp}\n{$nonce}\n" . hash('sha256', $rawInput);
-
-    if (!verify_ed25519_detached($signature, $canonicalMsg, $outerPubkey)) {
-        $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
-        write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
-        sync_respond(403, $lockFp, 'Forbidden: Invalid outer signature', $commonHeaders);
-    }
-
-    if (isset($state['nonces'][$nonce])) {
-        sync_respond(409, $lockFp, 'Conflict: Replay detected', $commonHeaders);
-    }
-    $state['nonces'][$nonce] = $now;
-
-    $cert = json_decode($rawInput, true);
-    if (!is_array($cert) || !isset($cert['old_pubkey'], $cert['new_pubkey'], $cert['retire_at'], $cert['cert_sig'])) {
-        sync_respond(400, $lockFp, 'Bad Request: Invalid certificate format', $commonHeaders);
-    }
-
-    $certOld = strtolower(trim((string)$cert['old_pubkey']));
-    $certNew = strtolower(trim((string)$cert['new_pubkey']));
-    $certRetire = (int)$cert['retire_at'];
-    $certSig = strtolower(trim((string)$cert['cert_sig']));
-
-    if (!hash_equals($state['admin_pubkey'], $certOld)) {
-        sync_respond(403, $lockFp, 'Forbidden: Old pubkey does not match current admin pubkey', $commonHeaders);
-    }
-    if (!hash_equals($outerPubkey, $certNew)) {
-        sync_respond(400, $lockFp, 'Bad Request: New pubkey does not match request pubkey', $commonHeaders);
-    }
-    if (hash_equals($certOld, $certNew)) {
-        sync_respond(400, $lockFp, 'Bad Request: Old and new pubkeys must differ', $commonHeaders);
-    }
-    if ($certRetire <= $now || $certRetire > $now + 181 * 86400) {
-        sync_respond(400, $lockFp, 'Bad Request: retire_at must be within 180 days', $commonHeaders);
-    }
-
-    $certCanonical = "HUMOCO-DROP-ROTATE-V1\n{$certOld}\n{$certNew}\n{$certRetire}";
-    if (!verify_ed25519_detached($certSig, $certCanonical, $certOld)) {
-        sync_respond(403, $lockFp, 'Forbidden: Invalid rotation certificate signature', $commonHeaders);
-    }
-
-    $state['admin_pubkey'] = $certNew;
-    $state['rotation'] = [
-        'old_pubkey' => $certOld,
-        'new_pubkey' => $certNew,
-        'retire_at'  => $certRetire,
-        'cert_sig'   => $certSig,
-    ];
-    save_state($stateFile, $state);
-
-    $rotHeaderVal = "{$certOld}:{$certNew}:{$certRetire}:{$certSig}";
-    sync_respond(200, $lockFp, json_encode(['ok' => true]), [
-        'Content-Type'           => 'application/json; charset=utf-8',
-        'X-Humoco-Sync-Rotation' => $rotHeaderVal,
-    ]);
-}
-
-// =========================================================================
 // ROUTE 5: GET sync.php?status (Admin Storage Dashboard Info)
 // =========================================================================
 if ($method === 'GET' && isset($_GET['status'])) {
@@ -832,9 +743,8 @@ if ($method === 'GET' && isset($_GET['status'])) {
     }
 
     $isCurrentAdmin = hash_equals($state['admin_pubkey'], $adminPub);
-    $isGraceAdmin = ($state['rotation'] !== null && $now < $state['rotation']['retire_at'] && hash_equals($state['rotation']['old_pubkey'], $adminPub));
 
-    if (!$isCurrentAdmin && !$isGraceAdmin) {
+    if (!$isCurrentAdmin) {
         $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
         write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
         sync_respond(403, $lockFp, 'Forbidden: Unauthorized admin pubkey', $commonHeaders);
@@ -876,7 +786,6 @@ if ($method === 'GET' && isset($_GET['status'])) {
         'slot_count'        => $totalSlotCount,
         'channel_counts'    => $slotCounts,
         'admin_pubkey'      => $state['admin_pubkey'],
-        'rotation'          => $state['rotation'],
     ];
 
     sync_respond(200, $lockFp, json_encode($statusData, JSON_UNESCAPED_SLASHES), array_merge($commonHeaders, [

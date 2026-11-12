@@ -12,8 +12,6 @@ use sha2::{Digest, Sha256};
 
 use crate::error::MarketError;
 
-pub const DROP_ROTATION_GRACE_SECS: u64 = 180 * 86_400;
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct MemberPolicy {
     pub direct_min: u8,
@@ -233,21 +231,18 @@ fn sha256_hex(data: &[u8]) -> String {
 pub fn derive_drop_admin_seed(
     master_seed: &[u8; 32],
     drop_index: u32,
-    generation: u32,
 ) -> [u8; 32] {
-    let mut material = [0u8; 40];
+    let mut material = [0u8; 36];
     material[..32].copy_from_slice(master_seed);
     material[32..36].copy_from_slice(&drop_index.to_be_bytes());
-    material[36..40].copy_from_slice(&generation.to_be_bytes());
     blake3::derive_key("HUMOCO_DROP_ADMIN_KEY_V1", &material)
 }
 
 pub fn derive_drop_admin_keypair(
     master_seed: &[u8; 32],
     drop_index: u32,
-    generation: u32,
 ) -> (SigningKey, VerifyingKey, String) {
-    let seed = derive_drop_admin_seed(master_seed, drop_index, generation);
+    let seed = derive_drop_admin_seed(master_seed, drop_index);
     let sk = SigningKey::from_bytes(&seed);
     let vk = sk.verifying_key();
     let vk_hex = hex::encode(vk.as_bytes());
@@ -255,7 +250,7 @@ pub fn derive_drop_admin_keypair(
 }
 
 pub fn derive_drop_data_dir(master_seed: &[u8; 32], drop_index: u32) -> String {
-    let seed_0 = derive_drop_admin_seed(master_seed, drop_index, 0);
+    let seed_0 = derive_drop_admin_seed(master_seed, drop_index);
     let derived = blake3::derive_key("HUMOCO_DROP_DATADIR_V1", &seed_0);
     format!("d-{}", &hex::encode(derived)[..16])
 }
@@ -664,97 +659,4 @@ pub fn sign_admin_request(
     }
 }
 
-// =========================================================================
-//  180-DAY KEY ROTATION CERTIFICATE (§7.2)
-// =========================================================================
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DropRotationCertificate {
-    pub old_pubkey: String,
-    pub new_pubkey: String,
-    pub retire_at: u64,
-    pub cert_sig: String,
-}
-
-impl DropRotationCertificate {
-    pub fn to_header_value(&self) -> String {
-        format!(
-            "{}:{}:{}:{}",
-            self.old_pubkey, self.new_pubkey, self.retire_at, self.cert_sig
-        )
-    }
-
-    pub fn from_header_value(hdr: &str) -> Result<Self, MarketError> {
-        let parts: Vec<&str> = hdr.split(':').collect();
-        if parts.len() != 4 {
-            return Err(MarketError::Validation(format!(
-                "Invalid DropRotationCertificate header, expected 4 colon-separated parts, got {}",
-                parts.len()
-            )));
-        }
-        let old_pubkey = parts[0].to_string();
-        let new_pubkey = parts[1].to_string();
-        let retire_at = parts[2].parse::<u64>().map_err(|e| {
-            MarketError::Validation(format!("Invalid retire_at in rotation certificate: {}", e))
-        })?;
-        let cert_sig = parts[3].to_string();
-        Ok(Self {
-            old_pubkey,
-            new_pubkey,
-            retire_at,
-            cert_sig,
-        })
-    }
-}
-
-pub fn create_drop_rotation_certificate(
-    old_admin_sk: &SigningKey,
-    new_admin_pk: &VerifyingKey,
-    retire_at: u64,
-) -> DropRotationCertificate {
-    let old_pubkey = hex::encode(old_admin_sk.verifying_key().as_bytes());
-    let new_pubkey = hex::encode(new_admin_pk.as_bytes());
-    let canonical = format!(
-        "HUMOCO-DROP-ROTATE-V1\n{}\n{}\n{}",
-        old_pubkey, new_pubkey, retire_at
-    );
-    let sig = old_admin_sk.sign(canonical.as_bytes());
-    DropRotationCertificate {
-        old_pubkey,
-        new_pubkey,
-        retire_at,
-        cert_sig: hex::encode(sig.to_bytes()),
-    }
-}
-
-pub fn verify_drop_rotation_certificate(
-    cert: &DropRotationCertificate,
-    expected_old_pubkey_hex64: &str,
-    now_secs: u64,
-) -> Result<(), MarketError> {
-    if cert.old_pubkey != expected_old_pubkey_hex64 {
-        return Err(MarketError::Validation(format!(
-            "Rotation certificate old_pubkey mismatch: expected '{}', got '{}'",
-            expected_old_pubkey_hex64, cert.old_pubkey
-        )));
-    }
-    if cert.old_pubkey == cert.new_pubkey {
-        return Err(MarketError::Validation(
-            "Rotation certificate old_pubkey and new_pubkey must not be identical".to_string(),
-        ));
-    }
-    if now_secs >= cert.retire_at {
-        return Err(MarketError::Validation(format!(
-            "Rotation certificate expired: now {} >= retire_at {}",
-            now_secs, cert.retire_at
-        )));
-    }
-    parse_ed25519_pubkey_hex64(&cert.old_pubkey)?;
-    parse_ed25519_pubkey_hex64(&cert.new_pubkey)?;
-
-    let canonical = format!(
-        "HUMOCO-DROP-ROTATE-V1\n{}\n{}\n{}",
-        cert.old_pubkey, cert.new_pubkey, cert.retire_at
-    );
-    verify_ed25519_detached_hex(&cert.old_pubkey, canonical.as_bytes(), &cert.cert_sig)
-}

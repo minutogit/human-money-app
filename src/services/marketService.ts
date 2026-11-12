@@ -191,10 +191,6 @@ export const marketService = {
         });
     },
 
-    rotateSyncAdminKey: async (password?: string): Promise<FrontendSyncAdminStatus> => {
-        return await invoke<FrontendSyncAdminStatus>("rotate_sync_admin_key", password ? { password } : {});
-    },
-
     getSyncOverviewStatus: async (password?: string): Promise<FrontendSyncOverviewStatus> => {
         return await invoke<FrontendSyncOverviewStatus>("get_sync_overview_status", password ? { password } : {});
     },

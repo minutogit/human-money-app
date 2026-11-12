@@ -1,5 +1,5 @@
 use ed25519_dalek::SigningKey;
-use humoco_market::{DropRotationCertificate, SignedDropHeaders};
+use humoco_market::SignedDropHeaders;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -32,8 +32,6 @@ pub struct SyncServerInfo {
     pub register_url: Option<String>,
     #[serde(default)]
     pub channels: Vec<String>,
-    #[serde(default)]
-    pub rotation: Option<DropRotationCertificate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -42,7 +40,6 @@ pub struct SyncCapabilityResult {
     pub max_bytes: Option<usize>,
     pub ttl_days: Option<u32>,
     pub slot_etag: Option<String>,
-    pub rotation: Option<DropRotationCertificate>,
     pub media_max_count: Option<usize>,
     pub media_max_user_bytes: Option<usize>,
     pub media_used_count: Option<usize>,
@@ -53,7 +50,6 @@ pub struct SyncCapabilityResult {
 pub enum PutSlotOutcome {
     Saved {
         etag: Option<String>,
-        rotation: Option<DropRotationCertificate>,
     },
     PreconditionFailed {
         current_etag: Option<String>,
@@ -70,8 +66,6 @@ pub struct SyncServerAdminStatus {
     #[serde(default)]
     pub channel_counts: std::collections::BTreeMap<String, usize>,
     pub admin_pubkey: String,
-    #[serde(default)]
-    pub rotation: Option<DropRotationCertificate>,
 }
 
 pub fn validate_sync_url(url: &str) -> Result<(), String> {
@@ -116,32 +110,12 @@ pub fn current_unix_timestamp() -> u64 {
         .as_secs()
 }
 
-pub fn extract_rotation_header(
-    headers: &reqwest::header::HeaderMap,
-) -> Option<DropRotationCertificate> {
-    let val = headers.get("x-humoco-sync-rotation")?.to_str().ok()?;
-    DropRotationCertificate::from_header_value(val).ok()
-}
-
 pub fn extract_etag(headers: &reqwest::header::HeaderMap) -> Option<String> {
     headers
         .get(reqwest::header::ETAG)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().trim_matches('"').to_string())
         .filter(|s| !s.is_empty())
-}
-
-pub fn apply_verified_rotation(
-    desc: &mut humoco_market::DropDescriptor,
-    cert: &DropRotationCertificate,
-    now_secs: u64,
-) -> bool {
-    if humoco_market::verify_drop_rotation_certificate(cert, &desc.drop_pub, now_secs).is_ok() {
-        desc.drop_pub = cert.new_pubkey.clone();
-        true
-    } else {
-        false
-    }
 }
 
 pub fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> u64 {
@@ -201,15 +175,10 @@ pub async fn fetch_sync_info(
         ));
     }
 
-    let rotation = extract_rotation_header(resp.headers());
-    let mut info: SyncServerInfo = resp
+    let info: SyncServerInfo = resp
         .json()
         .await
         .map_err(|e| format!("Failed to parse sync info JSON: {}", e))?;
-
-    if info.rotation.is_none() {
-        info.rotation = rotation;
-    }
 
     Ok(info)
 }
@@ -238,7 +207,6 @@ pub async fn head_slot_capability(
         .map_err(|e| format!("Network error checking capability on {}: {}", write_url, e))?;
 
     let status = resp.status();
-    let rotation = extract_rotation_header(resp.headers());
 
     if status.as_u16() == 200 {
         let max_bytes = resp
@@ -283,7 +251,6 @@ pub async fn head_slot_capability(
             max_bytes,
             ttl_days,
             slot_etag,
-            rotation,
             media_max_count,
             media_max_user_bytes,
             media_used_count,
@@ -295,7 +262,6 @@ pub async fn head_slot_capability(
             max_bytes: None,
             ttl_days: None,
             slot_etag: None,
-            rotation,
             media_max_count: None,
             media_max_user_bytes: None,
             media_used_count: None,
@@ -356,8 +322,7 @@ pub async fn put_slot(
 
     if status_code == 200 || status_code == 201 || status_code == 204 {
         let etag = extract_etag(resp.headers());
-        let rotation = extract_rotation_header(resp.headers());
-        Ok(PutSlotOutcome::Saved { etag, rotation })
+        Ok(PutSlotOutcome::Saved { etag })
     } else if status_code == 412 {
         let current_etag = extract_etag(resp.headers());
         Ok(PutSlotOutcome::PreconditionFailed { current_etag })
@@ -449,8 +414,7 @@ pub async fn put_media_blob(
 
     if status_code == 200 || status_code == 201 || status_code == 204 {
         let etag = extract_etag(resp.headers());
-        let rotation = extract_rotation_header(resp.headers());
-        Ok(PutSlotOutcome::Saved { etag, rotation })
+        Ok(PutSlotOutcome::Saved { etag })
     } else if status_code == 412 {
         let current_etag = extract_etag(resp.headers());
         Ok(PutSlotOutcome::PreconditionFailed { current_etag })
@@ -565,57 +529,7 @@ pub async fn push_members(
     }
 }
 
-pub async fn rotate_admin_key(
-    client: &reqwest::Client,
-    write_url: &str,
-    new_admin_sk: &SigningKey,
-    cert: &DropRotationCertificate,
-) -> Result<(), String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}rotate", write_url, sep);
 
-    let body_json = serde_json::to_string(cert)
-        .map_err(|e| format!("Failed to serialize rotation certificate: {}", e))?;
-
-    let timestamp = current_unix_timestamp();
-    let nonce = generate_sync_nonce();
-    let signed = humoco_market::sign_admin_request(
-        new_admin_sk,
-        "ROTATE",
-        "",
-        timestamp,
-        &nonce,
-        body_json.as_bytes(),
-    );
-
-    let resp = client
-        .post(&url)
-        .header("X-Drop-Pubkey", &signed.pubkey_hex)
-        .header("X-Drop-Timestamp", signed.timestamp.to_string())
-        .header("X-Drop-Nonce", &signed.nonce_hex)
-        .header("X-Drop-Signature", &signed.signature_hex)
-        .header("Content-Type", "application/json")
-        .body(body_json)
-        .send()
-        .await
-        .map_err(|e| format!("Network error rotating admin key: {}", e))?;
-
-    let status = resp.status();
-    if status.is_success() {
-        Ok(())
-    } else if status.as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        Err(format!("Rate limited rotating admin key (HTTP 429). Retry-After: {}s", secs))
-    } else {
-        let text = resp.text().await.unwrap_or_default();
-        Err(format!(
-            "Server returned HTTP {} rotating admin key: {}",
-            status,
-            text.trim()
-        ))
-    }
-}
 
 pub async fn fetch_admin_status(
     client: &reqwest::Client,

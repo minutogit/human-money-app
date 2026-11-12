@@ -187,7 +187,6 @@ export interface FrontendSyncSetupDraft {
     descriptor: FrontendSyncDescriptor;
     dataDir: string;
     adminPubkey: string;
-    generation: number;
     maxMembers: number;
     maxTotalStorageMb: number;
     policy: FrontendMemberPolicyDto;
@@ -197,8 +196,6 @@ export interface FrontendSyncSetupDraft {
 export interface FrontendSyncAdminStatus {
     descriptor: FrontendSyncDescriptor;
     adminPubkey: string;
-    generation: number;
-    rotationRetireAt?: number | null;
     dataDir: string;
     maxMembers: number;
     maxTotalStorageMb: number;

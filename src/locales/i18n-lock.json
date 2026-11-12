@@ -6779,16 +6779,6 @@
       "it": "manual-verified"
     }
   },
-  "marketplace.generationLabel": {
-    "source_text": "Generation",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
   "marketplace.goToRegisterBtn": {
     "source_text": "Register with Provider",
     "status": {
@@ -7738,66 +7728,6 @@
   },
   "marketplace.resetFilter": {
     "source_text": "Reset filters",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "marketplace.rotateKeyBtn": {
-    "source_text": "Rotate Admin Key",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "marketplace.rotateKeyConfirmDesc": {
-    "source_text": "A new Ed25519 admin key pair will be generated. The server will accept both the old and new keys during a 180-day grace period. Continue?",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "marketplace.rotateKeyConfirmTitle": {
-    "source_text": "Rotate Admin Key (180-Day Grace Period)?",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "marketplace.rotateKeySuccess": {
-    "source_text": "Admin key rotated successfully. Dual-key grace period is active.",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "marketplace.rotationGraceActive": {
-    "source_text": "Key rotation active (grace period expires: {{date}})",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "marketplace.rotationTitle": {
-    "source_text": "Admin Key Rotation",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
