@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { AppSettings, AnchorSyncStatus, RollbackReport, VoucherL2StatusDto } from "../types";
+import { AppSettings, AnchorSyncStatus, ReachPresetDto, ReachPresetId, RollbackReport, VoucherL2StatusDto } from "../types";
 
 export type { AnchorSyncStatus, RollbackReport, VoucherL2StatusDto };
 
@@ -19,6 +19,14 @@ export const settingsService = {
 
     saveSettings: async (settings: AppSettings, password?: string) => {
         return await invoke<void>("save_app_settings", { settings, password });
+    },
+
+    getReachPreset: async (password?: string): Promise<ReachPresetDto> => {
+        return await invoke<ReachPresetDto>("get_reach_preset", { password });
+    },
+
+    applyReachPreset: async (preset: ReachPresetId, password?: string): Promise<ReachPresetDto> => {
+        return await invoke<ReachPresetDto>("apply_reach_preset", { preset, password });
     },
 
     getSealSyncStatus: async () => {

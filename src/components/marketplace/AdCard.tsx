@@ -1,8 +1,8 @@
 // src/components/marketplace/AdCard.tsx
 import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MessageSquare, ArrowRight, Clock, Tag, ChevronDown, ChevronUp, User, Globe, ImageOff, Edit3 } from 'lucide-react';
-import { Ad, FrontendTrustTier } from '../../types';
+import { MessageSquare, ArrowRight, Clock, Tag, ChevronDown, ChevronUp, User, Globe, ImageOff, Image as ImageIcon, Edit3 } from 'lucide-react';
+import { Ad, FrontendEntrySource, FrontendTrustTier } from '../../types';
 import { Button } from '../ui/Button';
 import { TrustBadge } from '../ui/TrustBadge';
 import { truncateUserId } from '../../utils/userIdHelper';
@@ -14,6 +14,23 @@ export function clearAdImageCacheForTests(): void {
     adImageCache.clear();
 }
 
+export function resolveAuthorHops(sources?: FrontendEntrySource[]): number {
+    if (!sources || sources.length === 0) return 99;
+    return Math.min(
+        ...sources.map((s) => (s.kind === 'card' ? s.hops : 1))
+    );
+}
+
+type NavigatorWithConnection = Navigator & {
+    connection?: { type?: string; saveData?: boolean };
+};
+
+function isMeteredOrCellularConnection(): boolean {
+    if (typeof navigator === 'undefined') return false;
+    const conn = (navigator as NavigatorWithConnection).connection;
+    return Boolean(conn?.saveData || conn?.type === 'cellular');
+}
+
 export interface AdCardProps {
     ad: Ad;
     ownerDid: string;
@@ -22,6 +39,9 @@ export interface AdCardProps {
     daysLeft?: number;
     allowInquiries?: boolean;
     isOwn?: boolean;
+    mediaAutoLoadMaxHops?: number;
+    wifiOnly?: boolean;
+    authorHops?: number;
     onEditOwnAd?: (ad: Ad) => void;
     onInquire?: (ad: Ad, ownerDid: string, ownerName: string) => void;
     onPay?: (ownerDid: string) => void;
@@ -36,6 +56,9 @@ export const AdCard: React.FC<AdCardProps> = ({
     daysLeft,
     allowInquiries,
     isOwn,
+    mediaAutoLoadMaxHops = 2,
+    wifiOnly = false,
+    authorHops,
     onEditOwnAd,
     onInquire,
     onPay,
@@ -45,6 +68,17 @@ export const AdCard: React.FC<AdCardProps> = ({
     const [isExpanded, setIsExpanded] = useState(false);
 
     const imageToken = ad.imageToken;
+    const effectiveAuthorHops = isOwn ? 0 : (authorHops ?? 1);
+    const isWifiBlocked = Boolean(!isOwn && wifiOnly && isMeteredOrCellularConnection());
+    const shouldAutoLoad = Boolean(
+        isOwn || (!isWifiBlocked && effectiveAuthorHops <= mediaAutoLoadMaxHops)
+    );
+    const [manualLoadRequested, setManualLoadRequested] = useState(false);
+
+    useEffect(() => {
+        setManualLoadRequested(false);
+    }, [ownerDid, imageToken]);
+
     const [imageUri, setImageUri] = useState<string | null>(() => {
         if (!imageToken) return null;
         return adImageCache.get(`${ownerDid}:${imageToken}`) ?? null;
@@ -72,6 +106,10 @@ export const AdCard: React.FC<AdCardProps> = ({
             }
         }
 
+        if (!shouldAutoLoad && !manualLoadRequested) {
+            return;
+        }
+
         let isMounted = true;
         marketService
             .getAdImage(ownerDid, imageToken)
@@ -97,7 +135,7 @@ export const AdCard: React.FC<AdCardProps> = ({
         return () => {
             isMounted = false;
         };
-    }, [ownerDid, imageToken]);
+    }, [ownerDid, imageToken, shouldAutoLoad, manualLoadRequested]);
 
     const nowSecs = Math.floor(Date.now() / 1000);
     const effectiveDaysLeft =
@@ -183,7 +221,7 @@ export const AdCard: React.FC<AdCardProps> = ({
                     </span>
                 </div>
 
-                {/* Ad Image / Graceful Degradation */}
+                {/* Ad Image / Deferred Placeholder / Graceful Degradation */}
                 {imageToken && (
                     imageUri && !imageFailed ? (
                         <img
@@ -200,6 +238,32 @@ export const AdCard: React.FC<AdCardProps> = ({
                         >
                             <ImageOff size={14} className="shrink-0 text-theme-light/70" />
                             <span>{t('marketplace.imageUnavailable', 'Bild nicht mehr verfügbar')}</span>
+                        </div>
+                    ) : !shouldAutoLoad && !manualLoadRequested ? (
+                        <div
+                            data-testid="ad-card-image-placeholder"
+                            className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-xl bg-bg-app border border-theme-subtle text-xs text-theme-light"
+                        >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                                <div className="w-8 h-8 rounded-lg bg-theme-primary/10 text-theme-primary flex items-center justify-center shrink-0">
+                                    <ImageIcon size={16} />
+                                </div>
+                                <span className="leading-snug">
+                                    {isWifiBlocked
+                                        ? t('marketplace.imageWifiOnlyHint')
+                                        : t('marketplace.imageDeferredHint')}
+                                </span>
+                            </div>
+                            <Button
+                                type="button"
+                                size="xs"
+                                variant="outline"
+                                onClick={() => setManualLoadRequested(true)}
+                                data-testid="ad-card-load-image-btn"
+                                className="shrink-0 self-start sm:self-auto"
+                            >
+                                {t('marketplace.loadImageBtn')}
+                            </Button>
                         </div>
                     ) : null
                 )}

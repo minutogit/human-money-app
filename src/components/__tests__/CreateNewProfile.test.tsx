@@ -503,7 +503,7 @@ describe('CreateNewProfile Component', () => {
       });
     });
 
-    it('submits standard profile creation with retainMnemonic = true', async () => {
+    it('submits standard profile creation with default medium reach preset and retainMnemonic = true', async () => {
       render(
         <CreateNewProfile
           onProfileCreated={mockOnProfileCreated}
@@ -522,16 +522,63 @@ describe('CreateNewProfile Component', () => {
       fireEvent.change(passwordInputs[0], { target: { value: 'password123' } });
       fireEvent.change(passwordInputs[1], { target: { value: 'password123' } });
 
-      const submitBtn = screen.getByRole('button', { name: /Create Profile/i });
-      fireEvent.click(submitBtn);
+      fireEvent.click(screen.getByTestId('onboarding-next-button'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('reach-preset-selector')).toBeInTheDocument();
+        expect(screen.getByTestId('preset-option-medium')).toHaveAttribute('aria-pressed', 'true');
+        expect(screen.getByTestId('simple-mode-notice')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('onboarding-finish-button'));
 
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith('create_profile', expect.objectContaining({
           profileName: 'Alice',
           password: 'password123',
           retainMnemonic: true,
+          initialReachPreset: 'medium',
         }));
         expect(mockOnProfileCreated).toHaveBeenCalled();
+      });
+    });
+
+    it('allows selecting far reach preset with privacy notice in onboarding', async () => {
+      render(
+        <CreateNewProfile
+          onProfileCreated={mockOnProfileCreated}
+          onSwitchToLogin={mockOnSwitchToLogin}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(/My Secure Profile/i)).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByPlaceholderText(/My Secure Profile/i), { target: { value: 'Alice' } });
+      const passwordInputs = screen.getAllByPlaceholderText('••••••••');
+      fireEvent.change(passwordInputs[0], { target: { value: 'password123' } });
+      fireEvent.change(passwordInputs[1], { target: { value: 'password123' } });
+
+      fireEvent.click(screen.getByTestId('onboarding-next-button'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('preset-option-far')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('preset-option-far'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('reach-far-privacy-hint')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('onboarding-finish-button'));
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('create_profile', expect.objectContaining({
+          profileName: 'Alice',
+          initialReachPreset: 'far',
+        }));
       });
     });
   });

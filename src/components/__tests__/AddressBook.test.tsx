@@ -75,6 +75,7 @@ describe('AddressBook Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     rateLimitManager.clearCooldown();
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') {
@@ -300,7 +301,7 @@ describe('AddressBook Component', () => {
     // Expand options
     fireEvent.click(toggleBtn);
     expect(screen.getByTestId('expanded-network-options')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops|\+ their contacts|\+ deren Kontakte/i })).toBeInTheDocument();
+    expect(screen.getByTestId('preset-option-medium')).toBeInTheDocument();
 
     // Collapse options again
     fireEvent.click(toggleBtn);
@@ -334,7 +335,10 @@ describe('AddressBook Component', () => {
     const toggleBtn = screen.getByTestId('toggle-network-options-button');
     fireEvent.click(toggleBtn);
     expect(screen.getByTestId('expanded-network-options')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops|\+ their contacts|\+ deren Kontakte/i })).toBeInTheDocument();
+    expect(screen.getByTestId('preset-option-near')).toBeInTheDocument();
+    expect(screen.getByTestId('preset-option-medium')).toBeInTheDocument();
+    expect(screen.getByTestId('preset-option-far')).toBeInTheDocument();
+    expect(screen.queryByTestId('trust-list-menu-button')).not.toBeInTheDocument();
   });
 
   it('displays sync service recommendation card when no sync service is connected and navigates to sync settings on click', async () => {
@@ -624,7 +628,8 @@ describe('AddressBook Component', () => {
     expect(screen.getByTestId('add-tile-manual')).toBeInTheDocument();
   });
 
-  it('displays segmented reach control and live explanatory sentence', async () => {
+  it('displays 3-tier reach presets in simple mode and custom granular controls in expert mode', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_wot_summary') {
@@ -650,8 +655,11 @@ describe('AddressBook Component', () => {
     fireEvent.click(toggleBtn);
 
     expect(screen.getByTestId('expanded-network-options')).toBeInTheDocument();
-    expect(screen.getByTestId('reach-live-sentence')).toBeInTheDocument();
-    expect(screen.getByText(/Deine Kontakte und deren direkte Kontakte|Your contacts and their direct contacts/i)).toBeInTheDocument();
+    expect(screen.getByTestId('preset-or-custom')).toBeInTheDocument();
+    expect(screen.getByTestId('reach-reciprocal-hint')).toBeInTheDocument();
+    expect(screen.getByTestId('reach-custom-controls')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /contacts\.wotHops2|\+ deren Kontakte|\+ their contacts/i })).toBeInTheDocument();
+    expect(screen.getByTestId('trust-list-menu-button')).toBeInTheDocument();
   });
 
   it('separates empty states: no contacts vs search without match', async () => {

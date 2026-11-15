@@ -25,6 +25,7 @@ vi.mock('../../utils/log', () => ({
 describe('WoT Contacts & Trust Ratings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
   });
 
   describe('ContactDialog', () => {
@@ -340,11 +341,74 @@ describe('WoT Contacts & Trust Ratings', () => {
       });
     });
 
-    it('clicking a hop button in AddressBook invokes set_wot_max_hops', async () => {
+    it('shows 3-tier reach presets in Simple mode and hides offline trust list controls', async () => {
+      localStorage.setItem('humoco_ui_mode', 'simple');
+      (invoke as unknown as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+        if (cmd === 'get_wot_summary') return Promise.resolve({ ...mockSummary, ownListMaxHops: 2 });
+        if (cmd === 'get_wot_providers') return Promise.resolve([]);
+        if (cmd === 'get_reach_preset') {
+          return Promise.resolve({
+            preset: 'medium',
+            ownListMaxHops: 2,
+            cardMaxHops: 2,
+            shareMinLevel: 1,
+            mediaAutoLoadMaxHops: 2,
+          });
+        }
+        if (cmd === 'apply_reach_preset') {
+          return Promise.resolve({
+            preset: 'near',
+            ownListMaxHops: 1,
+            cardMaxHops: 1,
+            shareMinLevel: 2,
+            mediaAutoLoadMaxHops: 1,
+          });
+        }
+        return Promise.resolve();
+      });
+
+      render(<AddressBook onBack={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Alice')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('toggle-network-options-button'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('preset-option-near')).toBeInTheDocument();
+        expect(screen.getByTestId('preset-option-medium')).toBeInTheDocument();
+        expect(screen.getByTestId('preset-option-far')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByTestId('trust-list-menu-button')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('preset-option-near'));
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('apply_reach_preset', {
+          preset: 'near',
+          password: undefined,
+        });
+      });
+    });
+
+    it('clicking a hop button in AddressBook (Expert mode) invokes set_wot_max_hops', async () => {
+      localStorage.setItem('humoco_ui_mode', 'expert');
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve({ ...mockSummary, ownListMaxHops: 3 });
         if (cmd === 'get_wot_providers') return Promise.resolve([]);
+        if (cmd === 'get_reach_preset') {
+          return Promise.resolve({
+            preset: 'far',
+            ownListMaxHops: 3,
+            cardMaxHops: 3,
+            shareMinLevel: 1,
+            mediaAutoLoadMaxHops: 2,
+          });
+        }
         if (cmd === 'set_wot_max_hops') return Promise.resolve({ ...mockSummary, ownListMaxHops: 2 });
         return Promise.resolve();
       });
@@ -361,7 +425,7 @@ describe('WoT Contacts & Trust Ratings', () => {
         fireEvent.click(toggleBtn);
       }
 
-      // Find the "2 Hops" button
+      // Find the "2 Hops" granular button in Expert controls
       const hop2Btn = screen.getByRole('button', { name: /contacts\.wotHops2|2 Hops|\+ their contacts|\+ deren Kontakte/i });
       expect(hop2Btn).toBeInTheDocument();
       fireEvent.click(hop2Btn);
@@ -375,6 +439,7 @@ describe('WoT Contacts & Trust Ratings', () => {
     });
 
     it('multi-recipient .wot share modal defaults to sharing with all rated contacts and invokes export_wot_package', async () => {
+      localStorage.setItem('humoco_ui_mode', 'expert');
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve({ ...mockSummary, ratedContactsCount: 5 });

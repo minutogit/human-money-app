@@ -116,6 +116,8 @@ pub struct AppSettings {
     pub post_accept_from_contacts: bool,
     #[serde(default = "default_ui_mode")]
     pub ui_mode: String,
+    #[serde(default = "default_media_auto_load_max_hops")]
+    pub media_auto_load_max_hops: u8,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -191,6 +193,10 @@ fn default_ui_mode() -> String {
     "simple".to_string()
 }
 
+fn default_media_auto_load_max_hops() -> u8 {
+    2
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -226,6 +232,7 @@ impl Default for AppSettings {
             pending_restore_l2_reconciliation: false,
             post_accept_from_contacts: true,
             ui_mode: default_ui_mode(),
+            media_auto_load_max_hops: default_media_auto_load_max_hops(),
         }
     }
 }
@@ -268,5 +275,21 @@ mod tests {
         assert!(serialized.contains(r#""uiMode":"expert""#));
         let roundtrip: AppSettings = serde_json::from_str(&serialized).unwrap();
         assert_eq!(roundtrip.ui_mode, "expert");
+    }
+
+    #[test]
+    fn test_app_settings_default_and_roundtrip_media_auto_load_max_hops() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.media_auto_load_max_hops, 2);
+
+        let deserialized_missing: AppSettings = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(deserialized_missing.media_auto_load_max_hops, 2);
+
+        let mut custom = AppSettings::default();
+        custom.media_auto_load_max_hops = 1;
+        let serialized = serde_json::to_string(&custom).unwrap();
+        assert!(serialized.contains(r#""mediaAutoLoadMaxHops":1"#));
+        let roundtrip: AppSettings = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(roundtrip.media_auto_load_max_hops, 1);
     }
 }

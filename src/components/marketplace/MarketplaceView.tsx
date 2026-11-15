@@ -88,8 +88,10 @@ export function MarketplaceView({
     const [isOptionsOpen, setIsOptionsOpen] = useState(false);
     const [maxDistanceKm, setMaxDistanceKm] = useState<number | null>(null);
 
-    // Sync status count
+    // Sync status & reader image settings
     const [connectedSyncCount, setConnectedSyncCount] = useState<number | null>(null);
+    const [mediaAutoLoadMaxHops, setMediaAutoLoadMaxHops] = useState<number>(2);
+    const [marketPollWifiOnly, setMarketPollWifiOnly] = useState<boolean>(false);
 
     // React to navigation state changes
     useEffect(() => {
@@ -111,6 +113,8 @@ export function MarketplaceView({
             const settings = await settingsService.getSettings();
             const count = (settings.marketSelectedSyncs || []).length;
             setConnectedSyncCount(count);
+            setMediaAutoLoadMaxHops(settings.mediaAutoLoadMaxHops ?? 2);
+            setMarketPollWifiOnly(Boolean(settings.marketPollWifiOnly));
         } catch (err) {
             logger.debug('Failed to check sync settings in marketplace: ' + stringifyError(err));
             setConnectedSyncCount(0);
@@ -353,6 +357,8 @@ export function MarketplaceView({
             <MarketPersonView
                 person={selectedPerson}
                 initialInquiryAd={inquiryTargetAd}
+                mediaAutoLoadMaxHops={mediaAutoLoadMaxHops}
+                wifiOnly={marketPollWifiOnly}
                 onBack={() => {
                     setSelectedPersonDid(null);
                     setInquiryTargetAd(null);
@@ -553,6 +559,8 @@ export function MarketplaceView({
                             myCoordinates={currentProfile.profile.coordinates}
                             maxDistanceKm={maxDistanceKm}
                             onMaxDistanceChange={setMaxDistanceKm}
+                            mediaAutoLoadMaxHops={mediaAutoLoadMaxHops}
+                            wifiOnly={marketPollWifiOnly}
                             hasSyncService={connectedSyncCount !== null && connectedSyncCount > 0}
                             onCreateAd={handleCreateAdClick}
                             onImportCard={() => setIsImportModalOpen(true)}

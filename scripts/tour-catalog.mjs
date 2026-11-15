@@ -429,13 +429,58 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         devModeUnlocked: true,
         privacyDefault: "ask",
         preferredLanguage: "de",
+        shareMinLevel: 1,
+        mediaAutoLoadMaxHops: 2,
+        marketPollWifiOnly: false,
+        marketSyncEnabled: true,
+        wotShareViaSync: true,
+        postAcceptFromContacts: true,
+        syncBackupEnabled: true,
+        autoBackupEnabled: true,
+        uiMode: "simple",
         customServers: [
             { url: "https://l2-node1.humoco.org", name: "Frankfurt Shard #1", isActive: true },
             { url: "https://l2-node2.humoco.org", name: "Zürich Shard #2", isActive: true },
             { url: "https://l2-node3.humoco.org", name: "Wien Shard #3", isActive: true }
         ],
-        regionalMeshSources: []
+        regionalMeshSources: [],
+        marketSelectedSyncs: [
+            {
+                writeUrl: "https://sync-freiburg.humoco.org/write",
+                readUrl: "https://sync-freiburg.humoco.org/read",
+                dropPub: "drop_pub_freiburg_01"
+            }
+        ],
+        publicSyncs: []
     };
+
+    const MOCK_WOT_SUMMARY = {
+        ratedContactsCount: 2,
+        verifiedHumansCount: 0,
+        closeConfidantsCount: 1,
+        importedPeerListsCount: 2,
+        ownListVersion: 1,
+        ownListMaxHops: 2,
+        providerFiltersCount: 0
+    };
+
+    function detectMockReachPreset() {
+        const wot = MOCK_WOT_SUMMARY.ownListMaxHops;
+        const share = MOCK_SETTINGS.shareMinLevel;
+        const card = MOCK_MY_MARKET_PROFILE.maxHops;
+        const media = MOCK_SETTINGS.mediaAutoLoadMaxHops;
+        let preset = 'custom';
+        if (wot === 1 && share === 2 && card === 1 && media === 1) preset = 'near';
+        else if (wot === 2 && share === 1 && card === 2 && media === 2) preset = 'medium';
+        else if (wot === 3 && share === 1 && card === 3 && media === 2) preset = 'far';
+        return {
+            preset: preset,
+            ownListMaxHops: wot,
+            cardMaxHops: card,
+            shareMinLevel: share,
+            mediaAutoLoadMaxHops: media
+        };
+    }
 
     const MOCK_STANDARDS = [
         {
@@ -867,7 +912,45 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
 
         // --- Settings ---
         "get_settings": () => MOCK_SETTINGS,
-        "save_settings": () => null,
+        "get_app_settings": () => MOCK_SETTINGS,
+        "save_settings": (args) => {
+            if (args && args.settings) Object.assign(MOCK_SETTINGS, args.settings);
+            return null;
+        },
+        "save_app_settings": (args) => {
+            if (args && args.settings) Object.assign(MOCK_SETTINGS, args.settings);
+            return null;
+        },
+        "get_reach_preset": () => detectMockReachPreset(),
+        "apply_reach_preset": (args) => {
+            const p = args && args.preset;
+            if (p === 'near') {
+                MOCK_WOT_SUMMARY.ownListMaxHops = 1;
+                MOCK_SETTINGS.shareMinLevel = 2;
+                MOCK_MY_MARKET_PROFILE.maxHops = 1;
+                MOCK_SETTINGS.mediaAutoLoadMaxHops = 1;
+            } else if (p === 'medium') {
+                MOCK_WOT_SUMMARY.ownListMaxHops = 2;
+                MOCK_SETTINGS.shareMinLevel = 1;
+                MOCK_MY_MARKET_PROFILE.maxHops = 2;
+                MOCK_SETTINGS.mediaAutoLoadMaxHops = 2;
+            } else if (p === 'far') {
+                MOCK_WOT_SUMMARY.ownListMaxHops = 3;
+                MOCK_SETTINGS.shareMinLevel = 1;
+                MOCK_MY_MARKET_PROFILE.maxHops = 3;
+                MOCK_SETTINGS.mediaAutoLoadMaxHops = 2;
+            } else {
+                throw new Error('Invalid reach preset: ' + p);
+            }
+            return detectMockReachPreset();
+        },
+        "get_wot_summary": () => MOCK_WOT_SUMMARY,
+        "set_wot_max_hops": (args) => {
+            if (args && typeof args.maxHops === 'number') {
+                MOCK_WOT_SUMMARY.ownListMaxHops = Math.min(3, Math.max(1, args.maxHops));
+            }
+            return MOCK_WOT_SUMMARY;
+        },
         "benchmark_l2_servers": () => [
             { url: "https://l2-node1.humoco.org", latencyMs: 14, reachable: true },
             { url: "https://l2-node2.humoco.org", latencyMs: 22, reachable: true },

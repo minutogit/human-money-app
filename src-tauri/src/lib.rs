@@ -128,7 +128,7 @@ pub fn run() {
             create_new_voucher, create_transfer_bundle, receive_bundle, save_transaction_record,
             get_transaction_history, prepare_transfer_plan, rank_vouchers_for_recipient,
             checkout_received_bundle, submit_l2_send_intent, configure_regional_mesh_authority, verify_live_checkout_and_release, evaluate_checkout_release, verify_checkout_response_with_authority,
-            get_app_settings, save_app_settings,
+            get_app_settings, save_app_settings, get_reach_preset, apply_reach_preset,
             log_to_backend,
             // Multi-signature commands
             create_signing_request_bundle, open_voucher_signing_request, create_detached_signature_response_bundle,

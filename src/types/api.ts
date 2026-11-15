@@ -109,6 +109,17 @@ export interface AppSettings {
     lastBackupAt?: string | null;
     postAcceptFromContacts?: boolean;
     uiMode?: UiMode;
+    mediaAutoLoadMaxHops?: number;
+}
+
+export type ReachPresetId = 'near' | 'medium' | 'far';
+
+export interface ReachPresetDto {
+    preset: ReachPresetId | 'custom';
+    ownListMaxHops: number;
+    cardMaxHops: number;
+    shareMinLevel: number;
+    mediaAutoLoadMaxHops: number;
 }
 
 export type AutoBackupStatus =

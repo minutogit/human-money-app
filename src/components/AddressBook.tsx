@@ -615,7 +615,9 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                         currentMaxHops={currentMaxHops}
                         isUpdatingHops={isUpdatingHops}
                         hasSyncService={hasSyncService}
+                        protectAction={protectAction}
                         onSelectMaxHops={handleSetMaxHops}
+                        onRefreshWot={() => { void loadContacts(); }}
                         onOpenTrustListModal={() => setIsTrustListModalOpen(true)}
                         onNavigateToSyncSettings={handleNavigateToSyncSettings}
                         onClose={() => setIsNetworkOptionsOpen(false)}

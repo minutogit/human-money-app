@@ -195,4 +195,65 @@ describe('AdCard Component', () => {
     fireEvent.click(ownerBtn);
     expect(onOwnerClick).toHaveBeenCalledWith('did:key:z6MkuAlice', true);
   });
+
+  it('defers image fetch when authorHops exceeds mediaAutoLoadMaxHops and loads on click', async () => {
+    const mockDataUri = 'data:image/webp;base64,deferredImgData';
+    const getAdImageSpy = vi.spyOn(marketService, 'getAdImage').mockResolvedValue(mockDataUri);
+
+    render(
+      <AdCard
+        ad={{ ...mockAdOffer, imageToken: 'img-tok-hop3' }}
+        ownerDid="did:key:z6MkuFarUser"
+        ownerName="Far Trader"
+        authorHops={3}
+        mediaAutoLoadMaxHops={2}
+      />
+    );
+
+    expect(screen.getByTestId('ad-card-image-placeholder')).toBeInTheDocument();
+    expect(screen.getByTestId('ad-card-load-image-btn')).toBeInTheDocument();
+    expect(getAdImageSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('ad-card-load-image-btn'));
+
+    const loadedImg = await screen.findByTestId('ad-card-image');
+    expect(loadedImg).toHaveAttribute('src', mockDataUri);
+    expect(getAdImageSpy).toHaveBeenCalledWith('did:key:z6MkuFarUser', 'img-tok-hop3');
+  });
+
+  it('defers image fetch when wifiOnly is true and connection is cellular', async () => {
+    const mockDataUri = 'data:image/webp;base64,cellularImgData';
+    const getAdImageSpy = vi.spyOn(marketService, 'getAdImage').mockResolvedValue(mockDataUri);
+    const originalDescriptor = Object.getOwnPropertyDescriptor(navigator, 'connection');
+    Object.defineProperty(navigator, 'connection', {
+      configurable: true,
+      value: { type: 'cellular', saveData: false },
+    });
+
+    try {
+      render(
+        <AdCard
+          ad={{ ...mockAdOffer, imageToken: 'img-tok-cell' }}
+          ownerDid="did:key:z6MkuCellUser"
+          ownerName="Cell User"
+          authorHops={1}
+          mediaAutoLoadMaxHops={2}
+          wifiOnly={true}
+        />
+      );
+
+      expect(screen.getByTestId('ad-card-image-placeholder')).toBeInTheDocument();
+      expect(getAdImageSpy).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId('ad-card-load-image-btn'));
+      const loadedImg = await screen.findByTestId('ad-card-image');
+      expect(loadedImg).toHaveAttribute('src', mockDataUri);
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(navigator, 'connection', originalDescriptor);
+      } else {
+        delete (navigator as unknown as Record<string, unknown>).connection;
+      }
+    }
+  });
 });

@@ -138,47 +138,58 @@ pub fn create_profile(
     local_instance_id: String,
     language: MnemonicLanguage,
     retain_mnemonic: Option<bool>,
+    initial_reach_preset: Option<String>,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), FrontendError> {
     info!("Attempting to create profile '{}' with language {:?}...", profile_name, language);
-    let mut service = state.service.lock().unwrap();
-    let core_language = language.into();
-    let retain = retain_mnemonic.unwrap_or(true);
-    match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password, core_language, local_instance_id, retain) {
-        Ok(()) => {
-            info!("Profile created successfully!");
+    {
+        let mut service = state.service.lock().unwrap();
+        let core_language = language.into();
+        let retain = retain_mnemonic.unwrap_or(true);
+        match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password, core_language, local_instance_id, retain) {
+            Ok(()) => {
+                info!("Profile created successfully!");
 
-            // Get the folder_name by listing profiles and finding the one matching profile_name
-            let folder_name = service.list_profiles()
-                .ok()
-                .and_then(|profiles| profiles.into_iter().find(|p| p.profile_name == profile_name))
-                .map(|p| p.folder_name);
+                // Get the folder_name by listing profiles and finding the one matching profile_name
+                let folder_name = service.list_profiles()
+                    .ok()
+                    .and_then(|profiles| profiles.into_iter().find(|p| p.profile_name == profile_name))
+                    .map(|p| p.folder_name);
 
-            // Update last_used timestamp for the new profile
-            if let Some(ref folder) = folder_name {
-                if let Err(e) = update_profile_last_used(&app, folder) {
-                    error!("Failed to update profile last_used timestamp: {}", e);
-                    // Don't fail profile creation if metadata update fails
+                // Update last_used timestamp for the new profile
+                if let Some(ref folder) = folder_name {
+                    if let Err(e) = update_profile_last_used(&app, folder) {
+                        error!("Failed to update profile last_used timestamp: {}", e);
+                        // Don't fail profile creation if metadata update fails
+                    }
                 }
+
+                // 1. Initialisiere und speichere Standard-Einstellungen für das neue Profil
+                let default_settings = AppSettings::default();
+                let settings_bytes = serde_json::to_vec(&default_settings).map_err(|e| FrontendError::from(e.to_string()))?;
+
+                service
+                    .save_encrypted_data(SETTINGS_KEY, &settings_bytes, Some(&password))
+                    .map_err(|e| FrontendError::from(format!("Failed to save default settings: {}", e)))?;
+
+                // 2. Initialisiere die Session und den Cache (lädt Settings & leere History)
+                state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)?;
             }
-
-            // 1. Initialisiere und speichere Standard-Einstellungen für das neue Profil
-            let default_settings = AppSettings::default();
-            let settings_bytes = serde_json::to_vec(&default_settings).map_err(|e| FrontendError::from(e.to_string()))?;
-            
-            service
-                .save_encrypted_data(SETTINGS_KEY, &settings_bytes, Some(&password))
-                .map_err(|e| FrontendError::from(format!("Failed to save default settings: {}", e)))?;
-
-            // 2. Initialisiere die Session und den Cache (lädt Settings & leere History)
-            state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)
-        }
-        Err(e) => {
-            error!("Profile creation failed: {}", e);
-            Err(FrontendError::from(e))
+            Err(e) => {
+                error!("Profile creation failed: {}", e);
+                return Err(FrontendError::from(e));
+            }
         }
     }
+
+    if let Some(preset) = initial_reach_preset {
+        if matches!(preset.as_str(), "near" | "medium" | "far") {
+            crate::commands::settings_cmd::apply_reach_preset_impl(preset, Some(password), &state)?;
+        }
+    }
+
+    Ok(())
 }
 
 

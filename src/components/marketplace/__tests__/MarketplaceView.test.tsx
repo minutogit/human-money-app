@@ -211,6 +211,7 @@ describe('MarketplaceView Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
 
     (invoke as Mock).mockImplementation((cmd: string) => {
       switch (cmd) {
@@ -472,7 +473,8 @@ describe('MarketplaceView Component', () => {
     expect(mockGoBack).toHaveBeenCalledTimes(1);
   });
 
-  it('toggles marketplace options panel and allows changing market settings', async () => {
+  it('shows 3-tier reach presets in Simple mode and hides expert storage controls', async () => {
+    localStorage.setItem('humoco_ui_mode', 'simple');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_market_view') return Promise.resolve(mockSnapshot);
       if (cmd === 'get_my_market_profile') return Promise.resolve(mockMyProfile);
@@ -480,6 +482,57 @@ describe('MarketplaceView Component', () => {
         return Promise.resolve({
           marketShowUnknown: true,
           maxStoredCards: 2000,
+        });
+      }
+      if (cmd === 'get_reach_preset') {
+        return Promise.resolve({
+          preset: 'medium',
+          ownListMaxHops: 2,
+          cardMaxHops: 2,
+          shareMinLevel: 1,
+          mediaAutoLoadMaxHops: 2,
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    render(<MarketplaceView />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1, name: /Marktplatz|Marketplace/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('toggle-marketplace-options-button'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('marketplace-options-panel')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('preset-option-near')).toBeInTheDocument();
+    expect(screen.getByTestId('preset-option-medium')).toBeInTheDocument();
+    expect(screen.getByTestId('preset-option-far')).toBeInTheDocument();
+    expect(screen.queryByTestId('marketplace-options-inbound-section')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('validity-years-select')).not.toBeInTheDocument();
+  });
+
+  it('toggles marketplace options panel and allows changing market settings (Expert mode)', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_market_view') return Promise.resolve(mockSnapshot);
+      if (cmd === 'get_my_market_profile') return Promise.resolve(mockMyProfile);
+      if (cmd === 'get_app_settings') {
+        return Promise.resolve({
+          marketShowUnknown: true,
+          maxStoredCards: 2000,
+        });
+      }
+      if (cmd === 'get_reach_preset') {
+        return Promise.resolve({
+          preset: 'medium',
+          ownListMaxHops: 2,
+          cardMaxHops: 2,
+          shareMinLevel: 1,
+          mediaAutoLoadMaxHops: 2,
         });
       }
       if (cmd === 'save_app_settings') return Promise.resolve();

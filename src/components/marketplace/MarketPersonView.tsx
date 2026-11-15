@@ -44,7 +44,7 @@ import { postService } from '../../services/postService';
 import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
 import ContactDialog from '../ContactDialog';
 import { ShareCardModal } from './ShareCardModal';
-import { AdCard } from './AdCard';
+import { AdCard, resolveAuthorHops } from './AdCard';
 import { copyToClipboard } from '../../utils/clipboard';
 import { truncateUserId } from '../../utils/userIdHelper';
 import { translateError, stringifyError } from '../../utils/errorHelper';
@@ -58,9 +58,17 @@ export interface MarketPersonViewProps {
     person: FrontendMarketPerson;
     onBack: () => void;
     initialInquiryAd?: Ad | null;
+    mediaAutoLoadMaxHops?: number;
+    wifiOnly?: boolean;
 }
 
-export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBack, initialInquiryAd }) => {
+export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
+    person,
+    onBack,
+    initialInquiryAd,
+    mediaAutoLoadMaxHops = 2,
+    wifiOnly = false,
+}) => {
     const { t } = useTranslation();
     const { navigate } = useNavigation();
     const { protectAction } = useSession();
@@ -659,6 +667,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
                             const nowSecs = Math.floor(Date.now() / 1000);
                             const daysLeft =
                                 ad.expiresAt > nowSecs ? Math.ceil((ad.expiresAt - nowSecs) / 86400) : 0;
+                            const authorHops = resolveAuthorHops(currentPerson.sources);
 
                             return (
                                 <AdCard
@@ -668,6 +677,9 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({ person, onBa
                                     ownerName={displayName}
                                     trust={currentPerson.trust}
                                     daysLeft={daysLeft}
+                                    authorHops={authorHops}
+                                    mediaAutoLoadMaxHops={mediaAutoLoadMaxHops}
+                                    wifiOnly={wifiOnly}
                                     onInquire={() => openInquiryForAd(ad)}
                                     onPay={() => handlePay()}
                                 />

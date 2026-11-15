@@ -14,6 +14,130 @@ pub struct L2BenchmarkResult {
     pub reachable: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReachPresetDto {
+    pub preset: String,
+    pub own_list_max_hops: u8,
+    pub card_max_hops: u8,
+    pub share_min_level: u8,
+    pub media_auto_load_max_hops: u8,
+}
+
+pub fn preset_values(preset: &str) -> Result<(u8, u8, u8, u8), FrontendError> {
+    match preset {
+        "near" => Ok((1, 2, 1, 1)),
+        "medium" => Ok((2, 1, 2, 2)),
+        "far" => Ok((3, 1, 3, 2)),
+        _ => Err(FrontendError::from(format!("Invalid reach preset: {}", preset))),
+    }
+}
+
+pub fn detect_reach_preset(
+    own_list_max_hops: u8,
+    share_min_level: u8,
+    card_max_hops: u8,
+    media_auto_load_max_hops: u8,
+) -> String {
+    match (
+        own_list_max_hops,
+        share_min_level,
+        card_max_hops,
+        media_auto_load_max_hops,
+    ) {
+        (1, 2, 1, 1) => "near".to_string(),
+        (2, 1, 2, 2) => "medium".to_string(),
+        (3, 1, 3, 2) => "far".to_string(),
+        _ => "custom".to_string(),
+    }
+}
+
+pub fn get_reach_preset_impl(
+    password: Option<String>,
+    state: &AppState,
+) -> Result<ReachPresetDto, FrontendError> {
+    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    let (own_list_max_hops, card_max_hops) = {
+        let mut service = state.service.lock().unwrap();
+        let reg = state
+            .get_or_load_wot_register(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
+        let card_hops = crate::commands::market::get_own_card_max_hops_inner(
+            &mut service,
+            password.as_deref(),
+        );
+        (reg.policy.own_list_max_hops.clamp(1, 3), card_hops)
+    };
+    let share_min_level = settings.share_min_level.min(3);
+    let media_auto_load_max_hops = settings.media_auto_load_max_hops.min(3);
+    let preset = detect_reach_preset(
+        own_list_max_hops,
+        share_min_level,
+        card_max_hops,
+        media_auto_load_max_hops,
+    );
+    Ok(ReachPresetDto {
+        preset,
+        own_list_max_hops,
+        card_max_hops,
+        share_min_level,
+        media_auto_load_max_hops,
+    })
+}
+
+#[tauri::command]
+pub fn get_reach_preset(
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<ReachPresetDto, FrontendError> {
+    get_reach_preset_impl(password, &state)
+}
+
+pub fn apply_reach_preset_impl(
+    preset: String,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<ReachPresetDto, FrontendError> {
+    let (own_list_max_hops, share_min_level, card_max_hops, media_auto_load_max_hops) =
+        preset_values(&preset)?;
+
+    // Must be called before acquiring state.service lock because set_wot_max_hops_impl locks it internally.
+    crate::commands::wot::set_wot_max_hops_impl(own_list_max_hops, password.clone(), state)?;
+
+    {
+        let mut service = state.service.lock().unwrap();
+        crate::commands::market::set_own_card_max_hops_inner(
+            &mut service,
+            card_max_hops,
+            password.as_deref(),
+        )?;
+
+        let mut settings = state.get_cached_settings().map_err(FrontendError::from)?;
+        settings.share_min_level = share_min_level;
+        settings.media_auto_load_max_hops = media_auto_load_max_hops;
+        state
+            .save_settings(&mut service, settings, password.as_deref())
+            .map_err(FrontendError::from)?;
+    }
+
+    Ok(ReachPresetDto {
+        preset,
+        own_list_max_hops,
+        card_max_hops,
+        share_min_level,
+        media_auto_load_max_hops,
+    })
+}
+
+#[tauri::command]
+pub fn apply_reach_preset(
+    preset: String,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<ReachPresetDto, FrontendError> {
+    apply_reach_preset_impl(preset, password, &state)
+}
+
 #[tauri::command]
 pub fn get_app_settings(state: tauri::State<AppState>) -> Result<AppSettings, FrontendError> {
     info!("Getting app settings from cache...");
@@ -26,6 +150,9 @@ pub async fn save_app_settings(
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), FrontendError> {
+    let mut settings = settings;
+    settings.media_auto_load_max_hops = settings.media_auto_load_max_hops.min(3);
+    settings.share_min_level = settings.share_min_level.min(3);
     info!("Saving app settings to disk...");
     {
         let mut service = state.service.lock().unwrap();
@@ -1069,5 +1196,24 @@ mod tests {
         );
         assert_eq!(map_verdict(AnchorSyncVerdict::GenesisRequired), "PendingLeapLock");
         assert_eq!(map_verdict(AnchorSyncVerdict::Inconclusive), "Inconclusive");
+    }
+
+    #[test]
+    fn test_reach_preset_values_and_detection() {
+        assert_eq!(preset_values("near").unwrap(), (1, 2, 1, 1));
+        assert_eq!(preset_values("medium").unwrap(), (2, 1, 2, 2));
+        assert_eq!(preset_values("far").unwrap(), (3, 1, 3, 2));
+        assert!(preset_values("ultra").is_err());
+
+        assert_eq!(detect_reach_preset(1, 2, 1, 1), "near");
+        assert_eq!(detect_reach_preset(2, 1, 2, 2), "medium");
+        assert_eq!(detect_reach_preset(3, 1, 3, 2), "far");
+
+        // Any deviation from a preset yields "custom"
+        assert_eq!(detect_reach_preset(1, 1, 1, 1), "custom");
+        assert_eq!(detect_reach_preset(2, 1, 3, 2), "custom");
+        assert_eq!(detect_reach_preset(2, 2, 2, 2), "custom");
+        assert_eq!(detect_reach_preset(2, 1, 2, 0), "custom");
+        assert_eq!(detect_reach_preset(3, 1, 3, 3), "custom");
     }
 }

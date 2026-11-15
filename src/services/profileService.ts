@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { PublicProfile, TrustStatus, FrontendQuickContact } from "../types";
+import { PublicProfile, TrustStatus, FrontendQuickContact, ReachPresetId } from "../types";
 import { marketService } from "./marketService";
 
 export interface CreateProfileArgs {
@@ -11,6 +11,7 @@ export interface CreateProfileArgs {
     localInstanceId: string;
     language: string;
     retainMnemonic?: boolean;
+    initialReachPreset?: ReachPresetId;
 }
 
 export interface RecoverWalletArgs {
@@ -67,6 +68,7 @@ export const profileService = {
             localInstanceId: args.localInstanceId,
             language: args.language,
             retainMnemonic: args.retainMnemonic ?? true,
+            initialReachPreset: args.initialReachPreset,
         });
     },
 

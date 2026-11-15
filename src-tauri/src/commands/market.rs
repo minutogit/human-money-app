@@ -109,6 +109,43 @@ fn load_drops_from_settings(
     ))
 }
 
+pub(crate) fn get_own_card_max_hops_inner(service: &mut AppService, password: Option<&str>) -> u8 {
+    let stored: StoredOwnMarketProfile = service
+        .load_encrypted_data(MARKET_OWN_PROFILE_KEY, password)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    stored.max_hops.clamp(1, 3)
+}
+
+pub(crate) fn set_own_card_max_hops_inner(
+    service: &mut AppService,
+    max_hops: u8,
+    password: Option<&str>,
+) -> Result<u8, FrontendError> {
+    let clamped = max_hops.clamp(1, 3);
+    let mut stored: StoredOwnMarketProfile = service
+        .load_encrypted_data(MARKET_OWN_PROFILE_KEY, password)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+
+    stored.max_hops = clamped;
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
+    if stored.published {
+        let drops_opt = load_drops_from_settings(service, None, password);
+        rebuild_and_sign_own_card_with_drops(service, &mut stored, now, drops_opt)?;
+    }
+
+    let bytes = serde_json::to_vec(&stored)
+        .map_err(|e| FrontendError::from(format!("Failed to serialize StoredOwnMarketProfile: {}", e)))?;
+    service
+        .save_encrypted_data(MARKET_OWN_PROFILE_KEY, &bytes, password)
+        .map_err(FrontendError::from)?;
+
+    Ok(clamped)
+}
+
 pub fn sync_own_card_drops_on_settings_change(
     service: &mut AppService,
     syncs: &[crate::models::FrontendSyncDescriptor],

@@ -3,7 +3,7 @@ import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search, Plus, Cloud, FileUp, RotateCcw, MapPin } from 'lucide-react';
 import { Ad, FrontendBoardItem, FrontendMarketPerson } from '../../types';
-import { AdCard } from './AdCard';
+import { AdCard, resolveAuthorHops } from './AdCard';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { calculateDistanceKm } from '../../utils/geoUtils';
@@ -22,6 +22,8 @@ export interface BoardTabProps {
     onPay?: (ownerDid: string) => void;
     onOwnerClick?: (ownerDid: string, isOwn?: boolean) => void;
     onEditOwnAd?: (ad: Ad) => void;
+    mediaAutoLoadMaxHops?: number;
+    wifiOnly?: boolean;
 }
 
 export type BoardFilter = 'all' | 'offer' | 'request';
@@ -40,6 +42,8 @@ export const BoardTab: React.FC<BoardTabProps> = ({
     onPay,
     onOwnerClick,
     onEditOwnAd,
+    mediaAutoLoadMaxHops = 2,
+    wifiOnly = false,
 }) => {
     const { t } = useTranslation();
     const [searchQuery, setSearchQuery] = useState('');
@@ -48,6 +52,15 @@ export const BoardTab: React.FC<BoardTabProps> = ({
 
     const effectiveMaxDistance = maxDistanceKm !== undefined ? maxDistanceKm : internalMaxDistance;
     const setEffectiveMaxDistance = onMaxDistanceChange || setInternalMaxDistance;
+
+    const hopsByDid = useMemo(() => {
+        const map = new Map<string, number>();
+        if (!people) return map;
+        for (const p of people) {
+            map.set(p.did, resolveAuthorHops(p.sources));
+        }
+        return map;
+    }, [people]);
 
     const filteredItems = useMemo(() => {
         return items.filter((item) => {
@@ -193,6 +206,9 @@ export const BoardTab: React.FC<BoardTabProps> = ({
                             trust={item.trust}
                             daysLeft={item.daysLeft}
                             isOwn={item.isOwn}
+                            authorHops={item.isOwn ? 0 : (hopsByDid.get(item.ownerDid) ?? 99)}
+                            mediaAutoLoadMaxHops={mediaAutoLoadMaxHops}
+                            wifiOnly={wifiOnly}
                             onEditOwnAd={onEditOwnAd}
                             onInquire={onInquire}
                             onPay={onPay}
