@@ -1,12 +1,30 @@
 ---
 project: human-money-app
-version: "0.5.3"
+version: "0.5.5"
 phase: "beta"
 health: "green"
-last_updated: "2026-11-11"
+last_updated: "2026-11-15"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-067"
+    title: "Sync-Service Revocation & Graceful Migration (Signed revocation.json, 410 Gone, Grace Period, Auto Contact URL Migration)"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-064"]
+    description: "Implemented decentralized sync-service revocation and graceful migration across humoco-sync (sync.php), Rust backend (sync_client.rs, state.rs, commands/sync.rs, settings.rs, models/market.rs), and React Settings/Contact UI (de/en/es/fr/it). Added Ed25519-signed HUMOCO-DROP-REVOKE-V1 notices via PUT sync.php?revoke (atomic revocation.json + HTTP 410 Gone past effective_at + self-redirect rejection + clear via effective_at: null), 24h client polling and live probe verification, anti-hijacking drop_pub pinning, automatic replacement sync migration in address books (with 2-slot cap handling), and warning banners with 1-click replacement prefill in SyncServiceSettingsCard."
+  - id: "APP-066"
+    title: "Standard vs. Expert Recovery UX: Simplified Onboarding, Two-Tier Protection Status, Guardian Selection, Printable Emergency Sheet & 3-Step Restore"
+    status: "completed"
+    priority: "high"
+    depends_on: ["CORE-015", "APP-065"]
+    description: "Implemented Standard vs. Expert recovery UX: streamlined Standard-Mode profile creation with prominent fresh-install Restore vs. Create choice (`needs_profile`) compliant with `UX_GLOSSARY.md` (`glossaryLint.test.ts` — using `Profil`/`Sync-Dienst`, never `Wallet`/`Server`) and `retain_mnemonic = false` checkbox in Expert onboarding; enforced two-tier protection banner after the first voucher plus 2-sync-redundancy UX tip; added AddressBook guardian selection (`GuardianSetupModal`, explicitly advising different households) with `Pending`/`Confirmed` ack indicators; triggered immediate `sync_backup` upon guardian/sheet completion; added single guided 3-from-6 personal questions setup; implemented zero-dependency A4 printable Emergency Sheet (`EmergencyKitModal` with `window.print()` + `humoco://kit` SVG QR + 12 printed words); added shared recovery step in `WalletRecovery`, pre-login `pendingDeepLink` buffering in `App.tsx`, and restart-safe 2-button Simple-Mode `RestoreBackupView` (`SocialAndSheetRecoveryFlow` for Contacts vs. Emergency Sheet) with collapsible `Erweiterte Wiederherstellung` (`.hmcbackup`, 24w, BIP-39 passphrase, prefix). Verified with 566/566 Vitest tests across 74 test files, 94 src-tauri integration tests, 93 humoco-market tests, cargo clippy (0 warnings), npm run i18n:check, and 32/32 automated UI tour steps."
+  - id: "APP-065"
+    title: "Social Recovery Crypto & Sync Discovery Engine (GF(256) Shamir, Owner-Signed Share Commitments, High-Cost Argon2id & 1-Tap URI Reply)"
+    status: "completed"
+    priority: "high"
+    depends_on: ["CORE-015"]
+    description: "Implemented pure-Rust GF(256) Shamir secret splitting in `humoco-market`, Ed25519 `owner_sig` + BLAKE3 `share_commitments` + strict KDF bounds (`m<=256MiB, t<=32, p<=4`) against share-poisoning and Argon2id OOM bombs, single canonical 3-question KDF (`question_ids: [u8; 3]` from 6-item catalog, NFC/umlaut-normalized high-cost Argon2id `m=64MiB, t=12, p=1`) for strict 2-factor recovery (`C = S XOR P`), X25519-sealed guardian vault distribution via `post` (`MAX_GUARDIAN_WARDS = 64`, 1 entry per `owner_did`) with explicit `GuardianVaultAck` confirmation and `backup_sync_descriptors` locator tracking, zero-server 1-tap `humoco://recovery-req` / `humoco://recovery-reply` handshake with 6-digit SAS verification and 48h staleness check plus `humoco://kit` URI handling, guardian rotation epochs (advancing `local.rotation_epoch` to `recovered_rotation_epoch` on post-restore), and parallel highest-`(epoch, tx_nonce)` backup mirror selection. Verified with 93 humoco-market unit and property tests, 94 src-tauri tests, 566 Vitest tests, clippy (0 warnings), and 32/32 UI tour steps."
   - id: "APP-UX-08"
     title: "Hardened UX Improvements, Marketplace Settings Tab, Slim AddressBook Header & Quick Contact QR Flow"
     status: "completed"

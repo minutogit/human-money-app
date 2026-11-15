@@ -339,6 +339,11 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
     const [isUpdatingPolicy, setIsUpdatingPolicy] = useState(false);
     const [isDeletingAdmin, setIsDeletingAdmin] = useState(false);
     const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+    const [isRevokeModalOpen, setIsRevokeModalOpen] = useState(false);
+    const [revokeGraceDays, setRevokeGraceDays] = useState<'30' | '14' | '0'>('30');
+    const [revokeReplacementUrl, setRevokeReplacementUrl] = useState('');
+    const [revokeReason, setRevokeReason] = useState('');
+    const [isRevokingServer, setIsRevokingServer] = useState(false);
     const [copiedLink, setCopiedLink] = useState(false);
 
     // Synchronize local toggles when settings prop changes
@@ -569,7 +574,8 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
 
             let descriptorToActivate = discovered.descriptor;
 
-            if (!isCurrentlySelected && (discovered.status || discovered.descriptor.status) !== 'active') {
+            const currentStatus = discovered.status || discovered.descriptor.status;
+            if (!isCurrentlySelected && currentStatus !== 'active' && currentStatus !== 'deprecating') {
                 setIsProbingContacts(true);
                 try {
                     await marketService.probeContactSyncs(true);
@@ -577,7 +583,8 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                     setDiscoveredDrops(fresh);
                     notifySyncStatusUpdated();
                     const match = fresh.find(d => isSameSyncEndpoint(d.descriptor, discovered.descriptor));
-                    if (!match || (match.status || match.descriptor.status) !== 'active') {
+                    const freshStatus = match ? (match.status || match.descriptor.status) : undefined;
+                    if (!match || (freshStatus !== 'active' && freshStatus !== 'deprecating')) {
                         setFeedback({
                             type: 'info',
                             message: t('settings.syncStatusPendingAuthDesc', 'Dieser Dienst wartet noch auf die Freigabe durch den Kontakt.'),
@@ -720,6 +727,38 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         }
     };
 
+    const handleRevokeServer = async (clearRevocation: boolean) => {
+        setIsRevokingServer(true);
+        try {
+            await protectAction(async (pwd) => {
+                const nowSec = Math.floor(Date.now() / 1000);
+                const days = parseInt(revokeGraceDays, 10) || 0;
+                const effectiveAt = clearRevocation ? null : (days > 0 ? nowSec + days * 86400 : nowSec);
+                const updated = await marketService.revokeOwnSyncServer(
+                    effectiveAt,
+                    clearRevocation ? undefined : revokeReason.trim() || undefined,
+                    clearRevocation ? undefined : revokeReplacementUrl.trim() || undefined,
+                    pwd || undefined
+                );
+                if (updated) {
+                    setAdminStatus(updated);
+                }
+                setIsRevokeModalOpen(false);
+                notifySyncStatusUpdated();
+                setFeedback({
+                    type: 'success',
+                    message: clearRevocation
+                        ? t('settings.syncHostRevokeCleared', 'Abkündigung für Sync-Dienst wurde aufgehoben.')
+                        : t('settings.syncHostRevokeSaved', 'Abkündigung für Sync-Dienst wurde veröffentlicht.'),
+                });
+            });
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsRevokingServer(false);
+        }
+    };
+
     const handleCopyFriendLink = async (url: string) => {
         const ok = await copyToClipboard(url);
         if (ok) {
@@ -790,6 +829,72 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 {/* TAB 1: Connected Services & Features */}
                 {activeTab === 'connected' && (
                     <div className="space-y-6 animate-in fade-in duration-200">
+                        {(() => {
+                            const revokedList = [
+                                ...discoveredDrops
+                                    .filter((d) => {
+                                        const st = d.status || d.descriptor.status;
+                                        return st === 'deprecating' || st === 'revoked';
+                                    })
+                                    .map((d) => ({
+                                        url: d.descriptor.writeUrl || d.descriptor.readUrl,
+                                        status: (d.status || d.descriptor.status) as string,
+                                        sunsetAt: d.descriptor.sunsetAt,
+                                        reason: d.descriptor.revocationReason,
+                                        replacement: d.descriptor.replacement,
+                                    })),
+                                ...configuredPublicDrops
+                                    .filter((p) => p.status === 'deprecating' || p.status === 'revoked')
+                                    .map((p) => ({
+                                        url: p.writeUrl || p.readUrl,
+                                        status: p.status as string,
+                                        sunsetAt: p.sunsetAt,
+                                        reason: p.revocationReason,
+                                        replacement: p.replacement,
+                                    })),
+                            ];
+                            if (revokedList.length === 0) return null;
+                            return (
+                                <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl space-y-2 text-xs text-amber-900">
+                                    <div className="font-bold flex items-center gap-2">
+                                        <AlertTriangle size={15} className="text-amber-600 shrink-0" />
+                                        <span>{t('settings.syncRevocationBannerTitle', 'Abschaltung eines Sync-Dienstes angekündigt')}</span>
+                                    </div>
+                                    {revokedList.map((item, idx) => (
+                                        <div key={item.url + idx} className="pt-1 border-t border-amber-200/70 space-y-1">
+                                            <div className="font-mono text-[11px] break-all font-semibold">{item.url}</div>
+                                            <div>
+                                                {item.status === 'revoked'
+                                                    ? t('settings.syncStatusRevoked', 'Geschlossen')
+                                                    : item.sunsetAt
+                                                    ? t('settings.syncStatusDeprecatingDate', {
+                                                          date: new Date(item.sunsetAt * 1000).toLocaleDateString(),
+                                                          defaultValue: `Schließt am ${new Date(item.sunsetAt * 1000).toLocaleDateString()}`,
+                                                      })
+                                                    : t('settings.syncStatusDeprecating', 'Wird bald geschlossen')}
+                                                {item.reason ? ` — ${item.reason}` : ''}
+                                            </div>
+                                            {item.replacement?.writeUrl && (
+                                                <div className="flex flex-wrap items-center gap-2 pt-1">
+                                                    <span className="font-mono text-[11px] break-all">
+                                                        → {item.replacement.writeUrl}
+                                                    </span>
+                                                    <Button
+                                                        type="button"
+                                                        size="sm"
+                                                        variant="secondary"
+                                                        onClick={() => setInputUrl(item.replacement!.writeUrl)}
+                                                        className="text-xs"
+                                                    >
+                                                        {t('settings.syncUseReplacement', 'Neuen Sync-Dienst übernehmen')}
+                                                    </Button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            );
+                        })()}
                         {/* 1. Feature Comfort Toggles (Channels) */}
                         <div className="p-4 bg-bg-app rounded-2xl border border-theme-subtle space-y-3">
                             <h4 className="text-xs font-bold text-theme-secondary uppercase tracking-wider">
@@ -1054,6 +1159,19 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         } else if (status === 'unreachable') {
                                             badgeColor = 'bg-rose-100 text-rose-800 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800';
                                             statusText = t('settings.syncStatusOffline', 'Nicht erreichbar (Offline)');
+                                        } else if (status === 'deprecating') {
+                                            badgeColor = 'bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800';
+                                            const dateStr = drop.descriptor.sunsetAt
+                                                ? new Date(drop.descriptor.sunsetAt * 1000).toLocaleDateString()
+                                                : '';
+                                            statusText = dateStr
+                                                ? t('settings.syncStatusDeprecatingDate', { date: dateStr, defaultValue: `Schließt am ${dateStr}` })
+                                                : t('settings.syncStatusDeprecating', 'Wird bald geschlossen');
+                                            statusTooltip = drop.descriptor.revocationReason || undefined;
+                                        } else if (status === 'revoked') {
+                                            badgeColor = 'bg-rose-100 text-rose-800 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800';
+                                            statusText = t('settings.syncStatusRevoked', 'Geschlossen');
+                                            statusTooltip = drop.descriptor.revocationReason || undefined;
                                         }
 
                                         const displayUrl = drop.descriptor.writeUrl || drop.descriptor.readUrl;
@@ -1388,8 +1506,48 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     </div>
                                 </div>
 
+                                {/* Active Revocation Banner */}
+                                {adminStatus.revocation && (
+                                    <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl text-xs text-amber-900 space-y-2">
+                                        <div className="font-semibold flex items-center justify-between gap-2">
+                                            <span>
+                                                {t('settings.syncHostRevokeActiveTitle', 'Abkündigung aktiv')} (
+                                                {new Date(adminStatus.revocation.effective_at * 1000).toLocaleDateString()})
+                                            </span>
+                                            <Button
+                                                type="button"
+                                                variant="secondary"
+                                                size="sm"
+                                                onClick={() => handleRevokeServer(true)}
+                                                disabled={isRevokingServer}
+                                                className="text-xs"
+                                            >
+                                                {t('settings.syncHostRevokeCancel', 'Abkündigung aufheben')}
+                                            </Button>
+                                        </div>
+                                        {adminStatus.revocation.reason && (
+                                            <p className="text-amber-800">{adminStatus.revocation.reason}</p>
+                                        )}
+                                        {adminStatus.revocation.replacement?.write_url && (
+                                            <p className="font-mono text-[11px] break-all text-amber-800">
+                                                → {adminStatus.revocation.replacement.write_url}
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
+
                                 {/* Danger / Management Actions */}
                                 <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-theme-subtle/50">
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={() => setIsRevokeModalOpen(true)}
+                                        className="gap-1.5 text-xs"
+                                    >
+                                        <AlertTriangle size={13} />
+                                        <span>{t('settings.syncHostRevokeButton', 'Sync-Dienst abkündigen / umziehen')}</span>
+                                    </Button>
                                     <Button
                                         type="button"
                                         variant="danger"
@@ -1401,6 +1559,77 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         <span>{t('settings.syncHostDelete')}</span>
                                     </Button>
                                 </div>
+
+                                {isRevokeModalOpen && (
+                                    <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-3 text-xs">
+                                        <h4 className="font-bold text-amber-900">
+                                            {t('settings.syncHostRevokeModalTitle', 'Sync-Dienst abkündigen oder umziehen')}
+                                        </h4>
+                                        <div className="space-y-1">
+                                            <label className="block font-semibold text-theme-secondary">
+                                                {t('settings.syncHostRevokeGraceLabel', 'Übergangsfrist')}
+                                            </label>
+                                            <select
+                                                value={revokeGraceDays}
+                                                onChange={(e) => setRevokeGraceDays(e.target.value as '30' | '14' | '0')}
+                                                className="w-full px-3 py-2 rounded-xl border border-theme-subtle bg-white text-xs"
+                                            >
+                                                <option value="30">{t('settings.syncHostRevoke30Days', '30 Tage Übergangsfrist (empfohlen)')}</option>
+                                                <option value="14">{t('settings.syncHostRevoke14Days', '14 Tage Übergangsfrist')}</option>
+                                                <option value="0">{t('settings.syncHostRevokeNow', 'Sofort abschalten')}</option>
+                                            </select>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="block font-semibold text-theme-secondary">
+                                                {t('settings.syncHostRevokeReplacementLabel', 'Neue Sync-Dienst-Adresse (optional)')}
+                                            </label>
+                                            <input
+                                                type="url"
+                                                value={revokeReplacementUrl}
+                                                onChange={(e) => setRevokeReplacementUrl(e.target.value)}
+                                                placeholder="https://neu.example.org/sync.php"
+                                                className="w-full px-3 py-2 rounded-xl border border-theme-subtle bg-white text-xs font-mono"
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="block font-semibold text-theme-secondary">
+                                                {t('settings.syncHostRevokeReasonLabel', 'Grund (optional)')}
+                                            </label>
+                                            <input
+                                                type="text"
+                                                maxLength={200}
+                                                value={revokeReason}
+                                                onChange={(e) => setRevokeReason(e.target.value)}
+                                                placeholder={t('settings.syncHostRevokeReasonPlaceholder', 'z. B. Umzug auf neue Domain')}
+                                                className="w-full px-3 py-2 rounded-xl border border-theme-subtle bg-white text-xs"
+                                            />
+                                        </div>
+                                        <div className="flex items-center gap-2 pt-1">
+                                            <Button
+                                                type="button"
+                                                variant="primary"
+                                                size="sm"
+                                                onClick={() => handleRevokeServer(false)}
+                                                disabled={isRevokingServer}
+                                                className="text-xs"
+                                            >
+                                                {isRevokingServer
+                                                    ? t('common.saving', 'Speichern…')
+                                                    : t('settings.syncHostRevokeConfirm', 'Abkündigung veröffentlichen')}
+                                            </Button>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => setIsRevokeModalOpen(false)}
+                                                disabled={isRevokingServer}
+                                                className="text-xs"
+                                            >
+                                                {t('common.cancel', 'Abbrechen')}
+                                            </Button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>

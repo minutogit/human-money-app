@@ -10,6 +10,7 @@ export interface CreateProfileArgs {
     password: string;
     localInstanceId: string;
     language: string;
+    retainMnemonic?: boolean;
 }
 
 export interface RecoverWalletArgs {
@@ -60,7 +61,8 @@ export const profileService = {
             userPrefix: args.userPrefix,
             password: args.password,
             localInstanceId: args.localInstanceId,
-            language: args.language
+            language: args.language,
+            retainMnemonic: args.retainMnemonic ?? true,
         });
     },
 

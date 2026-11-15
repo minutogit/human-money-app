@@ -32,7 +32,7 @@ function loadImageFromFile(file: File): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => {
-            const img = new Image();
+            const img = new window.Image();
             img.onload = () => resolve(img);
             img.onerror = () => reject(new Error('Failed to load image'));
             img.src = reader.result as string;

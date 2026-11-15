@@ -146,7 +146,7 @@ export type AppState =
     | { view: "needs_login" }
     | { view: "logged_in" }
     | { view: "recreate_profile" }
-    | { view: "restore_backup"; previousView?: AppState }
+    | { view: "restore_backup"; previousView?: AppState; initialPayload?: string }
     | { view: "needs_recovery" }
     | { view: "settings"; initialSection?: 'sync' | 'backup' | 'network' | 'profile' | 'standards' | 'security' | 'connection' | 'advanced' }
     | { view: "support" }

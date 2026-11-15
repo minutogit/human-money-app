@@ -41,10 +41,21 @@ interface ConfirmationWord {
 interface CreateNewProfileProps {
     onProfileCreated: () => void;
     onSwitchToLogin?: () => void;
+    onSwitchToRestore?: () => void;
+    defaultExpertMode?: boolean;
 }
 
-export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNewProfileProps) {
+export function CreateNewProfile({
+    onProfileCreated,
+    onSwitchToLogin,
+    onSwitchToRestore,
+    defaultExpertMode,
+}: CreateNewProfileProps) {
     const { t } = useTranslation();
+    const [isExpertMode, setIsExpertMode] = useState<boolean>(defaultExpertMode ?? false);
+    const [retainMnemonic, setRetainMnemonic] = useState<boolean>(true);
+    const [profilesCount, setProfilesCount] = useState<number | null>(null);
+
     const [wizardStep, setWizardStep] = useState<WizardStep>("display_seed");
     const [generatedSeed, setGeneratedSeed] = useState<string[]>([]);
     const [wordCount, setWordCount] = useState<12 | 24>(12);
@@ -70,6 +81,10 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNe
 
     useEffect(() => {
         logger.info("CreateNewProfile component displayed");
+        authService.listProfiles()
+            .then((list) => setProfilesCount(list.length))
+            .catch(() => setProfilesCount(null));
+
         const systemLang = navigator.language || "en";
         let detectedLanguage: MnemonicLanguage = "english";
         const langMap: Record<string, MnemonicLanguage> = {
@@ -147,6 +162,38 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNe
         setTimeout(() => { setFeedbackMsg(""); setWizardStep("set_password"); }, 1000);
     };
 
+    async function handleStandardSubmit(e: FormEvent) {
+        e.preventDefault();
+        if (!profileName.trim()) { setFeedbackMsg(t('profile.profileNameRequired')); return; }
+        if (password !== confirmPassword) { setFeedbackMsg(t('profile.passwordMismatch')); return; }
+        if (password.length < 8) { setFeedbackMsg(t('profile.passwordMinLength')); return; }
+
+        setIsLoading(true);
+        setFeedbackMsg(t('profile.creatingProgress'));
+        setTimeout(async () => {
+            try {
+                let mnemonic = generatedSeed.join(' ');
+                if (!mnemonic.trim() || generatedSeed.length < 12) {
+                    mnemonic = await profileService.generateMnemonic(12, selectedLanguage);
+                }
+                const localInstanceId = await authService.getLocalInstanceId();
+                await profileService.createProfile({
+                    profileName: profileName.trim(),
+                    mnemonic,
+                    password,
+                    localInstanceId,
+                    language: selectedLanguage,
+                    retainMnemonic: true,
+                });
+                onProfileCreated();
+            } catch (err) {
+                setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(err, t)}`);
+            } finally {
+                setIsLoading(false);
+            }
+        }, 150);
+    }
+
     async function handleCreateProfileSubmit(e: FormEvent) {
         e.preventDefault();
         if (password !== confirmPassword) { setFeedbackMsg(t('profile.passwordMismatch')); return; }
@@ -166,6 +213,7 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNe
                     password,
                     localInstanceId,
                     language: selectedLanguage,
+                    retainMnemonic,
                 });
                 onProfileCreated();
             } catch (e) {
@@ -177,10 +225,126 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNe
     }
 
     const renderContent = () => {
+        if (!isExpertMode) {
+            return (
+                <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-500">
+                    {profilesCount === 0 && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-2">
+                            <div className="p-4 rounded-2xl bg-theme-primary/10 border-2 border-theme-primary text-theme-primary font-bold text-xs flex items-center justify-between shadow-sm">
+                                <span>{t('auth.createNewProfileOption')}</span>
+                                <CheckCircle2 size={16} />
+                            </div>
+                            <button
+                                type="button"
+                                onClick={onSwitchToRestore}
+                                className="p-4 rounded-2xl bg-bg-surface hover:bg-theme-subtle/30 border-2 border-theme-subtle hover:border-theme-primary/50 text-theme-secondary font-bold text-xs text-left transition-all flex items-center justify-between cursor-pointer"
+                            >
+                                <span>{t('auth.restoreExistingProfileOption')}</span>
+                                <ArrowRight size={14} className="text-theme-light" />
+                            </button>
+                        </div>
+                    )}
+
+                    <div className="text-center space-y-2">
+                        <h2 className="text-2xl font-black text-theme-primary tracking-tight">
+                            {t('auth.standardCreationTitle')}
+                        </h2>
+                        <p className="text-sm font-medium text-theme-light">
+                            {t('auth.standardCreationSubtitle')}
+                        </p>
+                    </div>
+
+                    <form onSubmit={handleStandardSubmit} className="space-y-6">
+                        <Card header={<div className="flex items-center gap-2"><Lock size={14}/><span className="font-black text-[10px] uppercase tracking-widest">{t('profile.profileDetails')}</span></div>}>
+                            <div className="space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
+                                        <User size={10}/> {t('profile.profileLabel')}
+                                    </label>
+                                    <Input
+                                        value={profileName}
+                                        onChange={(e) => setProfileName(e.target.value)}
+                                        placeholder={t('profile.profileNamePlaceholder')}
+                                        required
+                                    />
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">
+                                            {t('profile.accessPassword')}
+                                        </label>
+                                        <Input
+                                            type="password"
+                                            value={password}
+                                            onChange={(e) => setPassword(e.target.value)}
+                                            placeholder="••••••••"
+                                            required
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">
+                                            {t('profile.confirmPassword')}
+                                        </label>
+                                        <Input
+                                            type="password"
+                                            value={confirmPassword}
+                                            onChange={(e) => setConfirmPassword(e.target.value)}
+                                            placeholder="••••••••"
+                                            required
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </Card>
+
+                        <Button
+                            type="submit"
+                            disabled={isLoading || !password || password !== confirmPassword}
+                            className="w-full py-4 rounded-3xl shadow-premium-lg text-base gap-3"
+                        >
+                            {isLoading ? <RefreshCw className="animate-spin" size={20} /> : <Fingerprint size={20} />}
+                            {isLoading ? t('profile.creating') : t('profile.create')}
+                        </Button>
+                    </form>
+
+                    <div className="pt-4 border-t border-theme-primary/10 text-center space-y-3">
+                        <button
+                            type="button"
+                            onClick={() => setIsExpertMode(true)}
+                            className="text-xs font-bold text-theme-light hover:text-theme-primary transition-colors underline cursor-pointer"
+                        >
+                            {t('auth.expertOptionsLink')}
+                        </button>
+
+                        {onSwitchToLogin && (
+                            <div>
+                                <button
+                                    type="button"
+                                    onClick={onSwitchToLogin}
+                                    className="text-xs text-theme-light hover:text-theme-secondary transition-colors cursor-pointer"
+                                >
+                                    {t('auth.backToLogin')}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
         switch (wizardStep) {
             case "display_seed":
                 return (
                     <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-500">
+                        <div className="flex justify-end">
+                            <button
+                                type="button"
+                                onClick={() => setIsExpertMode(false)}
+                                className="text-xs font-bold text-theme-light hover:text-theme-primary transition-colors cursor-pointer"
+                            >
+                                {t('auth.hideExpertOptions')}
+                            </button>
+                        </div>
                         <div className="text-center space-y-2">
                             <h2 className="text-2xl font-black text-theme-primary tracking-tight flex items-center justify-center gap-2">
                                 <span>{t('profile.step1Title')}</span>
@@ -446,6 +610,23 @@ export function CreateNewProfile({ onProfileCreated, onSwitchToLogin }: CreateNe
                                             </div>
                                         </>
                                     )}
+                                    <div className="flex items-start gap-2.5 py-1 pt-2 border-t border-theme-primary/5">
+                                        <input
+                                            id="checkbox-retain-mnemonic"
+                                            type="checkbox"
+                                            checked={!retainMnemonic}
+                                            onChange={(e) => setRetainMnemonic(!e.target.checked)}
+                                            className="mt-1 h-4.5 w-4.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary/30 cursor-pointer"
+                                        />
+                                        <div className="flex flex-col">
+                                            <label htmlFor="checkbox-retain-mnemonic" className="text-xs font-bold text-theme-secondary cursor-pointer select-none">
+                                                {t('auth.doNotRetainMnemonic')}
+                                            </label>
+                                            <p className="text-[10px] font-medium text-theme-light leading-normal mt-0.5">
+                                                {t('auth.doNotRetainMnemonicHint')}
+                                            </p>
+                                        </div>
+                                    </div>
                                 </div>
                             </Card>
 

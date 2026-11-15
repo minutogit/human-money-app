@@ -2,9 +2,10 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { save, open } from '@tauri-apps/plugin-dialog';
-import { AppSettings, BackupSummaryDto, FrontendAutoBackupStatusDto } from '../types';
+import { AppSettings, BackupSummaryDto, FrontendAutoBackupStatusDto, RecoveryProtectionStatusDto } from '../types';
 import { backupService } from '../services/backupService';
 import { settingsService } from '../services/settingsService';
+import { recoveryService } from '../services/recoveryService';
 import { useSession } from '../context/SessionContext';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
@@ -25,6 +26,7 @@ import {
     Folder,
     RefreshCw,
     Cloud,
+    Info,
     X
 } from 'lucide-react';
 
@@ -49,11 +51,15 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         settings?.backupFrequency || 'after_mutation'
     );
     const [backupStatus, setBackupStatus] = useState<FrontendAutoBackupStatusDto | null>(null);
+    const [recoveryProtectionStatus, setRecoveryProtectionStatus] = useState<RecoveryProtectionStatusDto | null>(null);
 
     useEffect(() => {
         let active = true;
         backupService.getBackupStatus?.()?.then((st) => {
             if (active) setBackupStatus(st);
+        })?.catch(() => {});
+        recoveryService.getRecoveryProtectionStatus().then((prot) => {
+            if (active) setRecoveryProtectionStatus(prot);
         })?.catch(() => {});
         return () => {
             active = false;
@@ -661,6 +667,13 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                         : t('settings.syncBackupActive')}
                                 </span>
                             </div>
+
+                            {recoveryProtectionStatus?.syncBackupCount === 1 && (
+                                <div className="p-3 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200/50 dark:border-blue-900/40 rounded-xl text-xs text-blue-800 dark:text-blue-300 flex items-start gap-2">
+                                    <Info size={14} className="text-blue-500 shrink-0 mt-0.5" />
+                                    <span>{t('settings.syncRedundancyTip')}</span>
+                                </div>
+                            )}
 
                             <label className="flex items-start gap-2.5 cursor-pointer select-none pt-1">
                                 <input

@@ -8,11 +8,12 @@ import { profileService } from "../services/profileService";
 import { contactService } from "../services/contactService";
 import { settingsService } from "../services/settingsService";
 import { marketService } from "../services/marketService";
+import { recoveryService } from "../services/recoveryService";
 import { copyToClipboard } from "../utils/clipboard";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
-import { AggregatedBalance, VoucherSummary, WalletEvent, AppSettings, FrontendPendingSignRequest, FrontendPendingWotHandshake, IntegrityReport } from "../types";
+import { AggregatedBalance, VoucherSummary, WalletEvent, AppSettings, FrontendPendingSignRequest, FrontendPendingWotHandshake, IntegrityReport, RecoveryProtectionStatusDto } from "../types";
 import { postService, POST_INBOX_UPDATED_EVENT } from "../services/postService";
 import { useSession } from "../context/SessionContext";
 import { IntegrityReportModal } from "./IntegrityReportModal";
@@ -67,6 +68,7 @@ export function Dashboard() {
     const [showIntegrityModal, setShowIntegrityModal] = useState(false);
     const [showBackupReminder, setShowBackupReminder] = useState(false);
     const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+    const [protectionStatus, setProtectionStatus] = useState<RecoveryProtectionStatusDto | null>(null);
     const [contactsCount, setContactsCount] = useState(0);
     const [syncConnectedCount, setSyncConnectedCount] = useState(0);
     const [balanceViewMode, setBalanceViewMode] = useState<'spendable' | 'net'>('spendable');
@@ -116,7 +118,7 @@ export function Dashboard() {
         logger.info("Dashboard component displayed");
         async function fetchData() {
             try {
-                const [id, balanceList, , voucherSummaries, , contacts, eventHistory, userSettings, syncOverview] = await Promise.all([
+                const [id, balanceList, , voucherSummaries, , contacts, eventHistory, userSettings, syncOverview, recoveryProtection] = await Promise.all([
                     profileService.getUserId(),
                     voucherService.getTotalBalanceByCurrency(),
                     transferService.getHistory().catch(() => []),
@@ -126,12 +128,14 @@ export function Dashboard() {
                     transferService.getEventHistory(0, 5).catch(() => []),
                     settingsService.getSettings().catch(() => null),
                     marketService.getSyncOverviewStatus().catch(() => null),
+                    recoveryService.getRecoveryProtectionStatus().catch(() => null),
                 ]);
                 if (!active) return;
                 setUserId(id);
                 setBalances(balanceList || []);
                 setRecentEvents(eventHistory || []);
                 setContactsCount((contacts || []).length);
+                setProtectionStatus(recoveryProtection);
                 setSyncConnectedCount(syncOverview?.connectedCount || 0);
                 
                 const activeCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "active").length;
@@ -631,6 +635,43 @@ export function Dashboard() {
                         </Card>
                     )}
 
+                    {/* Two-Tier Protection Warning Banner */}
+                    {(activeVouchersCount > 0 || (balances || []).length > 0) &&
+                        (!protectionStatus?.hasIdentityRecovery || !protectionStatus?.hasVoucherBackup) && (
+                        <Card 
+                            variant="glass" 
+                            className="py-3 px-4 flex flex-wrap gap-3 items-center justify-between border-l-4 border-l-amber-500 bg-amber-50/40 dark:bg-amber-950/20"
+                            hover
+                            onClick={() => navigate({ view: 'settings', initialSection: !protectionStatus?.hasIdentityRecovery ? 'security' : 'backup' })}
+                            data-testid="protection-warning-banner"
+                        >
+                            <div className="flex items-center gap-4 min-w-0">
+                                <div className="p-2 rounded-xl bg-amber-500 text-white shrink-0">
+                                    <ShieldAlert size={20} />
+                                </div>
+                                <div className="min-w-0">
+                                    <p className="font-bold text-sm text-theme-secondary truncate">
+                                        {t('dashboard.protectionWarningTitle')}
+                                    </p>
+                                    <p className="text-xs text-theme-light line-clamp-2">
+                                        {!protectionStatus?.hasIdentityRecovery && !protectionStatus?.hasVoucherBackup
+                                            ? t('dashboard.protectionWarningBoth')
+                                            : protectionStatus?.hasIdentityRecovery && !protectionStatus?.hasVoucherBackup
+                                            ? t('dashboard.protectionWarningSyncOnly')
+                                            : t('dashboard.protectionWarningIdentityOnly')}
+                                    </p>
+                                </div>
+                            </div>
+                            <Button 
+                                variant="primary" 
+                                size="xs" 
+                                className="shadow-none shrink-0 bg-amber-500 hover:bg-amber-600 border-amber-600 text-white"
+                            >
+                                {t('dashboard.protectionWarningButton')}
+                            </Button>
+                        </Card>
+                    )}
+
                     {showBackupReminder && (
                         <Card 
                             variant="glass" 
@@ -654,10 +695,11 @@ export function Dashboard() {
 
                 {/* Zone 1.5: Getting Started Checklist */}
                 <FirstStepsChecklist 
-                    hasBackup={Boolean(appSettings?.lastBackupAt || appSettings?.backupSyncFolder)}
+                    hasBackup={Boolean(appSettings?.lastBackupAt || appSettings?.backupSyncFolder || protectionStatus?.hasVoucherBackup)}
                     hasContact={contactsCount > 0}
                     hasVoucher={activeVouchersCount > 0 || (balances || []).length > 0}
                     hasSync={syncConnectedCount > 0}
+                    hasIdentityRecovery={Boolean(protectionStatus?.hasIdentityRecovery)}
                     userId={userId}
                 />
 

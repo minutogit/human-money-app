@@ -10,6 +10,7 @@ pub mod backup;
 pub mod wot;
 pub mod market;
 pub mod post;
+pub mod recovery;
 
 pub use error::*;
 pub use voucher::*;
@@ -23,3 +24,4 @@ pub use backup::*;
 pub use wot::*;
 pub use market::*;
 pub use post::*;
+pub use recovery::*;

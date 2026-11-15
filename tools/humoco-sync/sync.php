@@ -145,6 +145,72 @@ function verify_ed25519_detached($sigHex, $message, $pubkeyHex) {
     return sodium_crypto_sign_verify_detached($sigBytes, $message, $pkBytes);
 }
 
+function contains_control_chars($str) {
+    return preg_match('/[\r\n\0]/', (string)$str) === 1;
+}
+
+function is_sync_url_valid($url) {
+    $trimmed = trim((string)$url);
+    if ($trimmed === '' || contains_control_chars($trimmed)) {
+        return false;
+    }
+    return strpos($trimmed, 'https://') === 0
+        || strpos($trimmed, 'http://127.0.0.1') === 0
+        || strpos($trimmed, 'http://localhost') === 0
+        || strpos($trimmed, 'http://[::1]') === 0;
+}
+
+function build_revocation_canonical_message(array $notice) {
+    $dropPub = isset($notice['drop_pub']) ? strtolower((string)$notice['drop_pub']) : '';
+    $issuedAt = isset($notice['issued_at']) ? (string)(int)$notice['issued_at'] : '0';
+    $effectiveAt = isset($notice['effective_at']) ? (string)(int)$notice['effective_at'] : '0';
+    $rep = isset($notice['replacement']) && is_array($notice['replacement']) ? $notice['replacement'] : null;
+    $repWrite = ($rep !== null && isset($rep['write_url'])) ? (string)$rep['write_url'] : '';
+    $repRead = ($rep !== null && isset($rep['read_url'])) ? (string)$rep['read_url'] : '';
+    $repPub = ($rep !== null && isset($rep['drop_pub'])) ? strtolower((string)$rep['drop_pub']) : '';
+    $reason = isset($notice['reason']) && $notice['reason'] !== null ? (string)$notice['reason'] : '';
+
+    return "HUMOCO-DROP-REVOKE-V1\n"
+        . $dropPub . "\n"
+        . $issuedAt . "\n"
+        . $effectiveAt . "\n"
+        . $repWrite . "\n"
+        . $repRead . "\n"
+        . $repPub . "\n"
+        . $reason;
+}
+
+function respond_if_revoked(array $state, $now, $lockFp, array $commonHeaders, $isHead = false) {
+    if (!isset($state['revocation']) || !is_array($state['revocation'])) {
+        return;
+    }
+    $eff = isset($state['revocation']['effective_at']) ? (int)$state['revocation']['effective_at'] : 0;
+    if ($eff > 0 && $now >= $eff) {
+        $body = $isHead ? null : json_encode($state['revocation'], JSON_UNESCAPED_SLASHES);
+        $headers = $isHead
+            ? $commonHeaders
+            : array_merge($commonHeaders, ['Content-Type' => 'application/json; charset=utf-8']);
+        sync_respond(410, $lockFp, $body, $headers);
+    }
+}
+
+function resolve_own_sync_urls(array $config, $dataDirSetting) {
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443)
+        || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');
+    $scheme = $isHttps ? 'https' : 'http';
+    $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : (isset($_SERVER['SERVER_NAME']) ? $_SERVER['SERVER_NAME'] : 'localhost');
+    $scriptName = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/sync.php';
+    $scriptDir = rtrim(dirname($scriptName), '/\\');
+    $writeUrl = $scheme . '://' . $host . $scriptName;
+    if (isset($config['read_url']) && is_string($config['read_url']) && $config['read_url'] !== '') {
+        $readUrl = $config['read_url'];
+    } else {
+        $readUrl = $scheme . '://' . $host . ($scriptDir !== '' ? $scriptDir : '') . '/' . $dataDirSetting;
+    }
+    return [$writeUrl, $readUrl];
+}
+
 // Extract and validate optional sub-mailbox prefix from X-Drop-Prefix header
 function extract_and_validate_prefix() {
     if (!isset($_SERVER['HTTP_X_DROP_PREFIX'])) {
@@ -514,23 +580,14 @@ if ($method === 'GET' && isset($_GET['info'])) {
         write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
     }
 
-    if (isset($config['read_url']) && is_string($config['read_url']) && $config['read_url'] !== '') {
-        $readUrl = $config['read_url'];
-    } else {
-        $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-            || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443)
-            || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');
-        $scheme = $isHttps ? 'https' : 'http';
-        $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : (isset($_SERVER['SERVER_NAME']) ? $_SERVER['SERVER_NAME'] : 'localhost');
-        $scriptDir = rtrim(dirname(isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/'), '/\\');
-        $readUrl = $scheme . '://' . $host . ($scriptDir !== '' ? $scriptDir : '') . '/' . $dataDirSetting;
-    }
+    list(, $readUrl) = resolve_own_sync_urls($config, $dataDirSetting);
 
     $infoResponse = [
         'drop_pub'     => $state['admin_pubkey'],
         'read_url'     => $readUrl,
         'register_url' => isset($config['register_url']) ? $config['register_url'] : null,
         'channels'     => array_keys($channels),
+        'revocation'   => (isset($state['revocation']) && is_array($state['revocation'])) ? $state['revocation'] : null,
     ];
 
     sync_respond(200, $lockFp, json_encode($infoResponse, JSON_UNESCAPED_SLASHES), array_merge($commonHeaders, [
@@ -546,6 +603,7 @@ if ($method === 'HEAD') {
         write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
         sync_respond(429, $lockFp, null, array_merge($commonHeaders, ['Retry-After' => '900']));
     }
+    respond_if_revoked($state, $now, $lockFp, $commonHeaders, true);
 
     $pubkey = isset($_SERVER['HTTP_X_DROP_PUBKEY']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_PUBKEY'])) : '';
     $channel = isset($_SERVER['HTTP_X_CHANNEL']) ? trim((string)$_SERVER['HTTP_X_CHANNEL']) : '';
@@ -728,6 +786,156 @@ if ($method === 'PUT' && isset($_GET['members'])) {
 }
 
 // =========================================================================
+// ROUTE 4: PUT sync.php?revoke (Admin Publish or Clear Revocation Notice)
+// =========================================================================
+if ($method === 'PUT' && isset($_GET['revoke'])) {
+    $adminPub = isset($_SERVER['HTTP_X_DROP_PUBKEY']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_PUBKEY'])) : '';
+    $timestamp = isset($_SERVER['HTTP_X_DROP_TIMESTAMP']) ? (int)$_SERVER['HTTP_X_DROP_TIMESTAMP'] : 0;
+    $nonce = isset($_SERVER['HTTP_X_DROP_NONCE']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_NONCE'])) : '';
+    $signature = isset($_SERVER['HTTP_X_DROP_SIGNATURE']) ? strtolower(trim((string)$_SERVER['HTTP_X_DROP_SIGNATURE'])) : '';
+
+    if (abs($now - $timestamp) > 60 || !preg_match('/^[0-9a-f]{32}$/', $nonce) || !preg_match('/^[0-9a-f]{128}$/', $signature)) {
+        if (!$disableRateLimit) {
+            $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
+            write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
+        }
+        sync_respond(400, $lockFp, 'Bad Request: Invalid headers', $commonHeaders);
+    }
+
+    if (!hash_equals($state['admin_pubkey'], $adminPub)) {
+        if (!$disableRateLimit) {
+            $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
+            write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
+        }
+        sync_respond(403, $lockFp, 'Forbidden: Unauthorized admin pubkey', $commonHeaders);
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $canonicalMsg = "HUMOCO-DROP-ADMIN-V1\nPUT_REVOKE\n{$timestamp}\n{$nonce}\n" . hash('sha256', $rawInput);
+
+    if (!verify_ed25519_detached($signature, $canonicalMsg, $adminPub)) {
+        if (!$disableRateLimit) {
+            $bucket['failCount'] = min(100, $bucket['failCount'] + 1);
+            write_ip_bucket($rlFp, $ipBucketIdx, $bucket);
+        }
+        sync_respond(403, $lockFp, 'Forbidden: Invalid admin signature', $commonHeaders);
+    }
+
+    if (isset($state['nonces'][$nonce])) {
+        sync_respond(409, $lockFp, 'Conflict: Replay detected', $commonHeaders);
+    }
+    $state['nonces'][$nonce] = $now;
+
+    $bodyData = json_decode($rawInput, true);
+    if (!is_array($bodyData) || !isset($bodyData['issued_at']) || !is_numeric($bodyData['issued_at'])) {
+        sync_respond(400, $lockFp, 'Bad Request: Missing issued_at', $commonHeaders);
+    }
+    $issuedAt = (int)$bodyData['issued_at'];
+    if ($issuedAt <= 0) {
+        sync_respond(400, $lockFp, 'Bad Request: Invalid issued_at', $commonHeaders);
+    }
+
+    if (isset($state['revocation']['issued_at']) && $issuedAt <= (int)$state['revocation']['issued_at']) {
+        sync_respond(409, $lockFp, 'Conflict: Stale issued_at', $commonHeaders);
+    }
+
+    $revocationFile = $dataDir . DIRECTORY_SEPARATOR . 'revocation.json';
+
+    // Clear revocation when effective_at is null or 0
+    $effectiveAtRaw = isset($bodyData['effective_at']) ? $bodyData['effective_at'] : null;
+    if ($effectiveAtRaw === null || (int)$effectiveAtRaw === 0) {
+        $state['revocation'] = null;
+        if (file_exists($revocationFile)) {
+            @unlink($revocationFile);
+        }
+        save_state($stateFile, $state);
+        sync_respond(200, $lockFp, json_encode(['revocation' => null], JSON_UNESCAPED_SLASHES), array_merge($commonHeaders, [
+            'Content-Type' => 'application/json; charset=utf-8',
+        ]));
+    }
+
+    if (!is_numeric($effectiveAtRaw) || (int)$effectiveAtRaw <= 0) {
+        sync_respond(400, $lockFp, 'Bad Request: Invalid effective_at', $commonHeaders);
+    }
+    $effectiveAt = (int)$effectiveAtRaw;
+
+    $noticeDropPub = isset($bodyData['drop_pub']) ? strtolower(trim((string)$bodyData['drop_pub'])) : '';
+    if (!hash_equals($state['admin_pubkey'], $noticeDropPub)) {
+        sync_respond(400, $lockFp, 'Bad Request: Notice drop_pub mismatch', $commonHeaders);
+    }
+
+    $reason = null;
+    if (isset($bodyData['reason']) && $bodyData['reason'] !== null) {
+        if (!is_string($bodyData['reason']) || strlen($bodyData['reason']) > 200 || contains_control_chars($bodyData['reason'])) {
+            sync_respond(400, $lockFp, 'Bad Request: Invalid reason', $commonHeaders);
+        }
+        $trimmedReason = trim($bodyData['reason']);
+        if ($trimmedReason !== '') {
+            $reason = $trimmedReason;
+        }
+    }
+
+    $replacement = null;
+    if (isset($bodyData['replacement']) && $bodyData['replacement'] !== null) {
+        if (!is_array($bodyData['replacement'])) {
+            sync_respond(400, $lockFp, 'Bad Request: Invalid replacement', $commonHeaders);
+        }
+        $repWrite = isset($bodyData['replacement']['write_url']) ? trim((string)$bodyData['replacement']['write_url']) : '';
+        $repRead = isset($bodyData['replacement']['read_url']) ? trim((string)$bodyData['replacement']['read_url']) : '';
+        $repPub = isset($bodyData['replacement']['drop_pub']) ? strtolower(trim((string)$bodyData['replacement']['drop_pub'])) : '';
+        if (!is_sync_url_valid($repWrite) || !is_sync_url_valid($repRead) || !preg_match('/^[0-9a-f]{64}$/', $repPub)) {
+            sync_respond(400, $lockFp, 'Bad Request: Invalid replacement fields', $commonHeaders);
+        }
+        list($ownWriteUrl, $ownReadUrl) = resolve_own_sync_urls($config, $dataDirSetting);
+        $normOwnWrite = strtolower(rtrim($ownWriteUrl, '/'));
+        $normOwnRead = strtolower(rtrim($ownReadUrl, '/'));
+        $normRepWrite = strtolower(rtrim($repWrite, '/'));
+        $normRepRead = strtolower(rtrim($repRead, '/'));
+        if ($normRepWrite === $normOwnWrite || $normRepRead === $normOwnRead || $normRepWrite === $normOwnRead || $normRepRead === $normOwnWrite) {
+            sync_respond(400, $lockFp, 'Bad Request: Self-redirect replacement is not allowed', $commonHeaders);
+        }
+        $replacement = [
+            'write_url' => $repWrite,
+            'read_url'  => $repRead,
+            'drop_pub'  => $repPub,
+        ];
+    }
+
+    $noticeSig = isset($bodyData['signature']) ? strtolower(trim((string)$bodyData['signature'])) : '';
+    if (!preg_match('/^[0-9a-f]{128}$/', $noticeSig)) {
+        sync_respond(400, $lockFp, 'Bad Request: Invalid notice signature format', $commonHeaders);
+    }
+
+    $cleanNotice = [
+        'drop_pub'     => $noticeDropPub,
+        'issued_at'    => $issuedAt,
+        'effective_at' => $effectiveAt,
+        'reason'       => $reason,
+        'replacement'  => $replacement,
+        'signature'    => $noticeSig,
+    ];
+
+    $noticeCanonical = build_revocation_canonical_message($cleanNotice);
+    if (!verify_ed25519_detached($noticeSig, $noticeCanonical, $state['admin_pubkey'])) {
+        sync_respond(403, $lockFp, 'Forbidden: Invalid notice signature', $commonHeaders);
+    }
+
+    $tmpRev = $revocationFile . '.tmp.' . getmypid() . '.' . mt_rand();
+    $revJson = json_encode($cleanNotice, JSON_UNESCAPED_SLASHES);
+    if (file_put_contents($tmpRev, $revJson) === false || !rename($tmpRev, $revocationFile)) {
+        @unlink($tmpRev);
+        sync_respond(500, $lockFp, 'Internal Server Error: Failed to write revocation.json', $commonHeaders);
+    }
+
+    $state['revocation'] = $cleanNotice;
+    save_state($stateFile, $state);
+
+    sync_respond(200, $lockFp, $revJson, array_merge($commonHeaders, [
+        'Content-Type' => 'application/json; charset=utf-8',
+    ]));
+}
+
+// =========================================================================
 // ROUTE 5: GET sync.php?status (Admin Storage Dashboard Info)
 // =========================================================================
 if ($method === 'GET' && isset($_GET['status'])) {
@@ -797,6 +1005,7 @@ if ($method === 'GET' && isset($_GET['status'])) {
 // ROUTE 6: PUT sync.php (Member Raw Binary Upload)
 // =========================================================================
 if ($method === 'PUT') {
+    respond_if_revoked($state, $now, $lockFp, $commonHeaders);
     $channel = isset($_SERVER['HTTP_X_CHANNEL']) ? trim((string)$_SERVER['HTTP_X_CHANNEL']) : '';
     if (!preg_match('/^[a-z0-9_]{1,32}$/', $channel) || !isset($channels[$channel])) {
         sync_respond(404, $lockFp, 'Not Found', $commonHeaders);
@@ -1046,6 +1255,7 @@ if ($method === 'PUT') {
 // ROUTE 7: DELETE sync.php (Member Slot or Media Delete)
 // =========================================================================
 if ($method === 'DELETE') {
+    respond_if_revoked($state, $now, $lockFp, $commonHeaders);
     $channel = isset($_SERVER['HTTP_X_CHANNEL']) ? trim((string)$_SERVER['HTTP_X_CHANNEL']) : '';
     if (!preg_match('/^[a-z0-9_]{1,32}$/', $channel) || !isset($channels[$channel])) {
         sync_respond(404, $lockFp, 'Not Found', $commonHeaders);

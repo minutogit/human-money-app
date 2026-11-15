@@ -901,6 +901,204 @@ else
 fi
 
 echo ""
+echo "=== Test Group 9: Server Revocation & Migration (PUT sync.php?revoke) ==="
+
+# 9.1 Publish future revocation notice (grace period: deprecating)
+TS=$(date +%s)
+ISSUED_AT_1=$TS
+EFFECTIVE_FUTURE=$((TS + 86400))
+NEW_WRITE="https://new-sync.example.org/sync.php"
+NEW_READ="https://new-sync.example.org/d-1111222233334444"
+NEW_PUB="$MEMBER2_PK"
+REASON_TXT="Umzug auf neuen Server"
+NOTICE_CANON_1=$(printf "HUMOCO-DROP-REVOKE-V1\n%s\n%s\n%s\n%s\n%s\n%s\n%s" \
+    "$ADMIN_PK" "$ISSUED_AT_1" "$EFFECTIVE_FUTURE" "$NEW_WRITE" "$NEW_READ" "$NEW_PUB" "$REASON_TXT")
+NOTICE_SIG_1=$(php_sign "$NOTICE_CANON_1" "$ADMIN_SK")
+BODY_REV_1=$(php -r '
+echo json_encode([
+    "drop_pub" => $argv[1],
+    "issued_at" => (int)$argv[2],
+    "effective_at" => (int)$argv[3],
+    "reason" => $argv[4],
+    "replacement" => [
+        "write_url" => $argv[5],
+        "read_url" => $argv[6],
+        "drop_pub" => $argv[7],
+    ],
+    "signature" => $argv[8],
+], JSON_UNESCAPED_SLASHES);
+' "$ADMIN_PK" "$ISSUED_AT_1" "$EFFECTIVE_FUTURE" "$REASON_TXT" "$NEW_WRITE" "$NEW_READ" "$NEW_PUB" "$NOTICE_SIG_1")
+
+NONCE_REV_1="da020202020202020202020202020202"
+BODY_REV_1_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$BODY_REV_1")
+CANON_ADM_1=$(printf "HUMOCO-DROP-ADMIN-V1\nPUT_REVOKE\n%s\n%s\n%s" "$TS" "$NONCE_REV_1" "$BODY_REV_1_HASH")
+SIG_ADM_1=$(php_sign "$CANON_ADM_1" "$ADMIN_SK")
+
+CODE_REV_1=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php?revoke" \
+    -H "X-Drop-Pubkey: $ADMIN_PK" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_REV_1" \
+    -H "X-Drop-Signature: $SIG_ADM_1" \
+    -d "$BODY_REV_1")
+assert_status "Valid future PUT ?revoke returns 200" "200" "$CODE_REV_1"
+
+REV_JSON=$(curl -s "$BASE_URL/data/revocation.json")
+if echo "$REV_JSON" | grep -q "$NEW_WRITE" && echo "$REV_JSON" | grep -q "$NOTICE_SIG_1"; then
+    echo "  [PASS] Static revocation.json contains signed notice and replacement URL"
+else
+    echo "  [FAIL] Static revocation.json missing expected fields: $REV_JSON" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+INFO_REV=$(curl -s "$BASE_URL/sync.php?info")
+if echo "$INFO_REV" | grep -q "$NEW_WRITE"; then
+    echo "  [PASS] GET sync.php?info includes revocation notice"
+else
+    echo "  [FAIL] GET sync.php?info missing revocation notice: $INFO_REV" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# Server remains usable during grace period
+CODE_HEAD_GRACE=$(curl -s -o /dev/null -w "%{http_code}" -I "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER2_PK" \
+    -H "X-Channel: card")
+assert_status "HEAD still returns 200 during grace period" "200" "$CODE_HEAD_GRACE"
+
+# 9.3 Clear revocation with higher issued_at and effective_at: null
+TS=$(date +%s)
+ISSUED_AT_2=$((ISSUED_AT_1 + 1))
+BODY_REV_CLR="{\"issued_at\":$ISSUED_AT_2,\"effective_at\":null}"
+NONCE_REV_2="da030303030303030303030303030303"
+BODY_REV_2_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$BODY_REV_CLR")
+CANON_ADM_2=$(printf "HUMOCO-DROP-ADMIN-V1\nPUT_REVOKE\n%s\n%s\n%s" "$TS" "$NONCE_REV_2" "$BODY_REV_2_HASH")
+SIG_ADM_2=$(php_sign "$CANON_ADM_2" "$ADMIN_SK")
+
+CODE_REV_CLR=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php?revoke" \
+    -H "X-Drop-Pubkey: $ADMIN_PK" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_REV_2" \
+    -H "X-Drop-Signature: $SIG_ADM_2" \
+    -d "$BODY_REV_CLR")
+assert_status "Clearing revocation via effective_at: null returns 200" "200" "$CODE_REV_CLR"
+
+if [ ! -f "$DATA_DIR/revocation.json" ]; then
+    echo "  [PASS] revocation.json was removed after clearing"
+else
+    echo "  [FAIL] revocation.json still exists after clearing" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# 9.4 Immediate revocation (effective_at <= now) enforces 410 Gone on HEAD/PUT/DELETE
+TS=$(date +%s)
+ISSUED_AT_3=$((ISSUED_AT_2 + 1))
+EFFECTIVE_NOW=$((TS - 5))
+NOTICE_CANON_3=$(printf "HUMOCO-DROP-REVOKE-V1\n%s\n%s\n%s\n%s\n%s\n%s\n%s" \
+    "$ADMIN_PK" "$ISSUED_AT_3" "$EFFECTIVE_NOW" "$NEW_WRITE" "$NEW_READ" "$NEW_PUB" "Abgeschaltet")
+NOTICE_SIG_3=$(php_sign "$NOTICE_CANON_3" "$ADMIN_SK")
+BODY_REV_3=$(php -r '
+echo json_encode([
+    "drop_pub" => $argv[1],
+    "issued_at" => (int)$argv[2],
+    "effective_at" => (int)$argv[3],
+    "reason" => "Abgeschaltet",
+    "replacement" => [
+        "write_url" => $argv[4],
+        "read_url" => $argv[5],
+        "drop_pub" => $argv[6],
+    ],
+    "signature" => $argv[7],
+], JSON_UNESCAPED_SLASHES);
+' "$ADMIN_PK" "$ISSUED_AT_3" "$EFFECTIVE_NOW" "$NEW_WRITE" "$NEW_READ" "$NEW_PUB" "$NOTICE_SIG_3")
+
+NONCE_REV_3="da040404040404040404040404040404"
+BODY_REV_3_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$BODY_REV_3")
+CANON_ADM_3=$(printf "HUMOCO-DROP-ADMIN-V1\nPUT_REVOKE\n%s\n%s\n%s" "$TS" "$NONCE_REV_3" "$BODY_REV_3_HASH")
+SIG_ADM_3=$(php_sign "$CANON_ADM_3" "$ADMIN_SK")
+
+CODE_REV_3=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php?revoke" \
+    -H "X-Drop-Pubkey: $ADMIN_PK" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_REV_3" \
+    -H "X-Drop-Signature: $SIG_ADM_3" \
+    -d "$BODY_REV_3")
+assert_status "Immediate revocation PUT ?revoke returns 200" "200" "$CODE_REV_3"
+
+CODE_HEAD_GONE=$(curl -s -o /dev/null -w "%{http_code}" -I "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER2_PK" \
+    -H "X-Channel: card")
+assert_status "HEAD returns 410 Gone after effective_at" "410" "$CODE_HEAD_GONE"
+
+CODE_PUT_GONE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER2_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: da050505050505050505050505050505" \
+    -H "X-Drop-Signature: $(printf '0%.0s' {1..128})" \
+    -d "hello")
+assert_status "PUT returns 410 Gone after effective_at" "410" "$CODE_PUT_GONE"
+
+CODE_DEL_GONE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$BASE_URL/sync.php" \
+    -H "X-Drop-Pubkey: $MEMBER2_PK" \
+    -H "X-Channel: card" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: da060606060606060606060606060606" \
+    -H "X-Drop-Signature: $(printf '0%.0s' {1..128})")
+assert_status "DELETE returns 410 Gone after effective_at" "410" "$CODE_DEL_GONE"
+
+# 9.5 Self-redirect replacement in PUT ?revoke is rejected with 400
+TS=$(date +%s)
+ISSUED_AT_4=$((ISSUED_AT_3 + 1))
+EFFECTIVE_FUTURE_4=$((TS + 3600))
+SELF_WRITE="$BASE_URL/sync.php"
+SELF_READ="$BASE_URL/data"
+NOTICE_CANON_SELF=$(printf "HUMOCO-DROP-REVOKE-V1\n%s\n%s\n%s\n%s\n%s\n%s\n%s" \
+    "$ADMIN_PK" "$ISSUED_AT_4" "$EFFECTIVE_FUTURE_4" "$SELF_WRITE" "$SELF_READ" "$ADMIN_PK" "Loop")
+NOTICE_SIG_SELF=$(php_sign "$NOTICE_CANON_SELF" "$ADMIN_SK")
+BODY_REV_SELF=$(php -r '
+echo json_encode([
+    "drop_pub" => $argv[1],
+    "issued_at" => (int)$argv[2],
+    "effective_at" => (int)$argv[3],
+    "reason" => "Loop",
+    "replacement" => [
+        "write_url" => $argv[4],
+        "read_url" => $argv[5],
+        "drop_pub" => $argv[1],
+    ],
+    "signature" => $argv[6],
+], JSON_UNESCAPED_SLASHES);
+' "$ADMIN_PK" "$ISSUED_AT_4" "$EFFECTIVE_FUTURE_4" "$SELF_WRITE" "$SELF_READ" "$NOTICE_SIG_SELF")
+
+NONCE_REV_SELF="da070707070707070707070707070707"
+BODY_REV_SELF_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$BODY_REV_SELF")
+CANON_ADM_SELF=$(printf "HUMOCO-DROP-ADMIN-V1\nPUT_REVOKE\n%s\n%s\n%s" "$TS" "$NONCE_REV_SELF" "$BODY_REV_SELF_HASH")
+SIG_ADM_SELF=$(php_sign "$CANON_ADM_SELF" "$ADMIN_SK")
+
+CODE_REV_SELF=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php?revoke" \
+    -H "X-Drop-Pubkey: $ADMIN_PK" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_REV_SELF" \
+    -H "X-Drop-Signature: $SIG_ADM_SELF" \
+    -d "$BODY_REV_SELF")
+assert_status "Self-redirect replacement in PUT ?revoke is rejected with 400" "400" "$CODE_REV_SELF"
+
+# 9.6 Non-admin / invalid signature on PUT ?revoke is rejected with 403
+TS=$(date +%s)
+NONCE_REV_BAD="da010101010101010101010101010101"
+BODY_REV_BAD='{"issued_at":100,"effective_at":null}'
+BODY_REV_BAD_HASH=$(php -r 'echo hash("sha256", $argv[1]);' "$BODY_REV_BAD")
+CANON_REV_BAD=$(printf "HUMOCO-DROP-ADMIN-V1\nPUT_REVOKE\n%s\n%s\n%s" "$TS" "$NONCE_REV_BAD" "$BODY_REV_BAD_HASH")
+SIG_REV_BAD=$(php_sign "$CANON_REV_BAD" "$MEMBER2_SK")
+
+CODE_REV_BAD=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "$BASE_URL/sync.php?revoke" \
+    -H "X-Drop-Pubkey: $MEMBER2_PK" \
+    -H "X-Drop-Timestamp: $TS" \
+    -H "X-Drop-Nonce: $NONCE_REV_BAD" \
+    -H "X-Drop-Signature: $SIG_REV_BAD" \
+    -d "$BODY_REV_BAD")
+assert_status "Non-admin PUT ?revoke is rejected with 403" "403" "$CODE_REV_BAD"
+
+echo ""
 echo "=========================================================="
 if [ "$FAIL_COUNT" -eq 0 ]; then
     echo " ALL TESTS PASSED SUCCESSFULLY! "

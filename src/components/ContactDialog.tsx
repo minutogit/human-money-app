@@ -388,18 +388,33 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                         }
                                     })();
                                     const syncKey = d.writeUrl || d.readUrl;
+                                    const isRevoked = d.status === 'revoked';
+                                    const isDeprecating = d.status === 'deprecating';
                                     const isUnreachable = d.status === 'unreachable' || (d.failCount ?? 0) > 0;
                                     const isActive = d.status === 'active';
                                     const isPendingAuth = d.status === 'pending_auth';
 
-                                    const dotColor = isUnreachable
+                                    const dotColor = isRevoked
+                                        ? 'bg-rose-600'
+                                        : isDeprecating
+                                        ? 'bg-amber-500'
+                                        : isUnreachable
                                         ? (d.failCount && d.failCount >= 3 ? 'bg-rose-500' : 'bg-amber-500')
                                         : isActive
                                         ? 'bg-emerald-500'
                                         : isPendingAuth
                                         ? 'bg-sky-500'
                                         : 'bg-slate-400';
-                                    const statusLabel = isUnreachable
+                                    const statusLabel = isRevoked
+                                        ? t('settings.syncStatusRevoked', 'Geschlossen')
+                                        : isDeprecating
+                                        ? (d.sunsetAt
+                                            ? t('settings.syncStatusDeprecatingDate', {
+                                                  date: new Date(d.sunsetAt * 1000).toLocaleDateString(),
+                                                  defaultValue: `Schließt am ${new Date(d.sunsetAt * 1000).toLocaleDateString()}`,
+                                              })
+                                            : t('settings.syncStatusDeprecating', 'Wird bald geschlossen'))
+                                        : isUnreachable
                                         ? (d.failCount && d.failCount >= 3 ? t('contacts.syncUnreachable') : t('contacts.syncWarning'))
                                         : isActive
                                         ? t('contacts.syncReachable')

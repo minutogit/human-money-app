@@ -127,7 +127,26 @@ export interface FrontendStandardRef {
     uuid: string;
 }
 
-export type SyncEndpointStatus = 'unverified' | 'pending_auth' | 'active' | 'unreachable';
+export type SyncEndpointStatus = 'unverified' | 'pending_auth' | 'active' | 'unreachable' | 'deprecating' | 'revoked';
+
+export interface FrontendSyncReplacementTarget {
+    writeUrl: string;
+    readUrl: string;
+    dropPub: string;
+}
+
+export interface SyncRevocationNotice {
+    drop_pub: string;
+    issued_at: number;
+    effective_at: number;
+    reason?: string | null;
+    replacement?: {
+        write_url: string;
+        read_url: string;
+        drop_pub: string;
+    } | null;
+    signature: string;
+}
 
 export interface FrontendSyncDescriptor {
     writeUrl: string;
@@ -139,6 +158,9 @@ export interface FrontendSyncDescriptor {
     failCount?: number;
     status?: SyncEndpointStatus | string;
     lastProbedAt?: number | null;
+    sunsetAt?: number | null;
+    revocationReason?: string | null;
+    replacement?: FrontendSyncReplacementTarget | null;
 }
 
 export interface FrontendMarketPerson {
@@ -211,6 +233,7 @@ export interface FrontendSyncAdminStatus {
     totalMemberCount: number;
     activeSlotIds: string[];
     channelCounts?: Record<string, number>;
+    revocation?: SyncRevocationNotice | null;
 }
 
 export interface FrontendSyncAdminUpdateRequest {
@@ -251,6 +274,10 @@ export interface StoredPublicSync {
     accessPubkey: string;
     enabled: boolean;
     authorizedChannels: string[];
+    status?: SyncEndpointStatus | string;
+    sunsetAt?: number | null;
+    revocationReason?: string | null;
+    replacement?: FrontendSyncReplacementTarget | null;
 }
 
 export interface FrontendSyncConnectionTestResult {
@@ -277,6 +304,7 @@ export interface FrontendMarketSyncResult {
     importedWotLists: number;
     errors: string[];
     retryAfterSecs?: number | null;
+    revokedOwnSyncs?: FrontendSyncDescriptor[];
 }
 
 export interface FrontendTrustChangeImpact {

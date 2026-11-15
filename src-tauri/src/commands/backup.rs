@@ -922,6 +922,9 @@ pub(crate) fn cleanup_stale_tmp_restore_files(tmp_dir: &Path) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
+                if path.file_name().and_then(|n| n.to_str()) == Some("active_recovery_session.json") {
+                    continue;
+                }
                 if let Ok(metadata) = fs::metadata(&path) {
                     if let Ok(modified) = metadata.modified() {
                         if let Ok(elapsed) = now.duration_since(modified) {
@@ -936,11 +939,10 @@ pub(crate) fn cleanup_stale_tmp_restore_files(tmp_dir: &Path) {
     }
 }
 
-#[tauri::command]
-pub async fn sync_backup(
+pub async fn sync_backup_impl(
     password: Option<String>,
-    state: tauri::State<'_, AppState>,
-    app: tauri::AppHandle,
+    state: &AppState,
+    app: &tauri::AppHandle,
 ) -> Result<FrontendBackupSyncResult, FrontendError> {
     let settings = state.get_cached_settings().map_err(FrontendError::from)?;
     if !settings.sync_backup_enabled {
@@ -1069,7 +1071,7 @@ pub async fn sync_backup(
     }
 
     // Generate in-memory PortableBackupContainer
-    let custom_standards = collect_custom_standards(&app);
+    let custom_standards = collect_custom_standards(app);
     let container_bytes = {
         let mut service = state
             .service
@@ -1202,6 +1204,15 @@ pub async fn sync_backup(
         errors,
         retry_after_secs,
     })
+}
+
+#[tauri::command]
+pub async fn sync_backup(
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<FrontendBackupSyncResult, FrontendError> {
+    sync_backup_impl(password, &state, &app).await
 }
 
 #[tauri::command]
@@ -1533,6 +1544,7 @@ mod tests {
             password,
             human_money_core::MnemonicLanguage::English,
             "device-test-1".into(),
+            true,
         ).unwrap();
         service
     }

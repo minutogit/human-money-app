@@ -20,6 +20,7 @@ import { RestoreBackupView } from './RestoreBackupView';
 import AddressBook from './AddressBook';
 import { ConflictDetailsView } from './ConflictDetailsView';
 import { ConflictListView } from './ConflictListView';
+import { authService } from '../services/authService';
 import { useSession } from '../context/SessionContext';
 import { useNavigation } from '../context/NavigationContext';
 import { SupportView } from './SupportView';
@@ -45,6 +46,7 @@ export const AppRouter: React.FC = () => {
                     navigate({ view: "logged_in" });
                 }}
                 onSwitchToLogin={() => navigate({ view: "needs_login" })}
+                onSwitchToRestore={() => navigate({ view: "restore_backup" })}
             />;
         case "needs_login":
             return <Login
@@ -70,12 +72,24 @@ export const AppRouter: React.FC = () => {
             />;
         case "restore_backup":
             return <RestoreBackupView
+                initialPayload={appState.initialPayload}
                 onRestoreSuccess={() => {
                     notifyLogin();
                     navigate({ view: "logged_in" });
                 }}
                 onSwitchToRecreate={() => navigate({ view: "recreate_profile" })}
-                onBack={() => navigate({ view: "needs_login" })}
+                onBack={async () => {
+                    try {
+                        const profiles = await authService.listProfiles();
+                        if (!profiles || profiles.length === 0) {
+                            navigate({ view: "needs_profile" });
+                        } else {
+                            navigate({ view: "needs_login" });
+                        }
+                    } catch {
+                        navigate({ view: "needs_login" });
+                    }
+                }}
             />;
         case "settings":
             return <SettingsView onBack={goBack} />;

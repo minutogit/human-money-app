@@ -643,6 +643,7 @@ mod tests {
             password,
             human_money_core::MnemonicLanguage::English,
             "device-wot-test".into(),
+            true,
         ).unwrap();
         service
     }

@@ -49,6 +49,7 @@ describe('CreateNewProfile Component', () => {
     it('renders the initial seed display step', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -62,6 +63,7 @@ describe('CreateNewProfile Component', () => {
     it('calls generate_mnemonic on component mount', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -78,6 +80,7 @@ describe('CreateNewProfile Component', () => {
     it('displays 12 seed words correctly', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -94,6 +97,7 @@ describe('CreateNewProfile Component', () => {
     it('regenerates seed when word count changes from 12 to 24', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -117,6 +121,7 @@ describe('CreateNewProfile Component', () => {
     it('regenerates seed when language changes', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -142,6 +147,7 @@ describe('CreateNewProfile Component', () => {
     it('navigates to confirmation step when clicking "I\'ve Saved My Seed Phrase"', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -164,6 +170,7 @@ describe('CreateNewProfile Component', () => {
 
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -190,6 +197,7 @@ describe('CreateNewProfile Component', () => {
     it('shows 3 random word inputs for confirmation', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -213,6 +221,7 @@ describe('CreateNewProfile Component', () => {
     it('shows error when confirmation words are incorrect', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -249,6 +258,7 @@ describe('CreateNewProfile Component', () => {
     it('proceeds to step 3 when confirmation words are correct', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -305,6 +315,7 @@ describe('CreateNewProfile Component', () => {
     it('switches to bulk mode when clicking toggle', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -333,6 +344,7 @@ describe('CreateNewProfile Component', () => {
     it('auto-cleans bulk input with numbers and punctuation', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -370,6 +382,7 @@ describe('CreateNewProfile Component', () => {
     it('shows error when bulk phrase does not match', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -412,6 +425,7 @@ describe('CreateNewProfile Component', () => {
     it('calls onSwitchToLogin when clicking back button', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -430,6 +444,7 @@ describe('CreateNewProfile Component', () => {
     it('shows back button in step 2', async () => {
       render(
         <CreateNewProfile
+          defaultExpertMode={true}
           onProfileCreated={mockOnProfileCreated}
           onSwitchToLogin={mockOnSwitchToLogin}
         />
@@ -450,6 +465,73 @@ describe('CreateNewProfile Component', () => {
 
       await waitFor(() => {
         expect(screen.getByText('Step 1: Your Secret Seed Phrase')).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('Standard Quick Onboarding Mode', () => {
+    it('renders standard quick create form by default', async () => {
+      render(
+        <CreateNewProfile
+          onProfileCreated={mockOnProfileCreated}
+          onSwitchToLogin={mockOnSwitchToLogin}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/Quick Start: Set up profile/i)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(/My Secure Profile/i)).toBeInTheDocument();
+      });
+    });
+
+    it('switches to expert options when clicking the link', async () => {
+      render(
+        <CreateNewProfile
+          onProfileCreated={mockOnProfileCreated}
+          onSwitchToLogin={mockOnSwitchToLogin}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/Expert options/i)).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText(/Expert options/i));
+
+      await waitFor(() => {
+        expect(screen.getByText('Step 1: Your Secret Seed Phrase')).toBeInTheDocument();
+      });
+    });
+
+    it('submits standard profile creation with retainMnemonic = true', async () => {
+      render(
+        <CreateNewProfile
+          onProfileCreated={mockOnProfileCreated}
+          onSwitchToLogin={mockOnSwitchToLogin}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(/My Secure Profile/i)).toBeInTheDocument();
+      });
+
+      const nameInput = screen.getByPlaceholderText(/My Secure Profile/i);
+      const passwordInputs = screen.getAllByPlaceholderText('••••••••');
+
+      fireEvent.change(nameInput, { target: { value: 'Alice' } });
+      fireEvent.change(passwordInputs[0], { target: { value: 'password123' } });
+      fireEvent.change(passwordInputs[1], { target: { value: 'password123' } });
+
+      const submitBtn = screen.getByRole('button', { name: /Create Profile/i });
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('create_profile', expect.objectContaining({
+          profileName: 'Alice',
+          password: 'password123',
+          retainMnemonic: true,
+        }));
+        expect(mockOnProfileCreated).toHaveBeenCalled();
       });
     });
   });

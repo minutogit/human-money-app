@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import "./App.css";
 import { ForkLockOverlay } from './components/ForkLockOverlay';
@@ -14,6 +14,7 @@ import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { AppRouter } from "./components/AppRouter";
 import { GlobalFileDropZone } from "./components/GlobalFileDropZone";
+import { GuardianReleaseModal } from "./components/GuardianReleaseModal";
 import { parseCardUri } from "./utils/humocoUri";
 import { marketService } from "./services/marketService";
 import type { HelpTopicId } from "./help/helpTopics";
@@ -24,15 +25,19 @@ function AppContent() {
     const { isForkLocked, isRecoveryRequired, clearLocks, isSessionActive, isAuthenticated, protectAction } = useSession();
     const isLoggedIn = isAuthenticated ?? isSessionActive;
 
-    useEffect(() => {
-        if (!isLoggedIn) return;
+    const [releaseModalOpen, setReleaseModalOpen] = useState(false);
+    const [releaseRequestUri, setReleaseRequestUri] = useState<string | undefined>(undefined);
+    const [pendingDeepLink, setPendingDeepLink] = useState<string | null>(null);
 
-        const handleUriImport = async (uri: string) => {
-            const parsed = parseCardUri(uri);
+    const handleDeepLink = useCallback((uri: string) => {
+        if (!uri) return;
+
+        const handleUriImport = async (targetUri: string) => {
+            const parsed = parseCardUri(targetUri);
             if (parsed) {
                 try {
                     const res = await protectAction(async (pwd) => {
-                        return await marketService.importContactCard(uri, pwd || undefined);
+                        return await marketService.importContactCard(targetUri, pwd || undefined);
                     });
                     if (res) {
                         navigate({ view: 'marketplace', selectedDid: res.did ?? undefined });
@@ -43,16 +48,43 @@ function AppContent() {
             }
         };
 
+        if (uri.includes('humoco://card') || uri.includes('?env=')) {
+            if (isLoggedIn) {
+                handleUriImport(uri);
+            }
+        } else if (uri.includes('humoco://recovery-reply') || uri.includes('humoco://kit')) {
+            navigate({ view: 'restore_backup', initialPayload: uri });
+        } else if (uri.includes('humoco://recovery-req')) {
+            if (isLoggedIn) {
+                setReleaseRequestUri(uri);
+                setReleaseModalOpen(true);
+            } else {
+                setPendingDeepLink(uri);
+            }
+        }
+    }, [isLoggedIn, navigate, protectAction]);
+
+    useEffect(() => {
+        if (isLoggedIn && pendingDeepLink) {
+            if (pendingDeepLink.includes('humoco://recovery-req')) {
+                setReleaseRequestUri(pendingDeepLink);
+                setReleaseModalOpen(true);
+                setPendingDeepLink(null);
+            }
+        }
+    }, [isLoggedIn, pendingDeepLink]);
+
+    useEffect(() => {
         if (typeof window !== 'undefined') {
             const currentUrl = window.location.href;
-            if (currentUrl.includes('humoco://card') || currentUrl.includes('?env=')) {
-                handleUriImport(currentUrl);
+            if (currentUrl.includes('humoco://') || currentUrl.includes('?env=')) {
+                handleDeepLink(currentUrl);
             }
 
             const onDeepLink = (e: Event) => {
                 const customEv = e as CustomEvent<string>;
-                if (customEv.detail && (customEv.detail.includes('humoco://card') || customEv.detail.includes('?env='))) {
-                    handleUriImport(customEv.detail);
+                if (customEv.detail) {
+                    handleDeepLink(customEv.detail);
                 }
             };
             window.addEventListener('humoco:deeplink', onDeepLink);
@@ -60,7 +92,17 @@ function AppContent() {
                 window.removeEventListener('humoco:deeplink', onDeepLink);
             };
         }
-    }, [isLoggedIn, navigate, protectAction]);
+    }, [handleDeepLink]);
+
+    useEffect(() => {
+        const onOpenRelease = (e: Event) => {
+            const customEv = e as CustomEvent<{ requestUri?: string } | undefined>;
+            setReleaseRequestUri(customEv.detail?.requestUri);
+            setReleaseModalOpen(true);
+        };
+        window.addEventListener('humoco:open-guardian-release', onOpenRelease);
+        return () => window.removeEventListener('humoco:open-guardian-release', onOpenRelease);
+    }, []);
 
     useEffect(() => {
         if (isForkLocked || isRecoveryRequired) {
@@ -126,6 +168,14 @@ function AppContent() {
                         </div>
                     </div>
                 )}
+                <GuardianReleaseModal
+                    isOpen={releaseModalOpen}
+                    onClose={() => {
+                        setReleaseModalOpen(false);
+                        setReleaseRequestUri(undefined);
+                    }}
+                    initialRequestUri={releaseRequestUri}
+                />
             </div>
     );
 }

@@ -315,6 +315,7 @@ pub fn prepare_sync_setup_impl(
         deny: Vec::new(),
         blocked_pubkeys: Vec::new(),
         last_members_hash: BTreeMap::new(),
+        revocation: None,
     };
 
     let bytes = serde_json::to_vec(&stored_admin)
@@ -488,6 +489,7 @@ pub async fn finalize_sync_setup_impl(
         total_member_count: stats.total_count,
         active_slot_ids,
         channel_counts: BTreeMap::new(),
+        revocation: admin.revocation.clone(),
     })
 }
 
@@ -702,6 +704,7 @@ pub async fn get_sync_admin_status_impl(
         total_member_count: stats.total_count,
         active_slot_ids,
         channel_counts,
+        revocation: admin.revocation.clone(),
     }))
 }
 
@@ -802,6 +805,7 @@ pub async fn update_sync_admin_config_impl(
         total_member_count: stats.total_count,
         active_slot_ids,
         channel_counts: BTreeMap::new(),
+        revocation: admin.revocation.clone(),
     })
 }
 
@@ -878,7 +882,13 @@ pub fn delete_sync_admin_impl(
             .market_selected_syncs
             .retain(|d| d.read_url != admin.descriptor.read_url);
         if settings.market_selected_syncs.len() != initial_len {
+            let selected_clone = settings.market_selected_syncs.clone();
             let _ = state.save_settings(&mut service, settings, password.as_deref());
+            crate::commands::market::sync_own_card_drops_on_settings_change(
+                &mut service,
+                &selected_clone,
+                password.as_deref(),
+            );
         }
     }
 
@@ -891,6 +901,148 @@ pub fn delete_sync_admin(
     state: State<'_, AppState>,
 ) -> Result<(), FrontendError> {
     delete_sync_admin_impl(password, &state)
+}
+
+pub async fn revoke_own_sync_server_impl(
+    effective_at: Option<u64>,
+    reason: Option<String>,
+    replacement_write_url: Option<String>,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<Option<FrontendSyncAdminStatus>, FrontendError> {
+    let (mut admin, admin_sk) = {
+        let mut service = state.service.lock().unwrap();
+        let bytes = service
+            .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
+            .map_err(FrontendError::from)?;
+        let admin = serde_json::from_slice::<StoredSyncAdmin>(&bytes)
+            .map_err(|e| FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e)))?;
+        let master_seed = get_wallet_master_seed(&mut service)?;
+        let (admin_sk, _, _) =
+            humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
+        (admin, admin_sk)
+    };
+
+    if admin.descriptor.write_url.trim().is_empty() {
+        return Err(FrontendError::from("Sync server write_url is not configured".to_string()));
+    }
+
+    let client = sync_client::create_sync_http_client();
+    let now_secs = sync_client::current_unix_timestamp();
+    let min_next_issued = admin
+        .revocation
+        .as_ref()
+        .map(|r| r.issued_at.saturating_add(1))
+        .unwrap_or(0);
+    let issued_at = now_secs.max(min_next_issued);
+
+    if let Some(eff) = effective_at {
+        let replacement = if let Some(ref rep_raw) = replacement_write_url {
+            let trimmed = rep_raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                let canonical_rep = humoco_market::canonicalize_write_url(trimmed)
+                    .map_err(|e| FrontendError::from(e.to_string()))?;
+                sync_client::validate_sync_url(&canonical_rep).map_err(FrontendError::from)?;
+                if canonical_rep.trim_end_matches('/').eq_ignore_ascii_case(admin.descriptor.write_url.trim_end_matches('/')) {
+                    return Err(FrontendError::from("Replacement URL must differ from the revoked server URL".to_string()));
+                }
+                let info = sync_client::fetch_sync_info(&client, &canonical_rep)
+                    .await
+                    .map_err(FrontendError::from)?;
+                if info.read_url.trim_end_matches('/').eq_ignore_ascii_case(admin.descriptor.read_url.trim_end_matches('/')) {
+                    return Err(FrontendError::from("Replacement read_url must differ from the revoked server read_url".to_string()));
+                }
+                Some(sync_client::SyncReplacementTarget {
+                    write_url: canonical_rep,
+                    read_url: info.read_url,
+                    drop_pub: info.drop_pub,
+                })
+            }
+        } else {
+            None
+        };
+
+        let notice = sync_client::sign_revocation_notice(
+            &admin_sk,
+            issued_at,
+            eff,
+            reason,
+            replacement,
+        )
+        .map_err(FrontendError::from)?;
+
+        sync_client::push_revocation_notice(
+            &client,
+            &admin.descriptor.write_url,
+            &admin_sk,
+            Some(&notice),
+            issued_at,
+        )
+        .await
+        .map_err(FrontendError::from)?;
+
+        admin.revocation = Some(notice);
+
+        // Remove deprecated own server from outgoing SdCard selection so new contacts don't receive it
+        let mut service = state.service.lock().unwrap();
+        let bytes = serde_json::to_vec(&admin)
+            .map_err(|e| FrontendError::from(format!("Failed to serialize StoredSyncAdmin: {}", e)))?;
+        service
+            .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, &bytes, password.as_deref())
+            .map_err(FrontendError::from)?;
+
+        let mut settings = state
+            .get_cached_settings()
+            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
+            .unwrap_or_default();
+        let old_read = admin.descriptor.read_url.trim().trim_end_matches('/').to_lowercase();
+        let initial_len = settings.market_selected_syncs.len();
+        settings.market_selected_syncs.retain(|d| {
+            d.read_url.trim().trim_end_matches('/').to_lowercase() != old_read
+        });
+        if settings.market_selected_syncs.len() != initial_len {
+            let selected_clone = settings.market_selected_syncs.clone();
+            let _ = state.save_settings(&mut service, settings, password.as_deref());
+            crate::commands::market::sync_own_card_drops_on_settings_change(
+                &mut service,
+                &selected_clone,
+                password.as_deref(),
+            );
+        }
+    } else {
+        sync_client::push_revocation_notice(
+            &client,
+            &admin.descriptor.write_url,
+            &admin_sk,
+            None,
+            issued_at,
+        )
+        .await
+        .map_err(FrontendError::from)?;
+
+        admin.revocation = None;
+        let mut service = state.service.lock().unwrap();
+        let bytes = serde_json::to_vec(&admin)
+            .map_err(|e| FrontendError::from(format!("Failed to serialize StoredSyncAdmin: {}", e)))?;
+        service
+            .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, &bytes, password.as_deref())
+            .map_err(FrontendError::from)?;
+    }
+
+    get_sync_admin_status_impl(password, state).await
+}
+
+#[tauri::command]
+pub async fn revoke_own_sync_server(
+    effective_at: Option<u64>,
+    reason: Option<String>,
+    replacement_write_url: Option<String>,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Option<FrontendSyncAdminStatus>, FrontendError> {
+    revoke_own_sync_server_impl(effective_at, reason, replacement_write_url, password, &state).await
 }
 
 pub async fn discover_available_syncs_impl(
@@ -910,6 +1062,13 @@ pub async fn discover_available_syncs_impl(
                 if !admin.descriptor.read_url.is_empty() && !admin.descriptor.write_url.is_empty() {
                     let mut desc: FrontendSyncDescriptor = admin.descriptor.into();
                     desc.status = "active".to_string();
+                    if let Some(ref rev) = admin.revocation {
+                        crate::state::apply_revocation_notice_to_descriptor(
+                            &mut desc,
+                            rev,
+                            sync_client::current_unix_timestamp(),
+                        );
+                    }
                     descriptors.push((desc, "Eigene Ablage".to_string()));
                 }
             }
@@ -972,7 +1131,25 @@ pub async fn discover_available_syncs_impl(
             d.read_url.trim().trim_end_matches('/').to_lowercase()
         };
         if !key.is_empty() {
-            deduped.entry(key).or_insert((d, label));
+            match deduped.entry(key) {
+                std::collections::btree_map::Entry::Vacant(v) => {
+                    v.insert((d, label));
+                }
+                std::collections::btree_map::Entry::Occupied(mut o) => {
+                    let (existing, _) = o.get_mut();
+                    if d.status == "deprecating" || d.status == "revoked" {
+                        existing.status = d.status;
+                        existing.sunset_at = d.sunset_at;
+                        existing.revocation_reason = d.revocation_reason;
+                        existing.replacement = d.replacement;
+                    } else if (existing.status.is_empty() || existing.status == "unverified")
+                        && !d.status.is_empty()
+                        && d.status != "unverified"
+                    {
+                        existing.status = d.status;
+                    }
+                }
+            }
         }
     }
 
@@ -996,7 +1173,7 @@ pub async fn discover_available_syncs_impl(
         } else {
             desc.status.clone()
         };
-        let is_authorized = status == "active";
+        let is_authorized = status == "active" || status == "deprecating";
         desc.status = status.clone();
 
         results.push(FrontendDiscoveredSync {
@@ -1074,7 +1251,11 @@ pub async fn probe_contact_syncs_impl(
     let mut contacts_modified = false;
     let mut settings_modified = false;
     let mut auto_activated = false;
-    let mut probe_cache: std::collections::HashMap<String, (String, String, String, bool)> = std::collections::HashMap::new();
+    let mut probe_cache: std::collections::HashMap<
+        String,
+        (String, String, String, bool, Option<sync_client::SyncRevocationNotice>),
+    > = std::collections::HashMap::new();
+    let mut verified_revocations: Vec<(String, sync_client::SyncRevocationNotice)> = Vec::new();
 
     for contact in address_book.contacts.values_mut() {
         for ep in &mut contact.syncs {
@@ -1098,6 +1279,7 @@ pub async fn probe_contact_syncs_impl(
                             let backoff = (60u64 * (1u64 << exp)).min(900);
                             elapsed < backoff
                         }
+                        "revoked" => elapsed < 3600,
                         _ => elapsed < 60,
                     };
                     if skip {
@@ -1118,7 +1300,7 @@ pub async fn probe_contact_syncs_impl(
             let canonical_write = humoco_market::canonicalize_write_url(&target_url).unwrap_or(target_url);
             let sync_endpoint_key = canonical_write.trim().trim_end_matches('/').to_lowercase();
 
-            if let Some((c_read, c_drop, c_status, c_ok)) = probe_cache.get(&sync_endpoint_key) {
+            if let Some((c_read, c_drop, c_status, c_ok, c_rev)) = probe_cache.get(&sync_endpoint_key) {
                 if *c_ok {
                     ep.write_url = canonical_write.clone();
                     ep.read_url = c_read.clone();
@@ -1127,13 +1309,18 @@ pub async fn probe_contact_syncs_impl(
                     ep.fail_count = 0;
                     ep.last_seen_at = Some(now);
                     ep.last_probed_at = Some(now);
-                    contacts_modified = true;
                 } else {
                     ep.status = c_status.clone();
                     ep.fail_count = ep.fail_count.saturating_add(1);
                     ep.last_probed_at = Some(now);
-                    contacts_modified = true;
                 }
+                if let Some(ref rev) = c_rev {
+                    crate::state::apply_revocation_notice_to_descriptor(ep, rev, now);
+                    verified_revocations.push((c_read.clone(), rev.clone()));
+                } else {
+                    crate::state::clear_revocation_on_descriptor(ep, c_status);
+                }
+                contacts_modified = true;
             } else {
                 // 1. Fetch server info via ?info
                 match sync_client::fetch_sync_info(&client, &canonical_write).await {
@@ -1142,14 +1329,29 @@ pub async fn probe_contact_syncs_impl(
                         ep.fail_count = ep.fail_count.saturating_add(1);
                         ep.last_probed_at = Some(now);
                         contacts_modified = true;
-                        probe_cache.insert(sync_endpoint_key.clone(), (ep.read_url.clone(), ep.drop_pub.clone(), "unreachable".to_string(), false));
+                        probe_cache.insert(
+                            sync_endpoint_key.clone(),
+                            (ep.read_url.clone(), ep.drop_pub.clone(), "unreachable".to_string(), false, None),
+                        );
                     }
                     Ok(info) => {
+                        let verified_rev = info.revocation.as_ref().and_then(|n| {
+                            sync_client::verify_revocation_notice(n, &info.drop_pub)
+                                .ok()
+                                .map(|_| n.clone())
+                        });
+                        let info_read_url = info.read_url.clone();
+                        let info_drop_pub = info.drop_pub.clone();
+
                         ep.write_url = canonical_write.clone();
-                        ep.read_url = info.read_url.clone();
-                        ep.drop_pub = info.drop_pub.clone();
+                        ep.read_url = info.read_url;
+                        ep.drop_pub = info.drop_pub;
                         ep.last_seen_at = Some(now);
                         contacts_modified = true;
+
+                        if verified_rev.is_none() {
+                            crate::state::clear_revocation_on_descriptor(ep, "unverified");
+                        }
 
                         // 2. Check authorization on resolved drop
                         let stealth_pk_res = if let Some(ref slot_id) = ep.slot_id {
@@ -1162,12 +1364,14 @@ pub async fn probe_contact_syncs_impl(
                             humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &ep.drop_pub)
                         };
 
+                        let mut probe_ok = false;
+                        let mut probe_status = "unreachable".to_string();
+
                         match stealth_pk_res {
                             Err(_) => {
                                 ep.status = "unreachable".to_string();
                                 ep.fail_count = ep.fail_count.saturating_add(1);
                                 ep.last_probed_at = Some(now);
-                                probe_cache.insert(sync_endpoint_key.clone(), (info.read_url, info.drop_pub, "unreachable".to_string(), false));
                             }
                             Ok(stealth_pk) => {
                                 let card_cap = sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, my_prefix.as_deref(), "card").await;
@@ -1181,23 +1385,34 @@ pub async fn probe_contact_syncs_impl(
                                     || post_cap.as_ref().map(|c| c.authorized).unwrap_or(false);
 
                                 if is_authorized {
+                                    probe_status = "active".to_string();
+                                    probe_ok = true;
                                     ep.status = "active".to_string();
                                     ep.fail_count = 0;
                                     ep.last_probed_at = Some(now);
-                                    probe_cache.insert(sync_endpoint_key.clone(), (info.read_url, info.drop_pub, "active".to_string(), true));
                                 } else if card_cap.is_ok() || post_cap.is_ok() {
+                                    probe_status = "pending_auth".to_string();
+                                    probe_ok = true;
                                     ep.status = "pending_auth".to_string();
                                     ep.fail_count = 0;
                                     ep.last_probed_at = Some(now);
-                                    probe_cache.insert(sync_endpoint_key.clone(), (info.read_url, info.drop_pub, "pending_auth".to_string(), true));
                                 } else {
                                     ep.status = "unreachable".to_string();
                                     ep.fail_count = ep.fail_count.saturating_add(1);
                                     ep.last_probed_at = Some(now);
-                                    probe_cache.insert(sync_endpoint_key.clone(), (info.read_url, info.drop_pub, "unreachable".to_string(), false));
                                 }
                             }
                         }
+
+                        if let Some(ref notice) = verified_rev {
+                            crate::state::apply_revocation_notice_to_descriptor(ep, notice, now);
+                            verified_revocations.push((info_read_url.clone(), notice.clone()));
+                        }
+
+                        probe_cache.insert(
+                            sync_endpoint_key.clone(),
+                            (info_read_url, info_drop_pub, probe_status, probe_ok, verified_rev),
+                        );
                     }
                 }
             }
@@ -1217,6 +1432,9 @@ pub async fn probe_contact_syncs_impl(
                     sel.status = ep.status.clone();
                     sel.fail_count = ep.fail_count;
                     sel.last_probed_at = ep.last_probed_at;
+                    sel.sunset_at = ep.sunset_at;
+                    sel.revocation_reason = ep.revocation_reason.clone();
+                    sel.replacement = ep.replacement.clone();
                     settings_modified = true;
                 }
             }
@@ -1244,12 +1462,24 @@ pub async fn probe_contact_syncs_impl(
                         fail_count: 0,
                         status: "active".to_string(),
                         last_probed_at: Some(now),
+                        ..Default::default()
                     });
                     has_healthy_sync = true;
                     settings_modified = true;
                     auto_activated = true;
                 }
             }
+        }
+    }
+
+    for (rev_read_url, notice) in verified_revocations {
+        if crate::state::apply_revocation_notice_to_address_book(
+            &mut address_book,
+            &rev_read_url,
+            &notice,
+            now,
+        ) {
+            contacts_modified = true;
         }
     }
 
@@ -1327,6 +1557,8 @@ pub async fn set_selected_upload_syncs_impl(
         );
     }
 
+    let _ = crate::commands::recovery::enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
+
     // Trigger upload to selected drops
     let _ = sync_market_channels_impl(None, Some(true), password, state).await;
 
@@ -1348,7 +1580,7 @@ pub async fn sync_market_channels_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMarketSyncResult, FrontendError> {
-    let settings = {
+    let mut settings = {
         let mut service = state.service.lock().unwrap();
         state
             .get_cached_settings()
@@ -1366,6 +1598,7 @@ pub async fn sync_market_channels_impl(
             imported_wot_lists: 0,
             errors: Vec::new(),
             retry_after_secs: None,
+            revoked_own_syncs: Vec::new(),
         });
     }
 
@@ -1880,6 +2113,180 @@ pub async fn sync_market_channels_impl(
         }
     }
 
+    // 2b. Check revocation.json (max once per 24h per read_url) across own syncs & contact syncs
+    let mut revoked_own_syncs: Vec<FrontendSyncDescriptor> = Vec::new();
+    let revocation_candidates: Vec<(String, String)> = {
+        let mut service = state.service.lock().unwrap();
+        let mut seen_urls = HashSet::new();
+        let mut list = Vec::new();
+        let mut push_pair = |read_url: &str, drop_pub: &str| {
+            let r = read_url.trim();
+            let p = drop_pub.trim().to_lowercase();
+            if !r.is_empty() && p.len() == 64 && p.chars().all(|c| c.is_ascii_hexdigit()) {
+                let norm = r.trim_end_matches('/').to_lowercase();
+                if seen_urls.insert(norm) {
+                    list.push((r.to_string(), p));
+                }
+            }
+        };
+        for d in &settings.market_selected_syncs {
+            push_pair(&d.read_url, &d.drop_pub);
+        }
+        for ps in &settings.public_syncs {
+            push_pair(&ps.read_url, &ps.drop_pub);
+        }
+        if let Ok(contacts) = state.load_contacts(&mut service, password.as_deref()) {
+            for c in contacts {
+                for d in &c.syncs {
+                    push_pair(&d.read_url, &d.drop_pub);
+                }
+            }
+        }
+        list
+    };
+
+    for (rev_read_url, rev_drop_pub) in revocation_candidates {
+        let last_chk = sync_state
+            .last_revocation_check_at
+            .get(&rev_read_url)
+            .copied()
+            .unwrap_or(0);
+        if now_secs.saturating_sub(last_chk) < 86_400 {
+            continue;
+        }
+        sync_state
+            .last_revocation_check_at
+            .insert(rev_read_url.clone(), now_secs);
+
+        match sync_client::fetch_revocation_notice(&client, &rev_read_url, &rev_drop_pub).await {
+            Ok(Some(notice)) => {
+                let norm_target = rev_read_url.trim().trim_end_matches('/').to_lowercase();
+                let mut service = state.service.lock().unwrap();
+
+                // Update contacts
+                if let Ok(data) =
+                    service.load_encrypted_data(crate::state::CONTACTS_DATA_NAME, password.as_deref())
+                {
+                    if let Ok(mut ab) =
+                        serde_json::from_slice::<crate::models::FrontendAddressBook>(&data)
+                    {
+                        if crate::state::apply_revocation_notice_to_address_book(
+                            &mut ab,
+                            &rev_read_url,
+                            &notice,
+                            now_secs,
+                        ) {
+                            if let Ok(bytes) = serde_json::to_vec(&ab) {
+                                let _ = service.save_encrypted_data(
+                                    crate::state::CONTACTS_DATA_NAME,
+                                    &bytes,
+                                    password.as_deref(),
+                                );
+                            }
+                            *state.contacts.lock().unwrap() = Some(ab);
+                        }
+                    }
+                }
+
+                // Update own settings (market_selected_syncs & public_syncs)
+                let mut settings_changed = false;
+                for d in &mut settings.market_selected_syncs {
+                    if d.read_url.trim().trim_end_matches('/').to_lowercase() == norm_target
+                        && d.drop_pub.trim().eq_ignore_ascii_case(&notice.drop_pub)
+                    {
+                        crate::state::apply_revocation_notice_to_descriptor(d, &notice, now_secs);
+                        revoked_own_syncs.push(d.clone());
+                        settings_changed = true;
+                    }
+                }
+                for ps in &mut settings.public_syncs {
+                    if ps.read_url.trim().trim_end_matches('/').to_lowercase() == norm_target
+                        && ps.drop_pub.trim().eq_ignore_ascii_case(&notice.drop_pub)
+                    {
+                        crate::state::apply_revocation_notice_to_public_sync(ps, &notice, now_secs);
+                        revoked_own_syncs.push(FrontendSyncDescriptor {
+                            write_url: ps.write_url.clone(),
+                            read_url: ps.read_url.clone(),
+                            slot_id: None,
+                            drop_pub: ps.drop_pub.clone(),
+                            status: ps.status.clone(),
+                            sunset_at: ps.sunset_at,
+                            revocation_reason: ps.revocation_reason.clone(),
+                            replacement: ps.replacement.clone(),
+                            ..Default::default()
+                        });
+                        settings_changed = true;
+                    }
+                }
+                if settings_changed {
+                    let _ = state.save_settings(&mut service, settings.clone(), password.as_deref());
+                }
+            }
+            Ok(None) => {
+                // Server returned 404 (no revocation / revocation cleared): clear stale local state
+                let norm_target = rev_read_url.trim().trim_end_matches('/').to_lowercase();
+                let mut service = state.service.lock().unwrap();
+                if let Ok(data) =
+                    service.load_encrypted_data(crate::state::CONTACTS_DATA_NAME, password.as_deref())
+                {
+                    if let Ok(mut ab) =
+                        serde_json::from_slice::<crate::models::FrontendAddressBook>(&data)
+                    {
+                        let mut ab_changed = false;
+                        for contact in ab.contacts.values_mut() {
+                            for ep in &mut contact.syncs {
+                                if ep.read_url.trim().trim_end_matches('/').to_lowercase() == norm_target
+                                    && ep.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
+                                    && crate::state::clear_revocation_on_descriptor(ep, "unverified")
+                                {
+                                    ab_changed = true;
+                                }
+                            }
+                        }
+                        if ab_changed {
+                            if let Ok(bytes) = serde_json::to_vec(&ab) {
+                                let _ = service.save_encrypted_data(
+                                    crate::state::CONTACTS_DATA_NAME,
+                                    &bytes,
+                                    password.as_deref(),
+                                );
+                            }
+                            *state.contacts.lock().unwrap() = Some(ab);
+                        }
+                    }
+                }
+
+                let mut settings_changed = false;
+                for d in &mut settings.market_selected_syncs {
+                    if d.read_url.trim().trim_end_matches('/').to_lowercase() == norm_target
+                        && d.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
+                        && crate::state::clear_revocation_on_descriptor(d, "active")
+                    {
+                        settings_changed = true;
+                    }
+                }
+                for ps in &mut settings.public_syncs {
+                    if ps.read_url.trim().trim_end_matches('/').to_lowercase() == norm_target
+                        && ps.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
+                    {
+                        let fallback = if ps.authorized_channels.is_empty() {
+                            "pending_auth"
+                        } else {
+                            "active"
+                        };
+                        if crate::state::clear_revocation_on_public_sync(ps, fallback) {
+                            settings_changed = true;
+                        }
+                    }
+                }
+                if settings_changed {
+                    let _ = state.save_settings(&mut service, settings.clone(), password.as_deref());
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
     // 3. Download poll
     // Split into direct O(1) slot fetches (for drops with slot_id) and index-based fetches
     let (direct_slot_fetches, candidate_read_urls) = {
@@ -1919,9 +2326,14 @@ pub async fn sync_market_channels_impl(
                     for d in c.syncs {
                         if !d.read_url.is_empty() {
                             if let Some(ref sid) = d.slot_id {
-                                direct_fetches.push((d.read_url, sid.clone(), None));
+                                direct_fetches.push((d.read_url.clone(), sid.clone(), None));
                             } else {
-                                index_urls.push(d.read_url);
+                                index_urls.push(d.read_url.clone());
+                            }
+                        }
+                        if let Some(ref rep) = d.replacement {
+                            if !rep.read_url.is_empty() && rep.read_url != d.read_url {
+                                index_urls.push(rep.read_url.clone());
                             }
                         }
                     }
@@ -2296,6 +2708,7 @@ pub async fn sync_market_channels_impl(
         imported_wot_lists,
         errors,
         retry_after_secs,
+        revoked_own_syncs,
     })
 }
 
@@ -2612,6 +3025,7 @@ pub async fn save_public_sync_impl(
             .map_err(|e| FrontendError::from(e.to_string()))?;
 
     let probe_client = sync_client::create_sync_probe_client();
+    let info_opt = sync_client::fetch_sync_info(&probe_client, &canonical_url).await.ok();
     let mut authorized_channels = Vec::new();
     for ch in ["card", "wot", "backup", "post"] {
         let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
@@ -2631,7 +3045,7 @@ pub async fn save_public_sync_impl(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
 
-        let stored = StoredPublicSync {
+        let mut stored = StoredPublicSync {
             write_url: canonical_url.clone(),
             read_url: read_url.clone(),
             drop_pub: drop_pub.clone(),
@@ -2639,7 +3053,25 @@ pub async fn save_public_sync_impl(
             access_pubkey: access_pubkey.clone(),
             enabled,
             authorized_channels: authorized_channels.clone(),
+            status: if !authorized_channels.is_empty() {
+                "active".to_string()
+            } else {
+                "pending_auth".to_string()
+            },
+            ..Default::default()
         };
+
+        if let Some(ref info) = info_opt {
+            if let Some(ref notice) = info.revocation {
+                if sync_client::verify_revocation_notice(notice, &drop_pub).is_ok() {
+                    crate::state::apply_revocation_notice_to_public_sync(
+                        &mut stored,
+                        notice,
+                        sync_client::current_unix_timestamp(),
+                    );
+                }
+            }
+        }
 
         if let Some(pos) = settings.public_syncs.iter().position(|d| d.write_url == canonical_url) {
             settings.public_syncs[pos] = stored;
@@ -2651,6 +3083,8 @@ pub async fn save_public_sync_impl(
             .save_settings(&mut service, settings, password.as_deref())
             .map_err(FrontendError::from)?;
     }
+
+    let _ = crate::commands::recovery::enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
 
     Ok(FrontendPublicSyncInfo {
         write_url: canonical_url,
@@ -2741,6 +3175,8 @@ pub async fn remove_public_sync_impl(
             }
         }
     }
+
+    let _ = crate::commands::recovery::enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
 
     Ok(())
 }
@@ -2899,6 +3335,7 @@ pub(crate) mod tests {
                 password,
                 human_money_core::MnemonicLanguage::English,
                 "device-drops-test".into(),
+                true,
             )
             .unwrap();
         service
@@ -3598,6 +4035,7 @@ pub(crate) mod tests {
                 access_pubkey: "b".repeat(64),
                 enabled: false,
                 authorized_channels: vec![],
+                ..Default::default()
             });
             state.save_settings(&mut s, settings, Some(password)).unwrap();
         }
@@ -3651,6 +4089,7 @@ pub(crate) mod tests {
             fail_count: 0,
             status: "unverified".to_string(),
             last_probed_at: None,
+            ..Default::default()
         };
         let alice_contact = FrontendContact {
             did: alice_did.to_string(),
@@ -3729,6 +4168,7 @@ pub(crate) mod tests {
             fail_count: 0,
             status: "unverified".to_string(),
             last_probed_at: None,
+            ..Default::default()
         };
         let charlie_contact = FrontendContact {
             did: charlie_did,
@@ -3777,6 +4217,7 @@ pub(crate) mod tests {
             fail_count: 0,
             status: "active".to_string(),
             last_probed_at: Some(chrono::Utc::now().timestamp() as u64),
+            ..Default::default()
         };
         {
             let mut s = bob_state.service.lock().unwrap();
@@ -3797,6 +4238,7 @@ pub(crate) mod tests {
             fail_count: 0,
             status: "pending_auth".to_string(),
             last_probed_at: Some(1000),
+            ..Default::default()
         };
 
         // 3. Add Charlie contact with a newly added "unverified" sync (last_probed_at == None, read_url == "")
@@ -3812,6 +4254,7 @@ pub(crate) mod tests {
             fail_count: 0,
             status: "unverified".to_string(),
             last_probed_at: None,
+            ..Default::default()
         };
 
         let alice_contact = FrontendContact {

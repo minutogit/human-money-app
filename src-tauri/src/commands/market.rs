@@ -296,6 +296,7 @@ async fn delete_remote_card_slots(state: &AppState, password: Option<&str>) {
                     fail_count: 0,
                     status: "active".to_string(),
                     last_probed_at: None,
+                    ..Default::default()
                 });
             }
         }
@@ -1432,6 +1433,7 @@ mod tests {
             password,
             human_money_core::MnemonicLanguage::English,
             "device-market-test".into(),
+            true,
         ).unwrap();
         service
     }
@@ -1995,6 +1997,7 @@ mod tests {
                     fail_count: 0,
                     status: "active".to_string(),
                     last_probed_at: None,
+                    ..Default::default()
                 }],
                 ..Default::default()
             });

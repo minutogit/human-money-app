@@ -403,6 +403,7 @@ mod tests {
             "password123",
             human_money_core::MnemonicLanguage::English,
             "device-pos-test".into(),
+            true,
         ).unwrap();
         let state = AppState::new(service);
         *state.settings.lock().unwrap() = Some(AppSettings::default());

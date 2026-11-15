@@ -19,6 +19,7 @@ export interface FirstStepsChecklistProps {
     hasContact: boolean;
     hasVoucher: boolean;
     hasSync: boolean;
+    hasIdentityRecovery?: boolean;
     userId?: string;
     onDismiss?: () => void;
 }
@@ -28,6 +29,7 @@ export const FirstStepsChecklist: React.FC<FirstStepsChecklistProps> = ({
     hasContact,
     hasVoucher,
     hasSync,
+    hasIdentityRecovery,
     userId,
     onDismiss,
 }) => {
@@ -47,7 +49,8 @@ export const FirstStepsChecklist: React.FC<FirstStepsChecklistProps> = ({
         }
     });
 
-    const allCompleted = hasBackup && hasContact && hasVoucher && hasSync;
+    const isBackupComplete = hasBackup && (hasIdentityRecovery ?? true);
+    const allCompleted = isBackupComplete && hasContact && hasVoucher && hasSync;
 
     const handleDismiss = () => {
         setIsDismissed(true);
@@ -67,32 +70,32 @@ export const FirstStepsChecklist: React.FC<FirstStepsChecklistProps> = ({
     const steps = [
         {
             id: "backup",
-            title: t("dashboard.stepBackupTitle", "Backup einrichten"),
-            desc: t("dashboard.stepBackupDesc", "Schütze dein Profil vor Datenverlust"),
-            done: hasBackup,
+            title: t("dashboard.stepBackupTitle"),
+            desc: t("dashboard.stepBackupDesc"),
+            done: isBackupComplete,
             icon: HardDrive,
             onClick: () => navigate({ view: "settings", initialSection: "backup" }),
         },
         {
             id: "contact",
-            title: t("dashboard.stepContactTitle", "Ersten Kontakt hinzufügen"),
-            desc: t("dashboard.stepContactDesc", "Verbinde dich mit Menschen, denen du vertraust"),
+            title: t("dashboard.stepContactTitle"),
+            desc: t("dashboard.stepContactDesc"),
             done: hasContact,
             icon: UserPlus,
             onClick: () => navigate({ view: "address_book" }),
         },
         {
             id: "voucher",
-            title: t("dashboard.stepVoucherTitle", "Ersten Gutschein erstellen oder empfangen"),
-            desc: t("dashboard.stepVoucherDesc", "Erstelle dein erstes Versprechen oder empfange eines"),
+            title: t("dashboard.stepVoucherTitle"),
+            desc: t("dashboard.stepVoucherDesc"),
             done: hasVoucher,
             icon: Ticket,
             onClick: () => navigate({ view: "create_voucher" }),
         },
         {
             id: "sync",
-            title: t("dashboard.stepSyncTitle", "Sync-Dienst verbinden (optional)"),
-            desc: t("dashboard.stepSyncDesc", "Gleiche Daten automatisch mit Kontakten ab"),
+            title: t("dashboard.stepSyncTitle"),
+            desc: t("dashboard.stepSyncDesc"),
             done: hasSync,
             icon: Cloud,
             onClick: () => navigate({ view: "settings", initialSection: "sync" }),
@@ -110,10 +113,10 @@ export const FirstStepsChecklist: React.FC<FirstStepsChecklistProps> = ({
             <div className="flex items-center justify-between pb-3 border-b border-theme-subtle/40 mb-3">
                 <div className="flex items-center gap-2">
                     <h3 className="text-sm font-bold text-theme-primary">
-                        {t("dashboard.firstStepsTitle", "Erste Schritte")}
+                        {t("dashboard.firstStepsTitle")}
                     </h3>
                     <span className="text-[11px] font-semibold text-theme-light bg-theme-subtle/30 px-2 py-0.5 rounded-full">
-                        {t("dashboard.stepsProgress", "{{completed}} von {{total}} erledigt", {
+                        {t("dashboard.stepsProgress", {
                             completed: completedCount,
                             total: steps.length,
                         })}
@@ -122,8 +125,8 @@ export const FirstStepsChecklist: React.FC<FirstStepsChecklistProps> = ({
                 <button
                     type="button"
                     onClick={handleDismiss}
-                    aria-label={t("dashboard.dismissChecklist", "Checkliste ausblenden")}
-                    title={t("dashboard.dismissChecklist", "Checkliste ausblenden")}
+                    aria-label={t("dashboard.dismissChecklist")}
+                    title={t("dashboard.dismissChecklist")}
                     className="p-1 rounded-lg text-theme-light hover:text-theme-secondary hover:bg-bg-app transition-colors cursor-pointer"
                     data-testid="dismiss-checklist-button"
                 >

@@ -199,6 +199,20 @@ export const marketService = {
         return await invoke<void>("delete_sync_admin", password ? { password } : {});
     },
 
+    revokeOwnSyncServer: async (
+        effectiveAt: number | null,
+        reason?: string,
+        replacementWriteUrl?: string,
+        password?: string
+    ): Promise<FrontendSyncAdminStatus | null> => {
+        return await invoke<FrontendSyncAdminStatus | null>("revoke_own_sync_server", {
+            effectiveAt,
+            reason: reason || undefined,
+            replacementWriteUrl: replacementWriteUrl || undefined,
+            password: password || undefined,
+        });
+    },
+
     discoverAvailableSyncs: async (password?: string): Promise<FrontendDiscoveredSync[]> => {
         return await invoke<FrontendDiscoveredSync[]>("discover_available_syncs", password ? { password } : {});
     },

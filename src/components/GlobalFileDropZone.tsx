@@ -38,7 +38,7 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
   } | null>(null);
 
   const isLoggedIn = isAuthenticated ?? isSessionActive;
-  const isDropZoneActive = Boolean(isLoggedIn && appState.view !== 'receive_bundle');
+  const isDropZoneActive = Boolean(appState.view !== 'receive_bundle');
 
   // Auto-dismiss drop feedback after 5 seconds
   useEffect(() => {
@@ -89,9 +89,34 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
     setIsDraggingOver(false);
     if (!isDropZoneActive) return;
 
+    // Check plain text drops first (e.g. dragged links)
+    const rawText = e.dataTransfer?.getData('text/plain');
+    if (rawText && (rawText.includes('humoco://recovery-reply') || rawText.includes('humoco://kit') || rawText.includes('humoco://recovery-req'))) {
+      window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: rawText.trim() }));
+      return;
+    }
+
     const files = e.dataTransfer?.files;
     if (files && files.length > 0) {
       const file = files[0];
+
+      // Check if dropped text file contains a recovery link
+      if (file.name.endsWith('.txt') || file.name.endsWith('.html') || file.name.endsWith('.json')) {
+        try {
+          const text = await file.text();
+          if (text.includes('humoco://recovery-reply') || text.includes('humoco://kit') || text.includes('humoco://recovery-req')) {
+            const match = text.match(/humoco:\/\/(recovery-reply|kit|recovery-req)[^\s"'>]+/);
+            if (match) {
+              window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: match[0] }));
+              return;
+            }
+          }
+        } catch {
+          // ignore read failure and proceed
+        }
+      }
+
+      if (!isLoggedIn) return;
 
       // Handle .hmcard files specifically
       if (file.name.endsWith('.hmcard')) {

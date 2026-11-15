@@ -10,11 +10,16 @@ vi.mock('../../context/NavigationContext', () => ({
     }),
 }));
 
+const translations: Record<string, string> = {
+    'dashboard.firstStepsTitle': 'Erste Schritte',
+    'dashboard.stepsProgress': '{{completed}} von {{total}} erledigt',
+};
+
 vi.mock('react-i18next', () => ({
     useTranslation: () => ({
         t: (key: string, defaultOrOptions?: string | Record<string, unknown>, options?: Record<string, unknown>) => {
             const opts = (typeof defaultOrOptions === 'object' ? defaultOrOptions : options) || {};
-            let text = typeof defaultOrOptions === 'string' ? defaultOrOptions : key;
+            let text = typeof defaultOrOptions === 'string' ? defaultOrOptions : (translations[key] || key);
             for (const [k, v] of Object.entries(opts)) {
                 text = text.replace(new RegExp(`{{${k}}}`, 'g'), String(v));
             }

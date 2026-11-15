@@ -58,7 +58,10 @@ import {
     Check,
     QrCode,
     SlidersHorizontal,
+    ShieldCheck,
 } from 'lucide-react';
+import { recoveryService } from '../services/recoveryService';
+import { GuardianSetupModal } from './GuardianSetupModal';
 import { QuickContactModal } from './profile/QuickContactModal';
 import { WotNetworkOptionsPanel } from './wot/WotNetworkOptionsPanel';
 
@@ -119,6 +122,9 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
     const [handshakeReturnFlags, setHandshakeReturnFlags] = useState<{ [msgId: string]: boolean }>({});
     const [isAcceptingHandshake, setIsAcceptingHandshake] = useState<string | null>(null);
 
+    const [guardianDids, setGuardianDids] = useState<Set<string>>(new Set());
+    const [isGuardianSetupOpen, setIsGuardianSetupOpen] = useState(false);
+
     const hasSyncService = (syncOverview?.connectedCount ?? 0) > 0;
 
     const handleNavigateToSyncSettings = () => {
@@ -130,7 +136,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
     const loadContacts = useCallback(async () => {
         setIsLoading(true);
         try {
-            const [contactsResult, summaryResult, providersResult, postInbox, dropStatus] = await Promise.all([
+            const [contactsResult, summaryResult, providersResult, postInbox, dropStatus, protectionStatus] = await Promise.all([
                 contactService.getContacts(),
                 wotService.getSummary().catch(e => {
                     logger.warn("Failed to load WoT summary: " + stringifyError(e));
@@ -141,12 +147,18 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                     return [];
                 }),
                 postService.getPostInboxSummary().catch(() => null),
-                marketService.getSyncOverviewStatus().catch(() => null)
+                marketService.getSyncOverviewStatus().catch(() => null),
+                recoveryService.getRecoveryProtectionStatus().catch(() => null),
             ]);
             setContacts(contactsResult);
             setWotSummary(summaryResult ?? null);
             setProviders(providersResult ?? []);
             setSyncOverview(dropStatus ?? null);
+            if (protectionStatus?.guardians) {
+                setGuardianDids(new Set(protectionStatus.guardians.map(g => g.userId)));
+            } else {
+                setGuardianDids(new Set());
+            }
             if (postInbox) {
                 setPendingHandshakes(postInbox.pendingWotHandshakes || []);
             }
@@ -662,8 +674,19 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                     >
                         <QrCode size={18} />
                         <span>
-                            {t('contacts.quickContactBtn', 'Mein QR-Code')}
+                            {t('contacts.quickContactBtn')}
                         </span>
+                    </Button>
+                    <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setIsGuardianSetupOpen(true)}
+                        className="gap-2"
+                        title={t('backup.manageGuardiansButton')}
+                        data-testid="manage-guardians-btn"
+                    >
+                        <ShieldCheck size={18} />
+                        <span>{t('backup.socialRecoveryStatusLabel')}</span>
                     </Button>
                     <Button
                         size="sm"
@@ -1109,6 +1132,15 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
 
                                                 {/* Trust Rating & Synced Peer List Pills */}
                                                 <div className="flex items-center gap-1.5 flex-wrap mb-3">
+                                                    {guardianDids.has(contact.did) && (
+                                                        <span
+                                                            title={t('backup.addressBookGuardianBadge')}
+                                                            className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider border shadow-sm bg-purple-50 text-purple-800 border-purple-200 flex items-center gap-1"
+                                                        >
+                                                            <ShieldCheck size={10} />
+                                                            {t('backup.socialRecoveryStatusLabel')}
+                                                        </span>
+                                                    )}
                                                     <span
                                                         title={t('contacts.trustLevelHint')}
                                                         className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider border shadow-sm ${
@@ -1528,6 +1560,15 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                     />
                 </div>
             </ModalShell>
+
+            {/* Guardian Setup Modal */}
+            <GuardianSetupModal
+                isOpen={isGuardianSetupOpen}
+                onClose={() => {
+                    setIsGuardianSetupOpen(false);
+                    loadContacts();
+                }}
+            />
         </PageLayout>
     );
 };

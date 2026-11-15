@@ -1,4 +1,4 @@
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use humoco_market::SignedDropHeaders;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +25,25 @@ pub enum IndexFetchResult {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SyncReplacementTarget {
+    pub write_url: String,
+    pub read_url: String,
+    pub drop_pub: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SyncRevocationNotice {
+    pub drop_pub: String,
+    pub issued_at: u64,
+    pub effective_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<SyncReplacementTarget>,
+    pub signature: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SyncServerInfo {
     pub drop_pub: String,
     pub read_url: String,
@@ -32,6 +51,8 @@ pub struct SyncServerInfo {
     pub register_url: Option<String>,
     #[serde(default)]
     pub channels: Vec<String>,
+    #[serde(default)]
+    pub revocation: Option<SyncRevocationNotice>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -66,6 +87,213 @@ pub struct SyncServerAdminStatus {
     #[serde(default)]
     pub channel_counts: std::collections::BTreeMap<String, usize>,
     pub admin_pubkey: String,
+}
+
+pub fn canonical_revocation_message(
+    drop_pub: &str,
+    issued_at: u64,
+    effective_at: u64,
+    replacement: Option<&SyncReplacementTarget>,
+    reason: Option<&str>,
+) -> String {
+    let (rep_w, rep_r, rep_p) = match replacement {
+        Some(r) => (
+            r.write_url.as_str(),
+            r.read_url.as_str(),
+            r.drop_pub.to_lowercase(),
+        ),
+        None => ("", "", String::new()),
+    };
+    format!(
+        "HUMOCO-DROP-REVOKE-V1\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        drop_pub.to_lowercase(),
+        issued_at,
+        effective_at,
+        rep_w,
+        rep_r,
+        rep_p,
+        reason.unwrap_or("")
+    )
+}
+
+pub fn sign_revocation_notice(
+    admin_sk: &SigningKey,
+    issued_at: u64,
+    effective_at: u64,
+    reason: Option<String>,
+    replacement: Option<SyncReplacementTarget>,
+) -> Result<SyncRevocationNotice, String> {
+    if let Some(ref r_txt) = reason {
+        if r_txt.len() > 200 || r_txt.contains('\n') || r_txt.contains('\r') || r_txt.contains('\0') {
+            return Err("Invalid revocation reason (max 200 chars, single-line)".to_string());
+        }
+    }
+    if let Some(ref rep) = replacement {
+        validate_sync_url(&rep.write_url)?;
+        validate_sync_url(&rep.read_url)?;
+        if rep.drop_pub.len() != 64 || !rep.drop_pub.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err("Invalid replacement drop_pub".to_string());
+        }
+    }
+    let drop_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+    let clean_reason = reason
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let clean_rep = replacement.map(|r| SyncReplacementTarget {
+        write_url: r.write_url.trim().to_string(),
+        read_url: r.read_url.trim().to_string(),
+        drop_pub: r.drop_pub.trim().to_lowercase(),
+    });
+    let canonical = canonical_revocation_message(
+        &drop_pub,
+        issued_at,
+        effective_at,
+        clean_rep.as_ref(),
+        clean_reason.as_deref(),
+    );
+    let sig = admin_sk.sign(canonical.as_bytes());
+    Ok(SyncRevocationNotice {
+        drop_pub,
+        issued_at,
+        effective_at,
+        reason: clean_reason,
+        replacement: clean_rep,
+        signature: hex::encode(sig.to_bytes()),
+    })
+}
+
+pub fn verify_revocation_notice(
+    notice: &SyncRevocationNotice,
+    expected_drop_pub: &str,
+) -> Result<(), String> {
+    let expected = expected_drop_pub.trim().to_lowercase();
+    if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Missing or invalid expected drop_pub".to_string());
+    }
+    if notice.drop_pub.trim().to_lowercase() != expected {
+        return Err("Revocation notice drop_pub mismatch".to_string());
+    }
+    if notice.issued_at == 0 || notice.effective_at == 0 {
+        return Err("Revocation notice missing timestamps".to_string());
+    }
+    if let Some(ref r_txt) = notice.reason {
+        if r_txt.len() > 200 || r_txt.contains('\n') || r_txt.contains('\r') || r_txt.contains('\0') {
+            return Err("Revocation notice contains invalid reason".to_string());
+        }
+    }
+    if let Some(ref rep) = notice.replacement {
+        validate_sync_url(&rep.write_url)?;
+        validate_sync_url(&rep.read_url)?;
+        if rep.drop_pub.len() != 64 || !rep.drop_pub.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err("Revocation notice contains invalid replacement drop_pub".to_string());
+        }
+    }
+    let pk_bytes: [u8; 32] = hex::decode(&expected)
+        .map_err(|_| "Invalid drop_pub hex".to_string())?
+        .try_into()
+        .map_err(|_| "Invalid drop_pub length".to_string())?;
+    let vk = VerifyingKey::from_bytes(&pk_bytes)
+        .map_err(|_| "Invalid Ed25519 drop_pub".to_string())?;
+    let sig_bytes: [u8; 64] = hex::decode(notice.signature.trim())
+        .map_err(|_| "Invalid signature hex".to_string())?
+        .try_into()
+        .map_err(|_| "Invalid signature length".to_string())?;
+    let sig = Signature::from_bytes(&sig_bytes);
+
+    let canonical = canonical_revocation_message(
+        &expected,
+        notice.issued_at,
+        notice.effective_at,
+        notice.replacement.as_ref(),
+        notice.reason.as_deref(),
+    );
+    vk.verify(canonical.as_bytes(), &sig)
+        .map_err(|_| "Invalid revocation notice Ed25519 signature".to_string())
+}
+
+pub async fn fetch_revocation_notice(
+    client: &reqwest::Client,
+    read_url: &str,
+    expected_drop_pub: &str,
+) -> Result<Option<SyncRevocationNotice>, String> {
+    validate_sync_url(read_url)?;
+    let base = read_url.trim().trim_end_matches('/');
+    let url = format!("{}/revocation.json", base);
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error fetching revocation.json from {}: {}", read_url, e))?;
+    let status = resp.status();
+    if status.as_u16() == 404 {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(format!("Server returned HTTP {} fetching revocation.json", status));
+    }
+    let notice: SyncRevocationNotice = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse revocation.json: {}", e))?;
+    verify_revocation_notice(&notice, expected_drop_pub)?;
+    Ok(Some(notice))
+}
+
+pub async fn push_revocation_notice(
+    client: &reqwest::Client,
+    write_url: &str,
+    admin_sk: &SigningKey,
+    notice: Option<&SyncRevocationNotice>,
+    issued_at: u64,
+) -> Result<(), String> {
+    validate_sync_url(write_url)?;
+    let sep = if write_url.contains('?') { "&" } else { "?" };
+    let url = format!("{}{}revoke", write_url, sep);
+
+    let body_json = match notice {
+        Some(n) => serde_json::to_string(n)
+            .map_err(|e| format!("Failed to serialize revocation notice: {}", e))?,
+        None => serde_json::to_string(&serde_json::json!({
+            "issued_at": issued_at,
+            "effective_at": null
+        }))
+        .map_err(|e| format!("Failed to serialize revocation clear payload: {}", e))?,
+    };
+
+    let timestamp = current_unix_timestamp();
+    let nonce = generate_sync_nonce();
+    let signed = humoco_market::sign_admin_request(
+        admin_sk,
+        "PUT_REVOKE",
+        "",
+        timestamp,
+        &nonce,
+        body_json.as_bytes(),
+    );
+
+    let resp = client
+        .put(&url)
+        .header("X-Drop-Pubkey", &signed.pubkey_hex)
+        .header("X-Drop-Timestamp", signed.timestamp.to_string())
+        .header("X-Drop-Nonce", &signed.nonce_hex)
+        .header("X-Drop-Signature", &signed.signature_hex)
+        .header("Content-Type", "application/json")
+        .body(body_json)
+        .send()
+        .await
+        .map_err(|e| format!("Network error pushing revocation: {}", e))?;
+
+    let status = resp.status();
+    if status.is_success() {
+        Ok(())
+    } else {
+        let text = resp.text().await.unwrap_or_default();
+        Err(format!(
+            "Server returned HTTP {} pushing revocation: {}",
+            status,
+            text.trim()
+        ))
+    }
 }
 
 pub fn validate_sync_url(url: &str) -> Result<(), String> {
@@ -787,5 +1015,47 @@ mod tests {
         let de_raw: SyncIndexEntry = serde_json::from_str(raw_json).unwrap();
         assert_eq!(de_raw.prefix, None);
         assert_eq!(de_raw.etag, None);
+    }
+
+    #[test]
+    fn test_sign_and_verify_revocation_notice() {
+        let sk = SigningKey::from_bytes(&[42u8; 32]);
+        let drop_pub = hex::encode(sk.verifying_key().as_bytes());
+        let rep = SyncReplacementTarget {
+            write_url: "https://new.example.org/sync.php".to_string(),
+            read_url: "https://new.example.org/d-1234567890abcdef".to_string(),
+            drop_pub: hex::encode([7u8; 32]),
+        };
+        let notice = sign_revocation_notice(
+            &sk,
+            1_700_000_000,
+            1_700_864_000,
+            Some("Serverumzug".to_string()),
+            Some(rep),
+        )
+        .unwrap();
+
+        assert!(verify_revocation_notice(&notice, &drop_pub).is_ok());
+
+        // Wrong expected drop_pub
+        let wrong_pub = hex::encode([99u8; 32]);
+        assert!(verify_revocation_notice(&notice, &wrong_pub).is_err());
+
+        // Tampered replacement URL
+        let mut tampered = notice.clone();
+        tampered.replacement.as_mut().unwrap().write_url =
+            "https://evil.example.org/sync.php".to_string();
+        assert!(verify_revocation_notice(&tampered, &drop_pub).is_err());
+
+        // Insecure http:// replacement URL rejected
+        let bad_rep = SyncReplacementTarget {
+            write_url: "http://insecure.example.org/sync.php".to_string(),
+            read_url: "https://new.example.org/d-1234".to_string(),
+            drop_pub: hex::encode([7u8; 32]),
+        };
+        assert!(sign_revocation_notice(&sk, 100, 200, None, Some(bad_rep)).is_err());
+
+        // Newline injection in reason rejected
+        assert!(sign_revocation_notice(&sk, 100, 200, Some("bad\nline".to_string()), None).is_err());
     }
 }

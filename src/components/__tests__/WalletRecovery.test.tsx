@@ -65,6 +65,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -78,6 +79,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -91,6 +93,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -105,6 +108,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -142,6 +146,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -155,6 +160,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -170,6 +176,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -194,6 +201,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -209,6 +217,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -230,6 +239,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -256,6 +266,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -281,6 +292,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -308,6 +320,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -335,6 +348,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -363,6 +377,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -383,6 +398,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -408,6 +424,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -433,6 +450,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -459,6 +477,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -482,6 +501,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -515,6 +535,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -550,6 +571,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -584,6 +606,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -648,6 +671,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -687,6 +711,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -721,6 +746,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -767,6 +793,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -841,6 +868,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -907,6 +935,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -946,6 +975,7 @@ describe('WalletRecovery Component', () => {
         <WalletRecovery
           onRecoverySuccess={mockOnRecoverySuccess}
           onSwitchToLogin={mockOnSwitchToLogin}
+          defaultMethod="phrase"
         />
       );
 
@@ -957,6 +987,28 @@ describe('WalletRecovery Component', () => {
       fireEvent.click(backButton);
 
       expect(mockOnSwitchToLogin).toHaveBeenCalled();
+    });
+  });
+
+  describe('Flow Mode (Social & Emergency Sheet)', () => {
+    it('renders flow mode by default and allows switching to phrase mode', async () => {
+      render(
+        <WalletRecovery
+          onRecoverySuccess={mockOnRecoverySuccess}
+          onSwitchToLogin={mockOnSwitchToLogin}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('switch-to-phrase-recovery')).toBeInTheDocument();
+      });
+
+      // Click to switch to phrase mode
+      fireEvent.click(screen.getByTestId('switch-to-phrase-recovery'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('switch-to-flow-recovery')).toBeInTheDocument();
+      });
     });
   });
 });

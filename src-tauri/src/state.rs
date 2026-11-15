@@ -14,6 +14,8 @@ pub const MARKET_OWN_PROFILE_KEY: &str = "market_own_profile";
 pub const MARKET_SYNC_ADMIN_KEY: &str = "market_sync_admin";
 pub const MARKET_SYNC_KEY: &str = "market_sync_state";
 pub const MARKET_POST_STATE_KEY: &str = "market_post_state";
+pub const RECOVERY_OWNER_STATE_KEY: &str = "recovery_owner_state";
+pub const RECOVERY_GUARDIAN_VAULT_KEY: &str = "recovery_guardian_vault";
 pub const BUNDLE_RETENTION_DAYS: i64 = 90;
 
 pub fn own_media_storage_key(image_token: &str) -> String {
@@ -73,6 +75,8 @@ pub struct StoredSyncAdmin {
     pub deny: Vec<String>,
     pub blocked_pubkeys: Vec<String>,
     pub last_members_hash: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revocation: Option<crate::sync_client::SyncRevocationNotice>,
 }
 
 fn default_max_total_storage_mb() -> usize {
@@ -90,6 +94,8 @@ pub struct StoredSyncState {
     pub last_modified_by_read_url: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub slot_mtimes: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    pub last_revocation_check_at: std::collections::BTreeMap<String, u64>,
     #[serde(default)]
     pub sync_sources_by_did: std::collections::BTreeMap<String, String>,
     #[serde(default)]
@@ -958,33 +964,41 @@ impl AppState {
                     let norm_read = sync_ep.read_url.trim().trim_end_matches('/').to_lowercase();
                     let norm_write = sync_ep.write_url.trim().trim_end_matches('/').to_lowercase();
                     if norm_read == norm_target || norm_write == norm_target {
+                        if sync_ep.status == "deprecating" && sync_ep.sunset_at.is_some_and(|eff| now_secs >= eff) {
+                            sync_ep.status = "revoked".to_string();
+                        }
+                        let is_revocation_state = sync_ep.status == "deprecating" || sync_ep.status == "revoked";
                         if *success {
                             sync_ep.last_seen_at = Some(now_secs);
                             sync_ep.fail_count = 0;
-                            if sync_ep.status == "active" {
-                                // remains active
-                            } else if sync_ep.status == "unreachable" {
-                                let is_selected = settings_opt.as_ref().map(|s| {
-                                    s.market_selected_syncs.iter().any(|sel| {
-                                        let sr = sel.read_url.trim().trim_end_matches('/').to_lowercase();
-                                        let sw = sel.write_url.trim().trim_end_matches('/').to_lowercase();
-                                        (!sr.is_empty() && (sr == norm_read || sr == norm_write))
-                                            || (!sw.is_empty() && (sw == norm_read || sw == norm_write))
-                                    })
-                                }).unwrap_or(false);
-                                if is_selected {
-                                    sync_ep.status = "active".to_string();
-                                } else {
+                            if !is_revocation_state {
+                                if sync_ep.status == "active" {
+                                    // remains active
+                                } else if sync_ep.status == "unreachable" {
+                                    let is_selected = settings_opt.as_ref().map(|s| {
+                                        s.market_selected_syncs.iter().any(|sel| {
+                                            let sr = sel.read_url.trim().trim_end_matches('/').to_lowercase();
+                                            let sw = sel.write_url.trim().trim_end_matches('/').to_lowercase();
+                                            (!sr.is_empty() && (sr == norm_read || sr == norm_write))
+                                                || (!sw.is_empty() && (sw == norm_read || sw == norm_write))
+                                        })
+                                    }).unwrap_or(false);
+                                    if is_selected {
+                                        sync_ep.status = "active".to_string();
+                                    } else {
+                                        sync_ep.status = "unverified".to_string();
+                                    }
+                                } else if sync_ep.status.is_empty() {
                                     sync_ep.status = "unverified".to_string();
                                 }
-                            } else if sync_ep.status.is_empty() {
-                                sync_ep.status = "unverified".to_string();
+                                // pending_auth and unverified remain unchanged on list_index read success!
                             }
-                            // pending_auth and unverified remain unchanged on list_index read success!
                         } else {
                             sync_ep.last_error_at = Some(now_secs);
                             sync_ep.fail_count = sync_ep.fail_count.saturating_add(1);
-                            sync_ep.status = "unreachable".to_string();
+                            if !is_revocation_state {
+                                sync_ep.status = "unreachable".to_string();
+                            }
                         }
                         updated = true;
                     }
@@ -1010,14 +1024,22 @@ impl AppState {
                     let norm_read = sel.read_url.trim().trim_end_matches('/').to_lowercase();
                     let norm_write = sel.write_url.trim().trim_end_matches('/').to_lowercase();
                     if norm_read == norm_target || norm_write == norm_target {
+                        if sel.status == "deprecating" && sel.sunset_at.is_some_and(|eff| now_secs >= eff) {
+                            sel.status = "revoked".to_string();
+                        }
+                        let is_revocation_state = sel.status == "deprecating" || sel.status == "revoked";
                         if *success {
                             sel.last_seen_at = Some(now_secs);
                             sel.fail_count = 0;
-                            sel.status = "active".to_string();
+                            if !is_revocation_state {
+                                sel.status = "active".to_string();
+                            }
                         } else {
                             sel.last_error_at = Some(now_secs);
                             sel.fail_count = sel.fail_count.saturating_add(1);
-                            sel.status = "unreachable".to_string();
+                            if !is_revocation_state {
+                                sel.status = "unreachable".to_string();
+                            }
                         }
                         settings_updated = true;
                     }
@@ -1270,6 +1292,171 @@ pub fn merge_contact_syncs(
     result
 }
 
+pub fn apply_revocation_notice_to_descriptor(
+    desc: &mut crate::models::FrontendSyncDescriptor,
+    notice: &crate::sync_client::SyncRevocationNotice,
+    now_secs: u64,
+) {
+    desc.status = if now_secs >= notice.effective_at {
+        "revoked".to_string()
+    } else {
+        "deprecating".to_string()
+    };
+    desc.sunset_at = Some(notice.effective_at);
+    desc.revocation_reason = notice.reason.clone();
+    desc.replacement = notice.replacement.clone().map(Into::into);
+}
+
+pub fn apply_revocation_notice_to_public_sync(
+    ps: &mut crate::settings::StoredPublicSync,
+    notice: &crate::sync_client::SyncRevocationNotice,
+    now_secs: u64,
+) {
+    ps.status = if now_secs >= notice.effective_at {
+        "revoked".to_string()
+    } else {
+        "deprecating".to_string()
+    };
+    ps.sunset_at = Some(notice.effective_at);
+    ps.revocation_reason = notice.reason.clone();
+    ps.replacement = notice.replacement.clone().map(Into::into);
+}
+
+pub fn clear_revocation_on_descriptor(
+    desc: &mut crate::models::FrontendSyncDescriptor,
+    fallback_status: &str,
+) -> bool {
+    if desc.sunset_at.is_some()
+        || desc.revocation_reason.is_some()
+        || desc.replacement.is_some()
+        || desc.status == "deprecating"
+        || desc.status == "revoked"
+    {
+        if desc.status == "deprecating" || desc.status == "revoked" {
+            desc.status = fallback_status.to_string();
+        }
+        desc.sunset_at = None;
+        desc.revocation_reason = None;
+        desc.replacement = None;
+        true
+    } else {
+        false
+    }
+}
+
+pub fn clear_revocation_on_public_sync(
+    ps: &mut crate::settings::StoredPublicSync,
+    fallback_status: &str,
+) -> bool {
+    if ps.sunset_at.is_some()
+        || ps.revocation_reason.is_some()
+        || ps.replacement.is_some()
+        || ps.status == "deprecating"
+        || ps.status == "revoked"
+    {
+        if ps.status == "deprecating" || ps.status == "revoked" {
+            ps.status = fallback_status.to_string();
+        }
+        ps.sunset_at = None;
+        ps.revocation_reason = None;
+        ps.replacement = None;
+        true
+    } else {
+        false
+    }
+}
+
+fn norm_sync_url(u: &str) -> String {
+    u.trim().trim_end_matches('/').to_lowercase()
+}
+
+pub fn apply_revocation_notice_to_address_book(
+    address_book: &mut crate::models::FrontendAddressBook,
+    old_read_url: &str,
+    notice: &crate::sync_client::SyncRevocationNotice,
+    now_secs: u64,
+) -> bool {
+    let old_norm = norm_sync_url(old_read_url);
+    let notice_pub = notice.drop_pub.trim().to_lowercase();
+    let is_revoked_now = now_secs >= notice.effective_at;
+    let mut updated = false;
+
+    for contact in address_book.contacts.values_mut() {
+        let syncs_len = contact.syncs.len();
+        let existing_endpoints: Vec<(String, String)> = contact
+            .syncs
+            .iter()
+            .map(|o| (norm_sync_url(&o.read_url), norm_sync_url(&o.write_url)))
+            .collect();
+        let mut idx_to_replace: Option<(usize, crate::models::FrontendSyncDescriptor)> = None;
+        let mut idx_to_append: Option<crate::models::FrontendSyncDescriptor> = None;
+
+        for (idx, ep) in contact.syncs.iter_mut().enumerate() {
+            if norm_sync_url(&ep.read_url) != old_norm {
+                continue;
+            }
+            if !ep.drop_pub.trim().eq_ignore_ascii_case(&notice_pub) {
+                continue;
+            }
+
+            let prev_status = ep.status.clone();
+            let prev_sunset = ep.sunset_at;
+            let prev_reason = ep.revocation_reason.clone();
+            let prev_rep = ep.replacement.clone();
+
+            apply_revocation_notice_to_descriptor(ep, notice, now_secs);
+            if ep.status != prev_status
+                || ep.sunset_at != prev_sunset
+                || ep.revocation_reason != prev_reason
+                || ep.replacement != prev_rep
+            {
+                updated = true;
+            }
+
+            if let Some(ref rep) = notice.replacement {
+                let rep_r = norm_sync_url(&rep.read_url);
+                let rep_w = norm_sync_url(&rep.write_url);
+                let ep_r = norm_sync_url(&ep.read_url);
+                let ep_w = norm_sync_url(&ep.write_url);
+
+                // Anti-loop: ignore self-redirects or targets already present on this contact
+                let is_self_redirect = rep_r == ep_r || (!rep_w.is_empty() && rep_w == ep_w);
+                let already_present = existing_endpoints
+                    .iter()
+                    .any(|(or, ow)| *or == rep_r || (!rep_w.is_empty() && *ow == rep_w));
+
+                if !is_self_redirect && !already_present {
+                    let new_desc = crate::models::FrontendSyncDescriptor {
+                        write_url: rep.write_url.clone(),
+                        read_url: rep.read_url.clone(),
+                        slot_id: None, // Force index resolution on new server until contact's new SdCard arrives
+                        drop_pub: rep.drop_pub.clone(),
+                        status: "unverified".to_string(),
+                        ..Default::default()
+                    };
+                    if is_revoked_now {
+                        idx_to_replace = Some((idx, new_desc));
+                    } else if syncs_len < 2 {
+                        idx_to_append = Some(new_desc);
+                    }
+                }
+            }
+        }
+
+        if let Some((idx, new_desc)) = idx_to_replace {
+            contact.syncs[idx] = new_desc;
+            updated = true;
+        } else if let Some(new_desc) = idx_to_append {
+            if contact.syncs.len() < 2 {
+                contact.syncs.push(new_desc);
+                updated = true;
+            }
+        }
+    }
+
+    updated
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -1306,6 +1493,7 @@ mod tests {
             fail_count: 0,
             status: "unverified".to_string(),
             last_probed_at: None,
+            ..Default::default()
         };
         let sync2 = FrontendSyncDescriptor {
             read_url: "https://sync2.example.org/sync.php".to_string(),
@@ -1317,6 +1505,7 @@ mod tests {
             fail_count: 0,
             status: "unverified".to_string(),
             last_probed_at: None,
+            ..Default::default()
         };
 
         // 1. Initial contact with 2 sync endpoints
@@ -1426,6 +1615,7 @@ mod tests {
             fail_count: 0,
             status: "unverified".to_string(),
             last_probed_at: None,
+            ..Default::default()
         };
 
         let contact = FrontendContact {
@@ -1504,6 +1694,7 @@ mod tests {
             fail_count: 0,
             status: "active".to_string(),
             last_probed_at: None,
+            ..Default::default()
         }];
         state.save_settings(&mut service, settings, Some(password)).unwrap();
 
@@ -1549,6 +1740,7 @@ mod tests {
             fail_count: 0,
             status: "active".to_string(),
             last_probed_at: None,
+            ..Default::default()
         };
 
         let contact = FrontendContact {
@@ -1595,6 +1787,7 @@ mod tests {
             fail_count: 0,
             status: "active".to_string(),
             last_probed_at: None,
+            ..Default::default()
         }];
         state.save_settings(&mut service, settings2, Some(password)).unwrap();
 
@@ -1615,6 +1808,7 @@ mod tests {
             fail_count: 0,
             status: "unverified".to_string(),
             last_probed_at: None,
+            ..Default::default()
         };
         let ep2 = FrontendSyncDescriptor {
             write_url: "https://sync-b.example.com/sync.php".to_string(),
@@ -1626,6 +1820,7 @@ mod tests {
             fail_count: 0,
             status: "unverified".to_string(),
             last_probed_at: None,
+            ..Default::default()
         };
 
         // Merge two unprobed syncs with distinct write URLs: neither should be dropped
@@ -1645,11 +1840,246 @@ mod tests {
             fail_count: 0,
             status: "unverified".to_string(),
             last_probed_at: None,
+            ..Default::default()
         };
         let merged2 = super::merge_contact_syncs(&[ep1], &[populated_card]);
         assert_eq!(merged2.len(), 1, "Matching write_url should be merged into single entry");
         assert_eq!(merged2[0].read_url, "https://sync-a.example.com/read");
         assert_eq!(merged2[0].drop_pub, "pubkey_a");
         assert_eq!(merged2[0].slot_id, Some("slot123".to_string()));
+    }
+
+    #[test]
+    fn test_apply_revocation_notice_to_address_book_grace_and_inplace_replace() {
+        use std::collections::HashMap;
+        let old_pub = "aa".repeat(32);
+        let new_pub = "bb".repeat(32);
+        let other_pub = "cc".repeat(32);
+
+        let mut contacts = HashMap::new();
+        contacts.insert(
+            "did:key:zAlice".to_string(),
+            FrontendContact {
+                did: "did:key:zAlice".to_string(),
+                profile: FrontendUserProfile::default(),
+                tags: vec![],
+                added_at: "100".to_string(),
+                notes: None,
+                trust_level: None,
+                desired_hops: None,
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![FrontendSyncDescriptor {
+                    write_url: "https://old.example.org/sync.php".to_string(),
+                    read_url: "https://old.example.org/d-old".to_string(),
+                    slot_id: Some("oldslot".to_string()),
+                    drop_pub: old_pub.clone(),
+                    status: "active".to_string(),
+                    ..Default::default()
+                }],
+            },
+        );
+        contacts.insert(
+            "did:key:zBob".to_string(),
+            FrontendContact {
+                did: "did:key:zBob".to_string(),
+                profile: FrontendUserProfile::default(),
+                tags: vec![],
+                added_at: "100".to_string(),
+                notes: None,
+                trust_level: None,
+                desired_hops: None,
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![
+                    FrontendSyncDescriptor {
+                        write_url: "https://old.example.org/sync.php".to_string(),
+                        read_url: "https://old.example.org/d-old".to_string(),
+                        slot_id: Some("bobold".to_string()),
+                        drop_pub: old_pub.clone(),
+                        status: "active".to_string(),
+                        ..Default::default()
+                    },
+                    FrontendSyncDescriptor {
+                        write_url: "https://keep.example.org/sync.php".to_string(),
+                        read_url: "https://keep.example.org/d-keep".to_string(),
+                        slot_id: Some("keep".to_string()),
+                        drop_pub: other_pub.clone(),
+                        status: "active".to_string(),
+                        ..Default::default()
+                    },
+                ],
+            },
+        );
+
+        let mut ab = crate::models::FrontendAddressBook { contacts };
+        let notice = crate::sync_client::SyncRevocationNotice {
+            drop_pub: old_pub.clone(),
+            issued_at: 1000,
+            effective_at: 2000,
+            reason: Some("Server-Umzug".to_string()),
+            replacement: Some(crate::sync_client::SyncReplacementTarget {
+                write_url: "https://new.example.org/sync.php".to_string(),
+                read_url: "https://new.example.org/d-new".to_string(),
+                drop_pub: new_pub.clone(),
+            }),
+            signature: "00".repeat(64),
+        };
+
+        // Wrong drop_pub -> no changes (anti-hijacking)
+        let mut wrong_notice = notice.clone();
+        wrong_notice.drop_pub = "ff".repeat(32);
+        assert!(!super::apply_revocation_notice_to_address_book(
+            &mut ab,
+            "https://old.example.org/d-old",
+            &wrong_notice,
+            1500
+        ));
+
+        // During grace period (now = 1500 < 2000):
+        // Alice (1 sync) gets replacement appended with slot_id = None
+        // Bob (2 syncs) keeps 2 entries, old marked deprecating with replacement metadata
+        assert!(super::apply_revocation_notice_to_address_book(
+            &mut ab,
+            "https://old.example.org/d-old",
+            &notice,
+            1500
+        ));
+        let alice = &ab.contacts["did:key:zAlice"];
+        assert_eq!(alice.syncs.len(), 2);
+        assert_eq!(alice.syncs[0].status, "deprecating");
+        assert_eq!(alice.syncs[1].read_url, "https://new.example.org/d-new");
+        assert_eq!(alice.syncs[1].slot_id, None);
+
+        let bob = &ab.contacts["did:key:zBob"];
+        assert_eq!(bob.syncs.len(), 2);
+        assert_eq!(bob.syncs[0].status, "deprecating");
+        assert!(bob.syncs[0].replacement.is_some());
+
+        // After effective_at (now = 2500 >= 2000):
+        // Bob's expired entry is replaced in-place with new server (slot_id = None)
+        assert!(super::apply_revocation_notice_to_address_book(
+            &mut ab,
+            "https://old.example.org/d-old",
+            &notice,
+            2500
+        ));
+        let bob_after = &ab.contacts["did:key:zBob"];
+        assert_eq!(bob_after.syncs.len(), 2);
+        assert_eq!(bob_after.syncs[0].read_url, "https://new.example.org/d-new");
+        assert_eq!(bob_after.syncs[0].slot_id, None);
+        assert_eq!(bob_after.syncs[1].read_url, "https://keep.example.org/d-keep");
+    }
+
+    #[test]
+    fn test_record_contact_sync_health_preserves_deprecating_and_revoked() {
+        let temp_dir = std::env::temp_dir().join(format!("humoco_health_rev_{}", uuid::Uuid::new_v4()));
+        let password = "test-password-123";
+        let alice_service = crate::commands::sync::tests::setup_test_app(
+            &temp_dir.join("alice"),
+            "Test Alice",
+            crate::commands::sync::tests::ALICE_PHRASE,
+            password,
+        );
+        let bob_service = crate::commands::sync::tests::setup_test_app(
+            &temp_dir.join("bob"),
+            "Test Bob",
+            crate::commands::sync::tests::BOB_PHRASE,
+            password,
+        );
+        let bob_did = bob_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let mut service = state.service.lock().unwrap();
+
+        let dep_ep = FrontendSyncDescriptor {
+            write_url: "https://dep.example.org/sync.php".to_string(),
+            read_url: "https://dep.example.org/d-dep".to_string(),
+            drop_pub: "aa".repeat(32),
+            status: "deprecating".to_string(),
+            sunset_at: Some(2000),
+            revocation_reason: Some("Umzug".to_string()),
+            ..Default::default()
+        };
+        let rev_ep = FrontendSyncDescriptor {
+            write_url: "https://rev.example.org/sync.php".to_string(),
+            read_url: "https://rev.example.org/d-rev".to_string(),
+            drop_pub: "bb".repeat(32),
+            status: "revoked".to_string(),
+            sunset_at: Some(1500),
+            ..Default::default()
+        };
+
+        let contact = FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile {
+                id: Some(bob_did.clone()),
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(2),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![dep_ep.clone(), rev_ep.clone()],
+        };
+        state.save_contact(&mut service, contact, Some(password)).unwrap();
+
+        let mut settings = state.load_settings(&mut service, Some(password)).unwrap_or_default();
+        settings.market_selected_syncs = vec![dep_ep.clone(), rev_ep.clone()];
+        state.save_settings(&mut service, settings, Some(password)).unwrap();
+
+        // 1. Before sunset (now = 1800 < 2000): success=true keeps deprecating, failure=false keeps revoked
+        state.record_contact_sync_health_batch(
+            &mut service,
+            &[
+                ("https://dep.example.org/d-dep".to_string(), true),
+                ("https://rev.example.org/d-rev".to_string(), false),
+            ],
+            1800,
+            Some(password),
+        );
+
+        let contacts_1 = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob_1 = contacts_1.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob_1.syncs[0].status, "deprecating");
+        assert_eq!(bob_1.syncs[0].last_seen_at, Some(1800));
+        assert_eq!(bob_1.syncs[1].status, "revoked");
+        assert_eq!(bob_1.syncs[1].fail_count, 1);
+
+        let settings_1 = state.load_settings(&mut service, Some(password)).unwrap();
+        assert_eq!(settings_1.market_selected_syncs[0].status, "deprecating");
+        assert_eq!(settings_1.market_selected_syncs[1].status, "revoked");
+
+        // 2. Failure on deprecating before sunset preserves deprecating (not "unreachable")
+        state.record_contact_sync_health_batch(
+            &mut service,
+            &[("https://dep.example.org/d-dep".to_string(), false)],
+            1900,
+            Some(password),
+        );
+        let contacts_2 = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob_2 = contacts_2.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob_2.syncs[0].status, "deprecating");
+        assert_eq!(bob_2.syncs[0].fail_count, 1);
+
+        // 3. Past sunset (now = 2100 >= 2000): deprecating is promoted to revoked even on success/fail
+        state.record_contact_sync_health_batch(
+            &mut service,
+            &[("https://dep.example.org/d-dep".to_string(), false)],
+            2100,
+            Some(password),
+        );
+        let contacts_3 = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob_3 = contacts_3.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob_3.syncs[0].status, "revoked");
+
+        let settings_3 = state.load_settings(&mut service, Some(password)).unwrap();
+        assert_eq!(settings_3.market_selected_syncs[0].status, "revoked");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

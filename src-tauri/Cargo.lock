@@ -2419,7 +2419,9 @@ dependencies = [
 name = "humoco-market"
 version = "0.2.1"
 dependencies = [
+ "argon2",
  "base64 0.22.1",
+ "bincode",
  "blake3",
  "bs58",
  "chacha20poly1305",
@@ -2437,7 +2439,10 @@ dependencies = [
  "sha2",
  "subtle",
  "thiserror 1.0.69",
+ "unicode-normalization",
+ "url",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]

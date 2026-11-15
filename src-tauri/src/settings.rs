@@ -129,6 +129,32 @@ pub struct StoredPublicSync {
     pub enabled: bool,
     #[serde(default)]
     pub authorized_channels: Vec<String>,
+    #[serde(default = "crate::models::default_sync_status")]
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sunset_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revocation_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<crate::models::FrontendSyncReplacementTarget>,
+}
+
+impl Default for StoredPublicSync {
+    fn default() -> Self {
+        Self {
+            write_url: String::new(),
+            read_url: String::new(),
+            drop_pub: String::new(),
+            register_url: None,
+            access_pubkey: String::new(),
+            enabled: default_is_active(),
+            authorized_channels: Vec::new(),
+            status: crate::models::default_sync_status(),
+            sunset_at: None,
+            revocation_reason: None,
+            replacement: None,
+        }
+    }
 }
 
 fn default_share_min_level() -> u8 {

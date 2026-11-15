@@ -25,7 +25,7 @@ use tauri_plugin_log::{
 };
 use human_money_core::app_service::AppService;
 
-use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*, market::*, sync::*, post::*, profile::*};
+use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*, market::*, sync::*, post::*, profile::*, recovery::*};
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
 
@@ -177,6 +177,7 @@ pub fn run() {
             update_sync_admin_config,
             block_sync_slot,
             delete_sync_admin,
+            revoke_own_sync_server,
             discover_available_syncs,
             probe_contact_syncs,
             set_selected_upload_syncs,
@@ -198,6 +199,19 @@ pub fn run() {
             dismiss_pending_post_item,
             get_post_inbox_summary,
             sync_post_channels,
+            export_profile_mnemonic,
+            confirm_emergency_sheet_saved,
+            get_recovery_protection_status,
+            setup_social_recovery_guardians,
+            revoke_social_recovery,
+            start_social_recovery_session,
+            get_active_recovery_session,
+            cancel_social_recovery_session,
+            import_guardian_recovery_reply,
+            inspect_guardian_recovery_request,
+            approve_guardian_recovery_request,
+            complete_social_recovery,
+            restore_from_emergency_kit_uri,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1149,6 +1149,146 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         "reply_market_inquiry_via_post": () => ({ inquiryId: "inq_01", status: "replied" }),
         "dismiss_pending_post_item": () => null,
 
+        // --- Social & Emergency Recovery ---
+        "export_profile_mnemonic": () => ({
+            phrase: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            languageCode: 0,
+            hasBip39Passphrase: false,
+            kitUri: "humoco://kit?v=1&ent=00000000000000000000000000000000&lang=0",
+            qrSvg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#eee"/></svg>',
+            syncUrls: ["https://sync.humoco.org"],
+            guardianNames: ["Bob", "Carol", "David"]
+        }),
+        "confirm_emergency_sheet_saved": () => ({
+            confirmedAt: Math.floor(Date.now() / 1000),
+            backupSyncResult: { uploadedTo: 1, authorizedTargets: 1, paddedBytes: 65536, errors: [] }
+        }),
+        "get_recovery_protection_status": () => ({
+            hasVoucher: true,
+            confirmedGuardiansCount: 2,
+            requiredThreshold: 2,
+            guardians: [
+                {
+                    userId: MOCK_RECIPIENT_DID,
+                    displayName: "Bob Baumeister",
+                    shareIndex: 1,
+                    status: { status: "confirmed", ackedAt: Math.floor(Date.now() / 1000) - 3600 },
+                    assignedAt: Math.floor(Date.now() / 1000) - 7200,
+                    lastContactedAt: Math.floor(Date.now() / 1000) - 3600,
+                    isStale90d: false,
+                    updatedAt: Math.floor(Date.now() / 1000) - 3600
+                },
+                {
+                    userId: MOCK_CAROL_DID,
+                    displayName: "Carol Designer",
+                    shareIndex: 2,
+                    status: { status: "confirmed", ackedAt: Math.floor(Date.now() / 1000) - 3600 },
+                    assignedAt: Math.floor(Date.now() / 1000) - 7200,
+                    lastContactedAt: Math.floor(Date.now() / 1000) - 3600,
+                    isStale90d: false,
+                    updatedAt: Math.floor(Date.now() / 1000) - 3600
+                },
+                {
+                    userId: "did:key:z6MkdDavidHelper789",
+                    displayName: "David Helfer",
+                    shareIndex: 3,
+                    status: { status: "pending" },
+                    assignedAt: Math.floor(Date.now() / 1000) - 7200,
+                    lastContactedAt: null,
+                    isStale90d: false,
+                    updatedAt: Math.floor(Date.now() / 1000) - 7200
+                }
+            ],
+            emergencySheetConfirmedAt: Math.floor(Date.now() / 1000) - 86400,
+            hasIdentityRecovery: true,
+            syncBackupCount: 2,
+            hasSyncBackup: true,
+            hasLocalBackup: true,
+            hasVoucherBackup: true,
+            guardianWards: []
+        }),
+        "setup_social_recovery_guardians": () => ({
+            rotationEpoch: 1,
+            thresholdM: 2,
+            guardiansCount: 3,
+            postSyncResult: { fetchedItems: 0, processedItems: 0, errors: [] },
+            backupSyncResult: { uploadedTo: 1, authorizedTargets: 1, paddedBytes: 65536, errors: [] }
+        }),
+        "revoke_social_recovery": () => ({
+            rotationEpoch: 2,
+            revokedGuardiansCount: 3,
+            postSyncResult: { fetchedItems: 0, processedItems: 0, errors: [] },
+            backupSyncResult: null
+        }),
+        "start_social_recovery_session": () => ({
+            sasCode: "482-910",
+            createdAt: Math.floor(Date.now() / 1000),
+            nameHint: "Alice",
+            requestUri: "humoco://recovery-req?v=1&pk=abcdef&ts=" + Math.floor(Date.now() / 1000) + "&name=Alice",
+            ownerDid: null,
+            ownerDisplayName: null,
+            rotationEpoch: null,
+            thresholdM: null,
+            collectedCount: 0,
+            questionIds: null,
+            hasEnoughShares: false,
+            discoveredSyncUrls: []
+        }),
+        "get_active_recovery_session": () => null,
+        "cancel_social_recovery_session": () => null,
+        "import_guardian_recovery_reply": () => ({
+            sasCode: "482-910",
+            createdAt: Math.floor(Date.now() / 1000),
+            nameHint: "Alice",
+            requestUri: "humoco://recovery-req?v=1&pk=abcdef&ts=" + Math.floor(Date.now() / 1000) + "&name=Alice",
+            ownerDid: MOCK_USER_DID,
+            ownerDisplayName: "Alice",
+            rotationEpoch: 1,
+            thresholdM: 2,
+            collectedCount: 2,
+            questionIds: [1, 2, 3],
+            hasEnoughShares: true,
+            discoveredSyncUrls: ["https://sync.humoco.org"]
+        }),
+        "inspect_guardian_recovery_request": () => ({
+            sasCode: "482-910",
+            requestedAt: Math.floor(Date.now() / 1000) - 60,
+            isStale48h: false,
+            nameHint: "Alice",
+            wards: [
+                {
+                    ownerDid: MOCK_USER_DID,
+                    ownerDisplayName: "Alice",
+                    rotationEpoch: 1,
+                    thresholdM: 2,
+                    totalN: 3,
+                    updatedAt: Math.floor(Date.now() / 1000) - 3600
+                }
+            ]
+        }),
+        "approve_guardian_recovery_request": () => ({
+            replyUri: "humoco://recovery-reply?v=1&data=mockdata",
+            replyQrSvg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#eee"/></svg>',
+            sasCode: "482-910",
+            ownerDisplayName: "Alice"
+        }),
+        "complete_social_recovery": () => ({
+            profileName: "Alice",
+            mode: "restore_new_device",
+            outcome: "restored_full_sync",
+            backupEpoch: 1,
+            backupTxNonce: 2,
+            pendingRestoreL2Reconciliation: false
+        }),
+        "restore_from_emergency_kit_uri": () => ({
+            profileName: "Alice",
+            mode: "restore_new_device",
+            outcome: "restored_full_sync",
+            backupEpoch: 1,
+            backupTxNonce: 2,
+            pendingRestoreL2Reconciliation: false
+        }),
+
         // --- Logs & Diagnostics ---
         "get_latest_logs": () => [
             "[INFO] HuMoCo Core v0.5.1 initialized with strict L1 autonomy",

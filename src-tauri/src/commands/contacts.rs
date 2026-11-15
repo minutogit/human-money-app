@@ -249,6 +249,7 @@ mod tests {
             fail_count: 0,
             status: "unverified".to_string(),
             last_probed_at: None,
+            ..Default::default()
         };
 
         // 1. Initial contact with sync1

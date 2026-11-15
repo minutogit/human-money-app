@@ -130,6 +130,7 @@ mod tests {
                     enabled: true,
                     authorized_channels: vec!["card".to_string()],
                     register_url: None,
+                    ..Default::default()
                 }],
                 ..Default::default()
             });

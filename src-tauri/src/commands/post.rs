@@ -99,6 +99,7 @@ pub(crate) fn collect_own_reply_syncs(
                 fail_count: 0,
                 status: "active".to_string(),
                 last_probed_at: None,
+                ..Default::default()
             });
         }
     }
@@ -2269,6 +2270,275 @@ pub async fn sync_post_channels_impl(
                         }
                     }
                 }
+                PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_ASSIGN_V1 => {
+                    match serde_json::from_slice::<humoco_market::GuardianVaultEntry>(&decrypted_bytes) {
+                        Ok(entry) => {
+                            if !are_dids_equal(&sender_did, &entry.owner_did) {
+                                errors.push(format!(
+                                    "Guardian assign sender DID mismatch: {} != {}",
+                                    sender_did, entry.owner_did
+                                ));
+                            } else {
+                                let is_trusted_non_offender = {
+                                    let mut service = state.service.lock().unwrap();
+                                    let is_offender = service
+                                        .with_wallet(|w| {
+                                            matches!(
+                                                w.check_reputation(&sender_did),
+                                                human_money_core::models::conflict::TrustStatus::KnownOffender(_)
+                                            )
+                                        })
+                                        .unwrap_or(false);
+                                    if is_offender {
+                                        false
+                                    } else {
+                                        state
+                                            .load_contacts(&mut service, password.as_deref())
+                                            .map(|list| {
+                                                list.iter().any(|c| {
+                                                    are_dids_equal(&c.did, &sender_did)
+                                                        && c.trust_level.unwrap_or(0) >= 1
+                                                })
+                                            })
+                                            .unwrap_or(false)
+                                    }
+                                };
+
+                                if !is_trusted_non_offender {
+                                    errors.push(format!(
+                                        "Guardian assign from untrusted sender or known offender: {}",
+                                        sender_did
+                                    ));
+                                } else {
+                                    match humoco_market::verify_guardian_vault_entry(&entry) {
+                                        Ok(()) => {
+                                            let mut service = state.service.lock().unwrap();
+                                            let mut vault = crate::commands::recovery::load_guardian_vault(
+                                                &mut service,
+                                                password.as_deref(),
+                                            )
+                                            .unwrap_or_else(|_| humoco_market::GuardianVaultStore::new());
+
+                                            match vault.upsert_ward(entry.clone()) {
+                                                Ok(()) => {
+                                                    if let Err(e) = crate::commands::recovery::save_guardian_vault(
+                                                        &mut service,
+                                                        &vault,
+                                                        password.as_deref(),
+                                                    ) {
+                                                        errors.push(format!("Failed to save guardian vault: {:?}", e));
+                                                    } else {
+                                                        let ack = humoco_market::GuardianVaultAck {
+                                                            owner_did: entry.owner_did.clone(),
+                                                            rotation_epoch: entry.rotation_epoch,
+                                                            acked_at: now_secs,
+                                                        };
+                                                        if let Ok(ack_bytes) = serde_json::to_vec(&ack) {
+                                                            if let Ok(container) = SecureContainer::seal(
+                                                                &my_identity,
+                                                                &ContainerConfig::TargetDid(
+                                                                    sender_did.clone(),
+                                                                    PrivacyMode::HashedRouting,
+                                                                ),
+                                                                &ack_bytes,
+                                                                PayloadType::Generic(
+                                                                    humoco_market::PAYLOAD_GUARDIAN_ACK_V1.to_string(),
+                                                                ),
+                                                            ) {
+                                                                if let Ok(container_bytes) = serde_json::to_vec(&container) {
+                                                                    let auto_msg_id = uuid::Uuid::new_v4().to_string();
+                                                                    let env = PostEnvelope::new(
+                                                                        auto_msg_id.clone(),
+                                                                        now_secs,
+                                                                        own_reply_syncs.iter().cloned().map(Into::into).collect(),
+                                                                        container_bytes,
+                                                                    );
+                                                                    if let Ok(sender_ed_pk) = get_pubkey_from_user_id(&sender_did) {
+                                                                        if let Ok(auto_box) = seal_post_box(&my_ed_sk, &sender_ed_pk, &env) {
+                                                                            post_state.processed_msg_ids.insert(auto_msg_id.clone());
+                                                                            post_state.outbox_entries.push(PostOutboxEntry {
+                                                                                msg_id: auto_msg_id,
+                                                                                recipient_did: sender_did.clone(),
+                                                                                tag16_hex: hex::encode(auto_box.tag16),
+                                                                                bundle_id: None,
+                                                                                entry: auto_box,
+                                                                                created_at: now_secs,
+                                                                            });
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        queue_receipt(
+                                                            &mut post_state,
+                                                            &my_identity,
+                                                            &my_ed_sk,
+                                                            &sender_did,
+                                                            &envelope.msg_id,
+                                                            &box_entry.tag16,
+                                                            None,
+                                                            &own_reply_syncs,
+                                                            now_secs,
+                                                        );
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    errors.push(format!("Failed to upsert guardian ward: {}", e));
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            errors.push(format!("Invalid guardian vault entry: {}", e));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            errors.push(format!("Failed to parse GuardianVaultEntry: {}", e));
+                        }
+                    }
+                }
+                PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_ACK_V1 => {
+                    match serde_json::from_slice::<humoco_market::GuardianVaultAck>(&decrypted_bytes) {
+                        Ok(ack) => {
+                            let mut service = state.service.lock().unwrap();
+                            if let Ok(Some(mut owner_state)) = crate::commands::recovery::load_recovery_owner_state(
+                                &mut service,
+                                password.as_deref(),
+                            ) {
+                                if ack.rotation_epoch == owner_state.rotation_epoch
+                                    && are_dids_equal(&ack.owner_did, &my_identity.user_id)
+                                {
+                                    let mut modified = false;
+                                    for g in &mut owner_state.guardians {
+                                        if are_dids_equal(&g.user_id, &sender_did) {
+                                            g.status = crate::models::GuardianAssignmentStatus::Confirmed {
+                                                acked_at: ack.acked_at,
+                                            };
+                                            modified = true;
+                                        }
+                                    }
+                                    if modified {
+                                        let _ = crate::commands::recovery::save_recovery_owner_state(
+                                            &mut service,
+                                            &owner_state,
+                                            password.as_deref(),
+                                        );
+                                    }
+                                }
+                            }
+                            queue_receipt(
+                                &mut post_state,
+                                &my_identity,
+                                &my_ed_sk,
+                                &sender_did,
+                                &envelope.msg_id,
+                                &box_entry.tag16,
+                                None,
+                                &own_reply_syncs,
+                                now_secs,
+                            );
+                        }
+                        Err(e) => {
+                            errors.push(format!("Failed to parse GuardianVaultAck: {}", e));
+                        }
+                    }
+                }
+                PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_LOCATOR_V1 => {
+                    match serde_json::from_slice::<humoco_market::GuardianLocatorUpdate>(&decrypted_bytes) {
+                        Ok(update) => {
+                            if !are_dids_equal(&sender_did, &update.owner_did) {
+                                errors.push(format!(
+                                    "Guardian locator update sender mismatch: {} != {}",
+                                    sender_did, update.owner_did
+                                ));
+                            } else {
+                                let mut service = state.service.lock().unwrap();
+                                let mut vault = crate::commands::recovery::load_guardian_vault(
+                                    &mut service,
+                                    password.as_deref(),
+                                )
+                                .unwrap_or_else(|_| humoco_market::GuardianVaultStore::new());
+                                match vault.update_locator(&update) {
+                                    Ok(updated) => {
+                                        if updated {
+                                            let _ = crate::commands::recovery::save_guardian_vault(
+                                                &mut service,
+                                                &vault,
+                                                password.as_deref(),
+                                            );
+                                        }
+                                        queue_receipt(
+                                            &mut post_state,
+                                            &my_identity,
+                                            &my_ed_sk,
+                                            &sender_did,
+                                            &envelope.msg_id,
+                                            &box_entry.tag16,
+                                            None,
+                                            &own_reply_syncs,
+                                            now_secs,
+                                        );
+                                    }
+                                    Err(e) => {
+                                        errors.push(format!("Failed to update guardian locator: {}", e));
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            errors.push(format!("Failed to parse GuardianLocatorUpdate: {}", e));
+                        }
+                    }
+                }
+                PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_REVOKE_V1 => {
+                    match serde_json::from_slice::<humoco_market::GuardianRevoke>(&decrypted_bytes) {
+                        Ok(revoke) => {
+                            if !are_dids_equal(&sender_did, &revoke.owner_did) {
+                                errors.push(format!(
+                                    "Guardian revoke sender mismatch: {} != {}",
+                                    sender_did, revoke.owner_did
+                                ));
+                            } else {
+                                let mut service = state.service.lock().unwrap();
+                                let mut vault = crate::commands::recovery::load_guardian_vault(
+                                    &mut service,
+                                    password.as_deref(),
+                                )
+                                .unwrap_or_else(|_| humoco_market::GuardianVaultStore::new());
+                                match vault.revoke_ward(&revoke) {
+                                    Ok(revoked) => {
+                                        if revoked {
+                                            let _ = crate::commands::recovery::save_guardian_vault(
+                                                &mut service,
+                                                &vault,
+                                                password.as_deref(),
+                                            );
+                                        }
+                                        queue_receipt(
+                                            &mut post_state,
+                                            &my_identity,
+                                            &my_ed_sk,
+                                            &sender_did,
+                                            &envelope.msg_id,
+                                            &box_entry.tag16,
+                                            None,
+                                            &own_reply_syncs,
+                                            now_secs,
+                                        );
+                                    }
+                                    Err(e) => {
+                                        errors.push(format!("Failed to revoke ward from guardian vault: {}", e));
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            errors.push(format!("Failed to parse GuardianRevoke: {}", e));
+                        }
+                    }
+                }
                 _ => {
                     // Unknown or unhandled payload type
                 }
@@ -2417,6 +2687,7 @@ mod tests {
                     fail_count: 0,
                     status: "active".to_string(),
                     last_probed_at: None,
+                    ..Default::default()
                 }],
             };
             alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
@@ -2447,6 +2718,7 @@ mod tests {
                     fail_count: 0,
                     status: "active".to_string(),
                     last_probed_at: None,
+                    ..Default::default()
                 }],
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
@@ -2609,6 +2881,7 @@ mod tests {
                     fail_count: 0,
                     status: "active".to_string(),
                     last_probed_at: None,
+                    ..Default::default()
                 }],
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
@@ -2756,6 +3029,7 @@ mod tests {
                     fail_count: 0,
                     status: "active".to_string(),
                     last_probed_at: None,
+                    ..Default::default()
                 }],
             };
             alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
@@ -2787,6 +3061,7 @@ mod tests {
                     fail_count: 0,
                     status: "active".to_string(),
                     last_probed_at: None,
+                    ..Default::default()
                 }],
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
@@ -2963,6 +3238,7 @@ mod tests {
                     fail_count: 0,
                     status: "active".to_string(),
                     last_probed_at: None,
+                    ..Default::default()
                 }],
             };
             alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
@@ -2993,6 +3269,7 @@ mod tests {
                     fail_count: 0,
                     status: "active".to_string(),
                     last_probed_at: None,
+                    ..Default::default()
                 }],
             };
             bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
@@ -3127,6 +3404,7 @@ mod tests {
             fail_count: 0,
             status: "active".to_string(),
             last_probed_at: None,
+            ..Default::default()
         }];
 
         let bob_syncs = vec![FrontendSyncDescriptor {
@@ -3139,6 +3417,7 @@ mod tests {
             fail_count: 0,
             status: "active".to_string(),
             last_probed_at: None,
+            ..Default::default()
         }];
 
         {

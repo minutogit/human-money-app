@@ -137,13 +137,15 @@ pub fn create_profile(
     password: String,
     local_instance_id: String,
     language: MnemonicLanguage,
+    retain_mnemonic: Option<bool>,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), FrontendError> {
     info!("Attempting to create profile '{}' with language {:?}...", profile_name, language);
     let mut service = state.service.lock().unwrap();
     let core_language = language.into();
-    match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password, core_language, local_instance_id) {
+    let retain = retain_mnemonic.unwrap_or(true);
+    match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password, core_language, local_instance_id, retain) {
         Ok(()) => {
             info!("Profile created successfully!");
 

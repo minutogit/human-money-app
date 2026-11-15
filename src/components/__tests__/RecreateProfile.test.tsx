@@ -775,6 +775,7 @@ describe('RecreateProfile Component', () => {
           password: 'password123',
           localInstanceId: 'test-instance-id',
           language: 'english',
+          retainMnemonic: true,
         });
       }, { timeout: 3000 });
 
@@ -829,6 +830,7 @@ describe('RecreateProfile Component', () => {
           password: 'password123',
           localInstanceId: 'test-instance-id',
           language: 'english',
+          retainMnemonic: true,
         });
       }, { timeout: 3000 });
 

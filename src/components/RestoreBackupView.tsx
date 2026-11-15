@@ -16,6 +16,7 @@ import { BackupProbeDto, BackupInspectionDto, RestoreOutcomeDto, MnemonicLanguag
 import { cleanSeedText } from '../utils/seedUtils';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { logger } from '../utils/log';
+import { SocialAndSheetRecoveryFlow } from './SocialAndSheetRecoveryFlow';
 import { 
     FolderSync, 
     FileArchive, 
@@ -32,13 +33,15 @@ import {
     Hash,
     Server,
     Search,
-    AlertTriangle
+    AlertTriangle,
+    ChevronDown
 } from 'lucide-react';
 
 export interface RestoreBackupViewProps {
     onRestoreSuccess: (outcome: RestoreOutcomeDto) => void;
     onSwitchToRecreate: () => void;
     onBack: () => void;
+    initialPayload?: string;
 }
 
 type WizardStep = 'select_source' | 'sync_source' | 'unlock_and_inspect' | 'completed';
@@ -47,6 +50,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
     onRestoreSuccess,
     onSwitchToRecreate,
     onBack,
+    initialPayload,
 }) => {
     const { t } = useTranslation();
 
@@ -398,88 +402,112 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
 
             {/* STEP 1: Select Backup Source */}
             {step === 'select_source' && (
-                <div className="space-y-4">
-                    <div className="text-center">
-                        <h2 className="text-sm font-black uppercase tracking-widest text-theme-secondary">
-                            {t('profile.backupRestoreSourceTitle')}
-                        </h2>
-                    </div>
+                <div className="space-y-6">
+                    {/* Primary Action Tiles: Social & Sheet Recovery */}
+                    <SocialAndSheetRecoveryFlow
+                        mode="restore_new_device"
+                        initialPayload={initialPayload}
+                        onSuccess={() => onRestoreSuccess({
+                            folderName: '',
+                            profileName: '',
+                            activeVoucherQueriesCount: 0,
+                            reconciledSpentCount: 0,
+                            restoredStandardsCount: 0,
+                            l2ReconciliationStatus: 'reconciled',
+                        })}
+                    />
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-                        {/* File Option */}
-                        <button
-                            type="button"
-                            onClick={handleSelectFile}
-                            className="p-6 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex flex-col justify-between gap-4 cursor-pointer group shadow-sm hover:shadow-md"
-                        >
-                            <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
-                                <FileArchive size={24} />
-                            </div>
-                            <div className="space-y-1">
-                                <h3 className="text-sm font-black text-theme-secondary group-hover:text-theme-primary">
-                                    {t('profile.backupRestoreSelectFile')}
-                                </h3>
-                                <p className="text-xs text-theme-light font-medium leading-relaxed">
-                                    {t('profile.backupRestoreSelectFileDesc')}
-                                </p>
-                            </div>
-                            <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
-                                <span>Browse file (.hmcbackup)</span>
-                                <ArrowRight size={14} />
-                            </div>
-                        </button>
+                    {/* Collapsible Section: Advanced Restore */}
+                    <details open className="group border border-theme-subtle rounded-3xl p-5 bg-bg-surface/50">
+                        <summary className="font-bold text-xs uppercase tracking-wider text-theme-light hover:text-theme-secondary cursor-pointer select-none flex items-center justify-between">
+                            <span>{t('backup.advancedRestoreCollapsible')}</span>
+                            <ChevronDown className="transition-transform group-open:rotate-180" size={16} />
+                        </summary>
 
-                        {/* Folder Option */}
-                        <button
-                            type="button"
-                            onClick={handleSelectFolder}
-                            className="p-6 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex flex-col justify-between gap-4 cursor-pointer group shadow-sm hover:shadow-md"
-                        >
-                            <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
-                                <FolderSync size={24} />
+                        <div className="mt-4 pt-4 border-t border-theme-subtle/50 space-y-4">
+                            <div className="text-left space-y-1">
+                                <h2 className="text-sm font-black uppercase tracking-widest text-theme-secondary">
+                                    {t('profile.backupRestoreSourceTitle')}
+                                </h2>
                             </div>
-                            <div className="space-y-1">
-                                <h3 className="text-sm font-black text-theme-secondary group-hover:text-theme-primary">
-                                    {t('profile.backupRestoreSelectFolder')}
-                                </h3>
-                                <p className="text-xs text-theme-light font-medium leading-relaxed">
-                                    {t('profile.backupRestoreSelectFolderDesc')}
-                                </p>
-                            </div>
-                            <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
-                                <span>{t('backup.selectDirectory', 'Verzeichnis auswählen')}</span>
-                                <ArrowRight size={14} />
-                            </div>
-                        </button>
 
-                        {/* Sync Service Option */}
-                        <button
-                            type="button"
-                            data-testid="restore-select-sync-btn"
-                            onClick={() => {
-                                setFeedback(null);
-                                setCredentialMode('mnemonic');
-                                setStep('sync_source');
-                            }}
-                            className="p-6 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex flex-col justify-between gap-4 cursor-pointer group shadow-sm hover:shadow-md"
-                        >
-                            <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
-                                <Server size={24} />
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                                {/* File Option */}
+                                <button
+                                    type="button"
+                                    onClick={handleSelectFile}
+                                    className="p-6 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex flex-col justify-between gap-4 cursor-pointer group shadow-sm hover:shadow-md"
+                                >
+                                    <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
+                                        <FileArchive size={24} />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <h3 className="text-sm font-black text-theme-secondary group-hover:text-theme-primary">
+                                            {t('profile.backupRestoreSelectFile')}
+                                        </h3>
+                                        <p className="text-xs text-theme-light font-medium leading-relaxed">
+                                            {t('profile.backupRestoreSelectFileDesc')}
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
+                                        <span>Browse file (.hmcbackup)</span>
+                                        <ArrowRight size={14} />
+                                    </div>
+                                </button>
+
+                                {/* Folder Option */}
+                                <button
+                                    type="button"
+                                    onClick={handleSelectFolder}
+                                    className="p-6 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex flex-col justify-between gap-4 cursor-pointer group shadow-sm hover:shadow-md"
+                                >
+                                    <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
+                                        <FolderSync size={24} />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <h3 className="text-sm font-black text-theme-secondary group-hover:text-theme-primary">
+                                            {t('profile.backupRestoreSelectFolder')}
+                                        </h3>
+                                        <p className="text-xs text-theme-light font-medium leading-relaxed">
+                                            {t('profile.backupRestoreSelectFolderDesc')}
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
+                                        <span>{t('backup.selectDirectory', 'Verzeichnis auswählen')}</span>
+                                        <ArrowRight size={14} />
+                                    </div>
+                                </button>
+
+                                {/* Sync Service Option */}
+                                <button
+                                    type="button"
+                                    data-testid="restore-select-sync-btn"
+                                    onClick={() => {
+                                        setFeedback(null);
+                                        setCredentialMode('mnemonic');
+                                        setStep('sync_source');
+                                    }}
+                                    className="p-6 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex flex-col justify-between gap-4 cursor-pointer group shadow-sm hover:shadow-md"
+                                >
+                                    <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
+                                        <Server size={24} />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <h3 className="text-sm font-black text-theme-secondary group-hover:text-theme-primary">
+                                            {t('profile.backupRestoreSelectSync', 'Von Sync-Dienst wiederherstellen')}
+                                        </h3>
+                                        <p className="text-xs text-theme-light font-medium leading-relaxed">
+                                            {t('profile.backupRestoreSelectSyncDesc', 'Freundes-, eigenen oder öffentlichen Sync-Dienst mit Mnemonic abrufen')}
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
+                                        <span>{t('profile.backupRestoreSelectSyncAction', 'Sync-Dienst abrufen')}</span>
+                                        <ArrowRight size={14} />
+                                    </div>
+                                </button>
                             </div>
-                            <div className="space-y-1">
-                                <h3 className="text-sm font-black text-theme-secondary group-hover:text-theme-primary">
-                                    {t('profile.backupRestoreSelectSync', 'Von Sync-Dienst wiederherstellen')}
-                                </h3>
-                                <p className="text-xs text-theme-light font-medium leading-relaxed">
-                                    {t('profile.backupRestoreSelectSyncDesc', 'Freundes-, eigenen oder öffentlichen Sync-Dienst mit Mnemonic abrufen')}
-                                </p>
-                            </div>
-                            <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
-                                <span>{t('profile.backupRestoreSelectSyncAction', 'Sync-Dienst abrufen')}</span>
-                                <ArrowRight size={14} />
-                            </div>
-                        </button>
-                    </div>
+                        </div>
+                    </details>
                 </div>
             )}
 

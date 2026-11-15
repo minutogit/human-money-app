@@ -334,6 +334,34 @@ impl From<humoco_market::StandardRef> for FrontendStandardRef {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct FrontendSyncReplacementTarget {
+    pub write_url: String,
+    pub read_url: String,
+    pub drop_pub: String,
+}
+
+impl From<crate::sync_client::SyncReplacementTarget> for FrontendSyncReplacementTarget {
+    fn from(r: crate::sync_client::SyncReplacementTarget) -> Self {
+        Self {
+            write_url: r.write_url,
+            read_url: r.read_url,
+            drop_pub: r.drop_pub,
+        }
+    }
+}
+
+impl From<FrontendSyncReplacementTarget> for crate::sync_client::SyncReplacementTarget {
+    fn from(r: FrontendSyncReplacementTarget) -> Self {
+        Self {
+            write_url: r.write_url,
+            read_url: r.read_url,
+            drop_pub: r.drop_pub,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendSyncDescriptor {
     pub write_url: String,
     pub read_url: String,
@@ -350,10 +378,35 @@ pub struct FrontendSyncDescriptor {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_probed_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sunset_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revocation_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<FrontendSyncReplacementTarget>,
 }
 
 pub fn default_sync_status() -> String {
     "unverified".to_string()
+}
+
+impl Default for FrontendSyncDescriptor {
+    fn default() -> Self {
+        Self {
+            write_url: String::new(),
+            read_url: String::new(),
+            slot_id: None,
+            drop_pub: String::new(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: default_sync_status(),
+            last_probed_at: None,
+            sunset_at: None,
+            revocation_reason: None,
+            replacement: None,
+        }
+    }
 }
 
 impl From<humoco_market::DropDescriptor> for FrontendSyncDescriptor {
@@ -368,6 +421,9 @@ impl From<humoco_market::DropDescriptor> for FrontendSyncDescriptor {
             fail_count: 0,
             status: "unverified".to_string(),
             last_probed_at: None,
+            sunset_at: None,
+            revocation_reason: None,
+            replacement: None,
         }
     }
 }
@@ -516,6 +572,8 @@ pub struct FrontendSyncAdminStatus {
     pub active_slot_ids: Vec<String>,
     #[serde(default)]
     pub channel_counts: std::collections::BTreeMap<String, usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revocation: Option<crate::sync_client::SyncRevocationNotice>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
@@ -587,6 +645,8 @@ pub struct FrontendMarketSyncResult {
     pub imported_wot_lists: usize,
     pub errors: Vec<String>,
     pub retry_after_secs: Option<u64>,
+    #[serde(default)]
+    pub revoked_own_syncs: Vec<FrontendSyncDescriptor>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
