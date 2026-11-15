@@ -34,9 +34,12 @@ import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { PageLayout } from "./ui/PageLayout";
 import { AlertBanner } from "./ui/AlertBanner";
 import { ModalShell } from "./ui/ModalShell";
+import { Advanced } from "./ui/Advanced";
+import { AdvancedDisclosure } from "./ui/AdvancedDisclosure";
+import { TechId } from "./ui/TechId";
 import { formatAmount } from "../utils/format";
 import { readFromClipboard } from "../utils/clipboard";
-import { parsePaymentRequest } from "../utils/humocoUri";
+import { parseContactCard, parsePaymentRequest } from "../utils/humocoUri";
 import { 
     Shield, 
     BookOpen,
@@ -460,6 +463,29 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
         }
     };
 
+    const handleApplyRawCode = (rawText: string): boolean => {
+        const trimmed = rawText.trim();
+        if (!trimmed) {
+            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.emptyClipboard') });
+            return false;
+        }
+        if (trimmed.includes('humoco://pay')) {
+            const ok = applyPaymentRequest(trimmed);
+            if (!ok) {
+                dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.invalidPaymentRequest') });
+            }
+            return ok;
+        }
+        const parsedContact = parseContactCard(trimmed);
+        if (parsedContact?.did) {
+            dispatch({ type: 'SET_FEEDBACK', msg: '' });
+            dispatch({ type: 'SET_RECIPIENT', id: parsedContact.did.replace(/\s+/g, '') });
+            return true;
+        }
+        dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.invalidPaymentRequest') });
+        return false;
+    };
+
     const handleVoucherToggle = (v: VoucherSummary) => {
         toggleVoucher(v.localInstanceId, v.currentAmount);
     };
@@ -474,10 +500,13 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.pendingL2ReconciliationBlocked', 'Ausgaben sind vorübergehend gesperrt, bis der Online-Sicherheitsabgleich durchgeführt wurde.') });
             return;
         }
-        if (!state.recipientId) { 
-            dispatch({ type: 'SET_RECIPIENT_ERROR', value: true }); 
-            document.getElementById('recipientId')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); 
-            return; 
+        if (!state.recipientId) {
+            dispatch({ type: 'SET_RECIPIENT_ERROR', value: true });
+            const targetEl =
+                document.getElementById('recipientId') ||
+                document.querySelector<HTMLElement>('[data-testid="recipient-search-input"]');
+            targetEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
         }
         if (selectedMap.size === 0) { 
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.assetSelectionRequired') }); 
@@ -594,7 +623,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
             title={t('transfer.title')} 
             description={t('transfer.description')} 
             onBack={goBack}
-            actions={
+            advancedActions={
                 <Button
                     variant="secondary"
                     size="sm"
@@ -659,65 +688,67 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                     <div className="lg:col-span-7 space-y-6">
-                        {/* Absender (From) */}
-                        <Card header={
-                            <div className="flex items-center justify-between gap-2 w-full">
-                                <div className="flex items-center gap-2">
-                                    <UserCheck size={16} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.senderNameLabel')}</span>
-                                    <HelpIcon topic="senderName" size={14} />
-                                </div>
-                                <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-theme-light hover:text-theme-secondary cursor-pointer select-none">
-                                    <input
-                                        type="checkbox"
-                                        checked={!state.sendProfileName}
-                                        onChange={(e) => dispatch({ type: 'TOGGLE_PROFILE_NAME', value: !e.target.checked })}
-                                        className="rounded border-slate-300 accent-theme-primary h-3.5 w-3.5 cursor-pointer"
-                                    />
-                                    <span>{t('transfer.sendAnonymously')}</span>
-                                </label>
-                            </div>
-                        }>
-                            {state.sendProfileName ? (
-                                <div className="space-y-1.5">
-                                    <div className="flex items-center gap-3">
-                                        <div className="shrink-0">
-                                            <Avatar size={32} name={ownUserId || "sender"} variant="beam" />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <Input 
-                                                value={state.customSenderName} 
-                                                onChange={(e) => dispatch({ type: 'SET_SENDER_NAME', name: e.target.value })} 
-                                                placeholder={t('transfer.senderNamePlaceholder')} 
-                                                className="bg-white border-slate-200 text-sm font-bold rounded-xl py-2 px-3" 
-                                            />
-                                        </div>
+                        <Advanced>
+                            {/* Absender (From) */}
+                            <Card header={
+                                <div className="flex items-center justify-between gap-2 w-full">
+                                    <div className="flex items-center gap-2">
+                                        <UserCheck size={16} className="text-theme-primary" />
+                                        <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('transfer.senderNameLabel')}</span>
+                                        <HelpIcon topic="senderName" size={14} />
                                     </div>
-                                    {ownUserId && (
-                                        <p className="text-[10px] font-mono text-slate-400 truncate pl-11">
-                                            {ownUserId}
-                                        </p>
-                                    )}
+                                    <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-theme-light hover:text-theme-secondary cursor-pointer select-none">
+                                        <input
+                                            type="checkbox"
+                                            checked={!state.sendProfileName}
+                                            onChange={(e) => dispatch({ type: 'TOGGLE_PROFILE_NAME', value: !e.target.checked })}
+                                            className="rounded border-slate-300 accent-theme-primary h-3.5 w-3.5 cursor-pointer"
+                                        />
+                                        <span>{t('transfer.sendAnonymously')}</span>
+                                    </label>
                                 </div>
-                            ) : (
-                                <div className="flex items-center gap-2.5 py-1.5 px-3 bg-slate-50 border border-slate-200/60 rounded-xl text-xs text-slate-500">
-                                    <Shield size={15} className="text-slate-400 shrink-0" />
-                                    <span>{t('transfer.anonymousHint')}</span>
-                                </div>
-                            )}
-                        </Card>
+                            }>
+                                {state.sendProfileName ? (
+                                    <div className="space-y-2">
+                                        <div className="flex items-center gap-3">
+                                            <div className="shrink-0">
+                                                <Avatar size={32} name={ownUserId || "sender"} variant="beam" />
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <Input
+                                                    value={state.customSenderName}
+                                                    onChange={(e) => dispatch({ type: 'SET_SENDER_NAME', name: e.target.value })}
+                                                    placeholder={t('transfer.senderNamePlaceholder')}
+                                                    className="bg-white border-slate-200 text-sm font-bold rounded-xl py-2 px-3"
+                                                />
+                                            </div>
+                                        </div>
+                                        {ownUserId && (
+                                            <div className="pl-11">
+                                                <TechId value={ownUserId} kind="did" />
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center gap-2.5 py-1.5 px-3 bg-slate-50 border border-slate-200/60 rounded-xl text-xs text-slate-500">
+                                        <Shield size={15} className="text-slate-400 shrink-0" />
+                                        <span>{t('transfer.anonymousHint')}</span>
+                                    </div>
+                                )}
+                            </Card>
 
-                        {/* Visual Flow Connector */}
-                        <div className="flex justify-center -my-3 relative z-10">
-                            <div className="w-0.5 h-6 border-l-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center">
-                                <div className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-400 rounded-full p-1 shadow-sm">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
+                            {/* Visual Flow Connector */}
+                            <div className="flex justify-center -my-3 relative z-10">
+                                <div className="w-0.5 h-6 border-l-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center">
+                                    <div className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-400 rounded-full p-1 shadow-sm">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
+                        </Advanced>
 
                         {/* Empfänger (To) */}
-                        <RecipientSelector 
+                        <RecipientSelector
                             recipientId={state.recipientId}
                             onRecipientChange={(e) => {
                                 const rawVal = e.target.value;
@@ -732,6 +763,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                                 e.target.value = val;
                                 dispatch({ type: 'SET_RECIPIENT', id: val });
                             }}
+                            onApplyRawCode={handleApplyRawCode}
                             onSelectContact={(c) => dispatch({ type: 'SET_RECIPIENT', id: c.did })}
                             contacts={contacts}
                             trustStatus={trustStatus}
@@ -749,54 +781,62 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                         }>
                             <div className="space-y-2">
                                 <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">{t('transfer.transactionNote')}</label>
-                                <Textarea 
-                                    value={state.notes} 
-                                    onChange={(e) => dispatch({ type: 'SET_NOTES', notes: e.target.value })} 
-                                    placeholder={t('transfer.notePlaceholder')} 
-                                    className="rounded-2xl min-h-[80px]" 
+                                <Textarea
+                                    value={state.notes}
+                                    onChange={(e) => dispatch({ type: 'SET_NOTES', notes: e.target.value })}
+                                    placeholder={t('transfer.notePlaceholder')}
+                                    className="rounded-2xl min-h-[80px]"
                                 />
                             </div>
                         </Card>
 
-                        {/* Privatsphäre & Sicherheit */}
-                        <PrivacyToggle 
-                            privacyMode={state.privacyMode}
-                            onPrivacyChange={(mode) => dispatch({ type: 'SET_PRIVACY', mode })}
-                            privacyRules={{ mode: detectedPrivacy, forced: detectedPrivacy !== 'flexible' }}
-                            privacyError={state.privacyError}
-                        />
-
-                        {/* Visitenkarte mitsenden */}
-                        {hasPublishedCard ? (
-                            <div className="flex items-start gap-3 p-4 bg-white border border-theme-subtle rounded-2xl">
-                                <input
-                                    type="checkbox"
-                                    id="sendCardToggle"
-                                    checked={sendCardOverride !== null ? sendCardOverride : (appSettings?.marketSendCardOnPayment ?? false)}
-                                    onChange={(e) => setSendCardOverride(e.target.checked)}
-                                    className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                        {/* Weitere Optionen (Privatsphäre & Visitenkarte) */}
+                        <AdvancedDisclosure
+                            title={t('transfer.moreOptionsTitle')}
+                            hasError={state.privacyError}
+                            isCustom={sendCardOverride !== null}
+                            toggleTestId="send-more-options-toggle"
+                        >
+                            <div className="space-y-5">
+                                <PrivacyToggle
+                                    privacyMode={state.privacyMode}
+                                    onPrivacyChange={(mode) => dispatch({ type: 'SET_PRIVACY', mode })}
+                                    privacyRules={{ mode: detectedPrivacy, forced: detectedPrivacy !== 'flexible' }}
+                                    privacyError={state.privacyError}
                                 />
-                                <div className="flex-1">
-                                    <label htmlFor="sendCardToggle" className="text-xs font-bold text-theme-secondary block cursor-pointer">
-                                        {t('transfer.sendCardTitle')}
-                                    </label>
-                                    <p className="text-[11px] text-theme-light mt-0.5">
-                                        {t('transfer.sendCardDesc')}
-                                    </p>
-                                </div>
+
+                                {hasPublishedCard ? (
+                                    <div className="flex items-start gap-3 p-4 bg-white border border-theme-subtle rounded-2xl">
+                                        <input
+                                            type="checkbox"
+                                            id="sendCardToggle"
+                                            checked={sendCardOverride !== null ? sendCardOverride : (appSettings?.marketSendCardOnPayment ?? false)}
+                                            onChange={(e) => setSendCardOverride(e.target.checked)}
+                                            className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                                        />
+                                        <div className="flex-1">
+                                            <label htmlFor="sendCardToggle" className="text-xs font-bold text-theme-secondary block cursor-pointer">
+                                                {t('transfer.sendCardTitle')}
+                                            </label>
+                                            <p className="text-[11px] text-theme-light mt-0.5">
+                                                {t('transfer.sendCardDesc')}
+                                            </p>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="p-3 bg-slate-50 border border-theme-subtle/60 rounded-2xl text-[11px] text-theme-light flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                        <span>{t('transfer.sendCardNoCardNotice')}</span>
+                                        <button
+                                            type="button"
+                                            onClick={() => navigate({ view: 'marketplace', initialTab: 'mine', initialOpenEditor: true })}
+                                            className="text-xs text-theme-primary hover:underline shrink-0 self-start sm:self-auto p-0 h-auto font-medium"
+                                        >
+                                            {t('transfer.openMarketplace')}
+                                        </button>
+                                    </div>
+                                )}
                             </div>
-                        ) : (
-                            <div className="p-3 bg-slate-50 border border-theme-subtle/60 rounded-2xl text-[11px] text-theme-light flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                <span>{t('transfer.sendCardNoCardNotice')}</span>
-                                <button
-                                    type="button"
-                                    onClick={() => navigate({ view: 'marketplace', initialTab: 'mine', initialOpenEditor: true })}
-                                    className="text-xs text-theme-primary hover:underline shrink-0 self-start sm:self-auto p-0 h-auto font-medium"
-                                >
-                                    {t('transfer.openMarketplace')}
-                                </button>
-                            </div>
-                        )}
+                        </AdvancedDisclosure>
                     </div>
 
                     <div className="lg:col-span-5 space-y-8">
@@ -828,85 +868,88 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                             onReceiveVoucher={() => navigate({ view: 'receive_bundle' })}
                         />
 
-                        {currentPlan && (
-                            <Card className="p-5 bg-amber-50/50 border border-amber-200/60 rounded-[32px] space-y-3 animate-in fade-in duration-300">
-                                <div className="flex items-center justify-between">
-                                    <h4 className="text-[10px] font-black text-amber-700 uppercase tracking-widest">{t('transfer.planTitle')}</h4>
-                                    {currentPlan.needsSplit && <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-2 py-1 rounded-full">{t('transfer.planSplitRequired')}</span>}
-                                </div>
-                                <div className="grid grid-cols-3 gap-2 text-xs">
-                                    <div className="bg-white rounded-xl p-2 border border-amber-100">
-                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planTarget', 'Ziel')}</p>
-                                        <p className="font-black text-slate-800">{formatAmount(currentPlan.target)} {filteredVouchers[0]?.displayCurrency ?? ''}</p>
-                                    </div>
-                                    <div className="bg-white rounded-xl p-2 border border-amber-100">
-                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planSelected', 'Ausgewählt')}</p>
-                                        <p className="font-black text-slate-800">{formatAmount(currentPlan.totalSelected)} {filteredVouchers[0]?.displayCurrency ?? ''}</p>
-                                    </div>
-                                    <div className={`rounded-xl p-2 border ${currentPlan.needsSplit ? 'bg-white border-amber-200' : 'bg-slate-50 border-slate-100'}`}>
-                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planChange', 'Wechselgeld')}</p>
-                                        <p className={`font-black ${currentPlan.needsSplit ? 'text-amber-700' : 'text-slate-400'}`}>
-                                            {(() => {
-                                                const total = parseFloat(currentPlan.totalSelected);
-                                                const target = parseFloat(currentPlan.target);
-                                                const diff = total - target;
-                                                const precision = filteredVouchers[0] ? (uuidToPrecisionMap.get(filteredVouchers[0].voucherStandardUuid) ?? 4) : 4;
-                                                return formatAmount(diff.toFixed(precision));
-                                            })()} {filteredVouchers[0]?.displayCurrency ?? ''}
-                                        </p>
-                                    </div>
-                                </div>
-                                <div className="space-y-1">
-                                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planInvolvedVouchers')}</p>
-                                    <div className="space-y-1 max-h-32 overflow-auto pr-1">
-                                        {currentPlan.selected.map((rv) => {
-                                            const voucher = filteredVouchers.find(v => v.localInstanceId === rv.localInstanceId);
-                                            const label = voucher?.displayStandardName ? `${voucher.displayStandardName} (${rv.localInstanceId.slice(0, 6)}…)` : `${rv.localInstanceId.slice(0, 8)}…`;
-                                            const currency = voucher?.displayCurrency || filteredVouchers[0]?.displayCurrency || '';
-                                            return (
-                                                <div key={rv.localInstanceId} className="flex justify-between items-center bg-white rounded-lg px-2 py-1 border border-slate-100 text-[11px]">
-                                                    <span className="font-mono text-slate-600 truncate max-w-[160px]">{label}</span>
-                                                    <span className="font-bold text-slate-700">{formatAmount(rv.amount)} {currency}</span>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                                {currentPlan.needsSplit && (
-                                    <p className="text-[10px] font-medium text-amber-800 bg-amber-100/70 p-2.5 rounded-xl border border-amber-200/50 leading-relaxed">
-                                        {t('transfer.splitReassurance')}
-                                    </p>
-                                )}
-                            </Card>
+                        {currentPlan?.needsSplit && (
+                            <p className="text-xs font-medium text-amber-800 bg-amber-50 p-3.5 rounded-2xl border border-amber-200/70 leading-relaxed">
+                                {t('transfer.splitReassurance')}
+                            </p>
                         )}
 
-                        {selectedMap.size > 0 && (
-                            <Card className="p-5 bg-slate-50 border border-slate-200/60 rounded-[32px] space-y-4 animate-in fade-in duration-300">
-                                <h4 className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.confirmTitle')} - {t('common.preview')}</h4>
-                                <div className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-                                    <div className="flex justify-between py-2.5">
-                                        <span className="text-slate-400">{t('transfer.senderNameLabel')}</span>
-                                        <span className="text-slate-900">{state.sendProfileName ? (state.customSenderName.trim() || t('transfer.noSenderNameProvided')) : t('transfer.anonymous')}</span>
+                        <Advanced>
+                            {currentPlan && (
+                                <Card className="p-5 bg-amber-50/50 border border-amber-200/60 rounded-[32px] space-y-3 animate-in fade-in duration-300">
+                                    <div className="flex items-center justify-between">
+                                        <h4 className="text-[10px] font-black text-amber-700 uppercase tracking-widest">{t('transfer.planTitle')}</h4>
+                                        {currentPlan.needsSplit && <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-2 py-1 rounded-full">{t('transfer.planSplitRequired')}</span>}
                                     </div>
-                                    <div className="flex justify-between py-2.5">
-                                        <span className="text-slate-400">{t('transfer.recipient')}</span>
-                                        <span className="font-mono text-[10px] text-slate-900 truncate max-w-[200px]">
-                                            {state.recipientId ? (
-                                                contacts.find(c => c.did === state.recipientId)
-                                                    ? `${contacts.find(c => c.did === state.recipientId)?.profile.firstName || ''} ${contacts.find(c => c.did === state.recipientId)?.profile.lastName || ''}`.trim() || contacts.find(c => c.did === state.recipientId)?.profile.organization || state.recipientId.slice(0, 8) + "..." + state.recipientId.slice(-8)
-                                                    : state.recipientId.slice(0, 8) + "..." + state.recipientId.slice(-8)
-                                            ) : '-'}
-                                        </span>
+                                    <div className="grid grid-cols-3 gap-2 text-xs">
+                                        <div className="bg-white rounded-xl p-2 border border-amber-100">
+                                            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planTarget', 'Ziel')}</p>
+                                            <p className="font-black text-slate-800">{formatAmount(currentPlan.target)} {filteredVouchers[0]?.displayCurrency ?? ''}</p>
+                                        </div>
+                                        <div className="bg-white rounded-xl p-2 border border-amber-100">
+                                            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planSelected', 'Ausgewählt')}</p>
+                                            <p className="font-black text-slate-800">{formatAmount(currentPlan.totalSelected)} {filteredVouchers[0]?.displayCurrency ?? ''}</p>
+                                        </div>
+                                        <div className={`rounded-xl p-2 border ${currentPlan.needsSplit ? 'bg-white border-amber-200' : 'bg-slate-50 border-slate-100'}`}>
+                                            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planChange', 'Wechselgeld')}</p>
+                                            <p className={`font-black ${currentPlan.needsSplit ? 'text-amber-700' : 'text-slate-400'}`}>
+                                                {(() => {
+                                                    const total = parseFloat(currentPlan.totalSelected);
+                                                    const target = parseFloat(currentPlan.target);
+                                                    const diff = total - target;
+                                                    const precision = filteredVouchers[0] ? (uuidToPrecisionMap.get(filteredVouchers[0].voucherStandardUuid) ?? 4) : 4;
+                                                    return formatAmount(diff.toFixed(precision));
+                                                })()} {filteredVouchers[0]?.displayCurrency ?? ''}
+                                            </p>
+                                        </div>
                                     </div>
-                                    <div className="flex justify-between py-2.5">
-                                        <span className="text-slate-400">{t('transfer.securityPrivacy')}</span>
-                                        <span className={state.privacyMode === 'stealth' ? 'text-purple-600' : 'text-blue-600'}>
-                                            {state.privacyMode === 'stealth' ? t('transfer.stealth') : (state.privacyMode === 'public' ? t('transfer.public') : '-')}
-                                        </span>
+                                    <div className="space-y-1">
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{t('transfer.planInvolvedVouchers')}</p>
+                                        <div className="space-y-1 max-h-32 overflow-auto pr-1">
+                                            {currentPlan.selected.map((rv) => {
+                                                const voucher = filteredVouchers.find(v => v.localInstanceId === rv.localInstanceId);
+                                                const label = voucher?.displayStandardName ? `${voucher.displayStandardName} (${rv.localInstanceId.slice(0, 6)}…)` : `${rv.localInstanceId.slice(0, 8)}…`;
+                                                const currency = voucher?.displayCurrency || filteredVouchers[0]?.displayCurrency || '';
+                                                return (
+                                                    <div key={rv.localInstanceId} className="flex justify-between items-center bg-white rounded-lg px-2 py-1 border border-slate-100 text-[11px]">
+                                                        <span className="font-mono text-slate-600 truncate max-w-[160px]">{label}</span>
+                                                        <span className="font-bold text-slate-700">{formatAmount(rv.amount)} {currency}</span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
-                                </div>
-                            </Card>
-                        )}
+                                </Card>
+                            )}
+
+                            {selectedMap.size > 0 && (
+                                <Card className="p-5 bg-slate-50 border border-slate-200/60 rounded-[32px] space-y-4 animate-in fade-in duration-300">
+                                    <h4 className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.confirmTitle')} - {t('common.preview')}</h4>
+                                    <div className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
+                                        <div className="flex justify-between py-2.5">
+                                            <span className="text-slate-400">{t('transfer.senderNameLabel')}</span>
+                                            <span className="text-slate-900">{state.sendProfileName ? (state.customSenderName.trim() || t('transfer.noSenderNameProvided')) : t('transfer.anonymous')}</span>
+                                        </div>
+                                        <div className="flex justify-between py-2.5">
+                                            <span className="text-slate-400">{t('transfer.recipient')}</span>
+                                            <span className="font-mono text-[10px] text-slate-900 truncate max-w-[200px]">
+                                                {state.recipientId ? (
+                                                    contacts.find(c => c.did === state.recipientId)
+                                                        ? `${contacts.find(c => c.did === state.recipientId)?.profile.firstName || ''} ${contacts.find(c => c.did === state.recipientId)?.profile.lastName || ''}`.trim() || contacts.find(c => c.did === state.recipientId)?.profile.organization || state.recipientId.slice(0, 8) + "..." + state.recipientId.slice(-8)
+                                                        : state.recipientId.slice(0, 8) + "..." + state.recipientId.slice(-8)
+                                                ) : '-'}
+                                            </span>
+                                        </div>
+                                        <div className="flex justify-between py-2.5">
+                                            <span className="text-slate-400">{t('transfer.securityPrivacy')}</span>
+                                            <span className={state.privacyMode === 'stealth' ? 'text-purple-600' : 'text-blue-600'}>
+                                                {state.privacyMode === 'stealth' ? t('transfer.stealth') : (state.privacyMode === 'public' ? t('transfer.public') : '-')}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </Card>
+                            )}
+                        </Advanced>
 
                         <TransferSummaryBar 
                             checkoutSummary={{
@@ -927,29 +970,46 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
             <ConfirmationModal 
                 isOpen={state.showConfirm}
                 title={t('transfer.confirmTitle')}
-                description={
-                    <div className="space-y-4 pt-2 text-left">
-                        <div className="flex items-center gap-3 p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/10">
-                            <Avatar size={40} name={state.recipientId} variant="beam" />
-                            <div className="min-w-0">
-                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.confirmRecipient')}</p>
-                                <p className="text-sm font-black text-theme-secondary truncate">{state.recipientId}</p>
+                description={(() => {
+                    const matched = contacts.find(c => c.did === state.recipientId);
+                    const matchedName = matched
+                        ? [`${matched.profile.firstName || ''}`, `${matched.profile.lastName || ''}`].join(' ').trim() || matched.profile.organization
+                        : undefined;
+                    return (
+                        <div className="space-y-4 pt-2 text-left">
+                            <div className="flex items-center gap-3 p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/10">
+                                <Avatar size={40} name={state.recipientId} variant="beam" />
+                                <div className="min-w-0 flex-1 space-y-1">
+                                    <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.confirmRecipient')}</p>
+                                    {matchedName ? (
+                                        <>
+                                            <p className="text-sm font-black text-theme-secondary truncate">{matchedName}</p>
+                                            <Advanced>
+                                                <TechId value={state.recipientId} kind="did" />
+                                            </Advanced>
+                                        </>
+                                    ) : (
+                                        <TechId value={state.recipientId} kind="did" />
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                            <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-2">{t('transfer.confirmAssets')}</p>
-                            <div className="text-lg font-black tracking-tighter text-theme-primary">
-                                {Object.entries(selectionStats).map(([displayCurrency, stat]) => `${formatAmount(stat.total.toString())} ${displayCurrency}`).join(', ')}
+                            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                <p className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-2">{t('transfer.confirmAssets')}</p>
+                                <div className="text-lg font-black tracking-tighter text-theme-primary">
+                                    {Object.entries(selectionStats).map(([displayCurrency, stat]) => `${formatAmount(stat.total.toString())} ${displayCurrency}`).join(', ')}
+                                </div>
                             </div>
+                            <Advanced>
+                                <div className="flex items-center gap-2 px-1">
+                                    <Shield size={14} className={state.privacyMode === 'stealth' ? "text-purple-500" : "text-blue-500"}/>
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">
+                                        {t('transfer.confirmPrivacy')} <span className={state.privacyMode === 'stealth' ? "text-purple-600" : "text-blue-600"}>{state.privacyMode === 'stealth' ? t('transfer.stealth') : t('transfer.public')}</span>
+                                    </p>
+                                </div>
+                            </Advanced>
                         </div>
-                        <div className="flex items-center gap-2 px-1">
-                            <Shield size={14} className={state.privacyMode === 'stealth' ? "text-purple-500" : "text-blue-500"}/>
-                            <p className="text-[10px] font-black uppercase tracking-widest text-theme-light">
-                                {t('transfer.confirmPrivacy')} <span className={state.privacyMode === 'stealth' ? "text-purple-600" : "text-blue-600"}>{state.privacyMode === 'stealth' ? t('transfer.stealth') : t('transfer.public')}</span>
-                            </p>
-                        </div>
-                    </div>
-                }
+                    );
+                })()}
                 confirmText={t('transfer.confirmExecute')}
                 onConfirm={executeTransfer}
                 onCancel={() => dispatch({ type: 'TOGGLE_CONFIRM', value: false })}
@@ -1014,7 +1074,9 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                                     <Avatar size={36} name={c.did} variant="beam" />
                                     <div className="min-w-0 flex-1">
                                         <p className="text-sm font-bold text-theme-secondary truncate">{name}</p>
-                                        <p className="text-[10px] font-mono text-theme-light truncate">{c.did}</p>
+                                        <Advanced>
+                                            <p className="text-[10px] font-mono text-theme-light truncate">{c.did}</p>
+                                        </Advanced>
                                     </div>
                                 </button>
                             );

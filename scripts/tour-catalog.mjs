@@ -972,6 +972,14 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         "get_contacts": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_CONTACTS,
         "save_contact": () => null,
         "delete_contact": () => null,
+        "get_my_quick_contact": () => ({
+            did: MOCK_USER_DID,
+            name: "Alice Musterfrau",
+            syncUrls: ["https://sync.humoco.org"],
+            uri: 'humoco://contact?did=' + encodeURIComponent(MOCK_USER_DID) + '&name=Alice%20Musterfrau',
+            qrSvg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#ffffff"/><rect x="12" y="12" width="24" height="24" fill="#0f172a"/></svg>'
+        }),
+        "encode_text_qr_svg": () => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#ffffff"/><rect x="12" y="12" width="24" height="24" fill="#0f172a"/></svg>',
         "get_market_view": () => window.__HUMOCO_SCENARIO__ === 'empty' ? { board: [], people: [], now: Math.floor(Date.now() / 1000) } : MOCK_MARKET_SNAPSHOT,
         "get_my_market_profile": () => window.__HUMOCO_SCENARIO__ === 'empty' ? null : MOCK_MY_MARKET_PROFILE,
         "save_my_market_profile": (args) => {

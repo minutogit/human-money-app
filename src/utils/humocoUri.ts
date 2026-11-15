@@ -134,9 +134,9 @@ export function parseContactCard(input: string): ParsedContactCard | null {
 }
 
 /**
- * Builds a human-readable payment request message for email/messenger containing a humoco://pay URI.
+ * Builds the compact humoco://pay URI for QR codes and links.
  */
-export function buildPaymentRequestText(params: PaymentRequestParams): string {
+export function buildPaymentRequestUri(params: PaymentRequestParams): string {
   const cleanTo = (params.to || '').trim();
   const cleanName = params.name?.trim();
   const cleanUnit = params.unit?.trim();
@@ -157,7 +157,22 @@ export function buildPaymentRequestText(params: PaymentRequestParams): string {
   if (cleanNote) searchParams.set('note', cleanNote);
   if (params.isTest) searchParams.set('test', 'true');
 
-  const uri = `humoco://pay?${searchParams.toString().replace(/\+/g, '%20')}`;
+  return `humoco://pay?${searchParams.toString().replace(/\+/g, '%20')}`;
+}
+
+/**
+ * Builds a human-readable payment request message for email/messenger containing a humoco://pay URI.
+ */
+export function buildPaymentRequestText(params: PaymentRequestParams): string {
+  const cleanTo = (params.to || '').trim();
+  const cleanName = params.name?.trim();
+  const cleanUnit = params.unit?.trim();
+  const cleanNote = params.note?.trim();
+  const amountStr = params.amount !== undefined && params.amount !== null && String(params.amount).trim() !== ''
+    ? String(params.amount).trim()
+    : undefined;
+
+  const uri = buildPaymentRequestUri(params);
 
   const lines: string[] = ['Human Money Zahlungsanforderung:'];
   if (cleanName && cleanTo) {

@@ -18,7 +18,7 @@ export interface TechIdProps {
 
 const AVATAR_COLORS = ['#E63946', '#2B1B17', '#E76F51', '#F4A261', '#2A9D8F'];
 
-function formatShortFingerprint(value: string): string {
+export function formatShortFingerprint(value: string): string {
     const trimmed = value.trim();
     if (trimmed.length <= 8) return trimmed;
     return `…${trimmed.slice(-6)}`;

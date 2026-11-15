@@ -49,6 +49,10 @@ export const profileService = {
         return await invoke<FrontendQuickContact>("get_my_quick_contact");
     },
 
+    encodeTextQrSvg: async (text: string): Promise<string> => {
+        return await invoke<string>("encode_text_qr_svg", { text });
+    },
+
     generateMnemonic: async (wordCount: number, language: string) => {
         return await invoke<string>("generate_mnemonic", { wordCount, language });
     },

@@ -1,5 +1,5 @@
 // src/components/TransferSuccessView.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
@@ -7,11 +7,16 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
 import { ModalShell } from './ui/ModalShell';
+import { Advanced } from './ui/Advanced';
+import { AdvancedDisclosure } from './ui/AdvancedDisclosure';
+import { TechId, formatShortFingerprint } from './ui/TechId';
 import { AppSettings, IntentDispatchObservation } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
 import { settingsService } from '../services/settingsService';
 import { postService } from '../services/postService';
+import { profileService } from '../services/profileService';
+import { useContactResolver } from '../hooks/useContactResolver';
 import { copyToClipboard } from '../utils/clipboard';
 import { 
     Download, 
@@ -65,6 +70,43 @@ export function TransferSuccessView({
     const [redepositError, setRedepositError] = useState<string | null>(depositError || null);
     const [showQrModal, setShowQrModal] = useState(false);
     const [copiedData, setCopiedData] = useState(false);
+    const [bundleQrSvg, setBundleQrSvg] = useState<string | null>(null);
+
+    const { resolveIdentity, isKnownContact } = useContactResolver();
+    const recipientIsKnown = isKnownContact(recipientId);
+    const safeRecipientDisplayName = recipientIsKnown
+        ? resolveIdentity(recipientId)
+        : formatShortFingerprint(recipientId);
+
+    const bundleBase64 = useMemo(() => {
+        if (!bundleData || bundleData.length === 0) return '';
+        let binary = '';
+        for (let i = 0; i < bundleData.length; i += 1) {
+            binary += String.fromCharCode(bundleData[i]);
+        }
+        return window.btoa(binary);
+    }, [bundleData]);
+
+    const isQrSizeSupported = bundleBase64.length > 0 && bundleBase64.length <= 2200;
+
+    useEffect(() => {
+        if (!showQrModal || !isQrSizeSupported) {
+            setBundleQrSvg(null);
+            return;
+        }
+        let active = true;
+        profileService
+            .encodeTextQrSvg(bundleBase64)
+            .then((svg) => {
+                if (active) setBundleQrSvg(svg);
+            })
+            .catch(() => {
+                if (active) setBundleQrSvg(null);
+            });
+        return () => {
+            active = false;
+        };
+    }, [showQrModal, isQrSizeSupported, bundleBase64]);
 
     useEffect(() => {
         let active = true;
@@ -148,9 +190,7 @@ export function TransferSuccessView({
 
     const handleCopyBase64 = async () => {
         try {
-            const binary = String.fromCharCode(...bundleData);
-            const b64 = window.btoa(binary);
-            const ok = await copyToClipboard(b64);
+            const ok = await copyToClipboard(bundleBase64);
             if (ok) {
                 setCopiedData(true);
                 setTimeout(() => setCopiedData(false), 2000);
@@ -162,6 +202,59 @@ export function TransferSuccessView({
             setFeedback(translateError(e, t));
         }
     };
+
+    const handoverContent = (
+        <div className="space-y-4 w-full flex flex-col items-center">
+            <div className="w-full p-5 bg-blue-50/50 border border-blue-100 rounded-3xl flex items-start gap-4 text-left">
+                <div className="p-2 bg-white rounded-xl shadow-sm text-blue-500">
+                    <Share2 size={20} />
+                </div>
+                <div className="space-y-1">
+                    <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest">{t('transfer.success.nextStep')}</h4>
+                    <p className="text-xs text-blue-800/80 font-medium leading-relaxed">
+                        {t('transfer.success.nextStepDesc')}
+                    </p>
+                </div>
+            </div>
+
+            <Button
+                size="lg"
+                onClick={handleSaveFile}
+                disabled={isSaving}
+                data-testid="save-transfer-file-button"
+                className="w-full max-w-sm py-4 rounded-3xl shadow-premium-lg text-base font-bold gap-2"
+            >
+                {isSaving ? <Download className="animate-bounce" size={20} /> : <Download size={20} />}
+                {isSaving ? t('transfer.success.savingFile') : t('transfer.success.saveFile')}
+            </Button>
+
+            <Button
+                variant="outline"
+                size="md"
+                onClick={() => setShowQrModal(true)}
+                data-testid="show-qr-button"
+                className="w-full max-w-sm py-3 rounded-2xl text-xs font-bold gap-2 border-theme-subtle"
+            >
+                <QrCode size={16} />
+                {t('transfer.showQrCodeButton', 'QR-Code & Direktübergabe anzeigen')}
+            </Button>
+
+            {savedFilePath && (
+                <Button
+                    variant="secondary"
+                    onClick={() => {
+                        revealItemInDir(savedFilePath).catch((err) => {
+                            logger.error(`Failed to reveal item in dir: ${stringifyError(err)}`);
+                        });
+                    }}
+                    className="w-full max-w-sm py-3 rounded-2xl text-xs font-bold gap-2 animate-in fade-in duration-200"
+                >
+                    <FolderOpen size={16} />
+                    {t('transfer.success.revealInFolder')}
+                </Button>
+            )}
+        </div>
+    );
 
     return (
         <div className="flex flex-col items-center justify-center min-h-[80vh] py-12 px-4 animate-in fade-in zoom-in-95 duration-500">
@@ -177,7 +270,13 @@ export function TransferSuccessView({
                         </div>
                     </div>
                     <div className="space-y-1">
-                        <h1 className="text-3xl font-black text-theme-primary tracking-tight">{t('transfer.success.title')}</h1>
+                        {depositedTo > 0 ? (
+                            <h1 data-testid="delivered-to-heading" className="text-3xl font-black text-theme-primary tracking-tight">
+                                {t('transfer.success.deliveredTo', { name: safeRecipientDisplayName })}
+                            </h1>
+                        ) : (
+                            <h1 className="text-3xl font-black text-theme-primary tracking-tight">{t('transfer.success.title')}</h1>
+                        )}
                         <p className="text-theme-light font-medium">{t('transfer.success.description')}</p>
                     </div>
                 </div>
@@ -195,12 +294,21 @@ export function TransferSuccessView({
                     <div className="space-y-4">
                         <div className="space-y-2">
                             <span className="text-[9px] font-black uppercase tracking-widest text-theme-light flex items-center gap-1.5 px-1">
-                                <User size={10} /> {t('transfer.success.recipientId')}
+                                <User size={10} /> {t('transfer.confirmRecipient')}
                             </span>
-                            <div className="p-4 bg-theme-subtle/10 rounded-2xl border border-theme-subtle/20">
-                                <p className="text-sm font-mono font-bold text-theme-secondary break-all">
-                                    {recipientId}
-                                </p>
+                            <div className="p-4 bg-theme-subtle/10 rounded-2xl border border-theme-subtle/20 space-y-1.5">
+                                {recipientIsKnown ? (
+                                    <>
+                                        <p className="text-sm font-bold text-theme-secondary">
+                                            {safeRecipientDisplayName}
+                                        </p>
+                                        <Advanced>
+                                            <TechId value={recipientId} kind="did" />
+                                        </Advanced>
+                                    </>
+                                ) : (
+                                    <TechId value={recipientId} kind="did" />
+                                )}
                             </div>
                         </div>
 
@@ -238,134 +346,100 @@ export function TransferSuccessView({
                             </div>
                         ) : null}
 
-                        <div className="p-5 bg-blue-50/50 border border-blue-100 rounded-3xl flex items-start gap-4">
-                            <div className="p-2 bg-white rounded-xl shadow-sm text-blue-500">
-                                <Share2 size={20} />
-                            </div>
-                            <div className="space-y-1">
-                                <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest">{t('transfer.success.nextStep')}</h4>
-                                <p className="text-xs text-blue-800/80 font-medium leading-relaxed">
-                                    {t('transfer.success.nextStepDesc')}
-                                </p>
-                            </div>
-                        </div>
+                        <Advanced>
+                            {l2Dispatch && l2Dispatch.length > 0 && (() => {
+                                const isAnyDispatched = l2Dispatch.some(obs => obs.httpStatus === 200 || obs.httpStatus === 201);
 
-                        {l2Dispatch && l2Dispatch.length > 0 && (() => {
-                            const isAnyDispatched = l2Dispatch.some(obs => obs.httpStatus === 200 || obs.httpStatus === 201);
-                            
-                            if (isAnyDispatched) {
+                                if (isAnyDispatched) {
+                                    return (
+                                        <div className="p-5 bg-emerald-50/60 border border-emerald-200 rounded-3xl space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-[10px] font-black uppercase tracking-widest text-emerald-900 flex items-center gap-1.5">
+                                                    <ShieldCheck size={14} className="text-emerald-600" />
+                                                    {t('transfer.l2DispatchedTitle')}
+                                                </span>
+                                                <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                                                    {l2Dispatch.length} {l2Dispatch.length === 1 ? 'Lock-Intent' : 'Lock-Intents'}
+                                                </span>
+                                            </div>
+                                            <p className="text-xs text-emerald-900/80 font-medium leading-relaxed">
+                                                {t('transfer.l2DispatchedDesc')}
+                                            </p>
+                                            <div className="space-y-1.5 pt-1">
+                                                {l2Dispatch.map((obs, idx) => (
+                                                    <div key={`${obs.localInstanceId}-${idx}`} className="flex items-center justify-between text-xs p-2.5 bg-white/80 rounded-xl border border-emerald-100">
+                                                        <span className="font-mono text-[11px] text-theme-light truncate max-w-[220px]" title={obs.localInstanceId}>
+                                                            {obs.localInstanceId.slice(0, 16)}...
+                                                        </span>
+                                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${obs.httpStatus && obs.httpStatus >= 200 && obs.httpStatus < 300 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                                                            {obs.httpStatus ? `HTTP ${obs.httpStatus}` : obs.status}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <p className="text-[10px] text-theme-light/70 italic border-t border-emerald-200/60 pt-2">
+                                                {t('transfer.l2TransportDisclaimer')}
+                                            </p>
+                                        </div>
+                                    );
+                                }
+
                                 return (
-                                    <div className="p-5 bg-emerald-50/60 border border-emerald-200 rounded-3xl space-y-3">
+                                    <div className="p-5 bg-slate-50 border border-slate-200 rounded-3xl space-y-3">
                                         <div className="flex items-center justify-between">
-                                            <span className="text-[10px] font-black uppercase tracking-widest text-emerald-900 flex items-center gap-1.5">
-                                                <ShieldCheck size={14} className="text-emerald-600" />
-                                                {t('transfer.l2DispatchedTitle')}
+                                            <span className="text-[10px] font-black uppercase tracking-widest text-theme-secondary flex items-center gap-1.5">
+                                                <ShieldCheck size={14} className="text-theme-primary" />
+                                                {t('transfer.l2PreparedOfflineTitle')}
                                             </span>
-                                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
                                                 {l2Dispatch.length} {l2Dispatch.length === 1 ? 'Lock-Intent' : 'Lock-Intents'}
                                             </span>
                                         </div>
-                                        <p className="text-xs text-emerald-900/80 font-medium leading-relaxed">
-                                            {t('transfer.l2DispatchedDesc')}
+                                        <p className="text-xs text-theme-light font-medium leading-relaxed">
+                                            {t('transfer.l2PreparedOfflineDesc')}
                                         </p>
                                         <div className="space-y-1.5 pt-1">
                                             {l2Dispatch.map((obs, idx) => (
-                                                <div key={`${obs.localInstanceId}-${idx}`} className="flex items-center justify-between text-xs p-2.5 bg-white/80 rounded-xl border border-emerald-100">
+                                                <div key={`${obs.localInstanceId}-${idx}`} className="flex items-center justify-between text-xs p-2.5 bg-white rounded-xl border border-slate-100">
                                                     <span className="font-mono text-[11px] text-theme-light truncate max-w-[220px]" title={obs.localInstanceId}>
                                                         {obs.localInstanceId.slice(0, 16)}...
                                                     </span>
-                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${obs.httpStatus && obs.httpStatus >= 200 && obs.httpStatus < 300 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
-                                                        {obs.httpStatus ? `HTTP ${obs.httpStatus}` : obs.status}
+                                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                                                        {obs.status}
                                                     </span>
                                                 </div>
                                             ))}
                                         </div>
-                                        <p className="text-[10px] text-theme-light/70 italic border-t border-emerald-200/60 pt-2">
-                                            {t('transfer.l2TransportDisclaimer')}
-                                        </p>
                                     </div>
                                 );
-                            }
-
-                            return (
-                                <div className="p-5 bg-slate-50 border border-slate-200 rounded-3xl space-y-3">
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-[10px] font-black uppercase tracking-widest text-theme-secondary flex items-center gap-1.5">
-                                            <ShieldCheck size={14} className="text-theme-primary" />
-                                            {t('transfer.l2PreparedOfflineTitle')}
-                                        </span>
-                                        <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
-                                            {l2Dispatch.length} {l2Dispatch.length === 1 ? 'Lock-Intent' : 'Lock-Intents'}
-                                        </span>
-                                    </div>
-                                    <p className="text-xs text-theme-light font-medium leading-relaxed">
-                                        {t('transfer.l2PreparedOfflineDesc')}
-                                    </p>
-                                    <div className="space-y-1.5 pt-1">
-                                        {l2Dispatch.map((obs, idx) => (
-                                            <div key={`${obs.localInstanceId}-${idx}`} className="flex items-center justify-between text-xs p-2.5 bg-white rounded-xl border border-slate-100">
-                                                <span className="font-mono text-[11px] text-theme-light truncate max-w-[220px]" title={obs.localInstanceId}>
-                                                    {obs.localInstanceId.slice(0, 16)}...
-                                                </span>
-                                                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
-                                                    {obs.status}
-                                                </span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            );
-                        })()}
+                            })()}
+                        </Advanced>
                     </div>
                 </div>
 
                 {/* 100% Offline & Direct Sharing Action Controls */}
                 <div className="flex flex-col items-center gap-3">
-                    <Button 
-                        size="lg" 
-                        onClick={handleSaveFile} 
-                        disabled={isSaving} 
-                        data-testid="save-transfer-file-button"
-                        className="w-full max-w-sm py-4 rounded-3xl shadow-premium-lg text-base font-bold gap-2"
-                    >
-                        {isSaving ? <Download className="animate-bounce" size={20} /> : <Download size={20} />}
-                        {isSaving ? t('transfer.success.savingFile') : t('transfer.success.saveFile')}
-                    </Button>
-
-                    <Button
-                        variant="outline"
-                        size="md"
-                        onClick={() => setShowQrModal(true)}
-                        data-testid="show-qr-button"
-                        className="w-full max-w-sm py-3 rounded-2xl text-xs font-bold gap-2 border-theme-subtle"
-                    >
-                        <QrCode size={16} />
-                        {t('transfer.showQrCodeButton', 'QR-Code & Direktübergabe anzeigen')}
-                    </Button>
-
-                    {savedFilePath && (
-                        <Button
-                            variant="secondary"
-                            onClick={() => {
-                                revealItemInDir(savedFilePath).catch((err) => {
-                                    logger.error(`Failed to reveal item in dir: ${stringifyError(err)}`);
-                                });
-                            }}
-                            className="w-full max-w-sm py-3 rounded-2xl text-xs font-bold gap-2 animate-in fade-in duration-200"
-                        >
-                            <FolderOpen size={16} />
-                            {t('transfer.success.revealInFolder')}
-                        </Button>
+                    {depositedTo > 0 ? (
+                        <div className="w-full">
+                            <AdvancedDisclosure
+                                title={t('transfer.directHandoverTitle')}
+                                toggleTestId="direct-handover-toggle"
+                            >
+                                {handoverContent}
+                            </AdvancedDisclosure>
+                        </div>
+                    ) : (
+                        handoverContent
                     )}
 
-                    <Button 
-                        variant="secondary" 
-                        onClick={onDone} 
+                    <Button
+                        variant="secondary"
+                        onClick={onDone}
                         className="w-full max-w-sm py-3 rounded-2xl text-xs font-black uppercase tracking-widest mt-2"
                     >
                         {t('transfer.success.finish')}
                     </Button>
-                    
+
                     {feedback && (
                         <p className="text-xs font-bold text-emerald-600 flex items-center gap-2 animate-in slide-in-from-bottom-2">
                             <ShieldCheck size={14} />
@@ -392,20 +466,34 @@ export function TransferSuccessView({
                             </p>
                         </div>
 
-                        <div className="p-3 bg-white border border-theme-subtle rounded-xl flex items-center justify-between gap-2">
-                            <span className="text-xs font-mono text-theme-light truncate">
-                                {suggestFilename(recipientId)}.transfer ({bundleData.length} Bytes)
-                            </span>
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={handleCopyBase64}
-                                className="gap-1 text-xs shrink-0"
-                            >
-                                {copiedData ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
-                                {copiedData ? t('common.copied', 'Kopiert!') : t('transfer.copyBundleData', 'Daten kopieren')}
-                            </Button>
-                        </div>
+                        {bundleQrSvg ? (
+                            <div
+                                data-testid="transfer-qr-svg"
+                                className="mx-auto w-56 h-56 p-3 bg-white rounded-2xl border border-theme-subtle shadow-sm flex items-center justify-center [&>svg]:w-full [&>svg]:h-full"
+                                dangerouslySetInnerHTML={{ __html: bundleQrSvg }}
+                            />
+                        ) : !isQrSizeSupported ? (
+                            <p className="text-xs text-amber-700 bg-amber-50 p-3 rounded-xl border border-amber-200 text-left">
+                                {t('transfer.qrTooLargeHint')}
+                            </p>
+                        ) : null}
+
+                        <Advanced>
+                            <div className="p-3 bg-white border border-theme-subtle rounded-xl flex items-center justify-between gap-2">
+                                <span className="text-xs font-mono text-theme-light truncate">
+                                    {suggestFilename(recipientId)}.transfer ({bundleData.length} Bytes)
+                                </span>
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={handleCopyBase64}
+                                    className="gap-1 text-xs shrink-0"
+                                >
+                                    {copiedData ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
+                                    {copiedData ? t('common.copied', 'Kopiert!') : t('transfer.copyBundleData', 'Daten kopieren')}
+                                </Button>
+                            </div>
+                        </Advanced>
 
                         <Button
                             variant="primary"

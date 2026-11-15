@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TransferSuccessView } from '../TransferSuccessView';
 import { postService } from '../../services/postService';
 import { invoke } from '@tauri-apps/api/core';
+import { UI_MODE_STORAGE_KEY } from '../../context/UiModeContext';
 
 // Mock dependencies
 vi.mock('@tauri-apps/api/core', () => ({
@@ -37,6 +38,7 @@ vi.mock('../../context/SessionContext', () => ({
   useSession: () => ({
     protectAction: vi.fn(async (cb) => cb('dummy-password')),
   }),
+  useOptionalSession: () => null,
 }));
 
 vi.mock('../../services/postService', () => ({
@@ -53,6 +55,12 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_contacts') return [];
+      if (cmd === 'encode_text_qr_svg') return '<svg data-testid="mock-svg"></svg>';
+      return undefined;
+    });
   });
 
   it('renders emerald success card when initially deposited to 1 or more sync endpoints', async () => {
@@ -96,6 +104,7 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
   });
 
   it('CRITICAL SST-V4 RETRY INVARIANT: clicking retry calls depositTransferToPost and NEVER create_transfer_bundle', async () => {
+    localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
     const depositMock = vi.mocked(postService.depositTransferToPost).mockResolvedValue({
       msgId: 'msg-deposit-123',
       depositedTo: 1,
@@ -157,5 +166,35 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
 
     const { copyToClipboard } = await import('../../utils/clipboard');
     expect(copyToClipboard).toHaveBeenCalled();
+  });
+
+  it('APP-UX-09 P3 Simple Mode: shows clear delivered-to heading without raw did:key and collapses direct handover buttons', async () => {
+    localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
+
+    const { container } = render(
+      <TransferSuccessView
+        bundleData={dummyBundleData}
+        recipientId={recipientId}
+        summary="10.00 Minuto"
+        bundleId={bundleId}
+        initialDepositedTo={2}
+        onDone={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('delivered-to-heading')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('delivered-to-heading').textContent).toContain('✓');
+    expect(screen.getByTestId('delivered-to-heading').textContent).toMatch(/Delivered to/i);
+    expect(container.innerHTML).not.toContain('did:key:');
+
+    const handoverToggle = screen.getByTestId('direct-handover-toggle');
+    expect(handoverToggle).toBeInTheDocument();
+    expect(screen.queryByTestId('save-transfer-file-button')).not.toBeInTheDocument();
+
+    fireEvent.click(handoverToggle);
+    expect(screen.getByTestId('save-transfer-file-button')).toBeInTheDocument();
   });
 });

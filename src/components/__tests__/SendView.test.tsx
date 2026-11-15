@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { SendView } from '../SendView';
 import { invoke } from '@tauri-apps/api/core';
 import { VoucherSummary, VoucherStandardInfo, Contact, AppSettings } from '../../types';
+import { UI_MODE_STORAGE_KEY } from '../../context/UiModeContext';
 
 // Mock the Tauri API
 vi.mock('@tauri-apps/api/core', () => ({
@@ -21,6 +22,7 @@ vi.mock('../../context/SessionContext', () => ({
     protectAction: vi.fn((callback) => callback('test-password')),
     profileName: 'Test Profile',
   }),
+  useOptionalSession: () => null,
 }));
 
 vi.mock('../../context/NavigationContext', () => ({
@@ -89,6 +91,7 @@ amount_decimal_places = 4`,
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_voucher_summaries') {
         return Promise.resolve(mockVouchers);
@@ -530,6 +533,73 @@ amount_decimal_places = 4`,
       // Only the 1 real voucher (50.00) is selected, not 2 (150.00)
       expect(screen.queryByText(/2 Vouchers Selected/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/150[.,]00/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('APP-UX-09 P3 Simple Mode: hides sender card, raw recipient DID input, and collapses manual voucher selection', async () => {
+    localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
+
+    const { container } = render(<SendView />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('quick-contact-did:key:z456')).toBeInTheDocument();
+      expect(document.getElementById('target-amount')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Your name for the recipient/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Send anonymously/i)).not.toBeInTheDocument();
+    expect(document.getElementById('recipientId')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/did:key:z/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('manual-voucher-selection-toggle')).toBeInTheDocument();
+    expect(container.textContent).not.toContain('did:key:');
+  });
+
+  it('APP-UX-09 P3 Simple Mode: quick contact + amount sends with profile senderProfileName', async () => {
+    localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
+
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'create_transfer_bundle') {
+        return Promise.resolve({
+          bundleData: [1, 2, 3],
+          bundleId: 'bundle-123',
+          involvedSourcesDetails: [],
+        });
+      }
+      if (cmd === 'save_transaction_record') {
+        return Promise.resolve(undefined);
+      }
+      if (cmd === 'deposit_transfer_to_post') {
+        return Promise.resolve({ msgId: 'm1', depositedTo: 1, errors: [] });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(<SendView />);
+
+    const janeBtn = await screen.findByTestId('quick-contact-did:key:z456');
+    fireEvent.click(janeBtn);
+
+    const amountInput = document.getElementById('target-amount') as HTMLInputElement;
+    fireEvent.change(amountInput, { target: { value: '25' } });
+
+    await screen.findByText(/1 Vouchers Selected/i, undefined, { timeout: 2000 });
+
+    const submitBtn = screen.getByRole('button', { name: /Send Vouchers/i });
+    expect(submitBtn).not.toBeDisabled();
+    fireEvent.click(submitBtn);
+
+    const confirmBtn = await screen.findByRole('button', { name: /Execute/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'create_transfer_bundle',
+        expect.objectContaining({
+          recipientId: 'did:key:z456',
+          senderProfileName: 'Test User',
+        })
+      );
     });
   });
 });

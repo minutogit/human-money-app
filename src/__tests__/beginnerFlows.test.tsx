@@ -1,18 +1,22 @@
 // src/__tests__/beginnerFlows.test.tsx
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
 import { FirstStepsChecklist } from '../components/FirstStepsChecklist';
 import { BackupSettingsCard } from '../components/BackupSettingsCard';
 import { AddContactModal } from '../components/AddContactModal';
 import ContactDialog from '../components/ContactDialog';
 import { ProfileCardEditor } from '../components/marketplace/ProfileCardEditor';
 import { AdEditorModal } from '../components/marketplace/AdEditorModal';
+import { SendView } from '../components/SendView';
+import { ReceiveView } from '../components/ReceiveView';
 import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../context/UiModeContext';
 import { UiModeToggle } from '../components/ui/UiModeToggle';
 import { Advanced } from '../components/ui/Advanced';
 import { TechId } from '../components/ui/TechId';
 import { backupService } from '../services/backupService';
-import { FrontendMyMarketProfile, AppSettings } from '../types';
+import { contactService } from '../services/contactService';
+import { FrontendMyMarketProfile, AppSettings, Contact } from '../types';
 
 const mockNavigate = vi.fn();
 const mockGoBack = vi.fn();
@@ -58,7 +62,7 @@ vi.mock('../services/contactService', () => ({
 
 vi.mock('../services/marketService', () => ({
     marketService: {
-        getMyMarketProfile: vi.fn(),
+        getMyMarketProfile: vi.fn().mockResolvedValue(null),
         saveMyMarketProfile: vi.fn(),
         setCardPublished: vi.fn(),
         upsertAd: vi.fn(),
@@ -96,6 +100,10 @@ vi.mock('../services/settingsService', () => ({
 vi.mock('@tauri-apps/plugin-dialog', () => ({
     open: vi.fn(),
     save: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/api/core', () => ({
+    invoke: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
@@ -406,5 +414,128 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         fireEvent.click(screen.getByTestId('ui-mode-simple'));
         expect(screen.queryByTestId('advanced-raw-panel')).not.toBeInTheDocument();
         expect(container.innerHTML).not.toContain('did:key:');
+    });
+
+    it('Task 5 (APP-UX-09 P3): keeps SendView and ReceiveView simple, unified, and free of raw did:key in Simple mode', async () => {
+        localStorage.removeItem(UI_MODE_STORAGE_KEY);
+
+        const ownDid = 'did:key:z6MkuBeginnerOwnDid000111';
+        const aliceDid = 'did:key:z6MkuBeginnerAlice222333';
+        const sampleSettings: AppSettings = {
+            sessionTimeoutSeconds: 300,
+            devModeUnlocked: false,
+            privacyDefault: 'ask',
+            customServers: [],
+            regionalMeshSources: [],
+            backupSyncFolder: '/fake/backup/path',
+            backupFrequency: 'after_mutation',
+        };
+        const sampleStandard = {
+            id: 'std-minuto',
+            displayName: 'Minuto (Min)',
+            content: 'name = "Minuto"\nuuid = "std-minuto"\nunit = "Min"\nabbreviation = "Min"\namount_decimal_places = 2',
+        };
+
+        const mockContacts: Contact[] = [
+            {
+                did: aliceDid,
+                profile: { id: aliceDid, firstName: 'Alice', lastName: 'Beginner' },
+                tags: [],
+                addedAt: '2026-01-01T00:00:00Z',
+            },
+        ];
+
+        vi.mocked(contactService.getContacts).mockResolvedValue(mockContacts);
+        vi.mocked(backupService.getBackupStatus).mockResolvedValue({
+            status: 'ok',
+            lastBackupAt: null,
+            backupDirty: false,
+            syncFolder: null,
+            changedBlobs: 0,
+            syncBackupEnabled: true,
+            lastSyncBackupAt: null,
+            hasAuthorizedSyncBackupTarget: false,
+        });
+
+        vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+            if (cmd === 'get_voucher_summaries') {
+                return [
+                    {
+                        localInstanceId: 'v-real-1',
+                        status: 'active',
+                        validUntil: '2099-01-01',
+                        creatorId: ownDid,
+                        description: 'Zeitgutschein',
+                        currentAmount: '50.00',
+                        unit: 'Min',
+                        rawStandardName: 'Minuto',
+                        voucherStandardUuid: 'std-minuto',
+                        transactionCount: 1,
+                        signaturesCount: 1,
+                        hasCollateral: false,
+                        isTestVoucher: false,
+                        displayCurrency: 'Minuto',
+                        displayStandardName: 'Minuto',
+                        allowPartialTransfers: true,
+                    },
+                ];
+            }
+            if (cmd === 'get_active_asset_classes') {
+                return [
+                    {
+                        standardUuid: 'std-minuto',
+                        isTestVoucher: false,
+                        displayStandardName: 'Minuto',
+                        displayCurrency: 'Minuto',
+                    },
+                ];
+            }
+            if (cmd === 'get_voucher_standards') return [sampleStandard];
+            if (cmd === 'get_contacts') return mockContacts;
+            if (cmd === 'get_user_profile') {
+                return { id: ownDid, firstName: 'Max', lastName: 'Mustermann' };
+            }
+            if (cmd === 'get_user_id') return ownDid;
+            if (cmd === 'get_app_settings') return sampleSettings;
+            if (cmd === 'encode_text_qr_svg') return '<svg data-testid="mock-beginner-qr"></svg>';
+            return undefined;
+        });
+
+        // 1. SendView in Simple mode
+        const sendRender = render(
+            <UiModeProvider>
+                <SendView />
+            </UiModeProvider>
+        );
+
+        await waitFor(() => {
+            expect(sendRender.container.querySelector('#target-amount')).toBeInTheDocument();
+        });
+
+        expect(sendRender.container.textContent).not.toContain('did:key:');
+        expect(screen.getByTestId('manual-voucher-selection-toggle')).toBeInTheDocument();
+        expect(screen.queryByTestId(`quick-contact-${aliceDid}`)).toBeInTheDocument();
+
+        fireEvent.click(screen.getByTestId(`quick-contact-${aliceDid}`));
+        const amountInput = sendRender.container.querySelector('#target-amount') as HTMLInputElement;
+        fireEvent.change(amountInput, { target: { value: '20' } });
+        expect(amountInput.value).toBe('20');
+
+        sendRender.unmount();
+
+        // 2. ReceiveView in Simple mode
+        const receiveRender = render(
+            <UiModeProvider>
+                <ReceiveView onBack={vi.fn()} onReceiveSuccess={vi.fn()} />
+            </UiModeProvider>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('receive-qr-svg')).toBeInTheDocument();
+            expect(receiveRender.container.querySelector('#bundle-drop-zone')).toBeInTheDocument();
+        });
+
+        expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+        expect(receiveRender.container.textContent).not.toContain('did:key:');
     });
 });

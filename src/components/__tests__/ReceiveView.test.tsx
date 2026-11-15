@@ -4,6 +4,7 @@ import { ReceiveView } from '../ReceiveView';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { VoucherStandardInfo, AppSettings } from '../../types';
+import { UI_MODE_STORAGE_KEY } from '../../context/UiModeContext';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -50,6 +51,18 @@ vi.mock('react-i18next', () => ({
         'transfer.checkout.fallbackAcceptTrust': 'Accept on Trust Basis (L1 Verified)',
         'transfer.checkout.fallbackCancel': 'Cancel / Reject',
         'transfer.checkout.fallbackNotice': 'Offline transfers protected by SST V4.',
+        'transfer.receiveTitle': 'Receive',
+        'transfer.myCodeTitle': 'My Code',
+        'transfer.myCodeDesc': 'Show QR code',
+        'transfer.requestPayment.title': 'Request Payment',
+        'transfer.requestPayment.copyButton': 'Copy Request',
+        'transfer.requestPayment.copiedButton': 'Copied',
+        'transfer.requestPayment.standardLabel': 'Voucher Type',
+        'transfer.requestPayment.amountLabel': 'Amount',
+        'transfer.requestPayment.amountPlaceholder': '0.00',
+        'transfer.requestPayment.noteLabel': 'Note',
+        'transfer.requestPayment.notePlaceholder': 'Optional note',
+        'transfer.directHandoverToggle': 'Save or hand over file directly',
       };
       return translations[key] || key;
     },
@@ -86,6 +99,7 @@ vi.mock('../../context/SessionContext', () => ({
   useSession: () => ({
     protectAction: vi.fn((callback) => callback('test-password')),
   }),
+  useOptionalSession: () => null,
 }));
 
 describe('ReceiveView Component (FreeTaler Standard)', () => {
@@ -114,12 +128,22 @@ amount_decimal_places = 4`,
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_voucher_standards') {
         return Promise.resolve(mockStandards);
       }
       if (cmd === 'get_app_settings') {
         return Promise.resolve(mockSettings);
+      }
+      if (cmd === 'get_user_id') {
+        return Promise.resolve('did:key:z789');
+      }
+      if (cmd === 'encode_text_qr_svg') {
+        return Promise.resolve('<svg data-testid="mock-qr-svg"></svg>');
+      }
+      if (cmd === 'get_user_profile') {
+        return Promise.resolve(null);
       }
       return Promise.resolve(undefined);
     });
@@ -372,12 +396,14 @@ amount_decimal_places = 4`,
       return Promise.resolve(undefined);
     });
 
+    localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
+
     render(
       <ReceiveView onBack={mockOnBack} onReceiveSuccess={mockOnReceiveSuccess} />
     );
 
     // 1. Enable PoS Mode checkbox
-    const posCheckbox = await screen.findByRole('checkbox');
+    const posCheckbox = await screen.findByRole('checkbox', { name: /PoS Cashier Mode/i });
     fireEvent.click(posCheckbox);
     expect(posCheckbox).toBeChecked();
 
@@ -405,5 +431,25 @@ amount_decimal_places = 4`,
         })
       );
     });
+  });
+
+  it('APP-UX-09 P3 Simple Mode: renders unified My Code QR + Select File without tabs, PoS toggle, or technical file guides', async () => {
+    localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
+
+    const { container } = render(
+      <ReceiveView onBack={mockOnBack} onReceiveSuccess={mockOnReceiveSuccess} />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('receive-qr-svg')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('My Code')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Select File/i })).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /PoS Cashier Mode/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/\.transfer/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\.ask/)).not.toBeInTheDocument();
+    expect(container.textContent).not.toContain('did:key:');
   });
 });

@@ -13,7 +13,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { copyToClipboard } from '../utils/clipboard';
 import { profileService } from '../services/profileService';
-import { buildPaymentRequestText } from '../utils/humocoUri';
+import { buildPaymentRequestText, buildPaymentRequestUri } from '../utils/humocoUri';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
@@ -37,9 +37,10 @@ import {
     PublicProfile
 } from '../types';
 import { PageLayout } from './ui/PageLayout';
-import { SegmentedTabs } from './ui/SegmentedTabs';
 import { AlertBanner } from './ui/AlertBanner';
 import { ModalShell } from './ui/ModalShell';
+import { Advanced } from './ui/Advanced';
+import { TechId } from './ui/TechId';
 import { ImportStandardModal } from './ImportStandardModal';
 import { 
     UploadCloud, 
@@ -52,7 +53,8 @@ import {
     CheckCircle2,
     AlertCircle,
     Copy,
-    Check
+    Check,
+    QrCode
 } from 'lucide-react';
 
 interface ReceiveViewProps {
@@ -66,7 +68,6 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
     const { protectAction } = useSession();
     const nav = useOptionalNavigation();
     const navigate = nav?.navigate;
-    const [activeTab, setActiveTab] = useState<'import' | 'request'>('import');
     const [ownUserId, setOwnUserId] = useState('');
     const [ownProfile, setOwnProfile] = useState<PublicProfile | null>(null);
     const [reqStandardId, setReqStandardId] = useState<string>('');
@@ -74,6 +75,7 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
     const [reqNote, setReqNote] = useState<string>('');
     const [reqIsTest, setReqIsTest] = useState<boolean>(false);
     const [copiedRequest, setCopiedRequest] = useState<boolean>(false);
+    const [qrSvg, setQrSvg] = useState<string | null>(null);
     const [bundlePath, setBundlePath] = useState<string | null>(null);
     const [bundleName, setBundleName] = useState<string | null>(null);
     const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
@@ -767,6 +769,19 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
     const reqNameParts = [ownProfile?.firstName, ownProfile?.lastName].filter(Boolean);
     const reqName = reqNameParts.length > 0 ? reqNameParts.join(' ') : (ownProfile?.organization || '');
 
+    const generatedPaymentUri = ownUserId
+        ? buildPaymentRequestUri({
+              to: ownUserId,
+              name: reqName || undefined,
+              standardUuid: reqStdUuid,
+              standardName: selectedReqStandard?.displayName,
+              unit: reqUnit,
+              amount: reqAmount.trim() || undefined,
+              note: reqNote.trim() || undefined,
+              isTest: reqIsTest,
+          })
+        : '';
+
     const generatedPaymentRequest = buildPaymentRequestText({
         to: ownUserId,
         name: reqName || undefined,
@@ -777,6 +792,25 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
         note: reqNote.trim() || undefined,
         isTest: reqIsTest,
     });
+
+    useEffect(() => {
+        if (!generatedPaymentUri) {
+            setQrSvg(null);
+            return;
+        }
+        let active = true;
+        profileService
+            .encodeTextQrSvg(generatedPaymentUri)
+            .then((svg) => {
+                if (active) setQrSvg(typeof svg === 'string' && svg.includes('<svg') ? svg : null);
+            })
+            .catch(() => {
+                if (active) setQrSvg(null);
+            });
+        return () => {
+            active = false;
+        };
+    }, [generatedPaymentUri]);
 
     const handleCopyPaymentRequest = async () => {
         setFeedbackMsg('');
@@ -795,102 +829,112 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
     };
 
     return (
-        <PageLayout 
-            title={activeTab === 'import' ? t('transfer.importFile.title') : t('transfer.requestPayment.title')} 
-            description={activeTab === 'import' ? t('transfer.importFile.description') : t('transfer.requestPayment.description')} 
+        <PageLayout
+            title={t('transfer.receiveTitle')}
+            description={t('transfer.myCodeDesc')}
             onBack={onBack}
         >
             <div className="max-w-3xl mx-auto space-y-8">
-                {/* Mode Tabs */}
-                <div className="flex justify-center">
-                    <SegmentedTabs<'import' | 'request'>
-                        activeTab={activeTab}
-                        onChange={setActiveTab}
-                        tabs={[
-                            { id: 'import', label: t('transfer.receiveTabs.importFile') },
-                            { id: 'request', label: t('transfer.receiveTabs.requestPayment') }
-                        ]}
-                    />
-                </div>
-
                 {feedbackMsg && (
                     <AlertBanner variant="error">
                         {feedbackMsg}
                     </AlertBanner>
                 )}
 
-                {activeTab === 'request' ? (
-                    <div className="space-y-6 animate-in fade-in duration-200">
-                        <div className="bg-white border border-theme-subtle rounded-3xl p-6 shadow-sm space-y-5">
+                {/* Unified Section 1: My Code (QR + Payment Request) */}
+                <div className="bg-white border border-theme-subtle rounded-3xl p-6 shadow-sm space-y-5">
+                    <div>
+                        <h3 className="text-base font-black text-theme-secondary">
+                            {t('transfer.myCodeTitle')}
+                        </h3>
+                        <p className="text-xs text-theme-light mt-1">
+                            {t('transfer.myCodeDesc')}
+                        </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
+                        <div className="md:col-span-5 flex flex-col items-center gap-3">
+                            <div
+                                data-testid="receive-qr-svg"
+                                className="w-48 h-48 p-3 bg-white border border-theme-subtle rounded-2xl shadow-sm flex items-center justify-center [&>svg]:w-full [&>svg]:h-full"
+                            >
+                                {qrSvg ? (
+                                    <div className="w-full h-full [&>svg]:w-full [&>svg]:h-full" dangerouslySetInnerHTML={{ __html: qrSvg }} />
+                                ) : (
+                                    <QrCode size={72} className="text-theme-light/40" />
+                                )}
+                            </div>
+                            <Button
+                                type="button"
+                                size="sm"
+                                onClick={handleCopyPaymentRequest}
+                                className="w-full py-2.5 rounded-xl gap-2 font-bold text-xs shadow-sm"
+                            >
+                                {copiedRequest ? <Check size={15} className="text-emerald-300" /> : <Copy size={15} />}
+                                {copiedRequest ? t('transfer.requestPayment.copied') : t('transfer.requestPayment.copyButton')}
+                            </Button>
+                        </div>
+
+                        <div className="md:col-span-7 space-y-4">
+                            {/* Standard Selection */}
                             <div>
-                                <h3 className="text-base font-black text-theme-secondary">
-                                    {t('transfer.requestPayment.title')}
-                                </h3>
-                                <p className="text-xs text-theme-light mt-1">
-                                    {t('transfer.requestPayment.description')}
-                                </p>
+                                <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">
+                                    {t('transfer.requestPayment.selectStandard')}
+                                </label>
+                                <select
+                                    value={reqStandardId}
+                                    onChange={(e) => setReqStandardId(e.target.value)}
+                                    className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary text-sm font-medium focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm"
+                                >
+                                    {voucherStandards.map((std) => (
+                                        <option key={std.id} value={std.id}>
+                                            {std.displayName}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
 
-                            <div className="space-y-4 pt-2">
-                                {/* Standard Selection */}
+                            {/* Amount and Unit */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <div>
                                     <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">
-                                        {t('transfer.requestPayment.selectStandard')}
-                                    </label>
-                                    <select
-                                        value={reqStandardId}
-                                        onChange={(e) => setReqStandardId(e.target.value)}
-                                        className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary text-sm font-medium focus:outline-none focus:ring-2 focus:ring-theme-primary/20 shadow-sm"
-                                    >
-                                        {voucherStandards.map((std) => (
-                                            <option key={std.id} value={std.id}>
-                                                {std.displayName}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-
-                                {/* Amount and Unit */}
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">
-                                            {t('transfer.requestPayment.amount')} ({t('common.optional')})
-                                        </label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            step="any"
-                                            value={reqAmount}
-                                            onChange={(e) => setReqAmount(e.target.value)}
-                                            placeholder="z. B. 15"
-                                            className="text-sm font-medium"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">
-                                            {t('transfer.requestPayment.unit')}
-                                        </label>
-                                        <div className="px-4 py-2.5 bg-slate-50 border border-theme-subtle rounded-xl text-sm font-bold text-theme-secondary">
-                                            {reqUnit || '–'}
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Note / Purpose */}
-                                <div>
-                                    <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">
-                                        {t('transfer.requestPayment.purpose')} ({t('common.optional')})
+                                        {t('transfer.requestPayment.amount')} ({t('common.optional')})
                                     </label>
                                     <Input
-                                        type="text"
-                                        value={reqNote}
-                                        onChange={(e) => setReqNote(e.target.value)}
-                                        placeholder={t('transfer.requestPayment.purposePlaceholder')}
+                                        type="number"
+                                        min="0"
+                                        step="any"
+                                        value={reqAmount}
+                                        onChange={(e) => setReqAmount(e.target.value)}
+                                        placeholder="z. B. 15"
                                         className="text-sm font-medium"
                                     />
                                 </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">
+                                        {t('transfer.requestPayment.unit')}
+                                    </label>
+                                    <div className="px-4 py-2.5 bg-slate-50 border border-theme-subtle rounded-xl text-sm font-bold text-theme-secondary">
+                                        {reqUnit || '–'}
+                                    </div>
+                                </div>
+                            </div>
 
-                                {/* Is Test Voucher Checkbox */}
+                            {/* Note / Purpose */}
+                            <div>
+                                <label className="block text-xs font-bold text-theme-light uppercase tracking-widest mb-1.5">
+                                    {t('transfer.requestPayment.purpose')} ({t('common.optional')})
+                                </label>
+                                <Input
+                                    type="text"
+                                    value={reqNote}
+                                    onChange={(e) => setReqNote(e.target.value)}
+                                    placeholder={t('transfer.requestPayment.purposePlaceholder')}
+                                    className="text-sm font-medium"
+                                />
+                            </div>
+
+                            <Advanced>
                                 <label className="flex items-center gap-3 cursor-pointer select-none pt-1">
                                     <input
                                         type="checkbox"
@@ -902,63 +946,59 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                                         {t('transfer.requestPayment.isTest')}
                                     </span>
                                 </label>
-                            </div>
+                            </Advanced>
                         </div>
+                    </div>
 
-                        {/* Live Preview Box */}
-                        <div className="bg-slate-50 border border-theme-subtle rounded-3xl p-6 space-y-4">
+                    <Advanced>
+                        <div className="bg-slate-50 border border-theme-subtle rounded-2xl p-4 space-y-2.5">
                             <div className="flex items-center justify-between">
-                                <h4 className="text-xs font-black uppercase tracking-widest text-theme-light">
+                                <h4 className="text-[10px] font-black uppercase tracking-widest text-theme-light">
                                     {t('transfer.requestPayment.previewTitle')}
                                 </h4>
                                 <span className="text-[10px] font-bold text-theme-light bg-white border border-theme-subtle/50 px-2 py-0.5 rounded-full">
                                     {t('transfer.requestPayment.readyToShare')}
                                 </span>
                             </div>
-                            <pre className="p-4 bg-white border border-theme-subtle rounded-2xl text-xs font-mono text-theme-secondary whitespace-pre-wrap break-all shadow-inner">
+                            <pre className="p-3 bg-white border border-theme-subtle rounded-xl text-xs font-mono text-theme-secondary whitespace-pre-wrap break-all shadow-inner">
                                 {generatedPaymentRequest}
                             </pre>
-                            <Button
-                                type="button"
-                                onClick={handleCopyPaymentRequest}
-                                className="w-full py-3.5 rounded-2xl gap-2 font-bold text-sm shadow-md"
-                            >
-                                {copiedRequest ? <Check size={18} className="text-emerald-300" /> : <Copy size={18} />}
-                                {copiedRequest ? t('transfer.requestPayment.copied') : t('transfer.requestPayment.copyButton')}
-                            </Button>
                         </div>
-                    </div>
-                ) : (
+                    </Advanced>
+                </div>
+
+                {/* Unified Section 2: PoS Mode (Expert) & Drop Zone */}
                 <div className="space-y-8">
-                {/* PoS Mode Toggle */}
-                {settings?.enablePosMode && (
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
-                        <div className="flex items-center gap-2">
-                            <label className="flex items-center gap-3 cursor-pointer select-none">
-                                <input
-                                    type="checkbox"
-                                    checked={isPosMode}
-                                    onChange={(e) => setIsPosMode(e.target.checked)}
-                                    className="rounded accent-theme-primary h-4 w-4"
-                                />
-                                <span className="text-xs font-bold text-theme-secondary">
-                                    {t('transfer.posModeToggle', 'PoS Cashier Mode (Point-of-Sale Checkout)')}
-                                </span>
-                            </label>
-                            <HelpIcon topic="posMode" size={14} />
-                        </div>
-                        {isPosMode && (
-                            <div className="w-full sm:w-64">
-                                <Input
-                                    placeholder={t('transfer.purchaseIdPlaceholder', 'Receipt / Purchase ID (optional)')}
-                                    value={purchaseId}
-                                    onChange={(e) => setPurchaseId(e.target.value)}
-                                    className="text-xs font-mono py-1.5"
-                                />
+                    <Advanced>
+                        {settings?.enablePosMode && (
+                            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
+                                <div className="flex items-center gap-2">
+                                    <label className="flex items-center gap-3 cursor-pointer select-none">
+                                        <input
+                                            type="checkbox"
+                                            checked={isPosMode}
+                                            onChange={(e) => setIsPosMode(e.target.checked)}
+                                            className="rounded accent-theme-primary h-4 w-4"
+                                        />
+                                        <span className="text-xs font-bold text-theme-secondary">
+                                            {t('transfer.posModeToggle', 'PoS Cashier Mode (Point-of-Sale Checkout)')}
+                                        </span>
+                                    </label>
+                                    <HelpIcon topic="posMode" size={14} />
+                                </div>
+                                {isPosMode && (
+                                    <div className="w-full sm:w-64">
+                                        <Input
+                                            placeholder={t('transfer.purchaseIdPlaceholder', 'Receipt / Purchase ID (optional)')}
+                                            value={purchaseId}
+                                            onChange={(e) => setPurchaseId(e.target.value)}
+                                            className="text-xs font-mono py-1.5"
+                                        />
+                                    </div>
+                                )}
                             </div>
                         )}
-                    </div>
-                )}
+                    </Advanced>
 
                 {/* PoS Trust Fallback Card */}
                 {pendingPosFallback && (
@@ -1002,11 +1042,11 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
 
                     <div
                         id="bundle-drop-zone"
-                        className={`relative group border-2 border-dashed rounded-[40px] p-12 transition-all flex flex-col items-center justify-center text-center overflow-hidden min-h-[340px] cursor-pointer ${
-                            isDragOver 
-                                ? 'border-theme-primary bg-theme-primary/5 shadow-premium-lg' 
-                                : bundleName 
-                                    ? 'border-emerald-500/30 bg-emerald-50/10' 
+                        className={`relative group border-2 border-dashed rounded-[40px] p-12 transition-all flex flex-col items-center justify-center text-center overflow-hidden min-h-[280px] cursor-pointer ${
+                            isDragOver
+                                ? 'border-theme-primary bg-theme-primary/5 shadow-premium-lg'
+                                : bundleName
+                                    ? 'border-emerald-500/30 bg-emerald-50/10'
                                     : 'border-theme-subtle hover:border-theme-primary/40 hover:bg-white/40'
                         }`}
                         onDragOver={handleDragOver}
@@ -1014,7 +1054,6 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                         onDrop={handleDrop}
                         onClick={bundleName ? undefined : handleFileSelect}
                     >
-                        {/* Background subtle pattern or glow */}
                         <div className={`absolute inset-0 transition-opacity duration-700 pointer-events-none ${isDragOver ? 'opacity-100' : 'opacity-0'}`}>
                             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] bg-theme-primary/10 rounded-full blur-[100px]"></div>
                         </div>
@@ -1039,8 +1078,8 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                                 </div>
                                 {!isProcessing && (
                                     <div className="pt-4">
-                                        <button 
-                                            type="button" 
+                                        <button
+                                            type="button"
                                             onClick={(e) => { e.stopPropagation(); clearSelection(); }}
                                             className="text-[10px] font-black uppercase tracking-widest text-theme-light hover:text-rose-500 transition-colors flex items-center gap-1 mx-auto"
                                         >
@@ -1056,9 +1095,11 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                                 </div>
                                 <div className="space-y-2">
                                     <h3 className="text-xl font-black text-theme-primary tracking-tight">{t('transfer.importFile.dropZone')}</h3>
-                                    <p className="text-sm font-medium text-theme-light/60 max-w-[280px]">
-                                        {t('transfer.importFile.dropZoneHint')}
-                                    </p>
+                                    <Advanced>
+                                        <p className="text-sm font-medium text-theme-light/60 max-w-[280px]">
+                                            {t('transfer.importFile.dropZoneHint')}
+                                        </p>
+                                    </Advanced>
                                 </div>
                                 <div className="pt-4">
                                     <Button type="button" onClick={(e) => { e.stopPropagation(); handleFileSelect(); }} variant="secondary" className="rounded-2xl px-8 shadow-premium group-hover:bg-theme-secondary group-hover:text-white transition-all">
@@ -1069,31 +1110,32 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                         )}
                     </div>
 
-                    <div className="text-center">
-                        <p className="text-[10px] font-bold text-theme-light flex items-center justify-center gap-2">
-                            <Lock size={12} />
-                            {t('transfer.importFile.localProcessing')}
-                        </p>
-                    </div>
+                    <Advanced>
+                        <div className="text-center">
+                            <p className="text-[10px] font-bold text-theme-light flex items-center justify-center gap-2">
+                                <Lock size={12} />
+                                {t('transfer.importFile.localProcessing')}
+                            </p>
+                        </div>
 
-                    {/* File Format Guide */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-10">
-                        {[
-                            { icon: FileCheck, titleKey: 'transfer.importFile.formatTransfer', descKey: 'transfer.importFile.formatTransferDesc', ext: '.transfer' },
-                            { icon: FileSignature, titleKey: 'transfer.importFile.formatSignatureRequest', descKey: 'transfer.importFile.formatSigReqDesc', ext: '.ask' },
-                            { icon: CheckCircle2, titleKey: 'transfer.importFile.formatSignatureResponse', descKey: 'transfer.importFile.formatSigRespDesc', ext: '.sig' }
-                        ].map((item, i) => (
-                            <div key={i} className="p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl flex flex-col items-center text-center">
-                                <item.icon size={18} className="text-theme-light/60 mb-2" />
-                                <h4 className="text-[10px] font-black uppercase tracking-widest text-theme-secondary mb-1">{t(item.titleKey)}</h4>
-                                <p className="text-[10px] text-theme-light font-medium leading-tight">{t(item.descKey)}</p>
-                                <span className="mt-2 text-[9px] font-mono font-bold bg-theme-subtle/20 px-2 py-0.5 rounded text-theme-light">{item.ext}</span>
-                            </div>
-                        ))}
-                    </div>
+                        {/* File Format Guide */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
+                            {[
+                                { icon: FileCheck, titleKey: 'transfer.importFile.formatTransfer', descKey: 'transfer.importFile.formatTransferDesc', ext: '.transfer' },
+                                { icon: FileSignature, titleKey: 'transfer.importFile.formatSignatureRequest', descKey: 'transfer.importFile.formatSigReqDesc', ext: '.ask' },
+                                { icon: CheckCircle2, titleKey: 'transfer.importFile.formatSignatureResponse', descKey: 'transfer.importFile.formatSigRespDesc', ext: '.sig' }
+                            ].map((item, i) => (
+                                <div key={i} className="p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl flex flex-col items-center text-center">
+                                    <item.icon size={18} className="text-theme-light/60 mb-2" />
+                                    <h4 className="text-[10px] font-black uppercase tracking-widest text-theme-secondary mb-1">{t(item.titleKey)}</h4>
+                                    <p className="text-[10px] text-theme-light font-medium leading-tight">{t(item.descKey)}</p>
+                                    <span className="mt-2 text-[9px] font-mono font-bold bg-theme-subtle/20 px-2 py-0.5 rounded text-theme-light">{item.ext}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </Advanced>
                 </div>
-            )}
-        </div>
+            </div>
 
             {/* Modals */}
             <ConfirmationModal
@@ -1225,7 +1267,9 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                             content: (
                                 <div className="space-y-3">
                                     <p className="text-xs font-bold text-theme-primary">{t('standards.importSuccess')}</p>
-                                    <p className="text-[10px] font-mono text-theme-light">Standard ID: {importedId}</p>
+                                    <Advanced>
+                                        <p className="text-[10px] font-mono text-theme-light">Standard ID: {importedId}</p>
+                                    </Advanced>
                                 </div>
                             ),
                             confirmText: t('common.ok')
@@ -1301,9 +1345,7 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                                           updated: wotImportModalData.updated,
                                       })}
                             </p>
-                            <p className="text-[10px] font-mono text-theme-light/60 truncate" title={wotImportModalData.senderDid}>
-                                {wotImportModalData.senderDid}
-                            </p>
+                            <TechId value={wotImportModalData.senderDid} kind="did" />
                         </div>
 
                         {wotImportModalData.isProviderFilter && (

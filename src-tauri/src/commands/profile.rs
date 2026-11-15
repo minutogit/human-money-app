@@ -90,6 +90,23 @@ pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContac
     })
 }
 
+/// Encodes a short arbitrary text payload (e.g. a humoco://pay URI or base64 bundle)
+/// into a crisp black-and-white QR code SVG string using humoco_market.
+#[tauri::command]
+pub fn encode_text_qr_svg(text: String) -> Result<String, FrontendError> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(FrontendError::from("QR payload must not be empty".to_string()));
+    }
+    if trimmed.len() > humoco_market::MAX_QR_SHARE_BYTES {
+        return Err(FrontendError::from(format!(
+            "QR payload exceeds maximum QR capacity of {} bytes",
+            humoco_market::MAX_QR_SHARE_BYTES
+        )));
+    }
+    humoco_market::encode_qr_svg(trimmed.as_bytes()).map_err(FrontendError::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +165,19 @@ mod tests {
         assert!(quick.qr_svg.is_some());
         let svg = quick.qr_svg.unwrap();
         assert!(svg.contains("<svg"));
+    }
+
+    #[test]
+    fn test_encode_text_qr_svg_valid_and_limits() {
+        let valid = encode_text_qr_svg("humoco://pay?to=did:key:z6MkpAlice&amount=10".to_string())
+            .expect("valid URI should encode as QR SVG");
+        assert!(valid.contains("<svg"));
+
+        let empty_err = encode_text_qr_svg("   ".to_string()).unwrap_err();
+        assert!(empty_err.message.contains("empty"));
+
+        let oversized = "x".repeat(humoco_market::MAX_QR_SHARE_BYTES + 1);
+        let size_err = encode_text_qr_svg(oversized).unwrap_err();
+        assert!(size_err.message.contains("capacity"));
     }
 }
