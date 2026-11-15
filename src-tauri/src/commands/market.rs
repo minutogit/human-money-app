@@ -519,6 +519,22 @@ pub fn get_my_market_profile(
     get_my_market_profile_impl(password, &state)
 }
 
+fn coarsen_public_coordinates(raw: &str) -> String {
+    let parts: Vec<&str> = raw.split(',').collect();
+    if parts.len() == 2 {
+        if let (Ok(lat), Ok(lon)) = (parts[0].trim().parse::<f64>(), parts[1].trim().parse::<f64>()) {
+            if lat.is_finite() && lon.is_finite() {
+                return format!(
+                    "{:.2}, {:.2}",
+                    (lat * 100.0).round() / 100.0,
+                    (lon * 100.0).round() / 100.0
+                );
+            }
+        }
+    }
+    raw.to_string()
+}
+
 pub fn save_my_market_profile_impl(
     request: FrontendSaveMyMarketProfileRequest,
     password: Option<String>,
@@ -538,6 +554,12 @@ pub fn save_my_market_profile_impl(
         .with_wallet(|w| w.profile.to_public_profile())
         .map_err(FrontendError::from)?;
 
+    // Hard guardrails: street address must never be public; public coordinates are coarsened to ~1 km (2 decimals).
+    let mut sanitized_visibility = request.visibility;
+    if sanitized_visibility.street == FieldAudience::Everyone {
+        sanitized_visibility.street = FieldAudience::Contacts;
+    }
+
     core_profile.first_name = request.profile.first_name;
     core_profile.last_name = request.profile.last_name;
     core_profile.organization = request.profile.organization;
@@ -546,7 +568,11 @@ pub fn save_my_market_profile_impl(
     core_profile.gender = request.profile.gender;
     core_profile.email = request.profile.email;
     core_profile.phone = request.profile.phone;
-    core_profile.coordinates = request.profile.coordinates;
+    core_profile.coordinates = if sanitized_visibility.coordinates == FieldAudience::Everyone {
+        request.profile.coordinates.map(|c| coarsen_public_coordinates(&c))
+    } else {
+        request.profile.coordinates
+    };
     core_profile.url = request.profile.url;
     core_profile.picture_url = request.profile.picture_url.clone();
 
@@ -574,11 +600,14 @@ pub fn save_my_market_profile_impl(
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
 
-    stored.visibility = request.visibility;
+    stored.visibility = sanitized_visibility;
     stored.skills = request.skills;
     stored.max_hops = request.max_hops.clamp(1, 3);
     stored.validity_years = request.validity_years.clamp(1, 3);
     stored.allow_inquiries = request.allow_inquiries;
+    for ad in &mut stored.ads {
+        ad.allow_inquiries = request.allow_inquiries;
+    }
     stored.picture_url = request.profile.picture_url;
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
@@ -2153,5 +2182,82 @@ mod tests {
         assert!(res.is_ok(), "Expected success publishing card with empty name, got: {:?}", res.err());
         let prof = res.unwrap();
         assert!(prof.published);
+    }
+
+    #[test]
+    fn test_save_profile_p8_privacy_guardrails_and_inquiry_sync() {
+        let base_dir = temp_test_dir("p8_guardrails");
+        let password = "TestPassword123!";
+        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_state = create_test_state(alice_service);
+
+        // Create an ad first with allow_inquiries = true
+        let ad_input = FrontendAdInput {
+            id: None,
+            kind: humoco_market::AdKind::Offer,
+            title: "Neighborhood Bike Help".to_string(),
+            text: None,
+            pricing: None,
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: None,
+        };
+        let p_with_ad = upsert_ad_impl(ad_input, Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(p_with_ad.ads.len(), 1);
+        assert!(p_with_ad.ads[0].allow_inquiries);
+
+        // Save profile attempting street=Everyone, public fine coords, and allow_inquiries=false
+        let save_req = FrontendSaveMyMarketProfileRequest {
+            profile: FrontendUserProfile {
+                first_name: Some("Alice".to_string()),
+                coordinates: Some("48.1351, 11.5820".to_string()),
+                ..Default::default()
+            },
+            visibility: CardFieldVisibility {
+                street: FieldAudience::Everyone,
+                coordinates: FieldAudience::Everyone,
+                ..Default::default()
+            },
+            skills: vec![],
+            max_hops: 2,
+            validity_years: 2,
+            allow_inquiries: false,
+        };
+
+        let saved = save_my_market_profile_impl(save_req, Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(saved.visibility.street, FieldAudience::Contacts, "street must never be public");
+        assert_eq!(
+            saved.profile.coordinates.as_deref(),
+            Some("48.14, 11.58"),
+            "public coordinates must be coarsened to 2 decimal places"
+        );
+        assert!(!saved.allow_inquiries);
+        assert!(
+            !saved.ads[0].allow_inquiries,
+            "profile allow_inquiries must propagate to existing ads"
+        );
+
+        // When coordinates visibility is contacts-only, finer coordinates are preserved
+        let save_contacts_coords = FrontendSaveMyMarketProfileRequest {
+            profile: FrontendUserProfile {
+                first_name: Some("Alice".to_string()),
+                coordinates: Some("48.1351, 11.5820".to_string()),
+                ..Default::default()
+            },
+            visibility: CardFieldVisibility {
+                street: FieldAudience::Contacts,
+                coordinates: FieldAudience::Contacts,
+                ..Default::default()
+            },
+            skills: vec![],
+            max_hops: 2,
+            validity_years: 2,
+            allow_inquiries: true,
+        };
+
+        let saved_contacts = save_my_market_profile_impl(save_contacts_coords, Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(saved_contacts.profile.coordinates.as_deref(), Some("48.1351, 11.5820"));
+        assert!(saved_contacts.ads[0].allow_inquiries);
     }
 }

@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AdEditorModal } from '../AdEditorModal';
 import { FrontendMyAd } from '../../../types';
 import { marketService } from '../../../services/marketService';
@@ -7,7 +7,12 @@ import { marketService } from '../../../services/marketService';
 describe('AdEditorModal Component', () => {
   const nowSecs = Math.floor(Date.now() / 1000);
 
-  it('renders creation form with Offer/Request options and saves new ad', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  it('renders Simple mode with price chips, hides duration tabs & allowInquiries toggle, and saves new ad', () => {
     const onSave = vi.fn();
     const onClose = vi.fn();
 
@@ -17,45 +22,85 @@ describe('AdEditorModal Component', () => {
         onClose={onClose}
         onSave={onSave}
         activeAdsCount={1}
+        allowInquiries={false}
       />
     );
 
     expect(screen.getByRole('heading', { level: 2, name: /Neues Inserat|New ad/i })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /90 Tage|90 days/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('ad-pricing-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('ad-is-remote-checkbox')).not.toBeInTheDocument();
 
     // Select "Gesuch"
-    const requestRadio = screen.getByTestId('ad-kind-request-btn');
-    fireEvent.click(requestRadio);
+    fireEvent.click(screen.getByTestId('ad-kind-request-btn'));
 
     // Title & text
-    const titleInput = screen.getByPlaceholderText(/z\. B\. Suche Leiter|e\.g\. Looking for a ladder/i);
-    fireEvent.change(titleInput, { target: { value: 'Suche Werkzeugkoffer' } });
+    fireEvent.change(screen.getByPlaceholderText(/z\. B\. Suche Leiter|e\.g\. Looking for a ladder/i), {
+      target: { value: 'Suche Werkzeugkoffer' },
+    });
+    fireEvent.change(screen.getByTestId('ad-text-input'), {
+      target: { value: 'Brauche Ratschenkasten für Samstag' },
+    });
 
-    const textInput = screen.getByTestId('ad-text-input');
-    fireEvent.change(textInput, { target: { value: 'Brauche Ratschenkasten für Samstag' } });
+    // Price chip + numeric amount -> "25 Minuto"
+    fireEvent.click(screen.getByTestId('price-chip-minuto'));
+    fireEvent.change(screen.getByTestId('ad-price-amount-input'), { target: { value: '25' } });
 
-    // Duration: 90 days
-    const duration90Tab = screen.getByRole('tab', { name: /90 Tage|90 days/i });
-    fireEvent.click(duration90Tab);
-
-    // Toggle isRemote
-    const remoteCheckbox = screen.getByTestId('ad-is-remote-checkbox');
-    fireEvent.click(remoteCheckbox);
+    // Open More details disclosure to toggle isRemote
+    fireEvent.click(screen.getByTestId('ad-more-details-toggle'));
+    fireEvent.click(screen.getByTestId('ad-is-remote-checkbox'));
 
     // Submit
-    const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
-    fireEvent.click(saveBtn);
+    fireEvent.click(screen.getByRole('button', { name: /^Speichern$|^Save$/i }));
 
     expect(onSave).toHaveBeenCalledWith({
       kind: 'request',
       title: 'Suche Werkzeugkoffer',
       text: 'Brauche Ratschenkasten für Samstag',
+      pricing: '25 Minuto',
       durationDays: 90,
-      allowInquiries: true,
+      allowInquiries: false,
       isRemote: true,
     });
   });
 
-  it('renders editing form prefilled with existing ad data', () => {
+  it('allows custom pricing text and duration selection in Expert mode', () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
+    const onSave = vi.fn();
+
+    render(
+      <AdEditorModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSave={onSave}
+        activeAdsCount={1}
+        allowInquiries={true}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('ad-kind-offer-btn'));
+    fireEvent.change(screen.getByTestId('ad-title-input'), { target: { value: 'Fahrrad-Service' } });
+    fireEvent.change(screen.getByTestId('ad-text-input'), { target: { value: 'Schnelle Hilfe bei Reifen und Kette' } });
+    fireEvent.change(screen.getByTestId('ad-pricing-input'), { target: { value: '15 Minuto' } });
+
+    const duration30Tab = screen.getByRole('tab', { name: /30 Tage|30 days/i });
+    fireEvent.click(duration30Tab);
+
+    fireEvent.click(screen.getByTestId('ad-is-remote-checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: /^Speichern$|^Save$/i }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'offer',
+      title: 'Fahrrad-Service',
+      text: 'Schnelle Hilfe bei Reifen und Kette',
+      pricing: '15 Minuto',
+      durationDays: 30,
+      allowInquiries: true,
+      isRemote: true,
+    }));
+  });
+
+  it('renders editing form prefilled with existing ad data and propagates profile allowInquiries', () => {
     const existingAd: FrontendMyAd = {
       id: 'ad-existing',
       kind: 'offer',
@@ -78,22 +123,15 @@ describe('AdEditorModal Component', () => {
         onSave={onSave}
         editingAd={existingAd}
         activeAdsCount={1}
+        allowInquiries={true}
       />
     );
 
     expect(screen.getByRole('heading', { level: 2, name: /Inserat bearbeiten|Edit ad/i })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Brennholz Buche')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Trockenes Buchenholz abzugeben')).toBeInTheDocument();
+    expect(screen.getByTestId('price-chip-custom-clear')).toBeInTheDocument();
 
-    const titleInput = screen.getByDisplayValue('Brennholz Buche');
-    expect(titleInput).toBeInTheDocument();
-
-    const textInput = screen.getByDisplayValue('Trockenes Buchenholz abzugeben');
-    expect(textInput).toBeInTheDocument();
-
-    // Toggle inquiries
-    const inquiryToggle = screen.getAllByRole('checkbox')[0];
-    fireEvent.click(inquiryToggle);
-
-    // Save
     const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
     fireEvent.click(saveBtn);
 
@@ -126,6 +164,7 @@ describe('AdEditorModal Component', () => {
   });
 
   it('renders quota status badge and loads ad image when editing ad has imageToken', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     const existingAdWithImage: FrontendMyAd = {
       id: 'ad-img-1',
       kind: 'offer',

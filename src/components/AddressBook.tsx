@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { PageLayout } from './ui/PageLayout';
 import { Button } from './ui/Button';
 import { Advanced } from './ui/Advanced';
+import { ExpertTabsLayout } from './ui/ExpertTabsLayout';
 import { TechId } from './ui/TechId';
 import { contactService } from '../services/contactService';
 import { wotService } from '../services/wotService';
@@ -21,14 +22,12 @@ import {
     WotProviderDto, 
     FrontendPendingWotHandshake, 
     FrontendSyncOverviewStatus,
-    FrontendMyMarketProfile,
     PublicProfile 
 } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import Avatar from 'boring-avatars';
 import ContactDialog from './ContactDialog';
 import { AddContactModal } from './AddContactModal';
-import { ShareCardModal } from './marketplace/ShareCardModal';
 import { TrustLevelRadioCards } from './TrustLevelRadioCards';
 import { logger } from '../utils/log';
 import { stringifyError, translateError } from '../utils/errorHelper';
@@ -92,9 +91,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
     const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(initialOpenAddModal || false);
     const [isQuickContactModalOpen, setIsQuickContactModalOpen] = useState(false);
     const [isNetworkOptionsOpen, setIsNetworkOptionsOpen] = useState(false);
-    const [isShareCardModalOpen, setIsShareCardModalOpen] = useState(false);
-    const [ownProfileForShare, setOwnProfileForShare] = useState<FrontendMyMarketProfile | null>(null);
-    const [isPublishPromptOpen, setIsPublishPromptOpen] = useState(false);
     const [isTrustListModalOpen, setIsTrustListModalOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [deleteRequest, setDeleteRequest] = useState<string | null>(null);
@@ -249,37 +245,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
             setFeedbackMsg({ type: 'error', message: translateError(err, t) });
         } finally {
             setIsUpdatingHops(false);
-        }
-    };
-
-    const handleOpenShareCard = async () => {
-        try {
-            const myProfile = await marketService.getMyMarketProfile();
-            setOwnProfileForShare(myProfile);
-            if (!myProfile.published) {
-                setIsPublishPromptOpen(true);
-                return;
-            }
-            setIsShareCardModalOpen(true);
-        } catch (err) {
-            logger.error("Failed to load market profile for sharing: " + stringifyError(err));
-            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
-        }
-    };
-
-    const handleConfirmPublishAndShare = async () => {
-        try {
-            const updated = await protectAction(async (pwd) => {
-                return await marketService.setCardPublished(true, false, pwd || undefined);
-            });
-            if (updated) {
-                setOwnProfileForShare(updated);
-                setIsPublishPromptOpen(false);
-                setIsShareCardModalOpen(true);
-            }
-        } catch (err) {
-            logger.error("Failed to publish business card: " + stringifyError(err));
-            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
         }
     };
 
@@ -627,6 +592,37 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
             actions={
                 <>
                     <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setIsQuickContactModalOpen(true)}
+                        className="gap-2"
+                        title={t('contacts.shareMyProfileBtn', 'Mein Profil teilen')}
+                        data-testid="my-quick-contact-button"
+                    >
+                        <QrCode size={18} />
+                        <span>
+                            {t('contacts.shareMyProfileBtn', 'Mein Profil teilen')}
+                        </span>
+                    </Button>
+                    <Button
+                        size="sm"
+                        onClick={() => {
+                            setInitialAddDid(undefined);
+                            setInitialAddProfile(undefined);
+                            setInitialAddSyncUrls(undefined);
+                            setIsAddContactModalOpen(true);
+                        }}
+                        className="gap-2"
+                        title={t('contacts.addContact')}
+                    >
+                        <UserPlus size={18} />
+                        <span>{t('contacts.addContact')}</span>
+                    </Button>
+                </>
+            }
+            advancedActions={
+                <>
+                    <Button
                         type="button"
                         variant="secondary"
                         size="sm"
@@ -646,12 +642,13 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                         data-testid="sync-services-button"
                     >
                         <RefreshCw size={16} className={isSyncingServices ? 'animate-spin' : ''} />
-                        {isCoolingDown && (
-                            <span className="text-xs font-mono font-bold">
-                                {cooldownSeconds}s
-                                <span className="sr-only"> {t('contacts.syncRateLimitWait', { seconds: cooldownSeconds, defaultValue: `Bitte noch ${cooldownSeconds}s warten...` })}</span>
-                            </span>
-                        )}
+                        <span>
+                            {isCoolingDown
+                                ? `${cooldownSeconds}s`
+                                : isSyncingServices
+                                    ? t('settings.syncing', 'Synchronisiere...')
+                                    : t('contacts.refreshSyncBtn', 'Aktualisieren')}
+                        </span>
                     </Button>
                     <Button
                         type="button"
@@ -668,19 +665,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                         {isNetworkOptionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                     </Button>
                     <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => setIsQuickContactModalOpen(true)}
-                        className="gap-2"
-                        title={t('contacts.quickContactBtn', 'Mein QR-Code')}
-                        data-testid="my-quick-contact-button"
-                    >
-                        <QrCode size={18} />
-                        <span>
-                            {t('contacts.quickContactBtn')}
-                        </span>
-                    </Button>
-                    <Button
                         size="sm"
                         variant="secondary"
                         onClick={() => setIsGuardianSetupOpen(true)}
@@ -690,20 +674,6 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                     >
                         <ShieldCheck size={18} />
                         <span>{t('backup.socialRecoveryStatusLabel')}</span>
-                    </Button>
-                    <Button
-                        size="sm"
-                        onClick={() => {
-                            setInitialAddDid(undefined);
-                            setInitialAddProfile(undefined);
-                            setInitialAddSyncUrls(undefined);
-                            setIsAddContactModalOpen(true);
-                        }}
-                        className="gap-2"
-                        title={t('contacts.addContact')}
-                    >
-                        <UserPlus size={18} />
-                        <span>{t('contacts.addContact')}</span>
                     </Button>
                 </>
             }
@@ -845,28 +815,31 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
 
                 {/* Progressive Disclosure Tab Bar */}
                 {providers.length > 0 && (
-                    <div className="flex justify-start">
-                        <SegmentedTabs
-                            tabs={[
-                                {
-                                    id: 'contacts',
-                                    label: `${t('contacts.tabPersonalContacts')} (${contacts.length})`,
-                                    icon: <Users size={16} />
-                                },
-                                {
-                                    id: 'providers',
-                                    label: `${t('contacts.tabProviders')} (${providers.length})`,
-                                    icon: <Building2 size={16} />
-                                }
-                            ]}
-                            activeTab={activeTab}
-                            onChange={(id) => setActiveTab(id as 'contacts' | 'providers')}
-                        />
-                    </div>
+                    <Advanced>
+                        <div className="flex justify-start">
+                            <SegmentedTabs
+                                tabs={[
+                                    {
+                                        id: 'contacts',
+                                        label: `${t('contacts.tabPersonalContacts')} (${contacts.length})`,
+                                        icon: <Users size={16} />
+                                    },
+                                    {
+                                        id: 'providers',
+                                        label: `${t('contacts.tabProviders')} (${providers.length})`,
+                                        icon: <Building2 size={16} />
+                                    }
+                                ]}
+                                activeTab={activeTab}
+                                onChange={(id) => setActiveTab(id as 'contacts' | 'providers')}
+                            />
+                        </div>
+                    </Advanced>
                 )}
 
-                {activeTab === 'providers' && providers.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {(() => {
+                    const providersSection = (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {providers.map((provider) => (
                             <div key={provider.issuerDid} className="group h-full">
                                 <div className="h-full bg-white border border-theme-subtle rounded-[32px] p-6 flex flex-col group-hover:border-theme-primary/30 group-hover:shadow-premium transition-all">
@@ -957,10 +930,11 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                 </div>
                             </div>
                         ))}
-                    </div>
-                ) : (
-                    <>
-                        {/* Search and Filters */}
+                        </div>
+                    );
+                    const contactsSection = (
+                        <>
+                            {/* Search and Filters */}
                         <div className="flex flex-col md:flex-row gap-6">
                             <div className="relative flex-1 group">
                                 <div className="absolute left-4 top-1/2 -translate-y-1/2 text-theme-light group-focus-within:text-theme-primary transition-colors">
@@ -1080,13 +1054,15 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                                     </div>
                                                 </div>
                                                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <button
-                                                        onClick={() => handleShareContactWot(contact)}
-                                                        className="p-2 hover:bg-theme-subtle/20 rounded-xl text-theme-light hover:text-theme-primary transition-all cursor-pointer"
-                                                        title={t('contacts.shareWotForContact')}
-                                                    >
-                                                        <Share2 size={18} />
-                                                    </button>
+                                                    <Advanced>
+                                                        <button
+                                                            onClick={() => handleShareContactWot(contact)}
+                                                            className="p-2 hover:bg-theme-subtle/20 rounded-xl text-theme-light hover:text-theme-primary transition-all cursor-pointer"
+                                                            title={t('contacts.shareWotForContact')}
+                                                        >
+                                                            <Share2 size={18} />
+                                                        </button>
+                                                    </Advanced>
                                                     <button
                                                         onClick={() => {
                                                              setEditingContact(contact);
@@ -1163,101 +1139,111 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                                                         ? t('contacts.trustLevel0')
                                                                         : t('contacts.trustLevelUnrated')}
                                                     </span>
-                                                    {contact.hasPeerList && (
-                                                        contact.peerListUpdatedAt && (Date.now() / 1000 - contact.peerListUpdatedAt) > 31_536_000 ? (
-                                                            <span
-                                                                title={t('contacts.peerListStaleHint')}
-                                                                className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200 shadow-sm"
+                                                    <Advanced>
+                                                        {contact.hasPeerList && (
+                                                            contact.peerListUpdatedAt && (Date.now() / 1000 - contact.peerListUpdatedAt) > 31_536_000 ? (
+                                                                <span
+                                                                    title={t('contacts.peerListStaleHint')}
+                                                                    className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200 shadow-sm"
+                                                                >
+                                                                    {t('contacts.peerListStale')}
+                                                                </span>
+                                                            ) : (
+                                                                <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-sm">
+                                                                    {t('contacts.peerListSynced')}
+                                                                </span>
+                                                            )
+                                                        )}
+                                                        {contact.syncs && contact.syncs.length > 0 && (
+                                                            <div
+                                                                data-testid="contact-has-sync-badge"
+                                                                className="flex flex-wrap items-center gap-1.5"
                                                             >
-                                                                {t('contacts.peerListStale')}
-                                                            </span>
-                                                        ) : (
-                                                            <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-sm">
-                                                                {t('contacts.peerListSynced')}
-                                                            </span>
-                                                        )
-                                                    )}
-                                                    {contact.syncs && contact.syncs.length > 0 && (
-                                                        <div
-                                                            data-testid="contact-has-sync-badge"
-                                                            className="flex flex-wrap items-center gap-1.5"
-                                                        >
-                                                            <span
-                                                                className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm flex items-center gap-1"
-                                                                title={t('contacts.hasSyncTooltip')}
-                                                            >
-                                                                <Server size={9} />
-                                                                {t('contacts.hasSync')}
-                                                            </span>
-                                                            {contact.syncs.map((syncEp, idx) => {
-                                                                const host = (() => {
-                                                                    try {
-                                                                        return new URL(syncEp.writeUrl || syncEp.readUrl).hostname;
-                                                                    } catch {
-                                                                        return syncEp.writeUrl || syncEp.readUrl;
+                                                                <span
+                                                                    className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm flex items-center gap-1"
+                                                                    title={t('contacts.hasSyncTooltip')}
+                                                                >
+                                                                    <Server size={9} />
+                                                                    {t('contacts.hasSync')}
+                                                                </span>
+                                                                {contact.syncs.map((syncEp, idx) => {
+                                                                    const host = (() => {
+                                                                        try {
+                                                                            return new URL(syncEp.writeUrl || syncEp.readUrl).hostname;
+                                                                        } catch {
+                                                                            return syncEp.writeUrl || syncEp.readUrl;
+                                                                        }
+                                                                    })();
+                                                                    const isFailing = syncEp.status === 'unreachable' || (syncEp.failCount ?? 0) > 0;
+                                                                    const isPendingAuth = syncEp.status === 'pending_auth';
+                                                                    const isActive = syncEp.status === 'active';
+
+                                                                    let badgeColor = 'bg-slate-50 text-slate-600 border-slate-200';
+                                                                    let dotColor = 'bg-slate-400';
+                                                                    let statusLabel = t('contacts.syncUnverified', 'Ungeprüft');
+                                                                    let tooltip = `${host} (${statusLabel})`;
+
+                                                                    if (isFailing) {
+                                                                        const isHardUnreachable = syncEp.status === 'unreachable' || (syncEp.failCount && syncEp.failCount >= 3);
+                                                                        badgeColor = isHardUnreachable
+                                                                            ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                                                            : 'bg-amber-50 text-amber-700 border-amber-200';
+                                                                        dotColor = isHardUnreachable ? 'bg-rose-500' : 'bg-amber-500';
+                                                                        statusLabel = isHardUnreachable ? t('contacts.syncUnreachable') : t('contacts.syncWarning');
+                                                                        tooltip = `${host} - ${statusLabel} (${t('contacts.syncFailCount')} ${syncEp.failCount ?? 0})`;
+                                                                    } else if (isPendingAuth) {
+                                                                        badgeColor = 'bg-amber-50 text-amber-700 border-amber-200';
+                                                                        dotColor = 'bg-amber-500';
+                                                                        statusLabel = t('contacts.syncPendingAuth', 'Wartet auf Freigabe');
+                                                                        tooltip = `${host} - ${statusLabel}`;
+                                                                    } else if (isActive) {
+                                                                        badgeColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                                                                        dotColor = 'bg-emerald-500';
+                                                                        statusLabel = t('contacts.syncAvailable', 'Abgleich bereit');
+                                                                        const dateStr = syncEp.lastSeenAt ? new Date(syncEp.lastSeenAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                                                                        tooltip = `${host} - ${statusLabel}${dateStr ? ` (${t('contacts.syncLastSeen')} ${dateStr})` : ''}`;
+                                                                    } else {
+                                                                        badgeColor = 'bg-slate-50 text-slate-600 border-slate-200';
+                                                                        dotColor = 'bg-slate-400';
+                                                                        statusLabel = t('contacts.syncUnverified', 'Ungeprüft');
+                                                                        tooltip = `${host} (${statusLabel})`;
                                                                     }
-                                                                })();
-                                                                const isFailing = syncEp.status === 'unreachable' || (syncEp.failCount ?? 0) > 0;
-                                                                const isPendingAuth = syncEp.status === 'pending_auth';
-                                                                const isActive = syncEp.status === 'active';
 
-                                                                let badgeColor = 'bg-slate-50 text-slate-600 border-slate-200';
-                                                                let dotColor = 'bg-slate-400';
-                                                                let statusLabel = t('contacts.syncUnverified', 'Ungeprüft');
-                                                                let tooltip = `${host} (${statusLabel})`;
-
-                                                                if (isFailing) {
-                                                                    const isHardUnreachable = syncEp.status === 'unreachable' || (syncEp.failCount && syncEp.failCount >= 3);
-                                                                    badgeColor = isHardUnreachable
-                                                                        ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                                                        : 'bg-amber-50 text-amber-700 border-amber-200';
-                                                                    dotColor = isHardUnreachable ? 'bg-rose-500' : 'bg-amber-500';
-                                                                    statusLabel = isHardUnreachable ? t('contacts.syncUnreachable') : t('contacts.syncWarning');
-                                                                    tooltip = `${host} - ${statusLabel} (${t('contacts.syncFailCount')} ${syncEp.failCount ?? 0})`;
-                                                                } else if (isPendingAuth) {
-                                                                    badgeColor = 'bg-amber-50 text-amber-700 border-amber-200';
-                                                                    dotColor = 'bg-amber-500';
-                                                                    statusLabel = t('contacts.syncPendingAuth', 'Wartet auf Freigabe');
-                                                                    tooltip = `${host} - ${statusLabel}`;
-                                                                } else if (isActive) {
-                                                                    badgeColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-                                                                    dotColor = 'bg-emerald-500';
-                                                                    statusLabel = t('contacts.syncAvailable', 'Abgleich bereit');
-                                                                    const dateStr = syncEp.lastSeenAt ? new Date(syncEp.lastSeenAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-                                                                    tooltip = `${host} - ${statusLabel}${dateStr ? ` (${t('contacts.syncLastSeen')} ${dateStr})` : ''}`;
-                                                                } else {
-                                                                    badgeColor = 'bg-slate-50 text-slate-600 border-slate-200';
-                                                                    dotColor = 'bg-slate-400';
-                                                                    statusLabel = t('contacts.syncUnverified', 'Ungeprüft');
-                                                                    tooltip = `${host} (${statusLabel})`;
-                                                                }
-
-                                                                return (
-                                                                    <span
-                                                                        key={`${syncEp.writeUrl || syncEp.readUrl}-${idx}`}
-                                                                        className={`px-1.5 py-0.5 rounded-md text-[9px] font-semibold border shadow-sm flex items-center gap-1 ${badgeColor}`}
-                                                                        title={tooltip}
-                                                                    >
-                                                                        <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
-                                                                        <span className="font-mono">{host}</span>
-                                                                        <span className="opacity-75 font-normal">({statusLabel})</span>
-                                                                    </span>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    )}
+                                                                    return (
+                                                                        <span
+                                                                            key={`${syncEp.writeUrl || syncEp.readUrl}-${idx}`}
+                                                                            className={`px-1.5 py-0.5 rounded-md text-[9px] font-semibold border shadow-sm flex items-center gap-1 ${badgeColor}`}
+                                                                            title={tooltip}
+                                                                        >
+                                                                            <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+                                                                            <span className="font-mono">{host}</span>
+                                                                            <span className="opacity-75 font-normal">({statusLabel})</span>
+                                                                        </span>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        )}
+                                                    </Advanced>
                                                 </div>
 
                                                 <div className="flex flex-wrap gap-1.5 mt-auto">
-                                                    {contact.tags.map(tag => (
+                                                    {contact.tags.slice(0, 1).map(tag => (
                                                         <span key={tag} className="flex items-center gap-1 px-2.5 py-1 bg-white border border-theme-subtle/50 rounded-lg text-[9px] uppercase tracking-widest font-black text-theme-light shadow-sm">
                                                             <Tag size={8} />
                                                             {tag}
                                                         </span>
                                                     ))}
-                                                    {contact.tags.length === 0 && (
-                                                        <span className="text-[9px] font-black uppercase tracking-widest text-theme-light/40 italic">{t('contacts.noTagsAssigned')}</span>
-                                                    )}
+                                                    <Advanced>
+                                                        {contact.tags.slice(1).map(tag => (
+                                                            <span key={tag} className="flex items-center gap-1 px-2.5 py-1 bg-white border border-theme-subtle/50 rounded-lg text-[9px] uppercase tracking-widest font-black text-theme-light shadow-sm">
+                                                                <Tag size={8} />
+                                                                {tag}
+                                                            </span>
+                                                        ))}
+                                                        {contact.tags.length === 0 && (
+                                                            <span className="text-[9px] font-black uppercase tracking-widest text-theme-light/40 italic">{t('contacts.noTagsAssigned')}</span>
+                                                        )}
+                                                    </Advanced>
                                                 </div>
                                             </div>
                                         </div>
@@ -1265,8 +1251,15 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                 ))}
                             </div>
                         )}
-                    </>
-                )}
+                        </>
+                    );
+                    return (
+                        <ExpertTabsLayout
+                            simpleContent={contactsSection}
+                            expertContent={activeTab === 'providers' && providers.length > 0 ? providersSection : contactsSection}
+                        />
+                    );
+                })()}
 
             </div>
 
@@ -1286,37 +1279,10 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                 onError={(msg) => setFeedbackMsg({ type: 'error', message: msg })}
             />
 
-            {/* Quick Contact Modal ("Mein QR-Code") */}
+            {/* Unified Profile Share Modal */}
             <QuickContactModal
                 isOpen={isQuickContactModalOpen}
                 onClose={() => setIsQuickContactModalOpen(false)}
-                onOpenFullShare={handleOpenShareCard}
-            />
-
-            {/* Share Own Business Card Modal */}
-            {ownProfileForShare && (
-                <ShareCardModal
-                    isOpen={isShareCardModalOpen}
-                    onClose={() => setIsShareCardModalOpen(false)}
-                    title={t('contacts.shareMyBusinessCard', 'Meine Visitenkarte teilen')}
-                    subtitle={t('marketplace.shareOwnCardSubtitle', 'Sichere Datei oder QR-Code zum Austausch')}
-                    fileWire={ownProfileForShare.fileWire}
-                    shareUri={ownProfileForShare.shareUri}
-                    qrSvg={ownProfileForShare.qrSvg}
-                    did={ownProfileForShare.profile.id}
-                    qrIsPartial={ownProfileForShare.qrIsPartial}
-                />
-            )}
-
-            {/* Prompt to publish card before sharing */}
-            <ConfirmationModal
-                isOpen={isPublishPromptOpen}
-                onCancel={() => setIsPublishPromptOpen(false)}
-                onConfirm={handleConfirmPublishAndShare}
-                title={t('contacts.publishCardBeforeShareTitle', 'Visitenkarte veröffentlichen?')}
-                description={t('contacts.publishCardBeforeShareDesc', 'Deine Visitenkarte ist aktuell nicht veröffentlicht. Möchtest du sie jetzt veröffentlichen, um sie als Datei oder QR-Code zu teilen?')}
-                confirmText={t('contacts.publishAndShareBtn', 'Veröffentlichen & Teilen')}
-                cancelText={t('common.cancel', 'Abbrechen')}
             />
 
             {/* Trust List Menu Modal ("⋯") */}

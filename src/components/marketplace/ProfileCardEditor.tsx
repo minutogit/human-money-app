@@ -15,7 +15,6 @@ import {
     Users,
     EyeOff,
     Briefcase,
-    Sparkles,
     Search,
     Upload,
 } from 'lucide-react';
@@ -32,6 +31,8 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { SegmentedTabs } from '../ui/SegmentedTabs';
 import { InfoHint } from '../ui/InfoHint';
+import { Advanced } from '../ui/Advanced';
+import { PresetOrCustom } from '../ui/PresetOrCustom';
 import {
     CoordinatePrecision,
     roundCoordinates,
@@ -39,6 +40,74 @@ import {
     geocodeAddress,
 } from '../../utils/geoUtils';
 import { compressAvatarToWebpDataUri } from '../../utils/imageCompression';
+
+export type CardPresetId = 'private' | 'local' | 'business';
+
+export const CARD_VISIBILITY_PRESETS: Record<CardPresetId, CardFieldVisibility> = {
+    private: {
+        name: 'everyone',
+        city: 'everyone',
+        coordinates: 'everyone',
+        organization: 'contacts',
+        community: 'contacts',
+        email: 'contacts',
+        phone: 'contacts',
+        picture: 'contacts',
+        url: 'contacts',
+        street: 'nobody',
+        gender: 'nobody',
+    },
+    local: {
+        name: 'everyone',
+        organization: 'everyone',
+        community: 'everyone',
+        city: 'everyone',
+        picture: 'everyone',
+        url: 'everyone',
+        coordinates: 'everyone',
+        street: 'contacts',
+        email: 'contacts',
+        phone: 'contacts',
+        gender: 'nobody',
+    },
+    business: {
+        name: 'everyone',
+        organization: 'everyone',
+        community: 'everyone',
+        city: 'everyone',
+        picture: 'everyone',
+        url: 'everyone',
+        email: 'everyone',
+        phone: 'everyone',
+        coordinates: 'everyone',
+        street: 'contacts',
+        gender: 'nobody',
+    },
+};
+
+const VISIBILITY_KEYS: (keyof CardFieldVisibility)[] = [
+    'name',
+    'organization',
+    'community',
+    'city',
+    'street',
+    'email',
+    'phone',
+    'coordinates',
+    'gender',
+    'url',
+    'picture',
+];
+
+export function detectCardPreset(vis: CardFieldVisibility): CardPresetId | 'custom' {
+    for (const id of ['local', 'private', 'business'] as const) {
+        const preset = CARD_VISIBILITY_PRESETS[id];
+        if (VISIBILITY_KEYS.every((k) => vis[k] === preset[k])) {
+            return id;
+        }
+    }
+    return 'custom';
+}
 
 export interface ProfileCardEditorProps {
     isOpen: boolean;
@@ -56,10 +125,13 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
     const { t } = useTranslation();
 
     const [profile, setProfile] = useState<FrontendUserProfile>(myProfile.profile);
-    const [visibility, setVisibility] = useState<CardFieldVisibility>(myProfile.visibility);
+    const [visibility, setVisibility] = useState<CardFieldVisibility>(() => ({
+        ...myProfile.visibility,
+        street: myProfile.visibility.street === 'everyone' ? 'contacts' : myProfile.visibility.street,
+    }));
     const [skills, setSkills] = useState<Skill[]>(myProfile.skills || []);
+    const [allowInquiries, setAllowInquiries] = useState<boolean>(myProfile.allowInquiries);
 
-    const [isBusinessPreset, setIsBusinessPreset] = useState<boolean>(false);
     const [previewPerspective, setPreviewPerspective] = useState<'contact' | 'forwarded'>('contact');
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -82,75 +154,66 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
         }
     };
 
-    // Synchronize initial state
+    // Synchronize initial state and enforce P8 guardrails (street never public, public coords max ~1 km)
     useEffect(() => {
         if (isOpen) {
-            setProfile(myProfile.profile);
-            setVisibility(myProfile.visibility);
+            const clampedVis: CardFieldVisibility = {
+                ...myProfile.visibility,
+                street: myProfile.visibility.street === 'everyone' ? 'contacts' : myProfile.visibility.street,
+            };
+            const initialProfile = { ...myProfile.profile };
+            if (clampedVis.coordinates === 'everyone' && initialProfile.coordinates?.trim()) {
+                initialProfile.coordinates = roundCoordinates(initialProfile.coordinates, 2) || initialProfile.coordinates;
+            }
+            setProfile(initialProfile);
+            setVisibility(clampedVis);
             setSkills(myProfile.skills || []);
+            setAllowInquiries(myProfile.allowInquiries);
+            setPreviewPerspective('contact');
+            if (clampedVis.coordinates !== 'contacts') {
+                setCoordPrecision(2);
+            }
+            setGeoError(null);
             setError(null);
-
-            // Check if business preset matches current visibility
-            const isBiz =
-                myProfile.visibility.name === 'everyone' &&
-                myProfile.visibility.organization === 'everyone' &&
-                myProfile.visibility.community === 'everyone' &&
-                myProfile.visibility.city === 'everyone' &&
-                myProfile.visibility.street === 'everyone' &&
-                myProfile.visibility.email === 'everyone' &&
-                myProfile.visibility.phone === 'everyone' &&
-                myProfile.visibility.url === 'everyone' &&
-                myProfile.visibility.picture === 'everyone';
-            setIsBusinessPreset(isBiz);
         }
     }, [myProfile, isOpen]);
 
-    // Preset toggle
-    const handleToggleBusinessPreset = (enable: boolean) => {
-        setIsBusinessPreset(enable);
-        if (enable) {
-            setVisibility((prev) => ({
-                ...prev,
-                name: 'everyone',
-                organization: 'everyone',
-                community: 'everyone',
-                city: 'everyone',
-                street: 'everyone',
-                email: 'everyone',
-                phone: 'everyone',
-                url: 'everyone',
-                picture: 'everyone',
-                coordinates: 'everyone',
-                gender: prev.gender,
-            }));
-        } else {
-            // Restore defaults
-            setVisibility({
-                name: 'everyone',
-                organization: 'everyone',
-                community: 'everyone',
-                city: 'everyone',
-                url: 'everyone',
-                picture: 'everyone',
-                street: 'contacts',
-                email: 'contacts',
-                phone: 'contacts',
-                coordinates: 'everyone',
-                gender: 'nobody',
+    const applyPreset = (presetId: CardPresetId) => {
+        const nextVis = { ...CARD_VISIBILITY_PRESETS[presetId] };
+        setVisibility(nextVis);
+        if (nextVis.coordinates === 'everyone') {
+            setCoordPrecision(2);
+            setProfile((prev) => {
+                if (!prev.coordinates?.trim()) return prev;
+                const rounded = roundCoordinates(prev.coordinates, 2);
+                return rounded ? { ...prev, coordinates: rounded } : prev;
             });
         }
     };
 
     const updateVisibility = (key: keyof CardFieldVisibility, val: FieldAudience) => {
-        setVisibility((prev) => ({ ...prev, [key]: val }));
-        setIsBusinessPreset(false);
+        const sanitizedVal: FieldAudience = key === 'street' && val === 'everyone' ? 'contacts' : val;
+        setVisibility((prev) => ({ ...prev, [key]: sanitizedVal }));
+        if (key === 'coordinates' && sanitizedVal !== 'contacts') {
+            setCoordPrecision(2);
+            if (sanitizedVal === 'everyone') {
+                setProfile((prev) => {
+                    if (!prev.coordinates?.trim()) return prev;
+                    const rounded = roundCoordinates(prev.coordinates, 2);
+                    return rounded ? { ...prev, coordinates: rounded } : prev;
+                });
+            }
+        }
     };
 
-    // Cycle visibility: everyone -> contacts -> nobody -> everyone
+    // Cycle visibility: everyone -> contacts -> nobody -> everyone (street only cycles contacts <-> nobody)
     const cycleVisibility = (key: keyof CardFieldVisibility) => {
-        const order: FieldAudience[] = ['everyone', 'contacts', 'nobody'];
+        const order: FieldAudience[] = key === 'street'
+            ? ['contacts', 'nobody']
+            : ['everyone', 'contacts', 'nobody'];
         const current = visibility[key];
-        const nextIdx = (order.indexOf(current) + 1) % order.length;
+        const idx = order.indexOf(current);
+        const nextIdx = idx === -1 ? 0 : (idx + 1) % order.length;
         updateVisibility(key, order[nextIdx]);
     };
 
@@ -170,24 +233,31 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
             pillStyle = 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200';
         }
 
+        const titleText = key === 'street'
+            ? t('marketplace.visibilityCycleStreetTooltip', 'Klicken zum Wechseln: Nur Kontakte ➔ Niemand')
+            : t('marketplace.visibilityCycleTooltip', 'Klicken zum Wechseln: Alle ➔ Nur Kontakte ➔ Niemand');
+
         return (
-            <button
-                type="button"
-                onClick={() => cycleVisibility(key)}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-all cursor-pointer ${pillStyle}`}
-                title={t('marketplace.visibilityCycleTooltip', 'Klicken zum Wechseln: Alle ➔ Nur Kontakte ➔ Niemand')}
-                data-testid={`visibility-btn-${key}`}
-            >
-                {icon}
-                <span>{label}</span>
-            </button>
+            <Advanced>
+                <button
+                    type="button"
+                    onClick={() => cycleVisibility(key)}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-all cursor-pointer ${pillStyle}`}
+                    title={titleText}
+                    data-testid={`visibility-btn-${key}`}
+                >
+                    {icon}
+                    <span>{label}</span>
+                </button>
+            </Advanced>
         );
     };
 
     const handlePrecisionChange = (newPrecision: CoordinatePrecision) => {
-        setCoordPrecision(newPrecision);
+        const effectivePrecision: CoordinatePrecision = visibility.coordinates === 'contacts' ? newPrecision : 2;
+        setCoordPrecision(effectivePrecision);
         if (profile.coordinates?.trim()) {
-            const rounded = roundCoordinates(profile.coordinates, newPrecision);
+            const rounded = roundCoordinates(profile.coordinates, effectivePrecision);
             if (rounded) {
                 setProfile((prev) => ({ ...prev, coordinates: rounded }));
             }
@@ -197,11 +267,16 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
     const handleFetchGps = async () => {
         setIsLocating(true);
         setGeoError(null);
+        const targetVisibility: FieldAudience = visibility.coordinates === 'contacts' ? 'contacts' : 'everyone';
+        const effectivePrecision: CoordinatePrecision = targetVisibility === 'contacts' ? coordPrecision : 2;
         try {
             const rawCoords = await getCurrentLocation(6);
-            const rounded = roundCoordinates(rawCoords, coordPrecision) || rawCoords;
+            const rounded = roundCoordinates(rawCoords, effectivePrecision) || rawCoords;
             setProfile((prev) => ({ ...prev, coordinates: rounded }));
-            setVisibility((prev) => ({ ...prev, coordinates: 'everyone' }));
+            setVisibility((prev) => ({ ...prev, coordinates: targetVisibility }));
+            if (targetVisibility !== 'contacts') {
+                setCoordPrecision(2);
+            }
         } catch (err) {
             setGeoError(err instanceof Error ? err.message : String(err));
         } finally {
@@ -212,11 +287,16 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
     const handleGeocodeAddress = async () => {
         setIsLocating(true);
         setGeoError(null);
+        const targetVisibility: FieldAudience = visibility.coordinates === 'contacts' ? 'contacts' : 'everyone';
+        const effectivePrecision: CoordinatePrecision = targetVisibility === 'contacts' ? coordPrecision : 2;
         try {
             const rawCoords = await geocodeAddress(profile.address || {}, 6);
-            const rounded = roundCoordinates(rawCoords, coordPrecision) || rawCoords;
+            const rounded = roundCoordinates(rawCoords, effectivePrecision) || rawCoords;
             setProfile((prev) => ({ ...prev, coordinates: rounded }));
-            setVisibility((prev) => ({ ...prev, coordinates: 'everyone' }));
+            setVisibility((prev) => ({ ...prev, coordinates: targetVisibility }));
+            if (targetVisibility !== 'contacts') {
+                setCoordPrecision(2);
+            }
         } catch (err) {
             setGeoError(err instanceof Error ? err.message : String(err));
         } finally {
@@ -280,9 +360,32 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
 
         setIsSaving(true);
         try {
+            let finalProfile: FrontendUserProfile = { ...profile };
+            const finalVisibility: CardFieldVisibility = {
+                ...visibility,
+                street: visibility.street === 'everyone' ? 'contacts' : visibility.street,
+            };
+
+            if (!finalProfile.coordinates?.trim() && (finalProfile.address?.city?.trim() || finalProfile.address?.zipCode?.trim())) {
+                const autoCoords = await geocodeAddress(finalProfile.address, 2).catch(() => null);
+                if (autoCoords) {
+                    finalProfile = {
+                        ...finalProfile,
+                        coordinates: roundCoordinates(autoCoords, 2) || autoCoords,
+                    };
+                }
+            }
+
+            if (finalVisibility.coordinates === 'everyone' && finalProfile.coordinates?.trim()) {
+                finalProfile = {
+                    ...finalProfile,
+                    coordinates: roundCoordinates(finalProfile.coordinates, 2) || finalProfile.coordinates,
+                };
+            }
+
             await onSave({
-                profile,
-                visibility,
+                profile: finalProfile,
+                visibility: finalVisibility,
                 skills: skills.map((s) => ({
                     title: s.title.trim(),
                     text: s.text?.trim() || undefined,
@@ -291,7 +394,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                 })),
                 maxHops: myProfile.maxHops,
                 validityYears: myProfile.validityYears ?? 2,
-                allowInquiries: myProfile.allowInquiries,
+                allowInquiries,
             });
             onClose();
         } catch (err) {
@@ -345,26 +448,40 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                     </div>
                 )}
 
-                {/* Top preset toggle & visibility explanation hint */}
+                {/* Top audience preset cards & visibility explanation hint */}
                 <div className="p-4 rounded-2xl bg-bg-app border border-theme-subtle space-y-3">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <Sparkles size={16} className="text-theme-primary" />
-                            <span className="text-xs font-bold text-theme-secondary">
-                                {t('marketplace.businessPresetTitle', 'Ich nutze die Karte geschäftlich')}
-                            </span>
-                        </div>
-                        <input
-                            type="checkbox"
-                            checked={isBusinessPreset}
-                            onChange={(e) => handleToggleBusinessPreset(e.target.checked)}
-                            className="rounded text-theme-primary focus:ring-theme-primary cursor-pointer w-4 h-4"
-                            data-testid="business-preset-checkbox"
-                        />
-                    </div>
-                    <p className="text-[11px] text-theme-light leading-relaxed">
-                        {t('marketplace.businessPresetDesc', 'Macht alle Kontaktdaten standardmäßig öffentlich sichtbar (außer GPS-Koordinaten und Geschlecht).')}
-                    </p>
+                    <PresetOrCustom<CardPresetId>
+                        value={detectCardPreset(visibility)}
+                        onChange={applyPreset}
+                        gridClassName="grid grid-cols-1 sm:grid-cols-3 gap-3"
+                        presets={[
+                            {
+                                id: 'private',
+                                title: t('marketplace.cardPresetPrivateTitle', 'Privat'),
+                                description: t(
+                                    'marketplace.cardPresetPrivateDesc',
+                                    'Nur Name & Ort öffentlich, Kontaktangaben nur für deine Kontakte.'
+                                ),
+                            },
+                            {
+                                id: 'local',
+                                title: t('marketplace.cardPresetLocalTitle', 'Lokal anbieten'),
+                                description: t(
+                                    'marketplace.cardPresetLocalDesc',
+                                    'Name, Angebote, Bild & Ort öffentlich – Telefon, E-Mail & Straße nur für Kontakte.'
+                                ),
+                                recommended: true,
+                            },
+                            {
+                                id: 'business',
+                                title: t('marketplace.cardPresetBusinessTitle', 'Geschäftlich'),
+                                description: t(
+                                    'marketplace.cardPresetBusinessDesc',
+                                    'Kontaktdaten öffentlich auffindbar, Straße nur für Kontakte.'
+                                ),
+                            },
+                        ]}
+                    />
                     <InfoHint topic="cardVisibility" variant="inline" />
                 </div>
 
@@ -585,91 +702,97 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                                 </div>
                             </div>
 
-                            {/* Koordinaten */}
-                            <div className="space-y-2">
-                                <div className="flex items-center justify-between">
-                                    <label className="text-[11px] font-bold text-theme-secondary">
-                                        {t('profile.coordinates', 'GPS-Koordinaten')}
-                                    </label>
-                                    {renderVisibilityButton('coordinates')}
-                                </div>
-
-                                <div className="flex flex-col sm:flex-row gap-2">
-                                    <div className="flex-1">
-                                        <Input
-                                            placeholder="z. B. 48.14, 11.58"
-                                            value={profile.coordinates || ''}
-                                            onChange={(e) => setProfile({ ...profile, coordinates: e.target.value })}
-                                            data-testid="profile-coordinates-input"
-                                        />
+                            {/* Coordinates (Expert mode only) */}
+                            <Advanced>
+                                <div className="space-y-2">
+                                    <div className="flex items-center justify-between">
+                                        <label className="text-[11px] font-bold text-theme-secondary">
+                                            {t('profile.coordinates', 'GPS-Koordinaten')}
+                                        </label>
+                                        {renderVisibilityButton('coordinates')}
                                     </div>
-                                    <select
-                                        value={coordPrecision}
-                                        onChange={(e) => handlePrecisionChange(Number(e.target.value) as CoordinatePrecision)}
-                                        className="px-2.5 py-1.5 rounded-xl text-xs font-medium bg-white border border-theme-subtle text-theme-secondary shrink-0 focus:outline-none focus:ring-2 focus:ring-theme-primary/30 cursor-pointer"
-                                        data-testid="coord-precision-select"
-                                        title={t('profile.coordPrecisionTooltip', 'Genauigkeit der Koordinaten')}
-                                    >
-                                        <option value={2}>{t('profile.coordPrecision2', 'Ungefähr (~1 km, empfohlen)')}</option>
-                                        <option value={3}>{t('profile.coordPrecision3', 'Mittel – Nachbarschaft (~100 m)')}</option>
-                                        <option value={4}>{t('profile.coordPrecision4', 'Exakt – Adresse (~10 m)')}</option>
-                                    </select>
-                                </div>
 
-                                {/* Action Buttons: GPS & Aus Ort ermitteln */}
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <Button
-                                        type="button"
-                                        size="xs"
-                                        variant="outline"
-                                        disabled={isLocating}
-                                        onClick={handleFetchGps}
-                                        data-testid="fetch-gps-btn"
-                                        className="flex items-center gap-1.5"
-                                    >
-                                        <MapPin size={12} className="text-theme-primary" />
-                                        <span>{t('profile.gpsButton', 'GPS')}</span>
-                                    </Button>
+                                    <div className="flex flex-col sm:flex-row gap-2">
+                                        <div className="flex-1">
+                                            <Input
+                                                placeholder="z. B. 48.14, 11.58"
+                                                value={profile.coordinates || ''}
+                                                onChange={(e) => setProfile({ ...profile, coordinates: e.target.value })}
+                                                data-testid="profile-coordinates-input"
+                                            />
+                                        </div>
+                                        <select
+                                            value={coordPrecision}
+                                            onChange={(e) => handlePrecisionChange(Number(e.target.value) as CoordinatePrecision)}
+                                            className="px-2.5 py-1.5 rounded-xl text-xs font-medium bg-white border border-theme-subtle text-theme-secondary shrink-0 focus:outline-none focus:ring-2 focus:ring-theme-primary/30 cursor-pointer"
+                                            data-testid="coord-precision-select"
+                                            title={t('profile.coordPrecisionTooltip', 'Genauigkeit der Koordinaten')}
+                                        >
+                                            <option value={2}>{t('profile.coordPrecision2', 'Ungefähr (~1 km, empfohlen)')}</option>
+                                            <option value={3} disabled={visibility.coordinates !== 'contacts'}>
+                                                {t('profile.coordPrecision3', 'Mittel – Nachbarschaft (~100 m)')}
+                                            </option>
+                                            <option value={4} disabled={visibility.coordinates !== 'contacts'}>
+                                                {t('profile.coordPrecision4', 'Exakt – Adresse (~10 m)')}
+                                            </option>
+                                        </select>
+                                    </div>
 
-                                    <Button
-                                        type="button"
-                                        size="xs"
-                                        variant="outline"
-                                        disabled={isLocating || (!profile.address?.city?.trim() && !profile.address?.zipCode?.trim())}
-                                        onClick={handleGeocodeAddress}
-                                        data-testid="geocode-address-btn"
-                                        className="flex items-center gap-1.5"
-                                    >
-                                        <Search size={12} className="text-theme-primary" />
-                                        <span>{t('profile.autoAddressButton', 'Aus Ort ermitteln')}</span>
-                                    </Button>
+                                    {/* Action Buttons: GPS & Aus Ort ermitteln */}
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <Button
+                                            type="button"
+                                            size="xs"
+                                            variant="outline"
+                                            disabled={isLocating}
+                                            onClick={handleFetchGps}
+                                            data-testid="fetch-gps-btn"
+                                            className="flex items-center gap-1.5"
+                                        >
+                                            <MapPin size={12} className="text-theme-primary" />
+                                            <span>{t('profile.gpsButton', 'GPS')}</span>
+                                        </Button>
 
-                                    {isLocating && (
-                                        <span className="text-[11px] text-theme-light italic">
-                                            {t('profile.locatingInProgress', 'Wird ermittelt...')}
-                                        </span>
-                                    )}
-                                </div>
+                                        <Button
+                                            type="button"
+                                            size="xs"
+                                            variant="outline"
+                                            disabled={isLocating || (!profile.address?.city?.trim() && !profile.address?.zipCode?.trim())}
+                                            onClick={handleGeocodeAddress}
+                                            data-testid="geocode-address-btn"
+                                            className="flex items-center gap-1.5"
+                                        >
+                                            <Search size={12} className="text-theme-primary" />
+                                            <span>{t('profile.autoAddressButton', 'Aus Ort ermitteln')}</span>
+                                        </Button>
 
-                                {geoError && (
-                                    <p className="text-xs text-rose-600 bg-rose-50 p-2 rounded-lg border border-rose-200">
-                                        {geoError}
-                                    </p>
-                                )}
-
-                                {/* Nudge info box if empty or visibility is nobody */}
-                                {(!profile.coordinates?.trim() || visibility.coordinates === 'nobody') && (
-                                    <div
-                                        className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-950 text-xs leading-relaxed"
-                                        data-testid="coordinates-recommended-hint"
-                                    >
-                                        {t(
-                                            'marketplace.coordinatesRecommendedHint',
-                                            '💡 Empfohlen für lokale Angebote: Trage deinen ungefähren Standort (~1 km Schutz) ein, damit Nachbarn deine Angebote im Umkreis finden können.'
+                                        {isLocating && (
+                                            <span className="text-[11px] text-theme-light italic">
+                                                {t('profile.locatingInProgress', 'Wird ermittelt...')}
+                                            </span>
                                         )}
                                     </div>
-                                )}
-                            </div>
+
+                                    {geoError && (
+                                        <p className="text-xs text-rose-600 bg-rose-50 p-2 rounded-lg border border-rose-200">
+                                            {geoError}
+                                        </p>
+                                    )}
+
+                                    {/* Nudge info box if empty or visibility is nobody */}
+                                    {(!profile.coordinates?.trim() || visibility.coordinates === 'nobody') && (
+                                        <div
+                                            className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-950 text-xs leading-relaxed"
+                                            data-testid="coordinates-recommended-hint"
+                                        >
+                                            {t(
+                                                'marketplace.coordinatesRecommendedHint',
+                                                '💡 Empfohlen für lokale Angebote: Trage deinen ungefähren Standort (~1 km Schutz) ein, damit Nachbarn deine Angebote im Umkreis finden können.'
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </Advanced>
                         </div>
 
                         {/* Section 3: Kontakt */}
@@ -727,6 +850,29 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                                     onChange={(e) => setProfile({ ...profile, url: e.target.value })}
                                 />
                             </div>
+
+                            <Advanced>
+                                <label className="flex items-start gap-3 p-3 rounded-xl bg-bg-app/50 border border-theme-subtle cursor-pointer hover:bg-bg-app transition-colors">
+                                    <input
+                                        type="checkbox"
+                                        checked={allowInquiries}
+                                        onChange={(e) => setAllowInquiries(e.target.checked)}
+                                        className="mt-0.5 rounded text-theme-primary focus:ring-theme-primary cursor-pointer"
+                                        data-testid="profile-allow-inquiries-checkbox"
+                                    />
+                                    <div className="min-w-0">
+                                        <span className="text-xs font-bold text-theme-secondary block">
+                                            {t('marketplace.allowInquiriesLabel', 'Anfragen erlauben')}
+                                        </span>
+                                        <span className="text-[11px] text-theme-light block mt-0.5 leading-snug">
+                                            {t(
+                                                'marketplace.profileAllowInquiriesDesc',
+                                                'Andere können dir über ihren Sync-Dienst eine Nachricht oder Reservierungsanfrage senden (gilt für alle deine Inserate).'
+                                            )}
+                                        </span>
+                                    </div>
+                                </label>
+                            </Advanced>
                         </div>
 
                         {/* Section 4: Fähigkeiten (max 8) */}
@@ -851,16 +997,18 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                                 </h4>
                             </div>
 
-                            {/* Perspective switch */}
-                            <SegmentedTabs<'contact' | 'forwarded'>
-                                fullWidth
-                                activeTab={previewPerspective}
-                                onChange={setPreviewPerspective}
-                                tabs={[
-                                    { id: 'contact', label: t('marketplace.previewContact', 'Direkter Kontakt') },
-                                    { id: 'forwarded', label: t('marketplace.previewForwarded', 'Über Empfehlung') },
-                                ]}
-                            />
+                            {/* Perspective switch (Expert mode) */}
+                            <Advanced>
+                                <SegmentedTabs<'contact' | 'forwarded'>
+                                    fullWidth
+                                    activeTab={previewPerspective}
+                                    onChange={setPreviewPerspective}
+                                    tabs={[
+                                        { id: 'contact', label: t('marketplace.previewContact', 'Direkter Kontakt') },
+                                        { id: 'forwarded', label: t('marketplace.previewForwarded', 'Über Empfehlung') },
+                                    ]}
+                                />
+                            </Advanced>
                         </div>
 
                         {/* Card preview mock */}

@@ -7,8 +7,39 @@ import { ModalShell } from '../ui/ModalShell';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { SegmentedTabs } from '../ui/SegmentedTabs';
+import { Advanced } from '../ui/Advanced';
+import { AdvancedDisclosure } from '../ui/AdvancedDisclosure';
 import { marketService } from '../../services/marketService';
 import { compressAdImageToWebpDataUri } from '../../utils/imageCompression';
+
+type PriceMode = 'none' | 'free' | 'negotiable' | 'minuto' | 'freetaler' | 'freetext';
+
+const parsePricingPreset = (raw?: string | null): { mode: PriceMode; amount: string; customText: string } => {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) return { mode: 'none', amount: '', customText: '' };
+    const lower = trimmed.toLowerCase();
+    if (lower === 'kostenlos' || lower === 'free' || lower === 'gratis' || lower === 'gratuit') {
+        return { mode: 'free', amount: '', customText: '' };
+    }
+    if (
+        lower === 'vb' ||
+        lower === 'verhandlungsbasis' ||
+        lower === 'negotiable' ||
+        lower === 'a convenir' ||
+        lower === 'trattabile'
+    ) {
+        return { mode: 'negotiable', amount: '', customText: '' };
+    }
+    const minutoMatch = trimmed.match(/^([0-9]+(?:[.,][0-9]+)?)\s*Minuto$/i);
+    if (minutoMatch) {
+        return { mode: 'minuto', amount: minutoMatch[1], customText: '' };
+    }
+    const ftMatch = trimmed.match(/^([0-9]+(?:[.,][0-9]+)?)\s*FreeTaler$/i);
+    if (ftMatch) {
+        return { mode: 'freetaler', amount: ftMatch[1], customText: '' };
+    }
+    return { mode: 'freetext', amount: '', customText: trimmed };
+};
 
 export interface AdEditorModalProps {
     isOpen: boolean;
@@ -17,6 +48,7 @@ export interface AdEditorModalProps {
     editingAd?: Ad | FrontendMyAd | null;
     activeAdsCount?: number;
     maxAds?: number;
+    allowInquiries?: boolean;
     onSave: (input: FrontendAdInput) => Promise<void>;
     ownerDid?: string;
     mediaMaxBytes?: number;
@@ -31,6 +63,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
     editingAd,
     activeAdsCount,
     maxAds = 5,
+    allowInquiries: allowInquiriesProp,
     onSave,
     ownerDid,
     mediaMaxBytes,
@@ -47,8 +80,9 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
     const [title, setTitle] = useState('');
     const [text, setText] = useState('');
     const [pricing, setPricing] = useState('');
+    const [priceMode, setPriceMode] = useState<PriceMode>('none');
+    const [priceAmount, setPriceAmount] = useState('');
     const [durationDays, setDurationDays] = useState<number>(90);
-    const [allowInquiries, setAllowInquiries] = useState<boolean>(true);
     const [isRemote, setIsRemote] = useState<boolean>(false);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -59,11 +93,13 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
 
     useEffect(() => {
         if (targetAd) {
+            const parsed = parsePricingPreset(targetAd.pricing);
             setKind(targetAd.kind);
             setTitle(targetAd.title);
             setText(targetAd.text || '');
             setPricing(targetAd.pricing || '');
-            setAllowInquiries(targetAd.allowInquiries);
+            setPriceMode(parsed.mode);
+            setPriceAmount(parsed.amount);
             setIsRemote(targetAd.isRemote ?? false);
             setError(null);
         } else {
@@ -71,8 +107,9 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             setTitle('');
             setText('');
             setPricing('');
+            setPriceMode('none');
+            setPriceAmount('');
             setDurationDays(90);
-            setAllowInquiries(true);
             setIsRemote(false);
             setError(null);
         }
@@ -154,7 +191,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                 text: text.trim() || undefined,
                 pricing: pricing.trim() || undefined,
                 durationDays,
-                allowInquiries,
+                allowInquiries: targetAd ? (allowInquiriesProp ?? targetAd.allowInquiries) : (allowInquiriesProp ?? true),
                 isRemote,
                 ...(imageWebpDataUri !== undefined ? { imageWebpDataUri } : {}),
             });
@@ -303,175 +340,317 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                     />
                 </div>
 
-                {/* 4. Pricing with counter */}
-                <div className="space-y-1.5">
+                {/* 4. Pricing Chips & Optional Expert Free-Text */}
+                <div className="space-y-2">
                     <div className="flex items-center justify-between">
                         <label className="text-[11px] font-black text-theme-light uppercase tracking-wider block">
                             {t('marketplace.adPricingLabel', 'Preis / Richtwert (optional)')}
                         </label>
-                        <span className={`text-[10px] ${pricingCharCount > 40 ? 'text-rose-600 font-bold' : 'text-theme-light'}`}>
-                            {pricingCharCount} / 40
-                        </span>
+                        <Advanced>
+                            <span className={`text-[10px] ${pricingCharCount > 40 ? 'text-rose-600 font-bold' : 'text-theme-light'}`}>
+                                {pricingCharCount} / 40
+                            </span>
+                        </Advanced>
                     </div>
-                    <Input
-                        value={pricing}
-                        onChange={(e) => setPricing(e.target.value)}
-                        placeholder={t('marketplace.adPricingPlaceholder', 'z. B. 10 Minuto / 1 Std. oder VB')}
-                        maxLength={40}
-                        data-testid="ad-pricing-input"
-                    />
+
+                    <div className="flex flex-wrap gap-1.5">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (priceMode === 'free') {
+                                    setPriceMode('none');
+                                    setPricing('');
+                                } else {
+                                    setPriceMode('free');
+                                    setPriceAmount('');
+                                    setPricing(t('marketplace.priceChipFree', 'Kostenlos'));
+                                }
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                                priceMode === 'free'
+                                    ? 'bg-theme-primary text-white border-theme-primary'
+                                    : 'bg-white text-theme-secondary border-theme-subtle hover:border-theme-primary/40'
+                            }`}
+                            data-testid="price-chip-free"
+                        >
+                            {t('marketplace.priceChipFree', 'Kostenlos')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (priceMode === 'negotiable') {
+                                    setPriceMode('none');
+                                    setPricing('');
+                                } else {
+                                    setPriceMode('negotiable');
+                                    setPriceAmount('');
+                                    setPricing(t('marketplace.priceChipNegotiable', 'VB'));
+                                }
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                                priceMode === 'negotiable'
+                                    ? 'bg-theme-primary text-white border-theme-primary'
+                                    : 'bg-white text-theme-secondary border-theme-subtle hover:border-theme-primary/40'
+                            }`}
+                            data-testid="price-chip-negotiable"
+                        >
+                            {t('marketplace.priceChipNegotiable', 'VB')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (priceMode === 'minuto') {
+                                    setPriceMode('none');
+                                    setPriceAmount('');
+                                    setPricing('');
+                                } else {
+                                    setPriceMode('minuto');
+                                    const amt = priceAmount.trim();
+                                    setPricing(amt ? `${amt} Minuto` : '');
+                                }
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                                priceMode === 'minuto'
+                                    ? 'bg-theme-primary text-white border-theme-primary'
+                                    : 'bg-white text-theme-secondary border-theme-subtle hover:border-theme-primary/40'
+                            }`}
+                            data-testid="price-chip-minuto"
+                        >
+                            {t('marketplace.priceChipMinuto', 'Minuto')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (priceMode === 'freetaler') {
+                                    setPriceMode('none');
+                                    setPriceAmount('');
+                                    setPricing('');
+                                } else {
+                                    setPriceMode('freetaler');
+                                    const amt = priceAmount.trim();
+                                    setPricing(amt ? `${amt} FreeTaler` : '');
+                                }
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                                priceMode === 'freetaler'
+                                    ? 'bg-theme-primary text-white border-theme-primary'
+                                    : 'bg-white text-theme-secondary border-theme-subtle hover:border-theme-primary/40'
+                            }`}
+                            data-testid="price-chip-freetaler"
+                        >
+                            {t('marketplace.priceChipFreetaler', 'FreeTaler')}
+                        </button>
+                        <Advanced>
+                            <button
+                                type="button"
+                                onClick={() => setPriceMode('freetext')}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                                    priceMode === 'freetext'
+                                        ? 'bg-theme-primary text-white border-theme-primary'
+                                        : 'bg-white text-theme-secondary border-theme-subtle hover:border-theme-primary/40'
+                                }`}
+                                data-testid="price-chip-freetext"
+                            >
+                                {t('marketplace.priceChipFreetext', 'Freitext')}
+                            </button>
+                        </Advanced>
+                    </div>
+
+                    {(priceMode === 'minuto' || priceMode === 'freetaler') && (
+                        <div className="flex items-center gap-2">
+                            <Input
+                                value={priceAmount}
+                                onChange={(e) => {
+                                    const val = e.target.value;
+                                    setPriceAmount(val);
+                                    const unit = priceMode === 'minuto' ? 'Minuto' : 'FreeTaler';
+                                    setPricing(val.trim() ? `${val.trim()} ${unit}` : '');
+                                }}
+                                placeholder={t('marketplace.adPriceAmountPlaceholder', 'z. B. 10')}
+                                className="max-w-[160px]"
+                                data-testid="ad-price-amount-input"
+                            />
+                            <span className="text-xs font-bold text-theme-secondary">
+                                {priceMode === 'minuto' ? 'Minuto' : 'FreeTaler'}
+                            </span>
+                        </div>
+                    )}
+
+                    {priceMode === 'freetext' && pricing.trim() && (
+                        <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-slate-50 border border-theme-subtle text-xs text-theme-secondary">
+                            <span className="truncate font-medium">{pricing}</span>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setPriceMode('none');
+                                    setPriceAmount('');
+                                    setPricing('');
+                                }}
+                                className="text-theme-light hover:text-rose-600 font-bold px-1 cursor-pointer"
+                                title={t('common.clear', 'Zurücksetzen')}
+                                data-testid="price-chip-custom-clear"
+                            >
+                                ×
+                            </button>
+                        </div>
+                    )}
+
+                    <Advanced>
+                        <Input
+                            value={pricing}
+                            onChange={(e) => {
+                                setPriceMode('freetext');
+                                setPricing(e.target.value);
+                            }}
+                            placeholder={t('marketplace.adPricingPlaceholder', 'z. B. 10 Minuto / 1 Std. oder VB')}
+                            maxLength={40}
+                            data-testid="ad-pricing-input"
+                        />
+                    </Advanced>
                 </div>
 
-                {/* Image upload section (optional) */}
-                <div className="space-y-1.5 pt-1">
-                    <div className="flex items-center justify-between">
+                {/* 5. Duration: Expert mode only (Simple defaults cleanly to 90 days) */}
+                <Advanced>
+                    <div className="space-y-1.5">
                         <label className="text-[11px] font-black text-theme-light uppercase tracking-wider block">
-                            {t('marketplace.adImageLabel', 'Inseratsbild (optional)')}
+                            {t('marketplace.adDurationLabel', 'Laufzeit')}
                         </label>
-                        <span className="text-[10px] font-semibold text-theme-light" data-testid="media-quota-badge">
-                            {t('marketplace.mediaQuotaStatus', '{{used}} von {{max}} Bildern belegt', {
-                                used: mediaUsedCount ?? 0,
-                                max: mediaMaxCount ?? 5,
-                            })}
-                        </span>
-                    </div>
-
-                    <div className="p-3 rounded-2xl bg-bg-app/50 border border-theme-subtle space-y-3">
-                        <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept="image/*"
-                            data-testid="ad-image-file-input"
-                            onChange={handleImageFileChange}
-                            className="hidden"
-                        />
-
-                        {imagePreviewUri ? (
+                        {!isEditMode ? (
                             <div className="space-y-2">
-                                <div className="rounded-xl overflow-hidden border border-theme-subtle max-h-48 bg-white flex items-center justify-center">
-                                    <img
-                                        src={imagePreviewUri}
-                                        alt="Ad preview"
-                                        className="w-full max-h-48 object-cover rounded-xl"
-                                    />
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <Button
-                                        type="button"
-                                        size="xs"
-                                        variant="outline"
-                                        onClick={() => fileInputRef.current?.click()}
-                                        className="flex items-center gap-1.5"
-                                    >
-                                        <Upload size={13} />
-                                        <span>{t('marketplace.adImageUpload', 'Bild auswählen')}</span>
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        size="xs"
-                                        variant="secondary"
-                                        data-testid="ad-image-remove-btn"
-                                        onClick={handleRemoveImage}
-                                        className="flex items-center gap-1.5"
-                                    >
-                                        <Trash2 size={13} />
-                                        <span>{t('marketplace.adImageRemove', 'Bild entfernen')}</span>
-                                    </Button>
-                                </div>
+                                <SegmentedTabs<string>
+                                    fullWidth
+                                    activeTab={String(durationDays)}
+                                    onChange={(tab) => setDurationDays(Number(tab))}
+                                    tabs={[
+                                        { id: '30', label: t('marketplace.duration30Days', '30 Tage') },
+                                        { id: '90', label: t('marketplace.duration90Days', '90 Tage (Standard)') },
+                                        { id: '180', label: t('marketplace.duration180Days', '180 Tage') },
+                                    ]}
+                                />
+                                <p className="text-[11px] text-theme-light leading-snug">
+                                    {t('marketplace.adDurationHint', 'Du kannst dein Inserat jederzeit vor oder nach Ablauf beliebig oft verlängern.')}
+                                </p>
                             </div>
                         ) : (
-                            <div className="flex items-center gap-3">
-                                <Button
-                                    type="button"
-                                    size="xs"
-                                    variant="outline"
-                                    onClick={() => fileInputRef.current?.click()}
-                                    className="flex items-center gap-1.5"
-                                >
-                                    <Upload size={13} />
-                                    <span>{t('marketplace.adImageUpload', 'Bild auswählen')}</span>
-                                </Button>
-                                <span className="text-[10px] text-theme-light leading-snug">
-                                    {t('marketplace.adImageHint', 'Max. 800×800 Pixel, WebP komprimiert (max. 100 KB).')}
+                            <div className="p-3 rounded-xl bg-bg-app border border-theme-subtle flex items-center gap-2 text-xs text-theme-secondary">
+                                <Calendar size={15} className="text-theme-primary shrink-0" />
+                                <span>
+                                    {t('marketplace.adEditingDurationInfo', 'Läuft bis {{date}} (Verlängern über „Verlängern“)', {
+                                        date: formatExpiryDate(targetAd?.expiresAt || 0),
+                                    })}
                                 </span>
                             </div>
                         )}
                     </div>
-                </div>
+                </Advanced>
 
-                {/* 5. Duration: Segmented control if creating, info text if editing */}
-                <div className="space-y-1.5">
-                    <label className="text-[11px] font-black text-theme-light uppercase tracking-wider block">
-                        {t('marketplace.adDurationLabel', 'Laufzeit')}
-                    </label>
-                    {!isEditMode ? (
-                        <div className="space-y-2">
-                            <SegmentedTabs<string>
-                                fullWidth
-                                activeTab={String(durationDays)}
-                                onChange={(tab) => setDurationDays(Number(tab))}
-                                tabs={[
-                                    { id: '30', label: t('marketplace.duration30Days', '30 Tage') },
-                                    { id: '90', label: t('marketplace.duration90Days', '90 Tage (Standard)') },
-                                    { id: '180', label: t('marketplace.duration180Days', '180 Tage') },
-                                ]}
-                            />
-                            <p className="text-[11px] text-theme-light leading-snug">
-                                {t('marketplace.adDurationHint', 'Du kannst dein Inserat jederzeit vor oder nach Ablauf beliebig oft verlängern.')}
-                            </p>
-                        </div>
-                    ) : (
-                        <div className="p-3 rounded-xl bg-bg-app border border-theme-subtle flex items-center gap-2 text-xs text-theme-secondary">
-                            <Calendar size={15} className="text-theme-primary shrink-0" />
-                            <span>
-                                {t('marketplace.adEditingDurationInfo', 'Läuft bis {{date}} (Verlängern über „Verlängern“)', {
-                                    date: formatExpiryDate(targetAd?.expiresAt || 0),
-                                })}
-                            </span>
-                        </div>
-                    )}
-                </div>
+                {/* 6. More details (Image Upload + Is Remote) */}
+                <AdvancedDisclosure
+                    title={t('marketplace.adMoreDetailsTitle', 'Weitere Angaben (Bild & Online)')}
+                    isCustom={Boolean(imagePreviewUri || targetAd?.imageToken || isRemote)}
+                    toggleTestId="ad-more-details-toggle"
+                    contentTestId="ad-more-details-content"
+                >
+                    <div className="space-y-4">
+                        {/* Image upload section (optional) */}
+                        <div className="space-y-1.5">
+                            <div className="flex items-center justify-between">
+                                <label className="text-[11px] font-black text-theme-light uppercase tracking-wider block">
+                                    {t('marketplace.adImageLabel', 'Inseratsbild (optional)')}
+                                </label>
+                                <span className="text-[10px] font-semibold text-theme-light" data-testid="media-quota-badge">
+                                    {t('marketplace.mediaQuotaStatus', '{{used}} von {{max}} Bildern belegt', {
+                                        used: mediaUsedCount ?? 0,
+                                        max: mediaMaxCount ?? 5,
+                                    })}
+                                </span>
+                            </div>
 
-                {/* 6. Allow inquiries toggle */}
-                <div className="pt-1">
-                    <label className="flex items-start gap-3 p-3 rounded-xl bg-bg-app/50 border border-theme-subtle cursor-pointer hover:bg-bg-app transition-colors">
-                        <input
-                            type="checkbox"
-                            checked={allowInquiries}
-                            onChange={(e) => setAllowInquiries(e.target.checked)}
-                            className="mt-0.5 rounded text-theme-primary focus:ring-theme-primary"
-                        />
-                        <div className="min-w-0">
-                            <span className="text-xs font-bold text-theme-secondary block">
-                                {t('marketplace.allowInquiriesLabel', 'Anfragen erlauben')}
-                            </span>
-                            <span className="text-[11px] text-theme-light block mt-0.5 leading-snug">
-                                {t('marketplace.allowInquiriesDesc', 'Andere können dir über ihren Sync-Dienst eine Nachricht oder Reservierungsanfrage zu diesem Inserat senden.')}
-                            </span>
-                        </div>
-                    </label>
-                </div>
+                            <div className="p-3 rounded-2xl bg-bg-app/50 border border-theme-subtle space-y-3">
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    data-testid="ad-image-file-input"
+                                    onChange={handleImageFileChange}
+                                    className="hidden"
+                                />
 
-                {/* 7. Is remote toggle */}
-                <div className="pt-1">
-                    <label className="flex items-start gap-3 p-3 rounded-xl bg-bg-app/50 border border-theme-subtle cursor-pointer hover:bg-bg-app transition-colors">
-                        <input
-                            type="checkbox"
-                            checked={isRemote}
-                            onChange={(e) => setIsRemote(e.target.checked)}
-                            className="mt-0.5 rounded text-theme-primary focus:ring-theme-primary"
-                            data-testid="ad-is-remote-checkbox"
-                        />
-                        <div className="min-w-0">
-                            <span className="text-xs font-bold text-theme-secondary block">
-                                {t('marketplace.adIsRemoteLabel', 'Ortsunabhängig / Online / Versand (überregional sichtbar)')}
-                            </span>
-                            <span className="text-[11px] text-theme-light block mt-0.5 leading-snug">
-                                {t('marketplace.adIsRemoteDesc', 'Dieses Inserat wird auch bei regionaler Filterung als ortsunabhängig angezeigt.')}
-                            </span>
+                                {imagePreviewUri ? (
+                                    <div className="space-y-2">
+                                        <div className="rounded-xl overflow-hidden border border-theme-subtle max-h-48 bg-white flex items-center justify-center">
+                                            <img
+                                                src={imagePreviewUri}
+                                                alt="Ad preview"
+                                                className="w-full max-h-48 object-cover rounded-xl"
+                                            />
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Button
+                                                type="button"
+                                                size="xs"
+                                                variant="outline"
+                                                onClick={() => fileInputRef.current?.click()}
+                                                className="flex items-center gap-1.5"
+                                            >
+                                                <Upload size={13} />
+                                                <span>{t('marketplace.adImageUpload', 'Bild auswählen')}</span>
+                                            </Button>
+                                            <Button
+                                                type="button"
+                                                size="xs"
+                                                variant="secondary"
+                                                data-testid="ad-image-remove-btn"
+                                                onClick={handleRemoveImage}
+                                                className="flex items-center gap-1.5"
+                                            >
+                                                <Trash2 size={13} />
+                                                <span>{t('marketplace.adImageRemove', 'Bild entfernen')}</span>
+                                            </Button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center gap-3">
+                                        <Button
+                                            type="button"
+                                            size="xs"
+                                            variant="outline"
+                                            onClick={() => fileInputRef.current?.click()}
+                                            className="flex items-center gap-1.5"
+                                        >
+                                            <Upload size={13} />
+                                            <span>{t('marketplace.adImageUpload', 'Bild auswählen')}</span>
+                                        </Button>
+                                        <span className="text-[10px] text-theme-light leading-snug">
+                                            {t('marketplace.adImageHint', 'Max. 800×800 Pixel, WebP komprimiert (max. 100 KB).')}
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
                         </div>
-                    </label>
-                </div>
+
+                        {/* Is remote toggle */}
+                        <div>
+                            <label className="flex items-start gap-3 p-3 rounded-xl bg-bg-app/50 border border-theme-subtle cursor-pointer hover:bg-bg-app transition-colors">
+                                <input
+                                    type="checkbox"
+                                    checked={isRemote}
+                                    onChange={(e) => setIsRemote(e.target.checked)}
+                                    className="mt-0.5 rounded text-theme-primary focus:ring-theme-primary"
+                                    data-testid="ad-is-remote-checkbox"
+                                />
+                                <div className="min-w-0">
+                                    <span className="text-xs font-bold text-theme-secondary block">
+                                        {t('marketplace.adIsRemoteLabel', 'Ortsunabhängig / Online / Versand (überregional sichtbar)')}
+                                    </span>
+                                    <span className="text-[11px] text-theme-light block mt-0.5 leading-snug">
+                                        {t('marketplace.adIsRemoteDesc', 'Dieses Inserat wird auch bei regionaler Filterung als ortsunabhängig angezeigt.')}
+                                    </span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                </AdvancedDisclosure>
 
                 {/* Footer buttons */}
                 <div className="flex items-center justify-end gap-2 pt-3 border-t border-theme-subtle/50">

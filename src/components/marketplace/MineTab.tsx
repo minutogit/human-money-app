@@ -26,6 +26,7 @@ import {
     FrontendMarketInquiryItem,
 } from '../../types';
 import { Button } from '../ui/Button';
+import { Advanced } from '../ui/Advanced';
 import { truncateUserId } from '../../utils/userIdHelper';
 
 export interface MineTabProps {
@@ -37,6 +38,7 @@ export interface MineTabProps {
     onCreateAd: () => void;
     onEditAd: (ad: FrontendMyAd) => void;
     onRenewAd: (ad: FrontendMyAd) => void;
+    onQuickRenewAd?: (ad: FrontendMyAd) => Promise<void> | void;
     onDeleteAd: (id: string) => Promise<void>;
     onReplyInquiry?: (
         inquiryId: string,
@@ -56,6 +58,7 @@ export const MineTab: React.FC<MineTabProps> = ({
     onCreateAd,
     onEditAd,
     onRenewAd,
+    onQuickRenewAd,
     onDeleteAd,
     onReplyInquiry,
     onPayInquiry,
@@ -97,10 +100,15 @@ export const MineTab: React.FC<MineTabProps> = ({
             {/* ======================================================== */}
             <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-black uppercase tracking-wider text-theme-secondary flex items-center gap-2">
-                        <User size={14} className="text-theme-primary" />
-                        <span>{t('marketplace.myBusinessCardTitle', 'Meine Visitenkarte')}</span>
-                    </h3>
+                    <div>
+                        <h3 className="text-xs font-black uppercase tracking-wider text-theme-secondary flex items-center gap-2">
+                            <User size={14} className="text-theme-primary" />
+                            <span>{t('marketplace.myBusinessCardTitle', 'Meine Visitenkarte')}</span>
+                        </h3>
+                        <p className="text-[11px] text-theme-light mt-0.5">
+                            {t('marketplace.myBusinessCardSubtitle', 'Was ich dauerhaft anbiete')}
+                        </p>
+                    </div>
                 </div>
 
                 {!myProfile.published ? (
@@ -332,12 +340,25 @@ export const MineTab: React.FC<MineTabProps> = ({
                                         <Button
                                             size="xs"
                                             variant="outline"
-                                            onClick={() => onRenewAd(ad)}
+                                            onClick={() => (onQuickRenewAd ? onQuickRenewAd(ad) : onRenewAd(ad))}
                                             className="flex items-center gap-1"
+                                            data-testid={`quick-renew-ad-${ad.id}`}
                                         >
                                             <RefreshCw size={13} />
-                                            <span>{t('marketplace.renewBtn', 'Verlängern')}</span>
+                                            <span>{t('marketplace.quickRenew90Btn', '+90 Tage')}</span>
                                         </Button>
+                                        <Advanced>
+                                            <Button
+                                                size="xs"
+                                                variant="outline"
+                                                onClick={() => onRenewAd(ad)}
+                                                className="flex items-center gap-1"
+                                                data-testid={`custom-renew-ad-${ad.id}`}
+                                            >
+                                                <Clock size={13} />
+                                                <span>{t('marketplace.renewBtn', 'Verlängern')}</span>
+                                            </Button>
+                                        </Advanced>
                                         <Button
                                             size="xs"
                                             variant="outline"
@@ -398,12 +419,25 @@ export const MineTab: React.FC<MineTabProps> = ({
                                             <Button
                                                 size="xs"
                                                 variant="outline"
-                                                onClick={() => onRenewAd(ad)}
+                                                onClick={() => (onQuickRenewAd ? onQuickRenewAd(ad) : onRenewAd(ad))}
                                                 className="flex items-center gap-1"
+                                                data-testid={`quick-renew-ad-${ad.id}`}
                                             >
                                                 <RefreshCw size={12} />
-                                                <span>{t('marketplace.republishBtn', 'Erneut veröffentlichen')}</span>
+                                                <span>{t('marketplace.quickRenew90Btn', '+90 Tage')}</span>
                                             </Button>
+                                            <Advanced>
+                                                <Button
+                                                    size="xs"
+                                                    variant="outline"
+                                                    onClick={() => onRenewAd(ad)}
+                                                    className="flex items-center gap-1"
+                                                    data-testid={`custom-renew-ad-${ad.id}`}
+                                                >
+                                                    <Clock size={12} />
+                                                    <span>{t('marketplace.republishBtn', 'Erneut veröffentlichen')}</span>
+                                                </Button>
+                                            </Advanced>
                                             <Button
                                                 size="xs"
                                                 variant="outline"

@@ -384,11 +384,11 @@ export function MarketplaceView({
             city: 'everyone',
             url: 'everyone',
             picture: 'everyone',
-            street: 'everyone',
-            email: 'everyone',
-            phone: 'everyone',
+            street: 'contacts',
+            email: 'contacts',
+            phone: 'contacts',
             coordinates: 'everyone',
-            gender: 'everyone',
+            gender: 'nobody',
         },
         skills: [],
         ads: [],
@@ -605,6 +605,7 @@ export function MarketplaceView({
                                 setIsCreateAdOpen(true);
                             }}
                             onRenewAd={(ad) => setRenewingAd(ad)}
+                            onQuickRenewAd={(ad) => handleRenewAd(ad.id, 90)}
                             onDeleteAd={handleDeleteAd}
                             onReplyInquiry={handleReplyInquiry}
                             onPayInquiry={handlePayInquiry}
@@ -625,6 +626,7 @@ export function MarketplaceView({
                 onSave={handleSaveAd}
                 editingAd={editingAd}
                 activeAdsCount={activeMyAdsCount}
+                allowInquiries={currentProfile.allowInquiries}
                 ownerDid={currentProfile?.profile?.id}
                 mediaMaxBytes={currentProfile?.mediaMaxBytes}
                 mediaMaxCount={currentProfile?.mediaMaxCount}

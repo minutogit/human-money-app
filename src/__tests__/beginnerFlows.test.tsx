@@ -218,7 +218,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         const mockOpenManualAdd = vi.fn();
         const mockContactAdded = vi.fn();
 
-        // Step 1: User opens AddContactModal and chooses "Manuell eingeben"
+        // Step 1: User opens AddContactModal in Simple mode and chooses manual entry via Other ways disclosure
         const { unmount } = render(
             <AddContactModal
                 isOpen={true}
@@ -230,9 +230,10 @@ describe('Beginner User Tasks (Integration Flows)', () => {
             />
         );
 
-        expect(screen.getByTestId('add-contact-tiles')).toBeInTheDocument();
-        const manualTile = screen.getByTestId('add-tile-manual');
-        fireEvent.click(manualTile);
+        expect(screen.getByTestId('smart-add-contact-panel')).toBeInTheDocument();
+        expect(screen.queryByTestId('add-contact-tiles')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByTestId('add-contact-other-ways-toggle'));
+        fireEvent.click(screen.getByTestId('add-other-manual'));
 
         expect(mockOpenManualAdd).toHaveBeenCalled();
         unmount();
@@ -323,6 +324,10 @@ describe('Beginner User Tasks (Integration Flows)', () => {
             />
         );
 
+        // Verify Simple mode shows visibility presets instead of 11 individual badges
+        expect(screen.getByTestId('preset-option-local')).toBeInTheDocument();
+        expect(screen.queryByTestId('visibility-btn-name')).not.toBeInTheDocument();
+
         // Click "Fähigkeit hinzufügen"
         const addSkillBtn = screen.getByTestId('add-skill-button');
         fireEvent.click(addSkillBtn);
@@ -352,7 +357,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         });
         unmountEditor();
 
-        // Step 2: Test AdEditorModal for creating a 90-day ad
+        // Step 2: Test AdEditorModal for creating a 90-day ad using Simple price chips
         const mockSaveAd = vi.fn().mockResolvedValue(undefined);
         render(
             <AdEditorModal
@@ -369,8 +374,8 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         const textInput = screen.getByTestId('ad-text-input');
         fireEvent.change(textInput, { target: { value: 'Verschiedene samenfeste Sorten aus Freilandkultur.' } });
 
-        const pricingInput = screen.getByTestId('ad-pricing-input');
-        fireEvent.change(pricingInput, { target: { value: '15 Minuto' } });
+        fireEvent.click(screen.getByTestId('price-chip-minuto'));
+        fireEvent.change(screen.getByTestId('ad-price-amount-input'), { target: { value: '15' } });
 
         // Submit Ad
         const submitBtn = screen.getByTestId('ad-submit-button');

@@ -26,9 +26,54 @@ describe('ContactDialog Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
   });
 
-  it('renders existing contact with drops', () => {
+  it('hides sync endpoints and edit-mode DID input in Simple mode while keeping new-contact DID input visible', () => {
+    const existing: Contact = {
+      did: 'did:key:z12345',
+      profile: {
+        id: 'did:key:z12345',
+        firstName: 'Alice',
+        lastName: 'Tester',
+      },
+      tags: ['friends'],
+      addedAt: '2024-01-01',
+      syncs: [
+        {
+          readUrl: 'https://sync1.example.com/sync.php',
+          writeUrl: 'https://sync1.example.com/sync.php',
+          dropPub: 'Pub1',
+        },
+      ],
+    };
+
+    const { rerender } = render(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+      />
+    );
+
+    expect(screen.getByTestId('contact-did-input')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/https:\/\/sync-server\./i)).not.toBeInTheDocument();
+
+    rerender(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+        existingContact={existing}
+      />
+    );
+
+    expect(screen.queryByTestId('contact-did-input')).not.toBeInTheDocument();
+    expect(screen.queryByText('sync1.example.com')).not.toBeInTheDocument();
+  });
+
+  it('renders existing contact with drops in Expert mode', () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     const existing: Contact = {
       did: 'did:key:z12345',
       profile: {
@@ -63,6 +108,7 @@ describe('ContactDialog Component', () => {
   });
 
   it('probes and adds a new sync service', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     vi.mocked(marketService.probePublicSync).mockResolvedValue({
       writeUrl: 'https://new-sync.example.com/sync.php',
       readUrl: 'https://new-sync.example.com/sync.php',
@@ -114,6 +160,7 @@ describe('ContactDialog Component', () => {
   });
 
   it('confirms and deletes a configured sync service', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     const existing: Contact = {
       did: 'did:key:z12345',
       profile: {
@@ -171,6 +218,7 @@ describe('ContactDialog Component', () => {
   });
 
   it('rejects adding duplicate sync service', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     const existing: Contact = {
       did: 'did:key:z12345',
       profile: { id: 'did:key:z12345' },
@@ -205,6 +253,7 @@ describe('ContactDialog Component', () => {
   });
 
   it('enforces limit of max 2 sync services', () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     const existing: Contact = {
       did: 'did:key:z12345',
       profile: { id: 'did:key:z12345' },

@@ -217,4 +217,20 @@ describe('BoardTab Component', () => {
     expect(screen.getByText('Mein eigenes Angebot')).toBeInTheDocument();
     expect(screen.getByTestId('ad-own-badge')).toBeInTheDocument();
   });
+
+  it('disables board radius select and shows missing-coordinates hint when myCoordinates is missing', () => {
+    render(
+      <BoardTab
+        items={mockItems}
+        hasSyncService={true}
+        myCoordinates={null}
+        onCreateAd={vi.fn()}
+        onImportCard={vi.fn()}
+        onNavigateToSyncSettings={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('board-radius-select')).toBeDisabled();
+    expect(screen.getByTestId('missing-coordinates-hint')).toBeInTheDocument();
+  });
 });

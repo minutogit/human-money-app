@@ -1,5 +1,5 @@
-import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ProfileCardEditor } from '../ProfileCardEditor';
 import { FrontendMyMarketProfile } from '../../../types';
 
@@ -64,7 +64,17 @@ describe('ProfileCardEditor Component', () => {
     qrIsPartial: false,
   };
 
-  it('renders editor form with all profile fields and visibility badges', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  it('renders editor form with all profile fields and presets in Simple mode', async () => {
     const onSave = vi.fn();
     const onClose = vi.fn();
 
@@ -85,6 +95,12 @@ describe('ProfileCardEditor Component', () => {
     expect(screen.getByDisplayValue('Mustermann Holz')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Möbelbau')).toBeInTheDocument();
 
+    // Simple mode shows PresetOrCustom options instead of 11 individual visibility buttons
+    expect(screen.getByTestId('preset-option-private')).toBeInTheDocument();
+    expect(screen.getByTestId('preset-option-local')).toBeInTheDocument();
+    expect(screen.getByTestId('preset-option-business')).toBeInTheDocument();
+    expect(screen.queryByTestId('visibility-btn-name')).not.toBeInTheDocument();
+
     // Check live preview has Max Mustermann
     expect(screen.getByText('Max Mustermann')).toBeInTheDocument();
 
@@ -92,24 +108,27 @@ describe('ProfileCardEditor Component', () => {
     const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
     fireEvent.click(saveBtn);
 
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
-      profile: expect.objectContaining({
-        firstName: 'Max',
-        lastName: 'Mustermann',
-        organization: 'Mustermann Holz',
-      }),
-      visibility: expect.objectContaining({
-        name: 'everyone',
-        organization: 'everyone',
-      }),
-      skills: expect.arrayContaining([
-        expect.objectContaining({ title: 'Möbelbau', isRemote: false }),
-      ]),
-      validityYears: 2,
-    }));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+        profile: expect.objectContaining({
+          firstName: 'Max',
+          lastName: 'Mustermann',
+          organization: 'Mustermann Holz',
+        }),
+        visibility: expect.objectContaining({
+          name: 'everyone',
+          organization: 'everyone',
+          street: 'contacts',
+        }),
+        skills: expect.arrayContaining([
+          expect.objectContaining({ title: 'Möbelbau', isRemote: false }),
+        ]),
+        validityYears: 2,
+      }));
+    });
   });
 
-  it('applies business preset when clicked', () => {
+  it('applies business preset via PresetOrCustom and keeps street off everyone', async () => {
     const onSave = vi.fn();
 
     render(
@@ -136,21 +155,25 @@ describe('ProfileCardEditor Component', () => {
       />
     );
 
-    const presetCheckbox = screen.getByTestId('business-preset-checkbox');
-    fireEvent.click(presetCheckbox);
+    const presetBtn = screen.getByTestId('preset-option-business');
+    fireEvent.click(presetBtn);
 
     // Save
     const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
     fireEvent.click(saveBtn);
 
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
-      visibility: expect.objectContaining({
-        organization: 'everyone',
-        email: 'everyone',
-        phone: 'everyone',
-        url: 'everyone',
-      }),
-    }));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+        visibility: expect.objectContaining({
+          organization: 'everyone',
+          email: 'everyone',
+          phone: 'everyone',
+          url: 'everyone',
+          street: 'contacts',
+          gender: 'nobody',
+        }),
+      }));
+    });
   });
 
   it('adds and removes skills up to 8 max', () => {
@@ -178,7 +201,8 @@ describe('ProfileCardEditor Component', () => {
     expect(remainingInputs.length).toBe(1);
   });
 
-  it('supports GPS location lookup and switches coordinate visibility to everyone', async () => {
+  it('supports GPS location lookup, guards public precision >= ~1 km, and restricts street off everyone in Expert mode', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     const onSave = vi.fn();
     render(
       <ProfileCardEditor
@@ -187,7 +211,7 @@ describe('ProfileCardEditor Component', () => {
         myProfile={{
           ...mockMyProfile,
           profile: { ...mockMyProfile.profile, coordinates: undefined },
-          visibility: { ...mockMyProfile.visibility, coordinates: 'nobody' },
+          visibility: { ...mockMyProfile.visibility, coordinates: 'nobody', street: 'contacts' },
         }}
         onSave={onSave}
       />
@@ -196,25 +220,36 @@ describe('ProfileCardEditor Component', () => {
     // Recommended hint should be shown when coordinates are empty
     expect(screen.getByTestId('coordinates-recommended-hint')).toBeInTheDocument();
 
-    // Click GPS button
+    // Click GPS button -> coordinates populated rounded to 2 decimals (~1 km), visibility becomes 'everyone'
     const gpsBtn = screen.getByTestId('fetch-gps-btn');
     fireEvent.click(gpsBtn);
 
-    // Coordinate input should be populated and rounded to 2 decimals (~1 km)
     await screen.findByDisplayValue('52.52, 13.40');
 
-    // Change precision to 3 (~100 m)
-    const precisionSelect = screen.getByTestId('coord-precision-select');
-    fireEvent.change(precisionSelect, { target: { value: '3' } });
-
-    // Should re-round existing coordinates to 3 decimals
-    expect(screen.getByDisplayValue('52.520, 13.400')).toBeInTheDocument();
+    // Options 3 and 4 (~100 m / ~10 m) must be disabled while coordinates visibility is 'everyone'
+    const precisionSelect = screen.getByTestId('coord-precision-select') as HTMLSelectElement;
+    expect(precisionSelect.querySelector('option[value="3"]')).toBeDisabled();
+    expect(precisionSelect.querySelector('option[value="4"]')).toBeDisabled();
 
     // Recommended hint disappears when coordinates are present and visibility is everyone
     expect(screen.queryByTestId('coordinates-recommended-hint')).not.toBeInTheDocument();
+
+    // Switching coordinate visibility from 'everyone' to 'contacts' enables precision 3
+    fireEvent.click(screen.getByTestId('visibility-btn-coordinates'));
+    expect(precisionSelect.querySelector('option[value="3"]')).not.toBeDisabled();
+    fireEvent.change(precisionSelect, { target: { value: '3' } });
+    expect(screen.getByDisplayValue('52.520, 13.400')).toBeInTheDocument();
+
+    // Street visibility button cycles only contacts <-> nobody (never everyone)
+    const streetBtn = screen.getByTestId('visibility-btn-street');
+    expect(streetBtn).toHaveTextContent(/Nur Kontakte|Contacts only/i);
+    fireEvent.click(streetBtn);
+    expect(streetBtn).toHaveTextContent(/Niemand|Nobody/i);
+    fireEvent.click(streetBtn);
+    expect(streetBtn).toHaveTextContent(/Nur Kontakte|Contacts only/i);
   });
 
-  it('supports toggling isRemote on skills', () => {
+  it('supports toggling isRemote on skills', async () => {
     const onSave = vi.fn();
     render(
       <ProfileCardEditor
@@ -233,14 +268,16 @@ describe('ProfileCardEditor Component', () => {
     const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
     fireEvent.click(saveBtn);
 
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
-      skills: [
-        expect.objectContaining({
-          title: 'Möbelbau',
-          isRemote: true,
-        }),
-      ],
-    }));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+        skills: [
+          expect.objectContaining({
+            title: 'Möbelbau',
+            isRemote: true,
+          }),
+        ],
+      }));
+    });
   });
 
   it('supports avatar upload via avatar-file-input and removal via avatar-remove-btn', async () => {
@@ -274,10 +311,12 @@ describe('ProfileCardEditor Component', () => {
     const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
     fireEvent.click(saveBtn);
 
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
-      profile: expect.objectContaining({
-        pictureUrl: undefined,
-      }),
-    }));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+        profile: expect.objectContaining({
+          pictureUrl: undefined,
+        }),
+      }));
+    });
   });
 });

@@ -147,6 +147,56 @@ describe('MineTab Component', () => {
     expect(screen.getByText('Altes Inserat')).toBeInTheDocument();
   });
 
+  it('supports 1-click +90 day renewal in Simple mode and hides custom modal trigger until Expert mode', () => {
+    localStorage.clear();
+    const onQuickRenewAd = vi.fn();
+    const onRenewAd = vi.fn();
+
+    const { unmount } = render(
+      <MineTab
+        myProfile={mockMyProfile}
+        inbox={mockInbox}
+        onOpenProfileEditor={vi.fn()}
+        onOpenShareCard={vi.fn()}
+        onTogglePublished={vi.fn()}
+        onCreateAd={vi.fn()}
+        onEditAd={vi.fn()}
+        onQuickRenewAd={onQuickRenewAd}
+        onRenewAd={onRenewAd}
+        onDeleteAd={vi.fn()}
+      />
+    );
+
+    const quickRenewBtn = screen.getByTestId('quick-renew-ad-ad-active-1');
+    expect(quickRenewBtn).toBeInTheDocument();
+    expect(screen.queryByTestId('custom-renew-ad-ad-active-1')).not.toBeInTheDocument();
+
+    fireEvent.click(quickRenewBtn);
+    expect(onQuickRenewAd).toHaveBeenCalledWith(expect.objectContaining({ id: 'ad-active-1' }));
+    unmount();
+
+    localStorage.setItem('humoco_ui_mode', 'expert');
+    render(
+      <MineTab
+        myProfile={mockMyProfile}
+        inbox={mockInbox}
+        onOpenProfileEditor={vi.fn()}
+        onOpenShareCard={vi.fn()}
+        onTogglePublished={vi.fn()}
+        onCreateAd={vi.fn()}
+        onEditAd={vi.fn()}
+        onQuickRenewAd={onQuickRenewAd}
+        onRenewAd={onRenewAd}
+        onDeleteAd={vi.fn()}
+      />
+    );
+
+    const customRenewBtn = screen.getByTestId('custom-renew-ad-ad-active-1');
+    expect(customRenewBtn).toBeInTheDocument();
+    fireEvent.click(customRenewBtn);
+    expect(onRenewAd).toHaveBeenCalledWith(expect.objectContaining({ id: 'ad-active-1' }));
+  });
+
   it('renders inquiries section with received inquiries and handles reply', () => {
     const onReplyInquiry = vi.fn();
 

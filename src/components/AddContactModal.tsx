@@ -13,6 +13,8 @@ import {
 import { ModalShell } from './ui/ModalShell';
 import { Button } from './ui/Button';
 import { Textarea } from './ui/Textarea';
+import { ExpertTabsLayout } from './ui/ExpertTabsLayout';
+import { Disclosure } from './ui/Disclosure';
 import { readFromClipboard } from '../utils/clipboard';
 import { marketService } from '../services/marketService';
 import { parseContactCard } from '../utils/humocoUri';
@@ -67,6 +69,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
     const { protectAction } = useSession();
     const [view, setView] = useState<ModalView>('tiles');
     const [pasteText, setPasteText] = useState('');
+    const [smartError, setSmartError] = useState<string | null>(null);
     const [isProcessing, setIsProcessing] = useState(false);
     const [cameraError, setCameraError] = useState<string | null>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -115,6 +118,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
             stopCamera();
             setView('tiles');
             setPasteText('');
+            setSmartError(null);
             setCameraError(null);
             setIsProcessing(false);
         }
@@ -132,9 +136,12 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
     }, [view, startCamera, stopCamera]);
 
     const handleImportPayload = useCallback(async (rawPayload: string) => {
+        setSmartError(null);
         const trimmed = rawPayload.trim();
         if (!trimmed) {
-            onError(t('contacts.emptyClipboard'));
+            const msg = t('contacts.emptyClipboard');
+            setSmartError(msg);
+            onError(msg);
             return;
         }
 
@@ -164,7 +171,9 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
 
         // 2. Verify that payload looks like a signed card envelope before attempting import
         if (!isCardEnvelopePayload(trimmed)) {
-            onError(t('contacts.invalidContactPayload', 'Ungültiges Kontakt- oder Visitenkarten-Format.'));
+            const msg = t('contacts.invalidContactPayload', 'Ungültiges Kontakt- oder Visitenkarten-Format.');
+            setSmartError(msg);
+            onError(msg);
             return;
         }
 
@@ -187,15 +196,23 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
                 );
                 onClose();
             } else if (res && res.status === 'rejected_expired') {
-                onError(t('marketplace.importExpiredDesc', 'Diese Visitenkarte ist abgelaufen.'));
+                const msg = t('marketplace.importExpiredDesc', 'Diese Visitenkarte ist abgelaufen.');
+                setSmartError(msg);
+                onError(msg);
             } else if (res && res.status === 'rejected_offender') {
-                onError(t('marketplace.importOffenderDesc', 'Diese Visitenkarte wurde wegen Betrugsverdacht blockiert.'));
+                const msg = t('marketplace.importOffenderDesc', 'Diese Visitenkarte wurde wegen Betrugsverdacht blockiert.');
+                setSmartError(msg);
+                onError(msg);
             } else {
-                onError(t('contacts.invalidContactPayload', 'Ungültiges Kontakt- oder Visitenkarten-Format.'));
+                const msg = t('contacts.invalidContactPayload', 'Ungültiges Kontakt- oder Visitenkarten-Format.');
+                setSmartError(msg);
+                onError(msg);
             }
         } catch (err) {
             logger.error(`Import card error: ${stringifyError(err)}`);
-            onError(stringifyError(err));
+            const msg = stringifyError(err);
+            setSmartError(msg);
+            onError(msg);
         } finally {
             setIsProcessing(false);
         }
@@ -295,6 +312,19 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
         }
     };
 
+    // Smart clipboard fill in Simple Mode
+    const handleSmartPasteClipboard = async () => {
+        setSmartError(null);
+        const { text, error } = await readFromClipboard();
+        if (error || !text || !text.trim()) {
+            const msg = t('contacts.emptyClipboard', 'Die Zwischenablage ist leer.');
+            setSmartError(msg);
+            onError(msg);
+            return;
+        }
+        setPasteText(text.trim());
+    };
+
     // Tile 4: Manual (Benutzer-ID)
     const handleTileManual = () => {
         onClose();
@@ -333,89 +363,191 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
                     : undefined
             }
         >
-            {/* View 1: 4 Tiles */}
+            {/* View 1: Simple Smart Input vs Expert 4 Tiles */}
             {view === 'tiles' && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2" data-testid="add-contact-tiles">
-                    {/* Tile 1: QR scannen */}
-                    <button
-                        type="button"
-                        data-testid="add-tile-qr"
-                        onClick={() => setView('qr_scanner')}
-                        className="group p-5 rounded-2xl border border-theme-subtle bg-white hover:border-theme-primary/40 hover:bg-theme-primary/5 text-left transition-all flex flex-col gap-3 shadow-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-theme-primary/20"
-                    >
-                        <div className="w-12 h-12 rounded-2xl bg-sky-50 text-sky-600 border border-sky-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                            <QrCode size={24} />
-                        </div>
-                        <div className="space-y-1">
-                            <h4 className="font-extrabold text-sm text-theme-primary tracking-tight group-hover:text-theme-accent transition-colors">
-                                {t('contacts.addTileQrTitle', 'QR scannen')}
-                            </h4>
-                            <p className="text-xs text-theme-light leading-relaxed">
-                                {t('contacts.addTileQrSubtitle', 'Kamera nutzen, um eine Visitenkarte zu scannen')}
-                            </p>
-                        </div>
-                    </button>
+                <ExpertTabsLayout
+                    simpleContent={
+                        <div className="space-y-4 py-1" data-testid="smart-add-contact-panel">
+                            <div className="space-y-2">
+                                <label
+                                    htmlFor="smart-contact-input"
+                                    className="block text-xs font-bold text-theme-secondary"
+                                >
+                                    {t('contacts.smartAddLabel', 'Kontakt-Link, Benutzer-ID oder Visitenkarte einfügen')}
+                                </label>
+                                <Textarea
+                                    id="smart-contact-input"
+                                    rows={3}
+                                    value={pasteText}
+                                    onChange={(e) => {
+                                        setPasteText(e.target.value);
+                                        if (smartError) setSmartError(null);
+                                    }}
+                                    placeholder={t('contacts.smartAddPlaceholder', 'humoco://..., Benutzer-ID oder .hmcard Text hier einfügen...')}
+                                    data-testid="smart-contact-input"
+                                />
+                                {smartError && (
+                                    <p className="text-xs font-medium text-rose-600" data-testid="smart-add-error">
+                                        {smartError}
+                                    </p>
+                                )}
+                                <div className="flex flex-wrap items-center gap-2 pt-1">
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={handleSmartPasteClipboard}
+                                        disabled={isProcessing}
+                                        className="gap-1.5"
+                                        data-testid="smart-paste-clipboard-btn"
+                                    >
+                                        <ClipboardPaste size={15} />
+                                        <span>{t('contacts.smartPasteClipboardBtn', 'Aus Zwischenablage')}</span>
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="primary"
+                                        size="sm"
+                                        onClick={() => handleImportPayload(pasteText)}
+                                        disabled={isProcessing || !pasteText.trim()}
+                                        className="gap-1.5 ml-auto"
+                                        data-testid="smart-contact-submit"
+                                    >
+                                        <span>{isProcessing ? t('common.importing', 'Wird übernommen...') : t('contacts.smartSubmitBtn', 'Übernehmen')}</span>
+                                    </Button>
+                                </div>
+                            </div>
 
-                    {/* Tile 2: Link/Code einfügen */}
-                    <button
-                        type="button"
-                        data-testid="add-tile-clipboard"
-                        onClick={handleTileClipboard}
-                        className="group p-5 rounded-2xl border border-theme-subtle bg-white hover:border-theme-primary/40 hover:bg-theme-primary/5 text-left transition-all flex flex-col gap-3 shadow-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-theme-primary/20"
-                    >
-                        <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                            <ClipboardPaste size={24} />
-                        </div>
-                        <div className="space-y-1">
-                            <h4 className="font-extrabold text-sm text-theme-primary tracking-tight group-hover:text-theme-accent transition-colors">
-                                {t('contacts.addTileClipboardTitle', 'Link/Code einfügen')}
-                            </h4>
-                            <p className="text-xs text-theme-light leading-relaxed">
-                                {t('contacts.addTileClipboardSubtitle', 'Aus der Zwischenablage einfügen')}
-                            </p>
-                        </div>
-                    </button>
+                            <div className="pt-2 border-t border-theme-subtle/60">
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    onClick={() => setView('qr_scanner')}
+                                    className="w-full gap-2 py-2.5"
+                                    data-testid="smart-add-qr-btn"
+                                >
+                                    <QrCode size={18} />
+                                    <span>{t('contacts.addTileQrTitle', 'QR scannen')}</span>
+                                </Button>
+                            </div>
 
-                    {/* Tile 3: Datei öffnen (.hmcard) */}
-                    <button
-                        type="button"
-                        data-testid="add-tile-file"
-                        onClick={handleTileFile}
-                        className="group p-5 rounded-2xl border border-theme-subtle bg-white hover:border-theme-primary/40 hover:bg-theme-primary/5 text-left transition-all flex flex-col gap-3 shadow-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-theme-primary/20"
-                    >
-                        <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                            <FileText size={24} />
+                            <Disclosure
+                                title={t('contacts.otherWaysLabel', 'Andere Wege')}
+                                defaultOpen={false}
+                                toggleTestId="add-contact-other-ways-toggle"
+                                contentTestId="add-contact-other-ways-content"
+                            >
+                                <div className="flex flex-col sm:flex-row gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={handleTileFile}
+                                        className="flex-1 gap-2 justify-start"
+                                        data-testid="add-other-file"
+                                    >
+                                        <FileText size={15} />
+                                        <span>{t('contacts.otherWayFileBtn', 'Visitenkarte aus Datei öffnen')}</span>
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={handleTileManual}
+                                        className="flex-1 gap-2 justify-start"
+                                        data-testid="add-other-manual"
+                                    >
+                                        <UserPlus size={15} />
+                                        <span>{t('contacts.otherWayManualBtn', 'Manuell eintragen')}</span>
+                                    </Button>
+                                </div>
+                            </Disclosure>
                         </div>
-                        <div className="space-y-1">
-                            <h4 className="font-extrabold text-sm text-theme-primary tracking-tight group-hover:text-theme-accent transition-colors">
-                                {t('contacts.addTileFileTitle', 'Datei öffnen (.hmcard)')}
-                            </h4>
-                            <p className="text-xs text-theme-light leading-relaxed">
-                                {t('contacts.addTileFileSubtitle', 'Visitenkarte aus einer Datei importieren')}
-                            </p>
-                        </div>
-                    </button>
+                    }
+                    expertContent={
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2" data-testid="add-contact-tiles">
+                            {/* Tile 1: QR scannen */}
+                            <button
+                                type="button"
+                                data-testid="add-tile-qr"
+                                onClick={() => setView('qr_scanner')}
+                                className="group p-5 rounded-2xl border border-theme-subtle bg-white hover:border-theme-primary/40 hover:bg-theme-primary/5 text-left transition-all flex flex-col gap-3 shadow-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-theme-primary/20"
+                            >
+                                <div className="w-12 h-12 rounded-2xl bg-sky-50 text-sky-600 border border-sky-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                                    <QrCode size={24} />
+                                </div>
+                                <div className="space-y-1">
+                                    <h4 className="font-extrabold text-sm text-theme-primary tracking-tight group-hover:text-theme-accent transition-colors">
+                                        {t('contacts.addTileQrTitle', 'QR scannen')}
+                                    </h4>
+                                    <p className="text-xs text-theme-light leading-relaxed">
+                                        {t('contacts.addTileQrSubtitle', 'Kamera nutzen, um eine Visitenkarte zu scannen')}
+                                    </p>
+                                </div>
+                            </button>
 
-                    {/* Tile 4: Manuell (Benutzer-ID) */}
-                    <button
-                        type="button"
-                        data-testid="add-tile-manual"
-                        onClick={handleTileManual}
-                        className="group p-5 rounded-2xl border border-theme-subtle bg-white hover:border-theme-primary/40 hover:bg-theme-primary/5 text-left transition-all flex flex-col gap-3 shadow-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-theme-primary/20"
-                    >
-                        <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                            <UserPlus size={24} />
+                            {/* Tile 2: Link/Code einfügen */}
+                            <button
+                                type="button"
+                                data-testid="add-tile-clipboard"
+                                onClick={handleTileClipboard}
+                                className="group p-5 rounded-2xl border border-theme-subtle bg-white hover:border-theme-primary/40 hover:bg-theme-primary/5 text-left transition-all flex flex-col gap-3 shadow-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-theme-primary/20"
+                            >
+                                <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                                    <ClipboardPaste size={24} />
+                                </div>
+                                <div className="space-y-1">
+                                    <h4 className="font-extrabold text-sm text-theme-primary tracking-tight group-hover:text-theme-accent transition-colors">
+                                        {t('contacts.addTileClipboardTitle', 'Link/Code einfügen')}
+                                    </h4>
+                                    <p className="text-xs text-theme-light leading-relaxed">
+                                        {t('contacts.addTileClipboardSubtitle', 'Aus der Zwischenablage einfügen')}
+                                    </p>
+                                </div>
+                            </button>
+
+                            {/* Tile 3: Datei öffnen (.hmcard) */}
+                            <button
+                                type="button"
+                                data-testid="add-tile-file"
+                                onClick={handleTileFile}
+                                className="group p-5 rounded-2xl border border-theme-subtle bg-white hover:border-theme-primary/40 hover:bg-theme-primary/5 text-left transition-all flex flex-col gap-3 shadow-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-theme-primary/20"
+                            >
+                                <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                                    <FileText size={24} />
+                                </div>
+                                <div className="space-y-1">
+                                    <h4 className="font-extrabold text-sm text-theme-primary tracking-tight group-hover:text-theme-accent transition-colors">
+                                        {t('contacts.addTileFileTitle', 'Datei öffnen (.hmcard)')}
+                                    </h4>
+                                    <p className="text-xs text-theme-light leading-relaxed">
+                                        {t('contacts.addTileFileSubtitle', 'Visitenkarte aus einer Datei importieren')}
+                                    </p>
+                                </div>
+                            </button>
+
+                            {/* Tile 4: Manuell (Benutzer-ID) */}
+                            <button
+                                type="button"
+                                data-testid="add-tile-manual"
+                                onClick={handleTileManual}
+                                className="group p-5 rounded-2xl border border-theme-subtle bg-white hover:border-theme-primary/40 hover:bg-theme-primary/5 text-left transition-all flex flex-col gap-3 shadow-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-theme-primary/20"
+                            >
+                                <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                                    <UserPlus size={24} />
+                                </div>
+                                <div className="space-y-1">
+                                    <h4 className="font-extrabold text-sm text-theme-primary tracking-tight group-hover:text-theme-accent transition-colors">
+                                        {t('contacts.addTileManualTitle', 'Manuell (Benutzer-ID)')}
+                                    </h4>
+                                    <p className="text-xs text-theme-light leading-relaxed">
+                                        {t('contacts.addTileManualSubtitle', 'Benutzer-ID direkt von Hand eingeben')}
+                                    </p>
+                                </div>
+                            </button>
                         </div>
-                        <div className="space-y-1">
-                            <h4 className="font-extrabold text-sm text-theme-primary tracking-tight group-hover:text-theme-accent transition-colors">
-                                {t('contacts.addTileManualTitle', 'Manuell (Benutzer-ID)')}
-                            </h4>
-                            <p className="text-xs text-theme-light leading-relaxed">
-                                {t('contacts.addTileManualSubtitle', 'Benutzer-ID direkt von Hand eingeben')}
-                            </p>
-                        </div>
-                    </button>
-                </div>
+                    }
+                />
             )}
 
             {/* View 2: QR Scanner */}

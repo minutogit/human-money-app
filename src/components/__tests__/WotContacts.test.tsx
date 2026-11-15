@@ -8,11 +8,13 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
 import { Contact, WotSummaryDto, WotImportResultDto, WotProviderDto } from '../../types';
 
-vi.mock('../../context/SessionContext', () => ({
-  useSession: () => ({
-    protectAction: vi.fn(async (action) => await action(undefined)),
-  }),
-}));
+vi.mock('../../context/SessionContext', () => {
+  const protectAction = vi.fn(async (action) => await action(undefined));
+  return {
+    useSession: () => ({ protectAction }),
+    useOptionalSession: () => ({ protectAction }),
+  };
+});
 
 vi.mock('../../utils/log', () => ({
   logger: {
@@ -285,6 +287,7 @@ describe('WoT Contacts & Trust Ratings', () => {
     ];
 
     it('loads and displays WoT banner stats and contact card trust pills', async () => {
+      localStorage.setItem('humoco_ui_mode', 'expert');
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);
@@ -307,6 +310,7 @@ describe('WoT Contacts & Trust Ratings', () => {
     });
 
     it('sharing WoT for a specific contact exports package with recipientDid', async () => {
+      localStorage.setItem('humoco_ui_mode', 'expert');
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);
@@ -374,7 +378,8 @@ describe('WoT Contacts & Trust Ratings', () => {
         expect(screen.getByText('Alice')).toBeInTheDocument();
       });
 
-      fireEvent.click(screen.getByTestId('toggle-network-options-button'));
+      fireEvent.click(screen.getByTestId('page-header-more-actions'));
+      fireEvent.click(await screen.findByTestId('toggle-network-options-button'));
 
       await waitFor(() => {
         expect(screen.getByTestId('preset-option-near')).toBeInTheDocument();
@@ -488,7 +493,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       });
     });
 
-    it('progressive disclosure: providers tab is hidden when empty and appears when provider exists', async () => {
+    it('progressive disclosure: providers tab is hidden in Simple mode, and in Expert mode appears only when provider exists', async () => {
       const mockProvider: WotProviderDto = {
         issuerDid: 'did:key:zProvider123',
         name: 'Regional Alliance',
@@ -501,7 +506,22 @@ describe('WoT Contacts & Trust Ratings', () => {
         isStale: false,
       };
 
-      // Test 1: Empty providers -> Tab switcher is NOT rendered
+      // Simple mode: providers tab remains hidden even when provider exists
+      (invoke as unknown as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+        if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);
+        if (cmd === 'get_wot_providers') return Promise.resolve([mockProvider]);
+        return Promise.resolve();
+      });
+      const { unmount: unmountSimple } = render(<AddressBook onBack={vi.fn()} />);
+      await waitFor(() => {
+        expect(screen.getByText('Alice')).toBeInTheDocument();
+      });
+      expect(screen.queryByRole('tab', { name: /contacts\.tabProviders|Community Seals & Providers/i })).not.toBeInTheDocument();
+      unmountSimple();
+
+      // Test 1 (Expert mode): Empty providers -> Tab switcher is NOT rendered
+      localStorage.setItem('humoco_ui_mode', 'expert');
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);

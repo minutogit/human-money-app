@@ -11,11 +11,13 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
 
-vi.mock('../../context/SessionContext', () => ({
-  useSession: () => ({
-    protectAction: vi.fn((action) => action(undefined)),
-  }),
-}));
+vi.mock('../../context/SessionContext', () => {
+  const protectAction = vi.fn((action) => action(undefined));
+  return {
+    useSession: () => ({ protectAction }),
+    useOptionalSession: () => ({ protectAction }),
+  };
+});
 
 const mockNavigateToSettingsSection = vi.fn();
 const mockGoBack = vi.fn();
@@ -155,8 +157,10 @@ describe('AddressBook Component', () => {
     const addBtn = screen.getByRole('button', { name: /contacts\.addContact|Add Contact|Kontakt hinzufügen/i });
     fireEvent.click(addBtn);
 
-    const manualTile = await screen.findByTestId('add-tile-manual');
-    fireEvent.click(manualTile);
+    const otherToggle = await screen.findByTestId('add-contact-other-ways-toggle');
+    fireEvent.click(otherToggle);
+    const manualBtn = await screen.findByTestId('add-other-manual');
+    fireEvent.click(manualBtn);
     
     await screen.findByTestId('contact-dialog');
     const saveBtn = screen.getByRole('button', { name: /Save/i });
@@ -197,6 +201,7 @@ describe('AddressBook Component', () => {
   });
 
   it('displays "Hat eine Ablage" badge when contact has drops configured', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     const contactsWithDrops: Contact[] = [
       {
         did: 'did:key:zWithDrop',
@@ -259,7 +264,8 @@ describe('AddressBook Component', () => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
     });
 
-    const syncBtn = screen.getByTestId('sync-services-button');
+    fireEvent.click(screen.getByTestId('page-header-more-actions'));
+    const syncBtn = await screen.findByTestId('sync-services-button');
     expect(syncBtn).toBeInTheDocument();
     fireEvent.click(syncBtn);
 
@@ -269,6 +275,7 @@ describe('AddressBook Component', () => {
   });
 
   it('adaptive trust network banner defaults to collapsed when rated contacts exist, expands on toggle', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_wot_summary') {
@@ -332,7 +339,8 @@ describe('AddressBook Component', () => {
 
     // Options start closed in slim status bar mode
     expect(screen.queryByTestId('expanded-network-options')).not.toBeInTheDocument();
-    const toggleBtn = screen.getByTestId('toggle-network-options-button');
+    fireEvent.click(screen.getByTestId('page-header-more-actions'));
+    const toggleBtn = await screen.findByTestId('toggle-network-options-button');
     fireEvent.click(toggleBtn);
     expect(screen.getByTestId('expanded-network-options')).toBeInTheDocument();
     expect(screen.getByTestId('preset-option-near')).toBeInTheDocument();
@@ -342,6 +350,7 @@ describe('AddressBook Component', () => {
   });
 
   it('displays sync service recommendation card when no sync service is connected and navigates to sync settings on click', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     mockNavigateToSettingsSection.mockClear();
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
@@ -382,6 +391,7 @@ describe('AddressBook Component', () => {
   });
 
   it('hides sync service recommendation card when a sync service is connected', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_sync_overview_status') {
@@ -411,6 +421,7 @@ describe('AddressBook Component', () => {
   });
 
   it('displays configured drops with passive health status badges', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     const contactsWithHealthDrops: Contact[] = [
       {
         did: 'did:key:zHealth',
@@ -458,6 +469,7 @@ describe('AddressBook Component', () => {
   });
 
   it('displays error feedback when syncMarketChannels returns HTTP 429 error', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'sync_market_channels') {
@@ -486,11 +498,13 @@ describe('AddressBook Component', () => {
     await waitFor(() => {
       expect(screen.getByText(/Rate-Limit erreicht \(HTTP 429\)/i)).toBeInTheDocument();
       expect(syncBtn).toBeDisabled();
-      expect(syncBtn).toHaveTextContent(/warten|wait/i);
+      expect(syncBtn).toHaveAttribute('aria-label', expect.stringMatching(/warten|wait/i));
+      expect(syncBtn).toHaveTextContent(/60s/);
     });
   });
 
   it('displays warning feedback when syncing with no sync services configured', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_sync_overview_status') {
@@ -611,7 +625,38 @@ describe('AddressBook Component', () => {
     });
   });
 
-  it('renders 4-tile Add Contact modal when clicking primary button', async () => {
+  it('hides sync badges and extra tags on contact cards in Simple mode and renders smart Add Contact modal', async () => {
+    const multiTagContact: Contact[] = [
+      {
+        did: 'did:key:zSimple1',
+        profile: { id: 'did:key:zSimple1', firstName: 'Clara', lastName: 'Simple' },
+        tags: ['firstTag', 'secondTag'],
+        addedAt: '2024-01-01',
+        syncs: [{ readUrl: 'https://s.example/d', writeUrl: 'https://s.example/s', dropPub: 'PubS' }],
+      },
+    ];
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve(multiTagContact);
+      return Promise.resolve(undefined);
+    });
+
+    render(<AddressBook onBack={mockOnBack} />);
+    await waitFor(() => {
+      expect(screen.getByText(/Clara Simple/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByText('firstTag').some((el) => el.tagName === 'SPAN')).toBe(true);
+    expect(screen.getAllByText('secondTag').some((el) => el.tagName === 'SPAN')).toBe(false);
+    expect(screen.queryByTestId('contact-has-sync-badge')).not.toBeInTheDocument();
+
+    const addBtn = screen.getByRole('button', { name: /contacts\.addContact|Add Contact|Kontakt hinzufügen/i });
+    fireEvent.click(addBtn);
+    expect(await screen.findByTestId('smart-add-contact-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('add-contact-tiles')).not.toBeInTheDocument();
+  });
+
+  it('renders 4-tile Add Contact modal when clicking primary button (Expert mode)', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     render(<AddressBook onBack={mockOnBack} />);
 
     await waitFor(() => {

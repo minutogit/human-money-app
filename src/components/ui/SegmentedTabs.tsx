@@ -5,6 +5,7 @@ export interface SegmentedTabItem<T extends string = string> {
     label: React.ReactNode;
     icon?: React.ReactNode;
     disabled?: boolean;
+    testId?: string;
 }
 
 export interface SegmentedTabsProps<T extends string = string> {
@@ -38,6 +39,7 @@ export function SegmentedTabs<T extends string = string>({
                         role="tab"
                         aria-selected={isActive}
                         disabled={tab.disabled}
+                        data-testid={tab.testId}
                         onClick={() => onChange(tab.id)}
                         className={`${
                             fullWidth ? 'flex-1 min-w-0' : ''

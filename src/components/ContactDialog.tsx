@@ -6,6 +6,8 @@ import { marketService } from '../services/marketService';
 import Avatar from 'boring-avatars';
 import { translateError } from '../utils/errorHelper';
 import { HelpIcon } from './ui/HelpIcon';
+import { Advanced } from './ui/Advanced';
+import { TechId } from './ui/TechId';
 import { TrustLevelRadioCards } from './TrustLevelRadioCards';
 import { readFromClipboard } from '../utils/clipboard';
 import { parseContactCard } from '../utils/humocoUri';
@@ -287,45 +289,50 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                         <h2 className="text-xl font-extrabold text-theme-secondary">
                             {existingContact ? t('contacts.editContact') : t('contacts.addNewContact')}
                         </h2>
-                        <p className="text-theme-light text-sm font-mono truncate w-full">
-                            {did || t('contacts.enterDidBelow')}
-                        </p>
+                        <div className="mt-0.5 text-theme-light text-sm">
+                            {did ? <TechId value={did} kind="did" /> : t('contacts.enterDidBelow')}
+                        </div>
                     </div>
                 </div>
 
                 <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
-                    <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                            <label className="block text-xs font-bold text-theme-light uppercase tracking-widest">{t('contacts.userId')}</label>
-                            {!existingContact && (
-                                <button
-                                    type="button"
-                                    onClick={handlePasteFromClipboard}
-                                    className="text-xs font-bold text-theme-primary hover:text-theme-accent transition-colors flex items-center gap-1"
-                                >
-                                    <Clipboard size={14} />
-                                    {t('contacts.pasteContactCard')}
-                                </button>
-                            )}
-                        </div>
-                        <input
-                            type="text"
-                            value={did}
-                            onChange={(e) => {
-                                const rawVal = e.target.value;
-                                if (rawVal.includes('humoco://contact')) {
-                                    applyContactCard(rawVal);
-                                    return;
-                                }
-                                const val = rawVal.replace(/\s+/g, '');
-                                setDid(val);
-                            }}
-                            disabled={!!existingContact}
-                            data-testid="contact-did-input"
-                            placeholder={t('contacts.didPlaceholder')}
-                            className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 disabled:opacity-50 font-mono text-sm shadow-sm"
-                        />
-                    </div>
+                    {(() => {
+                        const didField = (
+                            <div>
+                                <div className="flex items-center justify-between mb-1.5">
+                                    <label className="block text-xs font-bold text-theme-light uppercase tracking-widest">{t('contacts.userId')}</label>
+                                    {!existingContact && (
+                                        <button
+                                            type="button"
+                                            onClick={handlePasteFromClipboard}
+                                            className="text-xs font-bold text-theme-primary hover:text-theme-accent transition-colors flex items-center gap-1"
+                                        >
+                                            <Clipboard size={14} />
+                                            {t('contacts.pasteContactCard')}
+                                        </button>
+                                    )}
+                                </div>
+                                <input
+                                    type="text"
+                                    value={did}
+                                    onChange={(e) => {
+                                        const rawVal = e.target.value;
+                                        if (rawVal.includes('humoco://contact')) {
+                                            applyContactCard(rawVal);
+                                            return;
+                                        }
+                                        const val = rawVal.replace(/\s+/g, '');
+                                        setDid(val);
+                                    }}
+                                    disabled={!!existingContact}
+                                    data-testid="contact-did-input"
+                                    placeholder={t('contacts.didPlaceholder')}
+                                    className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 disabled:opacity-50 font-mono text-sm shadow-sm"
+                                />
+                            </div>
+                        );
+                        return existingContact ? <Advanced>{didField}</Advanced> : didField;
+                    })()}
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
@@ -362,19 +369,20 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                         />
                     </div>
 
-                    {/* Sync-Ablagen (Direct Sync Services) */}
-                    <div className="space-y-2 pt-1 border-t border-theme-subtle/50">
-                        <div>
-                            <div className="flex items-center gap-1.5">
-                                <label className="text-xs font-bold text-theme-light uppercase tracking-widest">
-                                    {t('contacts.syncEndpointsLabel')}
-                                </label>
-                                <Server size={14} className="text-theme-light" />
+                    {/* Sync endpoints (Direct Sync Services) */}
+                    <Advanced>
+                        <div className="space-y-2 pt-1 border-t border-theme-subtle/50">
+                            <div>
+                                <div className="flex items-center gap-1.5">
+                                    <label className="text-xs font-bold text-theme-light uppercase tracking-widest">
+                                        {t('contacts.syncEndpointsLabel')}
+                                    </label>
+                                    <Server size={14} className="text-theme-light" />
+                                </div>
+                                <p className="text-[11px] text-theme-light leading-tight mt-0.5">
+                                    {t('contacts.syncEndpointsHint')}
+                                </p>
                             </div>
-                            <p className="text-[11px] text-theme-light leading-tight mt-0.5">
-                                {t('contacts.syncEndpointsHint')}
-                            </p>
-                        </div>
 
                         {/* List of configured Sync-Ablagen */}
                         {syncs.length > 0 && (
@@ -520,7 +528,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                 {t('contacts.syncMaxReached')}
                             </p>
                         )}
-                    </div>
+                        </div>
+                    </Advanced>
 
                     {/* Personal Trust Rating */}
                     <div className="space-y-2 pt-1 border-t border-theme-subtle/50">

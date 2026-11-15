@@ -100,11 +100,19 @@ export const BoardTab: React.FC<BoardTabProps> = ({
     }, [items, people, filterKind, searchQuery, effectiveMaxDistance, myCoordinates]);
 
     const isBoardEmptyOverall = items.length === 0;
+    const hasCoords = Boolean(myCoordinates?.trim());
 
     return (
         <div className="space-y-6">
-            {/* Missing coords hint when radius is selected */}
-            {effectiveMaxDistance !== null && effectiveMaxDistance > 0 && !myCoordinates && (
+            {/* Subtle section subtitle */}
+            {!isBoardEmptyOverall && (
+                <p className="text-xs font-semibold text-theme-light" data-testid="board-subtitle">
+                    {t('marketplace.tabBoardSubtitle', 'Aktuelle Anzeigen')}
+                </p>
+            )}
+
+            {/* Missing coords hint when coordinates are missing */}
+            {((!hasCoords && !isBoardEmptyOverall) || (effectiveMaxDistance !== null && effectiveMaxDistance > 0 && !hasCoords)) && (
                 <div
                     className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center gap-2"
                     data-testid="missing-coordinates-hint"
@@ -112,8 +120,8 @@ export const BoardTab: React.FC<BoardTabProps> = ({
                     <MapPin size={14} className="text-amber-600 shrink-0" />
                     <span>
                         {t(
-                            'marketplace.radiusMissingCoordsHint',
-                            'Für den Umkreisfilter werden eigene Koordinaten in deiner Visitenkarte benötigt.'
+                            'marketplace.radiusDisabledNoLocationHint',
+                            'Standort in deiner Visitenkarte angeben, um nach Umkreis zu filtern.'
                         )}
                     </span>
                 </div>
@@ -140,7 +148,9 @@ export const BoardTab: React.FC<BoardTabProps> = ({
                         <select
                             value={effectiveMaxDistance === null ? '' : String(effectiveMaxDistance)}
                             onChange={(e) => setEffectiveMaxDistance(e.target.value === '' ? null : Number(e.target.value))}
-                            className="px-3 py-2 rounded-xl text-xs font-medium bg-white border border-theme-subtle text-theme-secondary focus:outline-none focus:ring-2 focus:ring-theme-primary/30 cursor-pointer shrink-0"
+                            disabled={!hasCoords}
+                            title={!hasCoords ? t('marketplace.radiusDisabledNoLocationHint', 'Standort in deiner Visitenkarte angeben, um nach Umkreis zu filtern.') : undefined}
+                            className="px-3 py-2 rounded-xl text-xs font-medium bg-white border border-theme-subtle text-theme-secondary focus:outline-none focus:ring-2 focus:ring-theme-primary/30 cursor-pointer shrink-0 disabled:opacity-50 disabled:bg-slate-100 disabled:cursor-not-allowed"
                             data-testid="board-radius-select"
                             aria-label={t('marketplace.radiusLabel', 'Umkreis')}
                         >
