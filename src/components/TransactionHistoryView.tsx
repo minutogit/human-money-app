@@ -457,10 +457,17 @@ export function TransactionHistoryView() {
                                     -{formatAmount(summaryData.outboundSums[currencyFilter] || 0)} {currencyFilter}
                                 </span>
                             </>
-                        ) : (
-                            Object.keys(summaryData.inboundSums).length > 0 && (
-                                <div className="flex items-center gap-2">
-                                    {Object.entries(summaryData.inboundSums).map(([unit, inVal]) => {
+                        ) : (() => {
+                            const summaryUnits = Array.from(
+                                new Set([
+                                    ...Object.keys(summaryData.inboundSums),
+                                    ...Object.keys(summaryData.outboundSums),
+                                ])
+                            ).sort();
+                            return summaryUnits.length > 0 ? (
+                                <div className="flex flex-wrap items-center gap-3">
+                                    {summaryUnits.map((unit) => {
+                                        const inVal = summaryData.inboundSums[unit] || 0;
                                         const outVal = summaryData.outboundSums[unit] || 0;
                                         return (
                                             <span key={unit} className="text-[11px] font-semibold text-theme-light">
@@ -472,8 +479,8 @@ export function TransactionHistoryView() {
                                         );
                                     })}
                                 </div>
-                            )
-                        )}
+                            ) : null;
+                        })()}
                     </div>
                 </div>
 
@@ -816,12 +823,37 @@ export function TransactionHistoryView() {
                                 </div>
                             );
                         }) : (
-                            <div className="text-center py-16 bg-white/40 backdrop-blur-sm border border-dashed border-theme-subtle rounded-3xl">
-                                <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-theme-subtle/20 text-theme-light mb-3">
+                            <div className="text-center py-14 px-6 bg-white/40 backdrop-blur-sm border border-dashed border-theme-subtle rounded-3xl space-y-3">
+                                <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-theme-subtle/20 text-theme-light">
                                     <Info size={28} />
                                 </div>
                                 <p className="text-theme-secondary font-bold text-sm">{t('history.noMatchingTx')}</p>
-                                <p className="text-xs text-theme-light mt-1">{t('history.adjustFilter')}</p>
+                                <p className="text-xs text-theme-light">{t('history.adjustFilter')}</p>
+                                <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                                    {history.length > 0 ? (
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => {
+                                                setSearchQuery('');
+                                                setDirectionFilter('all');
+                                                setCurrencyFilter('all');
+                                                setPeriodFilter('all');
+                                            }}
+                                        >
+                                            {t('voucher.filter.reset')}
+                                        </Button>
+                                    ) : (
+                                        <>
+                                            <Button variant="primary" size="sm" onClick={() => navigate({ view: 'create_voucher', previousView: { view: 'transaction_history' } })}>
+                                                {t('voucher.create')}
+                                            </Button>
+                                            <Button variant="outline" size="sm" onClick={() => navigate({ view: 'receive_bundle' })}>
+                                                {t('transfer.receive')}
+                                            </Button>
+                                        </>
+                                    )}
+                                </div>
                             </div>
                         )}
                     </div>

@@ -58,9 +58,11 @@ export function CreatorSection({
               {creator.phone && <div>{creator.phone}</div>}
               {creator.url && <a href={creator.url} target="_blank" rel="noopener noreferrer" className="text-theme-primary hover:underline block">{creator.url}</a>}
             </InfoRow>
-            <InfoRow label={t('voucher.genderOrientationLabel')}>
-              {creator.gender === "1" ? t('gender.male') : creator.gender === "2" ? t('gender.female') : creator.gender === "0" ? t('gender.notKnown') : creator.gender === "9" ? t('gender.notApplicable') : t('common.unknown')}
-            </InfoRow>
+            {(creator.gender === "1" || creator.gender === "2") && (
+              <InfoRow label={t('voucher.genderOrientationLabel')}>
+                {creator.gender === "1" ? t('gender.male') : t('gender.female')}
+              </InfoRow>
+            )}
             <InfoRow label={t('voucher.reputationStatusLabel')}>
               {typeof trustStatus === 'object' && trustStatus !== null && 'knownOffender' in trustStatus ? (
                 <span className="text-rose-500 font-black uppercase text-[10px] tracking-widest flex items-center gap-2">

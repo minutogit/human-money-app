@@ -82,7 +82,7 @@ type SendAction =
     | { type: 'TOGGLE_PROFILE_NAME'; value: boolean }
     | { type: 'SET_SENDER_NAME'; name: string }
     | { type: 'SET_TARGET_AMOUNT'; amount: string }
-    | { type: 'SET_STANDARD'; id: string | null; isTest: boolean | null }
+    | { type: 'SET_STANDARD'; id: string | null; isTest: boolean | null; preserveAmount?: boolean }
     | { type: 'SET_PRIVACY'; mode: 'public' | 'stealth' | null }
     | { type: 'SET_PROCESSING'; value: boolean }
     | { type: 'SET_FEEDBACK'; msg: string }
@@ -113,7 +113,7 @@ function reducer(state: SendState, action: SendAction): SendState {
         case 'TOGGLE_PROFILE_NAME': return { ...state, sendProfileName: action.value };
         case 'SET_SENDER_NAME': return { ...state, customSenderName: action.name };
         case 'SET_TARGET_AMOUNT': return { ...state, targetAmountStr: action.amount };
-        case 'SET_STANDARD': return { ...state, selectedStandardId: action.id, selectedIsTest: action.isTest, targetAmountStr: "" };
+        case 'SET_STANDARD': return { ...state, selectedStandardId: action.id, selectedIsTest: action.isTest, targetAmountStr: action.preserveAmount ? state.targetAmountStr : "" };
         case 'SET_PRIVACY': return { ...state, privacyMode: action.mode, privacyError: false };
         case 'SET_PROCESSING': return { ...state, isProcessing: action.value };
         case 'SET_FEEDBACK': return { ...state, feedbackMsg: action.msg };
@@ -177,7 +177,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
     const [hasPublishedCard, setHasPublishedCard] = useState(false);
     const [sendCardOverride, setSendCardOverride] = useState<boolean | null>(null);
 
-    const { selectedMap, toggleVoucher, setVoucherAmount, selectAmount, selectionStats, currentPlan, autoSelectGravitational } = useVoucherSelection(availableVouchers);
+    const { selectedMap, toggleVoucher, setVoucherAmount, selectAmount, clearSelection, selectionStats, currentPlan, autoSelectGravitational } = useVoucherSelection(availableVouchers);
     const detectedPrivacy = usePrivacyDetection(
         Array.from(selectedMap.keys()),
         availableVouchers,
@@ -277,7 +277,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                 setOwnUserId(userId);
                 setAppSettings(settings);
                 setContacts(fetchedContacts);
-                setActiveAssetClasses(activeClasses);
+                setActiveAssetClasses(activeClasses || []);
                 if (initialVoucherId) {
                     const targetVoucher = activeVouchers.find((v: VoucherSummary) => v.localInstanceId === initialVoucherId);
                     if (targetVoucher) {
@@ -286,10 +286,10 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                         dispatch({ type: 'SET_TARGET_AMOUNT', amount: targetVoucher.currentAmount });
                         toggleVoucher(targetVoucher.localInstanceId, targetVoucher.currentAmount);
                     }
-                } else if (activeClasses.length > 0) {
-                    const firstClass = activeClasses[0];
+                } else if (activeClasses && activeClasses.length > 0) {
+                    const firstClass = activeClasses.find((c: AssetClassSummary) => !c.isTestVoucher) || activeClasses[0];
                     const stdId = [...newIdMap.entries()].find(([, uuid]) => uuid === firstClass.standardUuid)?.[0] || firstClass.standardUuid;
-                    dispatch({ type: 'SET_STANDARD', id: stdId, isTest: firstClass.isTestVoucher });
+                    dispatch({ type: 'SET_STANDARD', id: stdId, isTest: firstClass.isTestVoucher, preserveAmount: true });
                 }
             } catch (e) {
                 if (!active) return;
@@ -354,13 +354,13 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
         const voucher = filteredVouchers[0];
         const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4) : 4;
         const timer = setTimeout(() => {
-            autoSelectGravitational(amountStr, recipient, standardUuid, precision).catch((e) => {
+            autoSelectGravitational(amountStr, recipient, standardUuid, precision, state.selectedIsTest).catch((e) => {
                 if (!active) return;
                 logger.error(`Gravitational auto-select failed: ${stringifyError(e)}`);
                 // Fallback to legacy greedy selection on error
                 const val = parseFloat(amountStr);
                 if (!isNaN(val) && val > 0 && voucher) {
-                    selectAmount(val, voucher.displayCurrency, precision);
+                    selectAmount(val, voucher.displayCurrency, precision, state.selectedIsTest, standardUuid);
                 }
             });
         }, 400);
@@ -372,14 +372,30 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
 
     const handleTargetAmountChange = (valStr: string) => {
         dispatch({ type: 'SET_TARGET_AMOUNT', amount: valStr });
-        // Auto-selection übernimmt die Auswahl via Effekt; kein direkter selectAmount-Aufruf nötig.
-        // Fallback für fehlenden Empfänger: lokale Greedy-Auswahl sofort, damit UI nicht leer wirkt
+        let effectiveStandardId = state.selectedStandardId;
+        let effectiveIsTest = state.selectedIsTest;
+
+        if (!effectiveStandardId && activeAssetClasses.length > 0) {
+            const preferredClass = activeAssetClasses.find((c: AssetClassSummary) => !c.isTestVoucher) || activeAssetClasses[0];
+            effectiveStandardId = [...standardIdToUuidMap.entries()].find(([, uuid]) => uuid === preferredClass.standardUuid)?.[0] || preferredClass.standardUuid;
+            effectiveIsTest = preferredClass.isTestVoucher;
+            dispatch({ type: 'SET_STANDARD', id: effectiveStandardId, isTest: effectiveIsTest, preserveAmount: true });
+        }
+
+        // Auto-selection triggers via effect when recipient is entered;
+        // fallback for missing/incomplete recipient: immediate local selection keeping Test/Real isolated
         if (state.recipientId.trim().length < 10) {
             const val = parseFloat(valStr);
-            if (!isNaN(val) && val > 0 && filteredVouchers[0]) {
-                const voucher = filteredVouchers[0];
-                const precision = uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4;
-                selectAmount(val, voucher.displayCurrency, precision);
+            const effectiveStandardUuid = effectiveStandardId
+                ? (standardIdToUuidMap.get(effectiveStandardId) || effectiveStandardId)
+                : null;
+            const matchingVoucher = availableVouchers.find(v =>
+                (!effectiveStandardUuid || v.voucherStandardUuid === effectiveStandardUuid) &&
+                (effectiveIsTest === null || v.isTestVoucher === effectiveIsTest)
+            );
+            if (!isNaN(val) && val > 0 && matchingVoucher) {
+                const precision = uuidToPrecisionMap.get(matchingVoucher.voucherStandardUuid) ?? 4;
+                selectAmount(val, matchingVoucher.displayCurrency, precision, effectiveIsTest, effectiveStandardUuid);
             }
         }
     };
@@ -789,7 +805,18 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                             activeAssetClasses={activeAssetClasses}
                             selectedStandardId={state.selectedStandardId}
                             selectedIsTest={state.selectedIsTest}
-                            onStandardSelect={(id, isTest) => dispatch({ type: 'SET_STANDARD', id, isTest })}
+                            onStandardSelect={(id, isTest) => {
+                                if (isTest !== null && selectedMap.size > 0) {
+                                    const hasOppositeRealm = Array.from(selectedMap.keys()).some(vId => {
+                                        const found = availableVouchers.find(v => v.localInstanceId === vId);
+                                        return found && Boolean(found.isTestVoucher) !== Boolean(isTest);
+                                    });
+                                    if (hasOppositeRealm) {
+                                        clearSelection();
+                                    }
+                                }
+                                dispatch({ type: 'SET_STANDARD', id, isTest });
+                            }}
                             targetAmountStr={state.targetAmountStr}
                             onTargetAmountChange={handleTargetAmountChange}
                             selection={selectedMap}
@@ -797,6 +824,8 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                             onAmountChange={handleAmountChange}
                             uuidToPrecisionMap={uuidToPrecisionMap}
                             standardIdToUuidMap={standardIdToUuidMap}
+                            onCreateVoucher={() => navigate({ view: 'create_voucher' })}
+                            onReceiveVoucher={() => navigate({ view: 'receive_bundle' })}
                         />
 
                         {currentPlan && (

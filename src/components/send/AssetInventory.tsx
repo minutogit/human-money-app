@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Coins, Filter, CreditCard } from 'lucide-react';
+import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { VoucherCard } from '../ui/VoucherCard';
@@ -18,6 +19,8 @@ interface AssetInventoryProps {
   onAmountChange: (id: string, amt: string, max: string) => void;
   uuidToPrecisionMap: Map<string, number>;
   standardIdToUuidMap: Map<string, string>;
+  onCreateVoucher?: () => void;
+  onReceiveVoucher?: () => void;
 }
 
 export function AssetInventory({
@@ -32,9 +35,20 @@ export function AssetInventory({
   onVoucherToggle,
   onAmountChange,
   uuidToPrecisionMap,
-  standardIdToUuidMap
+  standardIdToUuidMap,
+  onCreateVoucher,
+  onReceiveVoucher,
 }: AssetInventoryProps) {
   const { t } = useTranslation();
+  const selectedClass = selectedStandardId
+    ? activeAssetClasses.find(g => {
+        const stdUuid = standardIdToUuidMap.get(selectedStandardId) || selectedStandardId;
+        return g.standardUuid === stdUuid && (selectedIsTest === null || g.isTestVoucher === selectedIsTest);
+      })
+    : undefined;
+  const fallbackClass = activeAssetClasses.find(g => !g.isTestVoucher) ?? activeAssetClasses[0];
+  const displayCurrencyUnit = filteredVouchers[0]?.displayCurrency ?? selectedClass?.displayCurrency ?? fallbackClass?.displayCurrency ?? '';
+  const hasAnyActiveVouchers = activeAssetClasses.length > 0 || filteredVouchers.length > 0;
   return (
     <Card header={
       <div className="flex items-center gap-2">
@@ -68,7 +82,7 @@ export function AssetInventory({
           })}
         </div>
 
-        {selectedStandardId && (
+        {hasAnyActiveVouchers && (
           <div className="space-y-3 animate-in slide-in-from-top-2">
             <label htmlFor="target-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.targetAmount')}</label>
             <div className="relative">
@@ -81,7 +95,7 @@ export function AssetInventory({
                 className="py-5 px-6 rounded-3xl font-black text-2xl tracking-tighter" 
               />
               <div className="absolute right-6 top-1/2 -translate-y-1/2 font-black text-theme-primary uppercase tracking-widest">
-                {filteredVouchers[0]?.displayCurrency}
+                {displayCurrencyUnit}
               </div>
             </div>
             <p className="text-[10px] font-bold text-theme-light italic text-center">{t('transfer.autoSelection')}</p>
@@ -116,9 +130,23 @@ export function AssetInventory({
                 />
               );
             }) : (
-              <div className="text-center py-10 bg-slate-50 rounded-[32px] border-2 border-dashed border-slate-200">
-                <CreditCard className="mx-auto text-slate-300 mb-2" size={32} />
+              <div className="text-center py-10 px-4 bg-slate-50 rounded-[32px] border-2 border-dashed border-slate-200 space-y-3">
+                <CreditCard className="mx-auto text-slate-300" size={32} />
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('transfer.inventoryDepleted')}</p>
+                {activeAssetClasses.length === 0 && (onCreateVoucher || onReceiveVoucher) && (
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                    {onCreateVoucher && (
+                      <Button type="button" variant="primary" size="xs" onClick={onCreateVoucher}>
+                        {t('voucher.create')}
+                      </Button>
+                    )}
+                    {onReceiveVoucher && (
+                      <Button type="button" variant="outline" size="xs" onClick={onReceiveVoucher}>
+                        {t('transfer.receive')}
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>

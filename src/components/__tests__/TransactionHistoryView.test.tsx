@@ -303,4 +303,41 @@ describe('TransactionHistoryView', () => {
             expect(screen.getByText('history.exportCsvSuccess')).toBeInTheDocument();
         });
     });
+
+    it('renders per-currency summary entries even when a currency has only outbound amounts', async () => {
+        vi.mocked(transferService.getHistory).mockResolvedValue([
+            {
+                id: 'tx-in-ft',
+                direction: 'received',
+                senderId: 'did:key:zBob123456',
+                recipientId: 'did:key:zMe',
+                timestamp: '2026-11-10T10:00:00Z',
+                summableAmounts: { FreeTaler: '10' },
+                countableItems: {},
+                bundleId: 'bundle-ft-in',
+                involvedVouchers: [],
+            },
+            {
+                id: 'tx-out-min',
+                direction: 'sent',
+                senderId: 'did:key:zMe',
+                recipientId: 'did:key:zAlice123456',
+                timestamp: '2026-11-11T10:00:00Z',
+                summableAmounts: { Minuto: '60' },
+                countableItems: {},
+                bundleId: 'bundle-min-out',
+                involvedVouchers: [],
+            },
+        ]);
+
+        render(<TransactionHistoryView />);
+
+        await waitFor(() => {
+            const summaryLabel = screen.getByText('history.summaryBookings:2');
+            const summaryBar = summaryLabel.parentElement?.parentElement;
+            expect(summaryBar).not.toBeNull();
+            expect(summaryBar!.textContent).toMatch(/\+10[.,]00\s*\/\s*-0[.,]00 FreeTaler/);
+            expect(summaryBar!.textContent).toMatch(/\+0[.,]00\s*\/\s*-60[.,]00 Minuto/);
+        });
+    });
 });

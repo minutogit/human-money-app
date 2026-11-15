@@ -39,10 +39,8 @@ export function WotNetworkOptionsPanel({
             case 2:
                 return t('contacts.wotReachAudience2', 'Deine Kontakte und deren direkte Kontakte (Freunde von Freunden).');
             case 3:
-                return t('contacts.wotReachAudience3', 'Dein erweitertes Umfeld über bis zu drei Stufen.');
-            case 4:
             default:
-                return t('contacts.wotReachAudience4', 'Das gesamte erreichbare Netzwerk (maximale Weiterleitung).');
+                return t('contacts.wotReachAudience3', 'Dein erweitertes Umfeld über bis zu drei Stufen.');
         }
     })();
 
@@ -70,12 +68,11 @@ export function WotNetworkOptionsPanel({
                         </p>
                     </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         {[
                             { hops: 1, labelKey: 'contacts.wotHops1' },
                             { hops: 2, labelKey: 'contacts.wotHops2' },
                             { hops: 3, labelKey: 'contacts.wotHops3' },
-                            { hops: 4, labelKey: 'contacts.wotHops4' },
                         ].map(({ hops, labelKey }) => {
                             const isSelected = currentMaxHops === hops;
                             return (

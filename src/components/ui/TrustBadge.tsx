@@ -103,7 +103,7 @@ export const TrustBadge: React.FC<TrustBadgeProps> = ({
     colorClasses = 'bg-sky-50 text-sky-700 border-sky-200';
     Icon = ShieldCheck;
     label = t('voucher.trustOwn');
-  } else if (trust.trustPercent === 0) {
+  } else if (typeof trust.trustPercent !== 'number' || trust.trustPercent <= 0) {
     colorClasses = 'bg-slate-100 text-slate-600 border-slate-200';
     Icon = Shield;
     label = t('voucher.trustUnknown');

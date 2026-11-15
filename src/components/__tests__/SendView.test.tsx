@@ -449,5 +449,88 @@ amount_decimal_places = 4`,
       expect(createBundleArgs?.senderProfileName).toBeNull();
     });
   });
+
+  it('keeps #target-amount visible even when "All" standard filter is active and auto-selects when typing', async () => {
+    render(<SendView />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('FreeTaler').length).toBeGreaterThan(0);
+    });
+
+    // Click "All" pill (sets selectedStandardId = null)
+    const allPill = screen.getByRole('button', { name: /All|Alle/i });
+    fireEvent.click(allPill);
+
+    const amountInput = document.getElementById('target-amount') as HTMLInputElement | null;
+    expect(amountInput).toBeInTheDocument();
+
+    fireEvent.change(amountInput!, { target: { value: '25' } });
+    await waitFor(() => {
+      expect(amountInput).toHaveValue(25);
+      expect(screen.getByText(/1 Vouchers Selected/i)).toBeInTheDocument();
+    });
+  });
+
+  it('never mixes real and test vouchers of the same standard in selection', async () => {
+    const mixedVouchers: VoucherSummary[] = [
+      {
+        ...mockVouchers[0],
+        localInstanceId: 'real-voucher-1',
+        currentAmount: '50.00',
+        isTestVoucher: false,
+        validUntil: '2026-12-31',
+      },
+      {
+        ...mockVouchers[0],
+        localInstanceId: 'test-voucher-1',
+        currentAmount: '100.00',
+        isTestVoucher: true,
+        validUntil: '2026-06-30',
+      },
+    ];
+
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_summaries') return Promise.resolve(mixedVouchers);
+      if (cmd === 'get_user_id') return Promise.resolve('did:key:z789');
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_active_asset_classes') {
+        return Promise.resolve([
+          {
+            standardUuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
+            isTestVoucher: true,
+            displayStandardName: 'FreeTaler (Test)',
+            displayCurrency: 'Taler',
+          },
+          {
+            standardUuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
+            isTestVoucher: false,
+            displayStandardName: 'FreeTaler',
+            displayCurrency: 'Taler',
+          },
+        ]);
+      }
+      if (cmd === 'get_user_profile') return Promise.resolve({ firstName: 'Test', lastName: 'User' });
+      return Promise.resolve(undefined);
+    });
+
+    render(<SendView />);
+
+    await waitFor(() => {
+      expect(document.getElementById('target-amount')).toBeInTheDocument();
+    });
+
+    // Type an amount greater than the single 50 real voucher: must NOT pull in test-voucher-1
+    const amountInput = document.getElementById('target-amount') as HTMLInputElement;
+    fireEvent.change(amountInput, { target: { value: '120' } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/1 Vouchers Selected/i)).toBeInTheDocument();
+      // Only the 1 real voucher (50.00) is selected, not 2 (150.00)
+      expect(screen.queryByText(/2 Vouchers Selected/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/150[.,]00/)).not.toBeInTheDocument();
+    });
+  });
 });
 

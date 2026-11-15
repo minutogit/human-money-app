@@ -555,21 +555,16 @@ export function Dashboard() {
                         </Card>
                     )}
 
-                    {integrityReport && integrityReport.type !== 'valid' && (() => {
+                    {integrityReport && integrityReport.type !== 'valid' && integrityReport.type !== 'missingIntegrityRecord' && (() => {
                         const details = getIntegrityDetails(integrityReport);
-                        const isSoft = integrityReport.type === 'unknownItems' || integrityReport.type === 'missingIntegrityRecord';
                         return (
                             <Card 
                                 variant="glass" 
-                                className={`py-3 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-l-4 ${
-                                    isSoft ? 'border-l-blue-500 bg-blue-50/40' : 'border-l-red-500 bg-red-50/40'
-                                }`}
+                                className="py-3 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-l-4 border-l-amber-500 bg-amber-50/60"
                                 data-testid="security-warning-card"
                             >
                                 <div className="flex items-start gap-3 min-w-0">
-                                    <div className={`p-2 rounded-xl shrink-0 mt-0.5 ${
-                                        isSoft ? 'bg-blue-500 text-white' : 'bg-red-500 text-white'
-                                    }`}>
+                                    <div className="p-2 rounded-xl shrink-0 mt-0.5 bg-amber-500 text-white">
                                         <ShieldAlert size={20} />
                                     </div>
                                     <div className="min-w-0 space-y-1">
@@ -579,7 +574,6 @@ export function Dashboard() {
                                         <p className="text-xs text-theme-light">
                                             {details.desc}
                                         </p>
-                                        <InfoHint topic={details.topic} />
                                     </div>
                                 </div>
                                 <Button
@@ -587,7 +581,7 @@ export function Dashboard() {
                                     size="xs"
                                     onClick={() => setShowIntegrityModal(true)}
                                     data-testid="fix-integrity-button"
-                                    className="shrink-0 self-end sm:self-center bg-rose-600 hover:bg-rose-700 text-white"
+                                    className="shrink-0 self-end sm:self-center bg-amber-600 hover:bg-amber-700 text-white"
                                 >
                                     {t('dashboard.fixNow', 'Jetzt beheben')}
                                 </Button>
@@ -958,9 +952,25 @@ export function Dashboard() {
                                 </Card>
                             );
                         }) : (
-                            <div className="text-center py-12 px-6">
-                                <Card variant="none" className="border-2 border-dashed border-theme-subtle p-8 opacity-50">
+                            <div className="text-center py-8 px-6">
+                                <Card variant="none" className="border-2 border-dashed border-theme-subtle p-8 space-y-4">
                                     <p className="text-sm font-bold uppercase tracking-widest text-theme-placeholder">{t('dashboard.noRecentActivity')}</p>
+                                    <div className="flex flex-wrap items-center justify-center gap-2">
+                                        <Button
+                                            variant="primary"
+                                            size="sm"
+                                            onClick={() => navigate({ view: 'create_voucher', previousView: { view: 'logged_in' } })}
+                                        >
+                                            {t('voucher.create')}
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => navigate({ view: 'receive_bundle' })}
+                                        >
+                                            {t('transfer.receive')}
+                                        </Button>
+                                    </div>
                                 </Card>
                             </div>
                         )}

@@ -1,6 +1,11 @@
 // scripts/tour-catalog.mjs
 // Canonical tour steps and Tauri mock initialization script for HuMoCo UI Tour & Audit.
 
+import fs from 'node:fs';
+
+const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+export const APP_VERSION = pkg.version;
+
 export const MOCK_USER_DID = 'did:key:z6MkuSLmPtN3yDiCuPebk3Y7Y4YtK8m5eALICE';
 export const MOCK_RECIPIENT_DID = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doKBOB';
 export const MOCK_CAROL_DID = 'did:key:z6MktfW8w21oXgD9z5mNuZ2gR5c7bW5vE9k1mP4jL8yQCAROL';
@@ -466,7 +471,16 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             displayCurrency: "Minuto",
             displayStandardName: "Minuto Standard",
             allowPartialTransfers: true,
-            trust: { trustScore: 0.85, level: 3, directEndorsements: 3 }
+            trust: {
+                score: 0.85,
+                trustPercent: 85,
+                isOwnVoucher: true,
+                blockedByOffender: false,
+                shortestHops: 0,
+                additionalPathsCount: 0,
+                viaGuarantor: false,
+                bestPathNames: ["Alice Musterfrau"],
+            }
         },
         {
             localInstanceId: "inst_sample_02",
@@ -487,7 +501,17 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             displayCurrency: "FreeTaler",
             displayStandardName: "FreeTaler Standard",
             allowPartialTransfers: true,
-            trust: { trustScore: 0.60, level: 2, directEndorsements: 2 }
+            trust: {
+                score: 0.60,
+                trustPercent: 60,
+                isOwnVoucher: false,
+                blockedByOffender: false,
+                shortestHops: 1,
+                primaryBridgeName: "Bob Baumeister",
+                additionalPathsCount: 1,
+                viaGuarantor: false,
+                bestPathNames: ["Bob Baumeister"],
+            }
         }
     ];
 
@@ -497,7 +521,17 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         displayCurrency: "Minuto",
         displayStandardName: "Minuto Standard",
         isTestVoucher: false,
-        trust: { trustScore: 0.85, level: 3, directEndorsements: 3 },
+        trust: {
+            score: 0.85,
+            trustPercent: 85,
+            isOwnVoucher: false,
+            blockedByOffender: false,
+            shortestHops: 1,
+            primaryBridgeName: "Bob Baumeister",
+            additionalPathsCount: 1,
+            viaGuarantor: false,
+            bestPathNames: ["Bob Baumeister"],
+        },
         voucher: {
             voucherStandard: {
                 name: "Minuto",
@@ -1291,16 +1325,16 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
 
         // --- Logs & Diagnostics ---
         "get_latest_logs": () => [
-            "[INFO] HuMoCo Core v0.5.1 initialized with strict L1 autonomy",
+            "[INFO] HuMoCo Core v${APP_VERSION} initialized with strict L1 autonomy",
             "[INFO] SST V4 Trap verification: deterministic double-spend protection armed",
             "[INFO] Connected to 3/3 configured L2 Collision Lock nodes (14/20 mesh quorum ready)",
             "[DEBUG] Background PostBox poll: 1 pending item retrieved (latency 22ms)",
-            "[DEBUG] Web of Trust SD-JWT sync completed: 2 contacts verified (depth=3)"
+            "[DEBUG] Web of Trust SD-JWT sync completed: 2 contacts verified (depth=2)"
         ].join("\\n"),
         "log_to_backend": () => null,
 
         // --- Tauri Plugins ---
-        "plugin:app|version": () => "0.5.1",
+        "plugin:app|version": () => "${APP_VERSION}",
         "plugin:app|name": () => "HuMoCo Wallet",
         "plugin:app|tauri_version": () => "2.11.0",
         "plugin:log|log": () => null,

@@ -275,9 +275,25 @@ export function WalletView() {
                             </VoucherCard>
                         );
                     }) : (
-                        <div className="text-center py-20 bg-white/50 rounded-3xl border-2 border-dashed border-theme-subtle/50">
-                            <History size={48} className="mx-auto text-theme-light opacity-20 mb-4" />
+                        <div className="text-center py-16 px-6 bg-white/50 rounded-3xl border-2 border-dashed border-theme-subtle/50 space-y-4">
+                            <History size={48} className="mx-auto text-theme-light opacity-20" />
                             <p className="text-sm font-black text-theme-placeholder uppercase tracking-[0.2em]">{t('wallet.noVouchersFound')}</p>
+                            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                                {vouchers.length > 0 ? (
+                                    <Button variant="outline" size="sm" onClick={resetFilters}>
+                                        {t('voucher.filter.reset')}
+                                    </Button>
+                                ) : (
+                                    <>
+                                        <Button variant="primary" size="sm" onClick={() => navigate({ view: 'create_voucher', previousView: appState })}>
+                                            {t('voucher.create')}
+                                        </Button>
+                                        <Button variant="outline" size="sm" onClick={() => navigate({ view: 'receive_bundle' })}>
+                                            {t('transfer.receive')}
+                                        </Button>
+                                    </>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>

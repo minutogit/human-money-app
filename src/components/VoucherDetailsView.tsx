@@ -492,18 +492,6 @@ export function VoucherDetailsView() {
                         </div>
                         
                         <div className="flex flex-col gap-3 w-full md:w-auto">
-                            {statusInfo?.id === 'active' && (
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={handleCheckL2Status}
-                                    disabled={isCheckingL2}
-                                    className="bg-white/60 hover:bg-white/80 border-theme-subtle text-xs font-bold gap-1.5"
-                                >
-                                    {isCheckingL2 ? <Clock className="animate-spin" size={14} /> : <Shield size={14} />}
-                                    {isCheckingL2 ? t('voucher.checkingL2Status') : t('voucher.checkL2Status')}
-                                </Button>
-                            )}
                             {l2Error && (
                                 <p className="text-[10px] font-bold text-rose-500 max-w-[200px] truncate">{l2Error}</p>
                             )}

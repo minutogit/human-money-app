@@ -591,7 +591,7 @@ impl AppState {
             }
         };
 
-        reg.policy.own_list_max_hops = reg.policy.own_list_max_hops.clamp(1, 4);
+        reg.policy.own_list_max_hops = reg.policy.own_list_max_hops.clamp(1, 3);
         reg.policy.max_eval_depth = reg.policy.max_eval_depth.max(5);
         reg.policy.max_import_depth = reg.policy.max_import_depth.max(5);
         for entry in reg.own_contacts.values_mut() {

@@ -6,14 +6,27 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
   const [selectedMap, setSelectedMap] = useState<Map<string, string>>(new Map());
   const [currentPlan, setCurrentPlan] = useState<TransferPlan | null>(null);
   const latestRequestId = useRef(0);
+  const vouchersRef = useRef(vouchers);
+  vouchersRef.current = vouchers;
 
   const toggleVoucher = useCallback((localInstanceId: string, amount: string) => {
     setCurrentPlan(null);
+    const currentVouchers = vouchersRef.current;
+    const targetVoucher = currentVouchers.find(v => v.localInstanceId === localInstanceId);
     setSelectedMap(prev => {
       const next = new Map(prev);
       if (next.has(localInstanceId)) {
         next.delete(localInstanceId);
       } else {
+        if (targetVoucher) {
+          const targetIsTest = Boolean(targetVoucher.isTestVoucher);
+          for (const [id] of next.entries()) {
+            const existing = currentVouchers.find(v => v.localInstanceId === id);
+            if (existing && Boolean(existing.isTestVoucher) !== targetIsTest) {
+              next.delete(id);
+            }
+          }
+        }
         next.set(localInstanceId, amount);
       }
       return next;
@@ -30,45 +43,72 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     });
   }, []);
 
-  const selectAmount = useCallback((targetAmount: number, displayCurrency: string, precision: number = 4) => {
+  const selectAmount = useCallback((
+    targetAmount: number,
+    displayCurrency: string,
+    precision: number = 4,
+    isTest: boolean | null = null,
+    standardUuid: string | null = null
+  ) => {
     setCurrentPlan(null);
-    const relevantVouchers = vouchers
-      .filter(v => {
-        const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
-        return v.displayCurrency === displayCurrency && statusName.toLowerCase() === 'active';
-      })
-      .sort((a, b) => parseFloat(b.currentAmount) - parseFloat(a.currentAmount));
+    const matchingActive = vouchers.filter(v => {
+      const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
+      if (statusName.toLowerCase() !== 'active') return false;
+      if (standardUuid && v.voucherStandardUuid !== standardUuid) return false;
+      return v.displayCurrency === displayCurrency;
+    });
 
-    let accumulated = 0;
-    const newSelection = new Map(selectedMap);
+    const effectiveIsTest = isTest !== null
+      ? Boolean(isTest)
+      : matchingActive.some(v => !v.isTestVoucher)
+        ? false
+        : Boolean(matchingActive[0]?.isTestVoucher);
 
-    // Clear existing selection for this asset type to avoid duplicates/confusion during auto-select
-    for (const [id] of newSelection.entries()) {
-      const v = vouchers.find(v => v.localInstanceId === id);
-      if (v && v.displayCurrency === displayCurrency) {
-        newSelection.delete(id);
+    const relevantVouchers = matchingActive
+      .filter(v => Boolean(v.isTestVoucher) === effectiveIsTest)
+      .sort((a, b) => {
+        const dateA = a.validUntil || '9999-12-31';
+        const dateB = b.validUntil || '9999-12-31';
+        const dateCmp = dateA.localeCompare(dateB);
+        if (dateCmp !== 0) return dateCmp;
+        return parseFloat(b.currentAmount) - parseFloat(a.currentAmount);
+      });
+
+    setSelectedMap(prev => {
+      let accumulated = 0;
+      const newSelection = new Map(prev);
+
+      // Clear opposite test/real realm entries and existing entries for this currency/standard
+      for (const [id] of newSelection.entries()) {
+        const v = vouchers.find(item => item.localInstanceId === id);
+        if (!v) continue;
+        const matchesSameClass = v.displayCurrency === displayCurrency && (!standardUuid || v.voucherStandardUuid === standardUuid);
+        const oppositeTestRealm = Boolean(v.isTestVoucher) !== effectiveIsTest;
+        if (matchesSameClass || oppositeTestRealm) {
+          newSelection.delete(id);
+        }
       }
-    }
 
-    for (const v of relevantVouchers) {
-      if (accumulated >= targetAmount) break;
-      
-      const remainingNeeded = targetAmount - accumulated;
-      const voucherAmount = parseFloat(v.currentAmount);
+      for (const v of relevantVouchers) {
+        if (accumulated >= targetAmount) break;
 
-      if (v.allowPartialTransfers && voucherAmount > remainingNeeded) {
-        // Take only what's needed
-        newSelection.set(v.localInstanceId, remainingNeeded.toFixed(precision));
-        accumulated += remainingNeeded;
-      } else {
-        // Take full voucher
-        newSelection.set(v.localInstanceId, v.currentAmount);
-        accumulated += voucherAmount;
+        const remainingNeeded = targetAmount - accumulated;
+        const voucherAmount = parseFloat(v.currentAmount);
+
+        if (v.allowPartialTransfers && voucherAmount > remainingNeeded) {
+          // Take only what's needed
+          newSelection.set(v.localInstanceId, remainingNeeded.toFixed(precision));
+          accumulated += remainingNeeded;
+        } else {
+          // Take full voucher
+          newSelection.set(v.localInstanceId, v.currentAmount);
+          accumulated += voucherAmount;
+        }
       }
-    }
 
-    setSelectedMap(newSelection);
-  }, [vouchers, selectedMap]);
+      return newSelection;
+    });
+  }, [vouchers]);
 
   const clearSelection = useCallback(() => {
     setSelectedMap(new Map());
@@ -79,7 +119,8 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     targetAmountStr: string,
     recipientId: string,
     standardUuid: string | null = null,
-    precision: number = 4
+    precision: number = 4,
+    isTest: boolean | null = null
   ) => {
     const target = parseFloat(targetAmountStr);
     if (!target || target <= 0 || !recipientId || recipientId.trim().length < 10) {
@@ -93,15 +134,24 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
         recipientId: recipientId.trim()
       });
       if (requestId !== latestRequestId.current) return null;
+
+      // Guardrail: never allow mixed Test + Real vouchers from transfer plan
+      const selectedVouchers = plan.selected
+        .map(rv => vouchersRef.current.find(v => v.localInstanceId === rv.localInstanceId))
+        .filter((v): v is VoucherSummary => Boolean(v));
+      if (selectedVouchers.length > 0) {
+        const expectedIsTest = isTest !== null ? Boolean(isTest) : Boolean(selectedVouchers[0].isTestVoucher);
+        const hasMismatch = selectedVouchers.some(v => Boolean(v.isTestVoucher) !== expectedIsTest);
+        if (hasMismatch) {
+          setCurrentPlan(null);
+          throw new Error('Transfer plan mixed test and real vouchers');
+        }
+      }
+
       setCurrentPlan(plan);
 
       // Map plan to selectedMap with correct split amount handling
       const next = new Map<string, string>();
-      // Preserve selections of other asset classes not in plan? Replace only relevant class.
-      // For simplicity, replace entirely with plan selection (gravitational is full plan).
-      // But keep unrelated currencies if desired — here we replace all.
-      // To keep other currencies, we filter out currencies of plan first.
-      // For now, clear and set plan.
       let accumulated = 0;
       const targetNum = parseFloat(plan.target);
       for (let i = 0; i < plan.selected.length; i++) {
@@ -109,21 +159,13 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
         const isLast = i === plan.selected.length - 1;
         if (isLast && plan.needsSplit) {
           const remaining = targetNum - accumulated;
-          // Ensure remaining is positive and formatted with precision
           const remStr = remaining.toFixed(precision);
           next.set(rv.localInstanceId, remStr);
         } else {
           next.set(rv.localInstanceId, rv.amount);
           accumulated += parseFloat(rv.amount);
-          // For split case we already handled accumulated before, but for non-split we track
-          // If needsSplit, accumulated for earlier items still needed for remaining calc
-        }
-        // For needsSplit, we need accumulated of non-last items only; we already tracked
-        if (!isLast || !plan.needsSplit) {
-          // accumulated already updated for non-last; for last non-split already added
         }
       }
-      // If needsSplit we didn't add last full amount to accumulated before calc, but we used prior accumulated correctly
       setSelectedMap(next);
       return plan;
     } catch (e) {

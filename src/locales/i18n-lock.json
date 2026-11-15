@@ -3885,16 +3885,6 @@
       "en": "ai-translated"
     }
   },
-  "contacts.wotHops4": {
-    "source_text": "4 Hops",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
   "contacts.wotReachLabel": {
     "source_text": "Network Reach",
     "status": {
@@ -16757,7 +16747,7 @@
     }
   },
   "voucher.genderOrientationLabel": {
-    "source_text": "Gender Orientation",
+    "source_text": "Gender",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",

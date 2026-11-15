@@ -117,8 +117,8 @@ pub fn set_wot_max_hops_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendWotSummaryDto, FrontendError> {
-    if !(1..=4).contains(&max_hops) {
-        return Err(FrontendError::from("maxHops must be between 1 and 4".to_string()));
+    if !(1..=3).contains(&max_hops) {
+        return Err(FrontendError::from("maxHops must be between 1 and 3".to_string()));
     }
 
     let mut service = state.service.lock().unwrap();
@@ -684,14 +684,14 @@ mod tests {
             state.save_contact(&mut s, contact.clone(), Some(password)).unwrap();
         }
 
-        // Verify WoT register reflects level 2 and desired_hops 3
+        // Verify WoT register reflects level 2 and default desired_hops 2
         {
             let mut s = state.service.lock().unwrap();
             let reg = state.get_or_load_wot_register(&mut s, Some(password)).unwrap();
             let can_did = crate::state::canonicalize_did(&bob_did).unwrap();
             let entry = reg.own_contacts.get(&can_did).expect("Bob should be in own_contacts");
             assert_eq!(entry.level, 2);
-            assert_eq!(entry.desired_hops, 3);
+            assert_eq!(entry.desired_hops, 2);
         }
 
         // Verify summary
@@ -944,44 +944,44 @@ mod tests {
             alice_state.save_contact(&mut s, dave_contact, Some(password)).unwrap();
         }
 
-        // Verify initial state: Bob has desired_hops 3 (default own_list_max_hops), Dave has 0
+        // Verify initial state: Bob has desired_hops 2 (default own_list_max_hops), Dave has 0
         {
             let mut s = alice_state.service.lock().unwrap();
             let reg = alice_state.get_or_load_wot_register(&mut s, Some(password)).unwrap();
             let bob_can = crate::state::canonicalize_did(&bob_did).unwrap();
             let dave_can = crate::state::canonicalize_did(&dave_did).unwrap();
-            assert_eq!(reg.own_contacts.get(&bob_can).unwrap().desired_hops, 3);
+            assert_eq!(reg.own_contacts.get(&bob_can).unwrap().desired_hops, 2);
             assert_eq!(reg.own_contacts.get(&dave_can).unwrap().desired_hops, 0);
         }
 
-        // Verify bounds: 0 and 5 fail
+        // Verify bounds: 0 and 4 fail
         let err0 = set_wot_max_hops_impl(0, Some(password.to_string()), &alice_state);
         assert!(err0.is_err());
-        assert!(err0.unwrap_err().message.contains("maxHops must be between 1 and 4"));
+        assert!(err0.unwrap_err().message.contains("maxHops must be between 1 and 3"));
 
-        let err5 = set_wot_max_hops_impl(5, Some(password.to_string()), &alice_state);
-        assert!(err5.is_err());
-        assert!(err5.unwrap_err().message.contains("maxHops must be between 1 and 4"));
+        let err4 = set_wot_max_hops_impl(4, Some(password.to_string()), &alice_state);
+        assert!(err4.is_err());
+        assert!(err4.unwrap_err().message.contains("maxHops must be between 1 and 3"));
 
-        // Valid update: set to 2
-        let summary = set_wot_max_hops_impl(2, Some(password.to_string()), &alice_state).unwrap();
-        assert_eq!(summary.own_list_max_hops, 2);
+        // Valid update: set to 3
+        let summary = set_wot_max_hops_impl(3, Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(summary.own_list_max_hops, 3);
 
-        // Verify register: Bob updated to 2, Dave stayed 0
+        // Verify register: Bob updated to 3, Dave stayed 0
         {
             let mut s = alice_state.service.lock().unwrap();
             let reg = alice_state.get_or_load_wot_register(&mut s, Some(password)).unwrap();
             let bob_can = crate::state::canonicalize_did(&bob_did).unwrap();
             let dave_can = crate::state::canonicalize_did(&dave_did).unwrap();
-            assert_eq!(reg.policy.own_list_max_hops, 2);
-            assert_eq!(reg.own_contacts.get(&bob_can).unwrap().desired_hops, 2);
+            assert_eq!(reg.policy.own_list_max_hops, 3);
+            assert_eq!(reg.own_contacts.get(&bob_can).unwrap().desired_hops, 3);
             assert_eq!(reg.own_contacts.get(&dave_can).unwrap().desired_hops, 0);
         }
 
         // Verify cached contacts reflect updated desired_hops
         let cached = alice_state.get_cached_contacts().unwrap();
         let bob_cached = cached.iter().find(|c| c.did == bob_did).unwrap();
-        assert_eq!(bob_cached.desired_hops, Some(2));
+        assert_eq!(bob_cached.desired_hops, Some(3));
         let dave_cached = cached.iter().find(|c| c.did == dave_did).unwrap();
         assert_eq!(dave_cached.desired_hops, Some(0));
     }

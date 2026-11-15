@@ -232,7 +232,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
     };
 
     const handleSetMaxHops = async (hops: number) => {
-        const currentHops = wotSummary?.ownListMaxHops ?? 3;
+        const currentHops = wotSummary?.ownListMaxHops ?? 2;
         if (isUpdatingHops || hops === currentHops) return;
         setIsUpdatingHops(true);
         try {
@@ -599,7 +599,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
         return matchesSearch && matchesTag;
     });
 
-    const currentMaxHops = wotSummary?.ownListMaxHops ?? 3;
+    const currentMaxHops = wotSummary?.ownListMaxHops ?? 2;
 
     return (
         <PageLayout 
