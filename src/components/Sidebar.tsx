@@ -3,13 +3,15 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import Avatar from "boring-avatars";
 import logo from '../assets/logo.png';
-import { AppState } from '../types';
+import { AppState, UiMode } from '../types';
 import { useSession } from '../context/SessionContext';
 import { useNavigation } from '../context/NavigationContext';
+import { useUiMode } from '../context/UiModeContext';
 import { profileService } from '../services/profileService';
 import { integrityService } from '../services/integrityService';
 import { error } from "@tauri-apps/plugin-log";
 import { stringifyError } from '../utils/errorHelper';
+import { Disclosure } from './ui/Disclosure';
 import { 
   LayoutDashboard, 
   Wallet, 
@@ -19,7 +21,6 @@ import {
   Settings, 
   LogOut,
   ChevronRight,
-  ChevronDown,
   Heart,
   Bug,
   BookOpen,
@@ -53,37 +54,30 @@ export interface SidebarProps {
   openClaimsCount?: number;
 }
 
+interface NavItem {
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  view: AppState;
+  mode?: UiMode;
+}
+
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
   const { t } = useTranslation();
   const { isSessionActive, isAuthenticated, profileName, notifyLogout, protectAction, lockSession } = useSession();
   const { appState, navigate, appVersion, isSidebarOpen, setSidebarOpen } = useNavigation();
+  const { isExpert } = useUiMode();
   const currentView = appState.view;
   const isLoggedIn = isAuthenticated ?? isSessionActive;
 
   // Local state for fetched conflicts count if not passed via props
   const [fetchedClaimsCount, setFetchedClaimsCount] = useState<number>(0);
   const effectiveOpenClaims = openClaimsCount !== undefined ? openClaimsCount : fetchedClaimsCount;
-
-  // Collapsible 'Mehr' state - collapsed by default, stored in localStorage
-  const [isMoreOpen, setIsMoreOpen] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('humoco_sidebar_more_open') === 'true';
-    } catch {
-      return false;
-    }
-  });
-
-  const toggleMore = () => {
-    setIsMoreOpen((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem('humoco_sidebar_more_open', String(next));
-      } catch {
-        // ignore best-effort storage
-      }
-      return next;
-    });
-  };
 
   useEffect(() => {
     if (openClaimsCount !== undefined || !isLoggedIn) return;
@@ -111,7 +105,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
     navigate({ view: "needs_login" });
   };
 
-  const navGroups = [
+  const navGroups: NavGroup[] = [
     {
       label: t('sidebar.groupOverview', 'Übersicht'),
       items: [
@@ -214,19 +208,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
 
         {/* Navigation Content */}
         <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-4 pb-8 space-y-6 scrollbar-hide">
-          {navGroups.map((group) => (
+          {navGroups.map((group) => {
+            const visibleItems = group.items.filter(
+              (item) => item.mode !== 'expert' || isExpert
+            );
+            if (visibleItems.length === 0) return null;
+            return (
             <div key={group.label} className="space-y-2">
               <h3 className="px-4 text-[11px] font-bold text-theme-placeholder uppercase tracking-[0.15em]">
                 {group.label}
               </h3>
               <div className="space-y-1">
-                {group.items.map((item) => {
+                {visibleItems.map((item) => {
                   const active = isActive(item.id);
                   return (
                     <button
                       key={item.id}
                       onClick={() => {
-                        navigate(item.view as AppState);
+                        navigate(item.view);
                         setSidebarOpen(false);
                       }}
                       className={`w-full group flex items-center justify-between px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer ${
@@ -250,7 +249,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
 
           {/* Conditional Konflikte entry above 'Mehr' when open claims > 0 */}
           {effectiveOpenClaims > 0 && (
@@ -283,32 +283,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
           )}
 
           {/* Collapsible 'Mehr' section */}
-          <div className="space-y-2 pt-2 border-t border-theme-subtle/40">
-            <button
-              type="button"
-              onClick={toggleMore}
-              className="w-full flex items-center justify-between px-4 py-2 text-[11px] font-bold text-theme-placeholder uppercase tracking-[0.15em] hover:text-theme-primary transition-colors cursor-pointer"
-              aria-expanded={isMoreOpen}
-              data-testid="sidebar-more-toggle"
-            >
-              <div className="flex items-center gap-2">
-                <span>{t('sidebar.groupMore', 'Mehr')}</span>
-                {!isMoreOpen && effectiveOpenClaims > 0 && (
-                  <span
-                    className="w-2 h-2 rounded-full bg-rose-500 shrink-0 animate-pulse"
-                    data-testid="sidebar-more-indicator-dot"
-                    title={t('conflict.fraudReports')}
-                  />
-                )}
-              </div>
-              <ChevronDown
-                size={14}
-                className={`transition-transform duration-200 ${isMoreOpen ? 'rotate-180' : ''}`}
-              />
-            </button>
-
-            {isMoreOpen && (
-              <div className="space-y-1 animate-in fade-in duration-150" data-testid="sidebar-more-content">
+          <Disclosure
+            storageKey="humoco_sidebar_more_open"
+            toggleTestId="sidebar-more-toggle"
+            contentTestId="sidebar-more-content"
+            indicatorDot={effectiveOpenClaims > 0}
+            indicatorDotTestId="sidebar-more-indicator-dot"
+            indicatorDotTitle={t('conflict.fraudReports')}
+            className="space-y-2 pt-2 border-t border-theme-subtle/40"
+            buttonClassName="w-full flex items-center justify-between px-4 py-2 text-[11px] font-bold text-theme-placeholder uppercase tracking-[0.15em] hover:text-theme-primary transition-colors cursor-pointer"
+            contentClassName="space-y-1 animate-in fade-in duration-150"
+            title={t('sidebar.groupMore', 'Mehr')}
+          >
                 {/* Konflikte */}
                 <button
                   type="button"
@@ -419,9 +405,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
                   </div>
                   {currentView === 'bug_report' && <ChevronRight size={14} className="text-theme-primary/50" />}
                 </button>
-              </div>
-            )}
-          </div>
+          </Disclosure>
         </div>
 
         {/* Footer Section */}

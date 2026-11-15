@@ -16,7 +16,16 @@ const TEST_RESULTS_DIR = path.resolve(APP_DIR, 'test-results', 'tour');
 const args = process.argv.slice(2);
 const isAuto = args.includes('--auto');
 const isHeadless = isAuto || args.includes('--headless') || (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY);
-const targetStepArg = args.find(a => !a.startsWith('-'));
+const modeFlag = args.find(a => a.startsWith('--mode='));
+const modeFlagIdx = args.indexOf('--mode');
+const rawModeArg = modeFlag
+    ? modeFlag.split('=')[1]
+    : (modeFlagIdx >= 0 && args[modeFlagIdx + 1] ? args[modeFlagIdx + 1] : null);
+const VALID_MODES = ['simple', 'expert', 'both'];
+const requestedMode = VALID_MODES.includes(rawModeArg) ? rawModeArg : (isAuto ? 'both' : 'simple');
+const auditModes = requestedMode === 'both' ? ['simple', 'expert'] : [requestedMode];
+const initialHudMode = requestedMode === 'expert' ? 'expert' : 'simple';
+const targetStepArg = args.find((a, idx) => !a.startsWith('-') && !(modeFlagIdx >= 0 && idx === modeFlagIdx + 1));
 
 function findBrowser() {
     const candidates = [
@@ -141,7 +150,7 @@ class CdpSession {
     }
 }
 
-function getHudScript(initialStepId = '1.1') {
+function getHudScript(initialStepId = '1.1', initialUiMode = 'simple') {
     const stepsJson = JSON.stringify(TOUR_STEPS);
     return `
 (function() {
@@ -154,6 +163,7 @@ function getHudScript(initialStepId = '1.1') {
 
     let isMobile = false;
     let isDark = false;
+    let uiMode = "${initialUiMode}";
     try {
         isDark = document.documentElement?.classList?.contains('dark') ?? false;
     } catch (e) {
@@ -166,6 +176,7 @@ function getHudScript(initialStepId = '1.1') {
         if (index < 0 || index >= STEPS.length) return;
         currentIndex = index;
         const step = STEPS[currentIndex];
+        const effectiveUiMode = step.uiMode || uiMode;
         try { window.location.hash = '#' + step.id; } catch (e) {}
 
         if (window.__HUMOCO_TOUR__) {
@@ -176,7 +187,8 @@ function getHudScript(initialStepId = '1.1') {
                 isForkLocked: false,
                 isRecoveryRequired: false,
                 ...(step.sessionOverrides || {}),
-                settingsTab: step.settingsTab
+                settingsTab: step.settingsTab,
+                uiMode: effectiveUiMode
             });
         }
 
@@ -238,6 +250,16 @@ function getHudScript(initialStepId = '1.1') {
             } catch (e) {}
             renderHud();
         },
+        toggleUiMode: (forcedMode) => {
+            uiMode = (forcedMode === 'simple' || forcedMode === 'expert')
+                ? forcedMode
+                : (uiMode === 'expert' ? 'simple' : 'expert');
+            if (window.__HUMOCO_TOUR__) {
+                window.__HUMOCO_TOUR__.setUiMode(uiMode);
+            }
+            renderHud();
+        },
+        getUiMode: () => uiMode,
         cycleScenario: () => {
             currentScenarioIdx = (currentScenarioIdx + 1) % scenarios.length;
             const nextSc = scenarios[currentScenarioIdx];
@@ -290,12 +312,14 @@ function getHudScript(initialStepId = '1.1') {
         const cur = STEPS[currentIndex] || STEPS[0];
         const stepLabel = "[" + cur.id + "] " + cur.title + " (" + (currentIndex + 1) + "/" + STEPS.length + ")";
         const scenarioLabel = scenarios[currentScenarioIdx];
+        const effectiveUiMode = cur.uiMode || uiMode;
 
         container.innerHTML = \`
             <button id="__tour_prev__" title="Zurück (Alt+Links)" style="background: rgba(255,255,255,0.12); border:none; color:white; border-radius:50%; width:24px; height:24px; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:11px;">◀</button>
             <span id="__tour_label__" title="\${cur.description}" style="cursor:default; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding: 0 4px; font-weight:700; font-size:12px; color:#38bdf8;">\${stepLabel}</span>
             <button id="__tour_next__" title="Weiter (Alt+Rechts)" style="background: rgba(255,255,255,0.12); border:none; color:white; border-radius:50%; width:24px; height:24px; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:11px;">▶</button>
             <div style="width:1px; height:18px; background:rgba(255,255,255,0.2); margin:0 2px;"></div>
+            <button id="__tour_uimode__" title="UI-Modus wechseln (Taste e)" style="background:rgba(255,255,255,0.12); border:none; color:#e2e8f0; border-radius:6px; font-size:11px; padding:3px 7px; cursor:pointer;">\${effectiveUiMode === 'expert' ? '🔧 Erweitert' : '✨ Einfach'}</button>
             <button id="__tour_dark__" title="Dark / Light Toggle" style="background:none; border:none; color:white; cursor:pointer; font-size:14px; padding:2px;">\${isDark ? '☀️' : '🌙'}</button>
             <button id="__tour_mobile__" title="Mobile / Desktop Viewport" style="background:none; border:none; color:white; cursor:pointer; font-size:14px; padding:2px;">\${isMobile ? '🖥️' : '📱'}</button>
             <button id="__tour_scenario__" title="Daten-Szenario wechseln" style="background:rgba(255,255,255,0.12); border:none; color:#e2e8f0; border-radius:6px; font-size:11px; padding:3px 7px; cursor:pointer;">📦 \${scenarioLabel}</button>
@@ -306,6 +330,8 @@ function getHudScript(initialStepId = '1.1') {
         if (prevBtn) prevBtn.onclick = () => window.__HUMOCO_TOUR_HUD__.prev();
         const nextBtn = document.getElementById('__tour_next__');
         if (nextBtn) nextBtn.onclick = () => window.__HUMOCO_TOUR_HUD__.next();
+        const uiModeBtn = document.getElementById('__tour_uimode__');
+        if (uiModeBtn) uiModeBtn.onclick = () => window.__HUMOCO_TOUR_HUD__.toggleUiMode();
         const darkBtn = document.getElementById('__tour_dark__');
         if (darkBtn) darkBtn.onclick = () => window.__HUMOCO_TOUR_HUD__.toggleDark();
         const mobBtn = document.getElementById('__tour_mobile__');
@@ -328,6 +354,8 @@ function getHudScript(initialStepId = '1.1') {
             window.__HUMOCO_TOUR_HUD__.next();
         } else if (!isInput && e.key === 'ArrowLeft') {
             window.__HUMOCO_TOUR_HUD__.prev();
+        } else if (!isInput && (e.key === 'e' || e.key === 'E')) {
+            window.__HUMOCO_TOUR_HUD__.toggleUiMode();
         }
     });
 
@@ -428,7 +456,7 @@ async function runTour() {
     await cdp.send('DOM.enable');
 
     const initialStep = targetStepArg || '1.1';
-    const initScript = getTauriMockInitScript('normal') + '\n' + getHudScript(initialStep);
+    const initScript = getTauriMockInitScript('normal') + '\n' + getHudScript(initialStep, initialHudMode);
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: initScript });
 
     // Global collectors for current step
@@ -469,7 +497,7 @@ async function runTour() {
 
     if (isAuto) {
         console.log(`\n======================================================================`);
-        console.log(`   RUNNING AUTOMATED UI TOUR & AUDIT (${TOUR_STEPS.length} STEPS)`);
+        console.log(`   RUNNING AUTOMATED UI TOUR & AUDIT (${TOUR_STEPS.length} STEPS x ${auditModes.join(' + ')})`);
         console.log(`======================================================================\n`);
 
         fs.mkdirSync(TEST_RESULTS_DIR, { recursive: true });
@@ -477,81 +505,101 @@ async function runTour() {
         const results = [];
         let passedCount = 0;
         let warningCount = 0;
+        let failedCount = 0;
 
-        for (let i = 0; i < TOUR_STEPS.length; i++) {
-            const step = TOUR_STEPS[i];
-            currentStepErrors = [];
-            currentStepExceptions = [];
+        for (const auditMode of auditModes) {
+            console.log(`\n--- UI Mode: ${auditMode.toUpperCase()} ---`);
 
-            process.stdout.write(`Step [${step.id}] ${step.title.padEnd(42, ' ')} ... `);
-
-            // Navigate to step via HUD and ensure TourBridge state is applied directly
-            const stepPayload = JSON.stringify({
-                appState: step.appState,
-                isAuthenticated: step.auth,
-                isSessionActive: step.auth,
-                isForkLocked: false,
-                isRecoveryRequired: false,
-                ...(step.sessionOverrides || {}),
-                settingsTab: step.settingsTab
-            });
-
-            await cdp.evaluate(`
-                if (window.__HUMOCO_TOUR_HUD__) {
-                    window.__HUMOCO_TOUR_HUD__.goToStepId("${step.id}");
+            for (let i = 0; i < TOUR_STEPS.length; i++) {
+                const step = TOUR_STEPS[i];
+                if (step.uiMode && step.uiMode !== auditMode) {
+                    continue;
                 }
-                if (window.__HUMOCO_TOUR__) {
-                    window.__HUMOCO_TOUR__.setState(${stepPayload});
+
+                const effectiveUiMode = step.uiMode || auditMode;
+                currentStepErrors = [];
+                currentStepExceptions = [];
+
+                process.stdout.write(`[${auditMode}] Step [${step.id}] ${step.title.padEnd(40, ' ')} ... `);
+
+                // Navigate to step via HUD and ensure TourBridge state is applied directly
+                const stepPayload = JSON.stringify({
+                    appState: step.appState,
+                    isAuthenticated: step.auth,
+                    isSessionActive: step.auth,
+                    isForkLocked: false,
+                    isRecoveryRequired: false,
+                    ...(step.sessionOverrides || {}),
+                    settingsTab: step.settingsTab,
+                    uiMode: effectiveUiMode
+                });
+
+                await cdp.evaluate(`
+                    if (window.__HUMOCO_TOUR_HUD__) {
+                        if (window.__HUMOCO_TOUR_HUD__.toggleUiMode) {
+                            window.__HUMOCO_TOUR_HUD__.toggleUiMode(${JSON.stringify(effectiveUiMode)});
+                        }
+                        window.__HUMOCO_TOUR_HUD__.goToStepId("${step.id}");
+                    }
+                    if (window.__HUMOCO_TOUR__) {
+                        window.__HUMOCO_TOUR__.setState(${stepPayload});
+                    }
+                `);
+
+                // Wait for DOM to stabilize
+                await new Promise(r => setTimeout(r, 650));
+
+                // Check horizontal overflow
+                const hasOverflow = await cdp.evaluate('document.documentElement.scrollWidth > window.innerWidth');
+
+                // Capture screenshot
+                const screenshotFile = effectiveUiMode === 'expert' ? `expert-${step.id}.png` : `${step.id}.png`;
+                const screenshotData = await cdp.send('Page.captureScreenshot', { format: 'png' });
+                const screenshotPath = path.join(TEST_RESULTS_DIR, screenshotFile);
+                fs.writeFileSync(screenshotPath, Buffer.from(screenshotData.data, 'base64'));
+
+                const stepResult = {
+                    id: step.id,
+                    uiMode: effectiveUiMode,
+                    chapter: step.chapter,
+                    title: step.title,
+                    file: step.file,
+                    description: step.description,
+                    auth: step.auth,
+                    screenshotFile,
+                    screenshot: `test-results/tour/${screenshotFile}`,
+                    hasOverflow: !!hasOverflow,
+                    errors: [...currentStepErrors],
+                    exceptions: [...currentStepExceptions],
+                    status: 'PASS'
+                };
+
+                if (currentStepExceptions.length > 0 || currentStepErrors.length > 0) {
+                    stepResult.status = 'FAIL';
+                    failedCount++;
+                    warningCount++;
+                    console.log(`❌ FAIL (${currentStepErrors.length} errors, ${currentStepExceptions.length} exceptions)`);
+                } else if (hasOverflow) {
+                    stepResult.status = 'WARN';
+                    warningCount++;
+                    console.log(`⚠️ WARN (horizontal scroll overflow detected)`);
+                } else {
+                    passedCount++;
+                    console.log(`✅ OK`);
                 }
-            `);
 
-            // Wait for DOM to stabilize
-            await new Promise(r => setTimeout(r, 650));
-
-            // Check horizontal overflow
-            const hasOverflow = await cdp.evaluate('document.documentElement.scrollWidth > window.innerWidth');
-
-            // Capture screenshot
-            const screenshotData = await cdp.send('Page.captureScreenshot', { format: 'png' });
-            const screenshotPath = path.join(TEST_RESULTS_DIR, `${step.id}.png`);
-            fs.writeFileSync(screenshotPath, Buffer.from(screenshotData.data, 'base64'));
-
-            const stepResult = {
-                id: step.id,
-                chapter: step.chapter,
-                title: step.title,
-                file: step.file,
-                description: step.description,
-                auth: step.auth,
-                screenshot: `test-results/tour/${step.id}.png`,
-                hasOverflow: !!hasOverflow,
-                errors: [...currentStepErrors],
-                exceptions: [...currentStepExceptions],
-                status: 'PASS'
-            };
-
-            if (currentStepExceptions.length > 0 || currentStepErrors.length > 0) {
-                stepResult.status = 'FAIL';
-                warningCount++;
-                console.log(`❌ FAIL (${currentStepErrors.length} errors, ${currentStepExceptions.length} exceptions)`);
-            } else if (hasOverflow) {
-                stepResult.status = 'WARN';
-                warningCount++;
-                console.log(`⚠️ WARN (horizontal scroll overflow detected)`);
-            } else {
-                passedCount++;
-                console.log(`✅ OK`);
+                results.push(stepResult);
             }
-
-            results.push(stepResult);
         }
 
         // Write JSON audit report
         const reportJsonPath = path.join(TEST_RESULTS_DIR, 'audit-report.json');
         fs.writeFileSync(reportJsonPath, JSON.stringify({
             timestamp: new Date().toISOString(),
-            totalSteps: TOUR_STEPS.length,
+            modes: auditModes,
+            totalSteps: results.length,
             passed: passedCount,
+            failed: failedCount,
             warningsOrFails: warningCount,
             results
         }, null, 2));
@@ -560,22 +608,23 @@ async function runTour() {
         const reportMdPath = path.join(TEST_RESULTS_DIR, 'audit-report.md');
         let md = `# HuMoCo UI Tour & Audit Report\n\n`;
         md += `**Date:** ${new Date().toLocaleString('de-DE')}  \n`;
-        md += `**Total Steps:** ${TOUR_STEPS.length} | **Passed:** ${passedCount} | **Warnings/Failures:** ${warningCount}\n\n`;
+        md += `**Modes:** ${auditModes.join(', ')}  \n`;
+        md += `**Total Steps:** ${results.length} | **Passed:** ${passedCount} | **Failed:** ${failedCount} | **Warnings/Failures:** ${warningCount}\n\n`;
         md += `## Step Summary\n\n`;
-        md += `| Step | Title | Status | Component | Overflow | Errors | Screenshot |\n`;
-        md += `| :---: | :--- | :---: | :--- | :---: | :---: | :---: |\n`;
+        md += `| Step | Mode | Title | Status | Component | Overflow | Errors | Screenshot |\n`;
+        md += `| :---: | :---: | :--- | :---: | :--- | :---: | :---: | :---: |\n`;
 
         for (const r of results) {
             const statusBadge = r.status === 'PASS' ? '✅ PASS' : (r.status === 'WARN' ? '⚠️ WARN' : '❌ FAIL');
             const overflowStr = r.hasOverflow ? '⚠️ Ja' : 'Nein';
             const errorCountStr = (r.errors.length + r.exceptions.length) > 0 ? `❌ ${r.errors.length + r.exceptions.length}` : '0';
-            md += `| **${r.id}** | ${r.title} | ${statusBadge} | \`${r.file}\` | ${overflowStr} | ${errorCountStr} | [Screenshot](${r.id}.png) |\n`;
+            md += `| **${r.id}** | ${r.uiMode} | ${r.title} | ${statusBadge} | \`${r.file}\` | ${overflowStr} | ${errorCountStr} | [Screenshot](${r.screenshotFile}) |\n`;
         }
 
         md += `\n## Detailed Observations\n\n`;
         for (const r of results) {
             if (r.errors.length > 0 || r.exceptions.length > 0 || r.hasOverflow) {
-                md += `### Step [${r.id}] ${r.title}\n`;
+                md += `### [${r.uiMode}] Step [${r.id}] ${r.title}\n`;
                 md += `- **File:** \`${r.file}\`\n`;
                 md += `- **Description:** ${r.description}\n`;
                 if (r.hasOverflow) {
@@ -594,14 +643,14 @@ async function runTour() {
         fs.writeFileSync(reportMdPath, md);
 
         console.log(`\n======================================================================`);
-        console.log(`   AUDIT FINISHED: ${passedCount}/${TOUR_STEPS.length} PASSED`);
+        console.log(`   AUDIT FINISHED: ${passedCount}/${results.length} PASSED (${failedCount} FAILED)`);
         console.log(`   Report JSON: ${reportJsonPath}`);
         console.log(`   Report MD:   ${reportMdPath}`);
         console.log(`   Screenshots: ${TEST_RESULTS_DIR}/`);
         console.log(`======================================================================\n`);
 
         cleanup();
-        process.exit(0);
+        process.exit(failedCount > 0 ? 1 : 0);
     } else {
         // Interactive guided tour
         console.log(`\n======================================================================`);
@@ -611,6 +660,7 @@ async function runTour() {
         console.log(`   - Terminal Controls:`);
         console.log(`       [→] / [Enter] / [n] : Nächster Schritt`);
         console.log(`       [←] / [p]           : Vorheriger Schritt`);
+        console.log(`       [e]                 : UI-Modus wechseln (Einfach / Erweitert)`);
         console.log(`       [d]                 : Dark / Light Mode umschalten`);
         console.log(`       [m]                 : Mobile (390px) / Desktop Toggle`);
         console.log(`       [s]                 : Daten-Szenario wechseln (normal/empty/error)`);
@@ -639,6 +689,10 @@ async function runTour() {
                     if (info?.step) {
                         console.log(`◀ [${info.step.id}] ${info.step.title} (${info.index + 1}/${TOUR_STEPS.length})`);
                     }
+                } else if (key === 'e' || key === 'E') {
+                    await cdp.evaluate('window.__HUMOCO_TOUR_HUD__ && window.__HUMOCO_TOUR_HUD__.toggleUiMode()');
+                    const mode = await cdp.evaluate('window.__HUMOCO_TOUR_HUD__ && window.__HUMOCO_TOUR_HUD__.getUiMode()');
+                    console.log(`🎛️ UI-Modus umgeschaltet: ${mode}`);
                 } else if (key === 'd') {
                     await cdp.evaluate('window.__HUMOCO_TOUR_HUD__ && window.__HUMOCO_TOUR_HUD__.toggleDark()');
                     console.log('🌙 Dark/Light Mode umgeschaltet.');

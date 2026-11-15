@@ -7,6 +7,7 @@ import { logger } from "./utils/log";
 
 // Contexts
 import { SessionProvider, useSession } from './context/SessionContext';
+import { UiModeProvider } from './context/UiModeContext';
 import { NavigationProvider, useNavigation } from './context/NavigationContext';
 
 // Components
@@ -183,9 +184,11 @@ function AppContent() {
 function App() {
     return (
         <SessionProvider>
-            <NavigationProvider>
-                <AppContent />
-            </NavigationProvider>
+            <UiModeProvider>
+                <NavigationProvider>
+                    <AppContent />
+                </NavigationProvider>
+            </UiModeProvider>
         </SessionProvider>
     );
 }

@@ -3,9 +3,10 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
-import { HelpCircle, ExternalLink, ChevronDown } from 'lucide-react';
+import { HelpCircle, ExternalLink } from 'lucide-react';
 import { HELP_TOPICS, HelpTopicId, HELP_CATEGORIES } from '../../help/helpTopics';
 import { HelpContentRenderer } from '../../help/HelpContentRenderer';
+import { AdvancedDisclosure } from './AdvancedDisclosure';
 
 export interface HelpModalProps {
     isOpen: boolean;
@@ -104,15 +105,19 @@ export function HelpModal({ isOpen, onClose, topic, onNavigateToHelpCenter }: He
 
                     {/* Deep dive collapsible (Mehr erfahren / Technischer Hintergrund) */}
                     {currentTopic.deepDiveKey && (
-                        <details className="p-4 bg-slate-50 border border-theme-subtle rounded-2xl group cursor-pointer" data-testid="help-deep-dive">
-                            <summary className="text-xs font-bold text-theme-primary flex items-center justify-between select-none">
-                                <span>{t('helpCenter.deepDiveTitle', 'Mehr erfahren / Technischer Hintergrund')}</span>
-                                <ChevronDown size={14} className="group-open:rotate-180 transition-transform" />
-                            </summary>
-                            <div className="pt-3 border-t border-theme-subtle/50 mt-3 text-xs text-theme-secondary leading-relaxed">
-                                <HelpContentRenderer content={t(currentTopic.deepDiveKey)} />
-                            </div>
-                        </details>
+                        <AdvancedDisclosure
+                            title={
+                                <span className="text-xs font-bold text-theme-primary">
+                                    {t('helpCenter.deepDiveTitle', 'Mehr erfahren / Technischer Hintergrund')}
+                                </span>
+                            }
+                            contentTestId="help-deep-dive"
+                            className="bg-slate-50 border border-theme-subtle rounded-2xl overflow-hidden"
+                            buttonClassName="w-full flex items-center justify-between gap-2 p-4 text-left hover:bg-slate-100/70 transition-colors cursor-pointer"
+                            contentClassName="px-4 pb-4 pt-3 border-t border-theme-subtle/50 text-xs text-theme-secondary leading-relaxed"
+                        >
+                            <HelpContentRenderer content={t(currentTopic.deepDiveKey)} />
+                        </AdvancedDisclosure>
                     )}
 
                     {/* Related topics chips */}

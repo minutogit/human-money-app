@@ -3,10 +3,13 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '../context/NavigationContext';
 import { useSession } from '../context/SessionContext';
+import { useUiMode } from '../context/UiModeContext';
 import { AuthLayout } from './AuthLayout';
 import { PageLayout } from './ui/PageLayout';
 import { Card } from './ui/Card';
 import { BackButton } from './ui/BackButton';
+import { Disclosure } from './ui/Disclosure';
+import { AdvancedDisclosure } from './ui/AdvancedDisclosure';
 import {
     HELP_TOPICS,
     HELP_CATEGORIES,
@@ -20,7 +23,6 @@ import {
     X,
     BookOpen,
     ChevronRight,
-    ChevronDown,
     ArrowLeft,
     Compass,
 } from 'lucide-react';
@@ -34,6 +36,7 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
     const { t } = useTranslation();
     const { isSessionActive } = useSession();
     const { goBack, navigate } = useNavigation();
+    const { isExpert } = useUiMode();
 
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedCategory, setSelectedCategory] = useState<HelpCategory | 'all'>('all');
@@ -105,6 +108,58 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
     const activeCategoryDef = activeTopic
         ? HELP_CATEGORIES.find((c) => c.id === activeTopic.category)
         : null;
+
+    const renderTopicButton = (topic: HelpTopic) => {
+        const isSelected = activeTopic?.id === topic.id;
+        const catDef = HELP_CATEGORIES.find((c) => c.id === topic.category);
+        return (
+            <div
+                key={topic.id}
+                onClick={() => setSelectedTopicId(topic.id)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        setSelectedTopicId(topic.id);
+                    }
+                }}
+                className={`w-full text-left p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                    isSelected
+                        ? 'bg-theme-primary/10 border-theme-primary/40 shadow-sm ring-1 ring-theme-primary/20'
+                        : 'bg-white dark:bg-gray-800/60 border-theme-subtle hover:border-theme-primary/30 hover:bg-theme-primary/5'
+                }`}
+            >
+                <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-theme-primary/10 text-theme-primary">
+                            {catDef ? t(catDef.labelKey) : topic.category}
+                        </span>
+                    </div>
+                    <h3 className="font-extrabold text-sm text-theme-secondary tracking-tight truncate">
+                        {t(topic.titleKey)}
+                    </h3>
+                    <p className="text-xs text-theme-light line-clamp-1 mt-0.5">
+                        {t(topic.shortKey)}
+                    </p>
+                </div>
+                <ChevronRight
+                    size={18}
+                    className={`shrink-0 transition-transform ${
+                        isSelected ? 'text-theme-primary translate-x-0.5' : 'text-theme-placeholder'
+                    }`}
+                />
+            </div>
+        );
+    };
+
+    const hasActiveSearch = searchQuery.trim().length > 0;
+    const shouldGroupExpertTopics = !isExpert && !hasActiveSearch;
+    const primaryTopics = shouldGroupExpertTopics
+        ? filteredTopics.filter((topic) => topic.audience !== 'expert')
+        : filteredTopics;
+    const expertTopics = shouldGroupExpertTopics
+        ? filteredTopics.filter((topic) => topic.audience === 'expert')
+        : [];
 
     const renderContent = () => (
         <div className="space-y-6">
@@ -178,48 +233,23 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
                             selectedTopicId && activeTopic ? 'hidden lg:block' : 'block'
                         }`}
                     >
-                        {filteredTopics.map((topic) => {
-                            const isSelected = activeTopic?.id === topic.id;
-                            const catDef = HELP_CATEGORIES.find((c) => c.id === topic.category);
-                            return (
-                                <div
-                                    key={topic.id}
-                                    onClick={() => setSelectedTopicId(topic.id)}
-                                    role="button"
-                                    tabIndex={0}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter' || e.key === ' ') {
-                                            setSelectedTopicId(topic.id);
-                                        }
-                                    }}
-                                    className={`w-full text-left p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
-                                        isSelected
-                                            ? 'bg-theme-primary/10 border-theme-primary/40 shadow-sm ring-1 ring-theme-primary/20'
-                                            : 'bg-white dark:bg-gray-800/60 border-theme-subtle hover:border-theme-primary/30 hover:bg-theme-primary/5'
-                                    }`}
-                                >
-                                    <div className="min-w-0 flex-1">
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-theme-primary/10 text-theme-primary">
-                                                {catDef ? t(catDef.labelKey) : topic.category}
-                                            </span>
-                                        </div>
-                                        <h3 className="font-extrabold text-sm text-theme-secondary tracking-tight truncate">
-                                            {t(topic.titleKey)}
-                                        </h3>
-                                        <p className="text-xs text-theme-light line-clamp-1 mt-0.5">
-                                            {t(topic.shortKey)}
-                                        </p>
-                                    </div>
-                                    <ChevronRight
-                                        size={18}
-                                        className={`shrink-0 transition-transform ${
-                                            isSelected ? 'text-theme-primary translate-x-0.5' : 'text-theme-placeholder'
-                                        }`}
-                                    />
-                                </div>
-                            );
-                        })}
+                        {primaryTopics.map(renderTopicButton)}
+                        {expertTopics.length > 0 && (
+                            <Disclosure
+                                title={
+                                    <span className="text-xs font-bold text-theme-secondary">
+                                        {t('helpCenter.forAdvancedUsers')} ({expertTopics.length})
+                                    </span>
+                                }
+                                toggleTestId="help-center-expert-topics-toggle"
+                                contentTestId="help-center-expert-topics"
+                                className="border border-theme-subtle rounded-2xl overflow-hidden bg-slate-50/70 dark:bg-slate-800/40"
+                                buttonClassName="w-full flex items-center justify-between gap-2 px-4 py-3 text-left hover:bg-slate-100/70 transition-colors cursor-pointer"
+                                contentClassName="p-2.5 space-y-2.5 border-t border-theme-subtle bg-white/60 dark:bg-slate-900/40"
+                            >
+                                {expertTopics.map(renderTopicButton)}
+                            </Disclosure>
+                        )}
                     </div>
 
                     {/* Topic Detail View */}
@@ -264,15 +294,19 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
 
                                 {/* Deep dive collapsible (Mehr erfahren / Technischer Hintergrund) */}
                                 {activeTopic.deepDiveKey && (
-                                    <details className="p-4 bg-slate-50 border border-theme-subtle rounded-2xl group cursor-pointer mt-4" data-testid="help-center-deep-dive">
-                                        <summary className="text-xs font-bold text-theme-primary flex items-center justify-between select-none">
-                                            <span>{t('helpCenter.deepDiveTitle', 'Mehr erfahren / Technischer Hintergrund')}</span>
-                                            <ChevronDown size={14} className="group-open:rotate-180 transition-transform" />
-                                        </summary>
-                                        <div className="pt-3 border-t border-theme-subtle/50 mt-3 text-xs text-theme-secondary leading-relaxed">
-                                            <HelpContentRenderer content={t(activeTopic.deepDiveKey)} />
-                                        </div>
-                                    </details>
+                                    <AdvancedDisclosure
+                                        title={
+                                            <span className="text-xs font-bold text-theme-primary">
+                                                {t('helpCenter.deepDiveTitle', 'Mehr erfahren / Technischer Hintergrund')}
+                                            </span>
+                                        }
+                                        contentTestId="help-center-deep-dive"
+                                        className="bg-slate-50 border border-theme-subtle rounded-2xl overflow-hidden mt-4"
+                                        buttonClassName="w-full flex items-center justify-between gap-2 p-4 text-left hover:bg-slate-100/70 transition-colors cursor-pointer"
+                                        contentClassName="px-4 pb-4 pt-3 border-t border-theme-subtle/50 text-xs text-theme-secondary leading-relaxed"
+                                    >
+                                        <HelpContentRenderer content={t(activeTopic.deepDiveKey)} />
+                                    </AdvancedDisclosure>
                                 )}
 
                                 {/* Clickable Related Topics Chips */}

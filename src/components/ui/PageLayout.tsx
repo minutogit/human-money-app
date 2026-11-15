@@ -6,6 +6,7 @@ export interface PageLayoutProps {
     description?: string | React.ReactNode;
     onBack?: () => void;
     actions?: React.ReactNode;
+    advancedActions?: React.ReactNode;
     customHeader?: React.ReactNode;
     maxWidth?: '3xl' | '4xl' | '5xl' | '6xl' | 'full';
     optionsPanel?: React.ReactNode;
@@ -27,6 +28,7 @@ export function PageLayout({
     description,
     onBack,
     actions,
+    advancedActions,
     customHeader,
     maxWidth,
     optionsPanel,
@@ -46,6 +48,7 @@ export function PageLayout({
                     description={description}
                     onBack={onBack}
                     actions={actions}
+                    advancedActions={advancedActions}
                 />
             )}
 

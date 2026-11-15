@@ -23,9 +23,10 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
     const stripPlaceholders = (text: string): string => text.replace(/\{\{[^}]+\}\}/g, '');
 
     const isAllowlisted = (key: string): boolean => {
-        // Only help.*.long, help.*.deepDive and settings.advanced* may contain technical explanations of underlying primitives
+        // Only help.*.long, help.*.deepDive, settings.advanced*, and *.expert.* keys may use technical terms
         if (/^help\.[^.]+\.(long|deepDive)$/.test(key)) return true;
         if (/^settings\.advanced/.test(key)) return true;
+        if (/\.expert(\.|$)/.test(key)) return true;
         return false;
     };
 
@@ -132,7 +133,9 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
         for (const key of Object.keys(de)) {
             if (isAllowlisted(key)) {
                 expect(
-                    (key.startsWith('help.') && (key.endsWith('.long') || key.endsWith('.deepDive'))) || key.startsWith('settings.advanced'),
+                    (key.startsWith('help.') && (key.endsWith('.long') || key.endsWith('.deepDive'))) ||
+                        key.startsWith('settings.advanced') ||
+                        /\.expert(\.|$)/.test(key),
                     `Unexpected allowlisted key pattern: ${key}`
                 ).toBe(true);
             }

@@ -114,6 +114,8 @@ pub struct AppSettings {
     pub pending_restore_l2_reconciliation: bool,
     #[serde(default = "default_true")]
     pub post_accept_from_contacts: bool,
+    #[serde(default = "default_ui_mode")]
+    pub ui_mode: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -185,6 +187,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_ui_mode() -> String {
+    "simple".to_string()
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -219,6 +225,7 @@ impl Default for AppSettings {
             last_sync_backup_at: None,
             pending_restore_l2_reconciliation: false,
             post_accept_from_contacts: true,
+            ui_mode: default_ui_mode(),
         }
     }
 }
@@ -245,5 +252,21 @@ mod tests {
         let json = r#"{"maxStoredCards": 500}"#;
         let settings: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.max_stored_cards, 500);
+    }
+
+    #[test]
+    fn test_app_settings_default_and_roundtrip_ui_mode() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.ui_mode, "simple");
+
+        let deserialized_missing: AppSettings = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(deserialized_missing.ui_mode, "simple");
+
+        let mut expert = AppSettings::default();
+        expert.ui_mode = "expert".to_string();
+        let serialized = serde_json::to_string(&expert).unwrap();
+        assert!(serialized.contains(r#""uiMode":"expert""#));
+        let roundtrip: AppSettings = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(roundtrip.ui_mode, "expert");
     }
 }

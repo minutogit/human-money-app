@@ -6,8 +6,6 @@ import {
     Server,
     Wifi,
     WifiOff,
-    ChevronDown,
-    ChevronUp,
     ShieldCheck,
     Globe,
     Clock,
@@ -21,6 +19,7 @@ import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { HelpIcon } from '../ui/HelpIcon';
+import { AdvancedDisclosure } from '../ui/AdvancedDisclosure';
 import { translateError, stringifyError } from '../../utils/errorHelper';
 import { logger } from '../../utils/log';
 
@@ -38,11 +37,6 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
     initialOpen = false,
 }) => {
     const { t } = useTranslation();
-
-    const [isAdvancedNetworkOpen, setIsAdvancedNetworkOpen] = useState(
-        initialOpen ||
-        Boolean(settings?.customServers?.length || settings?.regionalMeshSources?.length || settings?.devModeUnlocked)
-    );
 
     const [newServerName, setNewServerName] = useState('');
     const [newServerUrl, setNewServerUrl] = useState('');
@@ -210,23 +204,19 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                     </div>
 
                     {/* Advanced Server & PoS Collapsible */}
-                    <div className="border border-theme-subtle rounded-2xl overflow-hidden">
-                        <button
-                            type="button"
-                            onClick={() => setIsAdvancedNetworkOpen(v => !v)}
-                            className="w-full flex items-center justify-between p-4 bg-slate-50/70 dark:bg-slate-800/40 hover:bg-slate-100/70 transition-colors text-left"
-                        >
-                            <div className="flex items-center gap-2">
-                                <Server size={14} className="text-theme-primary" />
-                                <span className="text-xs font-bold text-theme-secondary">
-                                    {t('settings.advancedNetworkToggle')}
-                                </span>
-                            </div>
-                            {isAdvancedNetworkOpen ? <ChevronUp size={16} className="text-theme-light" /> : <ChevronDown size={16} className="text-theme-light" />}
-                        </button>
-
-                        {isAdvancedNetworkOpen && (
-                            <div className="p-4 space-y-6 border-t border-theme-subtle">
+                    <AdvancedDisclosure
+                        icon={<Server size={14} className="text-theme-primary" />}
+                        title={
+                            <span className="text-xs font-bold text-theme-secondary">
+                                {t('settings.advancedNetworkToggle')}
+                            </span>
+                        }
+                        defaultOpen={initialOpen || Boolean(settings?.customServers?.length || settings?.regionalMeshSources?.length)}
+                        isCustom={Boolean(settings?.enablePosMode || settings?.customServers?.length || settings?.regionalMeshSources?.length)}
+                        className="border border-theme-subtle rounded-2xl overflow-hidden"
+                        buttonClassName="w-full flex items-center justify-between gap-2 p-4 bg-slate-50/70 dark:bg-slate-800/40 hover:bg-slate-100/70 transition-colors text-left cursor-pointer"
+                        contentClassName="p-4 space-y-6 border-t border-theme-subtle"
+                    >
                                 {/* PoS Mode Toggle */}
                                 <div className="flex items-start gap-3 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
                                     <input
@@ -486,9 +476,7 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                                         </div>
                                     )}
                                 </div>
-                            </div>
-                        )}
-                    </div>
+                    </AdvancedDisclosure>
                 </div>
             </Card>
         </div>

@@ -45,9 +45,12 @@ export type HelpTopicId =
     | 'gatewayTokens'
     | 'l2Protection';
 
+export type HelpAudience = 'everyone' | 'expert';
+
 export interface HelpTopic {
     id: HelpTopicId;
     category: HelpCategory;
+    audience?: HelpAudience;
     titleKey: string;   // help.<id>.title
     shortKey: string;   // help.<id>.short  – max. 1 sentence, ~120 chars
     longKey: string;    // help.<id>.long   – Markdown-light: paragraphs (\n\n), "• " bullet lists, **bold**
@@ -286,6 +289,7 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     passphrase: {
         id: 'passphrase',
         category: 'security',
+        audience: 'expert',
         titleKey: 'help.passphrase.title',
         shortKey: 'help.passphrase.short',
         longKey: 'help.passphrase.long',
@@ -294,6 +298,7 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     subaccount: {
         id: 'subaccount',
         category: 'security',
+        audience: 'expert',
         titleKey: 'help.subaccount.title',
         shortKey: 'help.subaccount.short',
         longKey: 'help.subaccount.long',
@@ -302,6 +307,7 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     handover: {
         id: 'handover',
         category: 'security',
+        audience: 'expert',
         titleKey: 'help.handover.title',
         shortKey: 'help.handover.short',
         longKey: 'help.handover.long',
@@ -310,6 +316,7 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     deviceBinding: {
         id: 'deviceBinding',
         category: 'security',
+        audience: 'expert',
         titleKey: 'help.deviceBinding.title',
         shortKey: 'help.deviceBinding.short',
         longKey: 'help.deviceBinding.long',
@@ -336,6 +343,7 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     posMode: {
         id: 'posMode',
         category: 'connection',
+        audience: 'expert',
         titleKey: 'help.posMode.title',
         shortKey: 'help.posMode.short',
         longKey: 'help.posMode.long',
@@ -344,6 +352,7 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     exclusiveGateways: {
         id: 'exclusiveGateways',
         category: 'connection',
+        audience: 'expert',
         titleKey: 'help.exclusiveGateways.title',
         shortKey: 'help.exclusiveGateways.short',
         longKey: 'help.exclusiveGateways.long',
@@ -352,6 +361,7 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     gatewayTokens: {
         id: 'gatewayTokens',
         category: 'connection',
+        audience: 'expert',
         titleKey: 'help.gatewayTokens.title',
         shortKey: 'help.gatewayTokens.short',
         longKey: 'help.gatewayTokens.long',
@@ -360,6 +370,7 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     l2Protection: {
         id: 'l2Protection',
         category: 'connection',
+        audience: 'expert',
         titleKey: 'help.l2Protection.title',
         shortKey: 'help.l2Protection.short',
         longKey: 'help.l2Protection.long',

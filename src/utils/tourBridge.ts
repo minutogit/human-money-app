@@ -1,5 +1,5 @@
 // src/utils/tourBridge.ts
-import { AppState } from '../types';
+import { AppState, UiMode } from '../types';
 
 export type SettingsTabId = 'profile' | 'security' | 'connection' | 'advanced';
 
@@ -11,6 +11,7 @@ export interface HumocoTourState {
     isRecoveryRequired?: boolean;
     settingsTab?: SettingsTabId;
     profileName?: string;
+    uiMode?: UiMode;
 }
 
 export type TourListener = (state: HumocoTourState) => void;
@@ -29,6 +30,7 @@ class TourBridge {
     private state: HumocoTourState = {};
     private listeners = new Set<TourListener>();
     private settingsTabSetter: ((tab: SettingsTabId) => void) | null = null;
+    private uiModeSetter: ((mode: UiMode) => void) | null = null;
 
     getState(): HumocoTourState {
         return { ...this.state };
@@ -62,6 +64,10 @@ class TourBridge {
             this.settingsTabSetter(nextPartial.settingsTab);
         }
 
+        if (nextPartial.uiMode && this.uiModeSetter) {
+            this.uiModeSetter(nextPartial.uiMode);
+        }
+
         for (const listener of this.listeners) {
             try {
                 listener(nextPartial);
@@ -80,6 +86,14 @@ class TourBridge {
 
     registerSettingsTabSetter(setter: ((tab: SettingsTabId) => void) | null): void {
         this.settingsTabSetter = setter;
+    }
+
+    registerUiModeSetter(setter: ((mode: UiMode) => void) | null): void {
+        this.uiModeSetter = setter;
+    }
+
+    setUiMode(mode: UiMode): void {
+        this.setState({ uiMode: mode });
     }
 }
 

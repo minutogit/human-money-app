@@ -7,6 +7,10 @@ import { AddContactModal } from '../components/AddContactModal';
 import ContactDialog from '../components/ContactDialog';
 import { ProfileCardEditor } from '../components/marketplace/ProfileCardEditor';
 import { AdEditorModal } from '../components/marketplace/AdEditorModal';
+import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../context/UiModeContext';
+import { UiModeToggle } from '../components/ui/UiModeToggle';
+import { Advanced } from '../components/ui/Advanced';
+import { TechId } from '../components/ui/TechId';
 import { backupService } from '../services/backupService';
 import { FrontendMyMarketProfile, AppSettings } from '../types';
 
@@ -34,6 +38,7 @@ vi.mock('../context/SessionContext', () => ({
         protectAction: mockProtectAction,
         isSessionActive: true,
     }),
+    useOptionalSession: () => null,
 }));
 
 vi.mock('../services/backupService', () => ({
@@ -370,5 +375,36 @@ describe('Beginner User Tasks (Integration Flows)', () => {
                 })
             );
         });
+    });
+
+    it('Task 4: hides technical Advanced elements and raw did:key in Simple mode and reveals them in Expert mode', () => {
+        localStorage.removeItem(UI_MODE_STORAGE_KEY);
+        const sampleDid = 'did:key:z6MkuBeginnerSampleDid987654';
+
+        const { container } = render(
+            <UiModeProvider>
+                <UiModeToggle variant="compact" />
+                <TechId value={sampleDid} kind="did" />
+                <Advanced>
+                    <div data-testid="advanced-raw-panel">Raw Transaction JSON</div>
+                </Advanced>
+            </UiModeProvider>
+        );
+
+        // Simple mode by default: no Advanced panel, no raw did:key in DOM
+        expect(screen.queryByTestId('advanced-raw-panel')).not.toBeInTheDocument();
+        expect(screen.getByTestId('tech-id-value')).toHaveTextContent('…987654');
+        expect(container.innerHTML).not.toContain('did:key:');
+
+        // Switch to Expert mode
+        fireEvent.click(screen.getByTestId('ui-mode-expert'));
+        expect(screen.getByTestId('advanced-raw-panel')).toBeInTheDocument();
+        expect(screen.getByTestId('tech-id-value')).toHaveTextContent(sampleDid);
+        expect(localStorage.getItem(UI_MODE_STORAGE_KEY)).toBe('expert');
+
+        // Switch back to Simple mode
+        fireEvent.click(screen.getByTestId('ui-mode-simple'));
+        expect(screen.queryByTestId('advanced-raw-panel')).not.toBeInTheDocument();
+        expect(container.innerHTML).not.toContain('did:key:');
     });
 });

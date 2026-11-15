@@ -1,11 +1,12 @@
 // src/components/settings/ProfileTab.tsx
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Fingerprint, Globe, User, Copy, CheckCircle2 } from 'lucide-react';
+import { Fingerprint, Globe, User, Copy, CheckCircle2, SlidersHorizontal } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { LanguageSelector } from '../ui/LanguageSelector';
+import { UiModeToggle } from '../ui/UiModeToggle';
 import { InfoHint } from '../ui/InfoHint';
 import { useOptionalNavigation } from '../../context/NavigationContext';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -113,6 +114,21 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
                 </div>
             }>
                 <LanguageSelector />
+            </Card>
+
+            {/* Ansicht (Einfach / Erweitert) */}
+            <Card header={
+                <div className="flex items-center gap-2">
+                    <SlidersHorizontal size={18} className="text-theme-primary" />
+                    <span className="font-black text-xs uppercase tracking-widest">{t('settings.viewModeTitle')}</span>
+                </div>
+            }>
+                <div className="space-y-3">
+                    <p className="text-xs text-theme-light leading-relaxed">
+                        {t('settings.viewModeSubtitle')}
+                    </p>
+                    <UiModeToggle variant="full" />
+                </div>
             </Card>
 
             {/* Verweis auf Marktplatz */}

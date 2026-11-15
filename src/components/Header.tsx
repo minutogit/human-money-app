@@ -6,6 +6,29 @@ import { useNavigation } from "../context/NavigationContext";
 import { useSession } from "../context/SessionContext";
 import { StatusChip } from "./StatusChip";
 import { INTERNAL_VIEWS } from "./Sidebar";
+import { UiModeToggle } from "./ui/UiModeToggle";
+
+const VIEW_TITLE_KEYS: Record<string, string> = {
+    logged_in: "dashboard.title",
+    wallet: "wallet.title",
+    marketplace: "marketplace.title",
+    activities: "dashboard.recentActivity",
+    transaction_history: "history.transactionHistory",
+    address_book: "contacts.addressBook",
+    conflict_list: "conflict.fraudReports",
+    conflict_details: "conflict.fraudReports",
+    settings: "settings.title",
+    create_voucher: "voucher.create",
+    send_vouchers: "transfer.title",
+    receive_bundle: "transfer.receive",
+    voucher_details: "wallet.title",
+    receive_success: "transfer.receiveSuccess.transferComplete",
+    transfer_success: "transfer.success.title",
+    sign_request: "voucher.signRequest.title",
+    support: "common.supportMenu",
+    bug_report: "common.bugReportTitle",
+    help_center: "helpCenter.menuTitle",
+};
 
 export const Header: React.FC = () => {
     const { t } = useTranslation();
@@ -16,6 +39,8 @@ export const Header: React.FC = () => {
     if (!INTERNAL_VIEWS.includes(appState.view) || !isLoggedIn) {
         return null;
     }
+
+    const titleKey = VIEW_TITLE_KEYS[appState.view] ?? "common.appName";
 
     return (
         <header className="relative shrink-0 z-30 flex h-16 items-center justify-between border-b border-theme-subtle bg-white dark:bg-gray-900 px-4 md:px-6 shadow-xs">
@@ -32,12 +57,13 @@ export const Header: React.FC = () => {
                 <div className="flex items-center gap-2.5 min-w-0">
                     <img src={logo} alt={t('common.logo', 'Logo')} className="w-7 h-7 object-contain md:hidden shrink-0" />
                     <h1 className="text-base md:text-lg font-bold text-theme-primary truncate">
-                        Human Money App
+                        {t(titleKey)}
                     </h1>
                 </div>
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                <UiModeToggle variant="compact" />
                 <StatusChip />
             </div>
         </header>

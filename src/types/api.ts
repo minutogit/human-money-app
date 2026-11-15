@@ -26,6 +26,8 @@ export interface ProcessAndAttachSignatureArgs {
 
 export type PrivacyDefault = 'ask' | 'stealth' | 'public';
 
+export type UiMode = 'simple' | 'expert';
+
 export type SealSyncStatus = 'Synced' | 'PendingUpload';
 
 export interface SealUploadData {
@@ -106,6 +108,7 @@ export interface AppSettings {
     backupProtectionMode?: string | null;
     lastBackupAt?: string | null;
     postAcceptFromContacts?: boolean;
+    uiMode?: UiMode;
 }
 
 export type AutoBackupStatus =

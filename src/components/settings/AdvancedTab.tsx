@@ -2,8 +2,6 @@
 import React, { useState, FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-    ChevronDown,
-    ChevronUp,
     ShieldCheck,
     Clock,
     Save,
@@ -17,6 +15,7 @@ import { StandardsManager } from '../StandardsManager';
 import { Button } from '../ui/Button';
 import { HelpIcon } from '../ui/HelpIcon';
 import { AlertBanner } from '../ui/AlertBanner';
+import { Disclosure } from '../ui/Disclosure';
 import { copyToClipboard } from '../../utils/clipboard';
 
 export interface AdvancedTabProps {
@@ -49,7 +48,6 @@ export const AdvancedTab: React.FC<AdvancedTabProps> = ({
     initialOpenSection,
 }) => {
     const { t } = useTranslation();
-    const [isStandardsOpen, setIsStandardsOpen] = useState(initialOpenSection === 'standards');
     const [copiedDeviceId, setCopiedDeviceId] = useState(false);
 
     return (
@@ -63,31 +61,26 @@ export const AdvancedTab: React.FC<AdvancedTabProps> = ({
             />
 
             {/* Voucher Standards Manager */}
-            <div id="settings-standards-section" className="border border-theme-subtle rounded-2xl overflow-hidden bg-white/50 dark:bg-slate-900/50">
-                <button
-                    type="button"
-                    onClick={() => setIsStandardsOpen(v => !v)}
-                    className="w-full flex items-center justify-between p-5 bg-slate-50/70 dark:bg-slate-800/40 hover:bg-slate-100/70 transition-colors text-left"
+            <div id="settings-standards-section">
+                <Disclosure
+                    defaultOpen={initialOpenSection === 'standards'}
+                    icon={<ShieldCheck size={18} className="text-theme-primary" />}
+                    title={
+                        <span className="font-black text-xs uppercase tracking-widest text-theme-secondary block">
+                            {t('standards.title')}
+                        </span>
+                    }
+                    subtitle={
+                        <p className="text-[10px] text-theme-light/70 font-medium">
+                            {t('standards.manageStandardsDescription')}
+                        </p>
+                    }
+                    className="border border-theme-subtle rounded-2xl overflow-hidden bg-white/50 dark:bg-slate-900/50"
+                    buttonClassName="w-full flex items-center justify-between p-5 bg-slate-50/70 dark:bg-slate-800/40 hover:bg-slate-100/70 transition-colors text-left cursor-pointer"
+                    contentClassName="p-6 border-t border-theme-subtle bg-white dark:bg-slate-900"
                 >
-                    <div className="flex items-center gap-3">
-                        <ShieldCheck size={18} className="text-theme-primary" />
-                        <div>
-                            <span className="font-black text-xs uppercase tracking-widest text-theme-secondary block">
-                                {t('standards.title')}
-                            </span>
-                            <p className="text-[10px] text-theme-light/70 font-medium">
-                                {t('standards.manageStandardsDescription')}
-                            </p>
-                        </div>
-                    </div>
-                    {isStandardsOpen ? <ChevronUp size={18} className="text-theme-light" /> : <ChevronDown size={18} className="text-theme-light" />}
-                </button>
-
-                {isStandardsOpen && (
-                    <div className="p-6 border-t border-theme-subtle bg-white dark:bg-slate-900">
-                        <StandardsManager />
-                    </div>
-                )}
+                    <StandardsManager />
+                </Disclosure>
             </div>
 
             {/* Eigenen Dienst betreiben (Host / Admin Mode) */}
