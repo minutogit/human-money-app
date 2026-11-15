@@ -170,7 +170,6 @@ export type AppState =
     | { view: "send_vouchers"; initialRecipientId?: string; initialVoucherId?: string; initialNote?: string }
     | { view: "receive_bundle"; droppedFile?: { name: string; bytes: number[] } }
     | { view: "transaction_history" }
-    | { view: "activities"; previousView?: AppState }
     | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string; l2Dispatch?: IntentDispatchObservation[]; bundleId?: string; depositedTo?: number; depositError?: string }
     | { view: "receive_success"; payload: ReceiveSuccessPayload }
     | { view: "address_book"; initialSearchQuery?: string; initialOpenAddModal?: boolean; previousView?: AppState }

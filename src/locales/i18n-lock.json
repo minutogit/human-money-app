@@ -5007,28 +5007,6 @@
       "en": "ai-translated"
     }
   },
-  "history.activitiesDescription": {
-    "source_text": "Comprehensive journal of identity changes, signatures and transactions.",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    },
-    "ai_hint": "Descriptive paragraph text in transaction history / activity log."
-  },
-  "history.activitiesTitle": {
-    "source_text": "Activity Logs",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    },
-    "ai_hint": "Title header for transaction history / activity log view."
-  },
   "history.activityLog": {
     "ai_hint": "Sidebar navigation item label for the Activity Log page.",
     "status": {
@@ -5072,16 +5050,6 @@
       "en": "ai-translated"
     },
     "ai_hint": "Descriptive paragraph text in transaction history / activity log."
-  },
-  "history.backToStatement": {
-    "source_text": "To Account Statement",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
   },
   "history.copyDid": {
     "source_text": "Copy DID",
@@ -5177,16 +5145,6 @@
       "en": "ai-translated"
     },
     "ai_hint": "Activity log status event message."
-  },
-  "history.eventLogButton": {
-    "source_text": "Event Log",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
   },
   "history.eventQuarantine": {
     "source_text": "Voucher quarantined",
@@ -5346,17 +5304,6 @@
     },
     "ai_hint": "Label or text in transaction history / activity log. ('Assets' = 'Werte' in German) Contains variables: {{count}}."
   },
-  "history.loadActivitiesFailed": {
-    "source_text": "Failed to load activity log.",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    },
-    "ai_hint": "Error notification shown in transaction history / activities."
-  },
   "history.loadFailed": {
     "source_text": "Failed to load transaction history: {{error}}",
     "status": {
@@ -5370,17 +5317,6 @@
   },
   "history.loading": {
     "source_text": "Loading history...",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    },
-    "ai_hint": "Label or text in transaction history / activity log."
-  },
-  "history.loadingActivities": {
-    "source_text": "Retreiving System Journals...",
     "status": {
       "de": "ai-translated",
       "fr": "ai-translated",

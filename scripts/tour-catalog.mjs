@@ -212,20 +212,11 @@ export const TOUR_STEPS = [
         }
     },
     {
-        id: '2.10',
-        chapter: 2,
-        title: 'Aktivitäten & Verlauf',
-        file: 'src/components/Activities.tsx',
-        description: 'Echtzeit-Chronik aller Wallet-Ereignisse, Bürgschaften und Übertragungen.',
-        auth: true,
-        appState: { view: 'activities' }
-    },
-    {
         id: '2.11',
         chapter: 2,
         title: 'Transaktionshistorie',
         file: 'src/components/TransactionHistoryView.tsx',
-        description: 'Detaillierter Audit-Trail über alle Transaktionen mit CSV-Export.',
+        description: 'Detaillierter Zahlungsverlauf mit Filter, CSV-Export und integriertem Ereignis-Protokoll im Expertenmodus.',
         auth: true,
         appState: { view: 'transaction_history' }
     },

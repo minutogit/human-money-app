@@ -5,7 +5,7 @@ import { TransactionHistoryView } from '../TransactionHistoryView';
 import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../../context/UiModeContext';
 import { transferService } from '../../services/transferService';
 import { contactService } from '../../services/contactService';
-import { TransactionRecord, Contact } from '../../types';
+import { TransactionRecord, Contact, WalletEvent } from '../../types';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
@@ -104,6 +104,7 @@ describe('TransactionHistoryView', () => {
         vi.clearAllMocks();
         localStorage.clear();
         vi.mocked(transferService.getHistory).mockResolvedValue([...mockRecords]);
+        vi.mocked(transferService.getEventHistory).mockResolvedValue([]);
         vi.mocked(contactService.getContacts).mockResolvedValue([...mockContacts]);
         vi.mocked(contactService.saveContact).mockResolvedValue();
     });
@@ -293,7 +294,25 @@ describe('TransactionHistoryView', () => {
         });
     });
 
-    it('navigates to activities view when clicking the event log button via more menu in simple mode', async () => {
+    it('does not show deprecated Activities button or event log disclosures in simple mode', async () => {
+        const mockEvents: WalletEvent[] = [
+            {
+                eventId: 'ev-1',
+                localInstanceId: 'v-1',
+                voucherId: 'voucher-1',
+                timestamp: '2026-06-01T12:00:00.000Z',
+                eventType: 'transferReceived',
+                bffData: {
+                    displayCurrency: 'Minuto',
+                    amount: '100.00',
+                    isTestVoucher: false,
+                    counterpartyId: 'did:key:z6MkhaXG',
+                    counterpartyName: 'Alice Wonder',
+                },
+            },
+        ];
+        vi.mocked(transferService.getEventHistory).mockResolvedValue(mockEvents);
+
         renderWithMode('simple');
 
         await waitFor(() => {
@@ -301,10 +320,68 @@ describe('TransactionHistoryView', () => {
         });
 
         fireEvent.click(screen.getByTestId('page-header-more-actions'));
-        fireEvent.click(screen.getByText('history.eventLogButton'));
-        expect(mockNavigate).toHaveBeenCalledWith({
-            view: 'activities',
-            previousView: { view: 'transaction_history' }
+        expect(screen.getByText('history.exportCsv')).toBeInTheDocument();
+        expect(screen.queryByText('history.eventLogButton')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('history-event-log-toggle')).not.toBeInTheDocument();
+
+        // Expand transaction row: per-tx event log remains expert-only
+        fireEvent.click(screen.getByText('Alice Wonder'));
+        await waitFor(() => {
+            expect(screen.getByText('history.txStatus')).toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('tx-event-log-toggle')).not.toBeInTheDocument();
+    });
+
+    it('renders global and per-transaction event log disclosures in expert mode', async () => {
+        const mockEvents: WalletEvent[] = [
+            {
+                eventId: 'ev-1',
+                localInstanceId: 'v-1',
+                voucherId: 'voucher-1',
+                timestamp: '2026-06-01T12:00:00.000Z',
+                eventType: 'transferReceived',
+                bffData: {
+                    displayCurrency: 'Minuto',
+                    amount: '100.00',
+                    isTestVoucher: false,
+                    counterpartyId: 'did:key:z6MkhaXG',
+                    counterpartyName: 'Alice Wonder',
+                },
+            },
+            {
+                eventId: 'ev-2',
+                localInstanceId: 'v-created-99',
+                voucherId: 'voucher-99',
+                timestamp: '2026-05-01T09:00:00.000Z',
+                eventType: 'voucherCreated',
+                bffData: {
+                    displayCurrency: 'Minuto',
+                    amount: '50.00',
+                    isTestVoucher: false,
+                },
+            },
+        ];
+        vi.mocked(transferService.getEventHistory).mockResolvedValue(mockEvents);
+
+        renderWithMode('expert');
+
+        const globalToggle = await screen.findByTestId('history-event-log-toggle');
+        expect(screen.queryByTestId('history-event-log-content')).not.toBeInTheDocument();
+
+        fireEvent.click(globalToggle);
+        await waitFor(() => {
+            expect(screen.getByTestId('history-event-log-content')).toBeInTheDocument();
+            expect(screen.getByText('history.eventCreated')).toBeInTheDocument();
+        });
+
+        // Expand tx-1-rec and inspect per-transaction event log
+        fireEvent.click(screen.getByText('Alice Wonder'));
+        const txToggle = await screen.findByTestId('tx-event-log-toggle');
+        fireEvent.click(txToggle);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('tx-event-log-content')).toBeInTheDocument();
+            expect(screen.getByTestId('tx-event-log-content')).toHaveTextContent('#v-1');
         });
     });
 

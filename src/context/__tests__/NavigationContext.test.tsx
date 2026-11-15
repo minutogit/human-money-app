@@ -61,7 +61,7 @@ function NavigationConsumer() {
         Nav Voucher Details
       </button>
       <button onClick={() => navigate({ view: 'settings' })}>Nav Settings</button>
-      <button onClick={() => navigate({ view: 'activities' })}>Nav Activities</button>
+      <button onClick={() => navigate({ view: 'transaction_history' })}>Nav History</button>
       <button onClick={() => navigate({ view: 'logged_in' })}>Nav Logged In</button>
       <button onClick={() => navigate({ view: 'needs_login' })}>Nav Needs Login</button>
       <button

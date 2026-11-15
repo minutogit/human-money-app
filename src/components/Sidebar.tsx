@@ -2,7 +2,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import Avatar from "boring-avatars";
-import logo from '../assets/logo.png';
 import { AppState, UiMode } from '../types';
 import { useSession } from '../context/SessionContext';
 import { useNavigation } from '../context/NavigationContext';
@@ -12,6 +11,7 @@ import { integrityService } from '../services/integrityService';
 import { error } from "@tauri-apps/plugin-log";
 import { stringifyError } from '../utils/errorHelper';
 import { Disclosure } from './ui/Disclosure';
+import { TechId } from './ui/TechId';
 import { 
   LayoutDashboard, 
   Wallet, 
@@ -32,7 +32,6 @@ export const INTERNAL_VIEWS = [
   'logged_in', 
   'wallet', 
   'marketplace',
-  'activities', 
   'transaction_history', 
   'address_book', 
   'conflict_list', 
@@ -78,6 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
   // Local state for fetched conflicts count if not passed via props
   const [fetchedClaimsCount, setFetchedClaimsCount] = useState<number>(0);
   const effectiveOpenClaims = openClaimsCount !== undefined ? openClaimsCount : fetchedClaimsCount;
+  const [userId, setUserId] = useState<string>('');
 
   useEffect(() => {
     if (openClaimsCount !== undefined || !isLoggedIn) return;
@@ -92,6 +92,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
       isMounted = false;
     };
   }, [openClaimsCount, isLoggedIn]);
+
+  useEffect(() => {
+    if (!isLoggedIn || typeof profileService?.getUserId !== 'function') {
+      setUserId('');
+      return;
+    }
+    let isMounted = true;
+    Promise.resolve(profileService.getUserId())
+      .then((id) => {
+        if (isMounted && typeof id === 'string') {
+          setUserId(id);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, [isLoggedIn]);
 
   // Only show sidebar for internal views when a session is active
   if (!INTERNAL_VIEWS.includes(currentView) || !isLoggedIn) {
@@ -110,7 +128,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
       label: t('sidebar.groupOverview', 'Übersicht'),
       items: [
         { id: 'logged_in', label: t('dashboard.title'), icon: LayoutDashboard, view: { view: 'logged_in' } },
-        { id: 'wallet', label: t('wallet.title'), icon: Wallet, view: { view: 'wallet' } },
+        { id: 'wallet', label: t('wallet.title'), icon: Wallet, view: { view: 'wallet' }, mode: 'expert' },
         { id: 'transaction_history', label: t('history.transactionHistory'), icon: History, view: { view: 'transaction_history' } },
       ]
     },
@@ -143,14 +161,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
           isSidebarOpen ? "translate-x-0" : "max-md:-translate-x-full"
         } md:translate-x-0 flex flex-col border-r border-theme-subtle`}
       >
-        {/* Brand Header */}
-        <div className="px-6 py-4 flex items-center gap-3 border-b border-theme-subtle/50 shrink-0">
-          <div className="w-8 h-8 rounded-lg bg-white shadow-sm flex items-center justify-center overflow-hidden border border-theme-subtle">
-            <img src={logo} alt="Logo" className="w-7 h-7 object-contain" />
-          </div>
-          <h1 className="text-sm font-bold text-theme-secondary tracking-tight">{t('common.appName')}</h1>
-        </div>
-
         {/* Profile Header */}
         <div className="p-3 border-b border-theme-subtle bg-bg-app/30 flex items-center justify-between gap-2 shrink-0">
           <div 
@@ -189,6 +199,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isSessionActive ? "bg-theme-success animate-pulse" : "bg-theme-warning"}`}></span>
                 {isSessionActive ? t('common.activeWallet') : t('auth.sessionLocked')}
               </span>
+              {isExpert && userId && (
+                <div
+                  className="mt-1"
+                  data-testid="sidebar-user-id"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <TechId value={userId} kind="did" />
+                </div>
+              )}
             </div>
           </div>
           {isSessionActive && (
@@ -282,134 +301,127 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
             </div>
           )}
 
-          {/* Collapsible 'Mehr' section */}
-          <Disclosure
-            storageKey="humoco_sidebar_more_open"
-            toggleTestId="sidebar-more-toggle"
-            contentTestId="sidebar-more-content"
-            indicatorDot={effectiveOpenClaims > 0}
-            indicatorDotTestId="sidebar-more-indicator-dot"
-            indicatorDotTitle={t('conflict.fraudReports')}
-            className="space-y-2 pt-2 border-t border-theme-subtle/40"
-            buttonClassName="w-full flex items-center justify-between px-4 py-2 text-[11px] font-bold text-theme-placeholder uppercase tracking-[0.15em] hover:text-theme-primary transition-colors cursor-pointer"
-            contentClassName="space-y-1 animate-in fade-in duration-150"
-            title={t('sidebar.groupMore', 'Mehr')}
-          >
-                {/* Konflikte */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigate({ view: 'conflict_list' });
-                    setSidebarOpen(false);
-                  }}
-                  className={`w-full group flex items-center justify-between px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer ${
-                    isActive('conflict_list')
-                      ? "bg-theme-primary/10 text-theme-primary font-semibold shadow-sm"
-                      : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
-                  }`}
-                  data-testid="sidebar-more-item-conflicts"
-                >
-                  <div className="flex items-center gap-3">
-                    <ShieldAlert
-                      size={18}
-                      className={`transition-transform duration-200 group-hover:scale-110 ${
-                        isActive('conflict_list') ? "text-theme-primary" : "text-theme-placeholder"
-                      }`}
-                    />
-                    <span className="text-sm">{t('conflict.fraudReports')}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    {effectiveOpenClaims > 0 && (
-                      <span className="px-1.5 py-0.5 text-[10px] font-bold bg-rose-500 text-white rounded-full">
-                        {effectiveOpenClaims}
-                      </span>
-                    )}
-                    {isActive('conflict_list') && <ChevronRight size={14} className="text-theme-primary/50" />}
-                  </div>
-                </button>
+          {/* Collapsible 'Mehr' section (Expert mode only; Help lives in footer) */}
+          {isExpert && (
+            <Disclosure
+              storageKey="humoco_sidebar_more_open"
+              toggleTestId="sidebar-more-toggle"
+              contentTestId="sidebar-more-content"
+              indicatorDot={effectiveOpenClaims > 0}
+              indicatorDotTestId="sidebar-more-indicator-dot"
+              indicatorDotTitle={t('conflict.fraudReports')}
+              className="space-y-2 pt-2 border-t border-theme-subtle/40"
+              buttonClassName="w-full flex items-center justify-between px-4 py-2 text-[11px] font-bold text-theme-placeholder uppercase tracking-[0.15em] hover:text-theme-primary transition-colors cursor-pointer"
+              contentClassName="space-y-1 animate-in fade-in duration-150"
+              title={t('sidebar.groupMore', 'Mehr')}
+            >
+                  {/* Konflikte */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigate({ view: 'conflict_list' });
+                      setSidebarOpen(false);
+                    }}
+                    className={`w-full group flex items-center justify-between px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer ${
+                      isActive('conflict_list')
+                        ? "bg-theme-primary/10 text-theme-primary font-semibold shadow-sm"
+                        : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
+                    }`}
+                    data-testid="sidebar-more-item-conflicts"
+                  >
+                    <div className="flex items-center gap-3">
+                      <ShieldAlert
+                        size={18}
+                        className={`transition-transform duration-200 group-hover:scale-110 ${
+                          isActive('conflict_list') ? "text-theme-primary" : "text-theme-placeholder"
+                        }`}
+                      />
+                      <span className="text-sm">{t('conflict.fraudReports')}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {effectiveOpenClaims > 0 && (
+                        <span className="px-1.5 py-0.5 text-[10px] font-bold bg-rose-500 text-white rounded-full">
+                          {effectiveOpenClaims}
+                        </span>
+                      )}
+                      {isActive('conflict_list') && <ChevronRight size={14} className="text-theme-primary/50" />}
+                    </div>
+                  </button>
 
-                {/* Hilfe & Konzept */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigate({ view: 'help_center', previousView: appState });
-                    setSidebarOpen(false);
-                  }}
-                  className={`w-full group flex items-center justify-between px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer ${
-                    currentView === 'help_center'
-                      ? "bg-theme-primary/10 text-theme-primary font-semibold shadow-sm"
-                      : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
-                  }`}
-                  data-testid="sidebar-more-item-help"
-                >
-                  <div className="flex items-center gap-3">
-                    <BookOpen
-                      size={18}
-                      className={`transition-transform duration-200 group-hover:scale-110 ${
-                        currentView === 'help_center' ? "text-theme-primary" : "text-theme-placeholder"
-                      }`}
-                    />
-                    <span className="text-sm">{t('helpCenter.menuTitle')}</span>
-                  </div>
-                  {currentView === 'help_center' && <ChevronRight size={14} className="text-theme-primary/50" />}
-                </button>
+                  {/* Unterstützen */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigate({ view: 'support' });
+                      setSidebarOpen(false);
+                    }}
+                    className={`w-full group flex items-center justify-between px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer ${
+                      currentView === 'support'
+                        ? "bg-theme-primary/10 text-theme-primary font-semibold shadow-sm"
+                        : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
+                    }`}
+                    data-testid="sidebar-more-item-support"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Heart
+                        size={18}
+                        className={`transition-transform duration-200 group-hover:scale-110 ${
+                          currentView === 'support' ? "text-theme-primary" : "text-theme-placeholder"
+                        }`}
+                      />
+                      <span className="text-sm">{t('common.supportMenu')}</span>
+                    </div>
+                    {currentView === 'support' && <ChevronRight size={14} className="text-theme-primary/50" />}
+                  </button>
 
-                {/* Unterstützen */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigate({ view: 'support' });
-                    setSidebarOpen(false);
-                  }}
-                  className={`w-full group flex items-center justify-between px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer ${
-                    currentView === 'support'
-                      ? "bg-theme-primary/10 text-theme-primary font-semibold shadow-sm"
-                      : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
-                  }`}
-                  data-testid="sidebar-more-item-support"
-                >
-                  <div className="flex items-center gap-3">
-                    <Heart
-                      size={18}
-                      className={`transition-transform duration-200 group-hover:scale-110 ${
-                        currentView === 'support' ? "text-theme-primary" : "text-theme-placeholder"
-                      }`}
-                    />
-                    <span className="text-sm">{t('common.supportMenu')}</span>
-                  </div>
-                  {currentView === 'support' && <ChevronRight size={14} className="text-theme-primary/50" />}
-                </button>
-
-                {/* Fehler melden */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigate({ view: 'bug_report' });
-                    setSidebarOpen(false);
-                  }}
-                  className={`w-full group flex items-center justify-between px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer ${
-                    currentView === 'bug_report'
-                      ? "bg-theme-primary/10 text-theme-primary font-semibold shadow-sm"
-                      : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
-                  }`}
-                  data-testid="sidebar-more-item-bug"
-                >
-                  <div className="flex items-center gap-3">
-                    <Bug
-                      size={18}
-                      className={`transition-transform duration-200 group-hover:scale-110 ${
-                        currentView === 'bug_report' ? "text-theme-primary" : "text-theme-placeholder"
-                      }`}
-                    />
-                    <span className="text-sm">{t('common.bugReportMenu')}</span>
-                  </div>
-                  {currentView === 'bug_report' && <ChevronRight size={14} className="text-theme-primary/50" />}
-                </button>
-          </Disclosure>
+                  {/* Fehler melden */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigate({ view: 'bug_report' });
+                      setSidebarOpen(false);
+                    }}
+                    className={`w-full group flex items-center justify-between px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer ${
+                      currentView === 'bug_report'
+                        ? "bg-theme-primary/10 text-theme-primary font-semibold shadow-sm"
+                        : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
+                    }`}
+                    data-testid="sidebar-more-item-bug"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Bug
+                        size={18}
+                        className={`transition-transform duration-200 group-hover:scale-110 ${
+                          currentView === 'bug_report' ? "text-theme-primary" : "text-theme-placeholder"
+                        }`}
+                      />
+                      <span className="text-sm">{t('common.bugReportMenu')}</span>
+                    </div>
+                    {currentView === 'bug_report' && <ChevronRight size={14} className="text-theme-primary/50" />}
+                  </button>
+            </Disclosure>
+          )}
         </div>
 
         {/* Footer Section */}
         <div className="p-4 mt-auto border-t border-theme-subtle bg-bg-app/10 space-y-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              navigate({ view: 'help_center', previousView: appState });
+              setSidebarOpen(false);
+            }}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer ${
+              currentView === 'help_center'
+                ? "bg-theme-primary/10 text-theme-primary font-semibold"
+                : "text-theme-light hover:bg-bg-app hover:text-theme-secondary"
+            }`}
+            data-testid="sidebar-help-button"
+          >
+            <BookOpen size={18} className={currentView === 'help_center' ? "text-theme-primary" : "text-theme-placeholder"} />
+            <span className="text-sm">{t('helpCenter.menuTitle')}</span>
+          </button>
+
           <button 
             onClick={() => {
               navigate({ view: 'settings' });

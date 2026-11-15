@@ -1,6 +1,7 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
+import { UI_MODE_STORAGE_KEY } from '../../context/UiModeContext';
 import { integrityService } from '../../services/integrityService';
 import { profileService } from '../../services/profileService';
 
@@ -51,19 +52,39 @@ describe('Sidebar Component', () => {
         vi.clearAllMocks();
         localStorage.clear();
         vi.mocked(integrityService.getDoubleSpendConflicts).mockResolvedValue([]);
+        vi.mocked(profileService.getUserId).mockResolvedValue('did:key:z6MkAlice');
     });
 
-    it('renders Übersicht and Menschen groups, and does NOT render old Aktionen group', () => {
+    it('renders 4+3 simple navigation without wallet, duplicate appName, Mehr disclosure, or user DID by default', () => {
         render(<Sidebar openClaimsCount={0} />);
 
+        // 4 main entries in Simple mode
         expect(screen.getByText('Übersicht')).toBeInTheDocument();
         expect(screen.getByText('dashboard.title')).toBeInTheDocument();
-        expect(screen.getByText('wallet.title')).toBeInTheDocument();
         expect(screen.getByText('history.transactionHistory')).toBeInTheDocument();
 
         expect(screen.getByText('Menschen')).toBeInTheDocument();
         expect(screen.getByText('contacts.addressBook')).toBeInTheDocument();
         expect(screen.getByText('marketplace.title')).toBeInTheDocument();
+
+        // Expert-only & duplicate elements hidden in Simple mode
+        expect(screen.queryByText('wallet.title')).not.toBeInTheDocument();
+        expect(screen.queryByText('common.appName')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('sidebar-more-toggle')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('sidebar-user-id')).not.toBeInTheDocument();
+
+        // 3 fixed footer entries: Help, Settings, Logout
+        const helpBtn = screen.getByTestId('sidebar-help-button');
+        expect(helpBtn).toBeInTheDocument();
+        expect(screen.getByTestId('sidebar-settings-button')).toBeInTheDocument();
+        expect(screen.getByTestId('sidebar-logout-button')).toBeInTheDocument();
+
+        fireEvent.click(helpBtn);
+        expect(mockNavigate).toHaveBeenCalledWith({
+            view: 'help_center',
+            previousView: { view: 'logged_in' },
+        });
+        expect(mockSetSidebarOpen).toHaveBeenCalledWith(false);
 
         // Old group keys should NOT exist
         expect(screen.queryByText('common.sidebarActions')).not.toBeInTheDocument();
@@ -71,8 +92,17 @@ describe('Sidebar Component', () => {
         expect(screen.queryByText('common.sidebarSecurity')).not.toBeInTheDocument();
     });
 
-    it('collapses "Mehr" by default and toggles open/close on click with localStorage persistence', () => {
+    it('renders expert navigation including wallet, user TechId, and collapsible "Mehr" without duplicate help item', async () => {
+        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
         render(<Sidebar openClaimsCount={0} />);
+
+        expect(screen.getByText('wallet.title')).toBeInTheDocument();
+        expect(screen.queryByText('common.appName')).not.toBeInTheDocument();
+
+        await waitFor(() => {
+            expect(screen.getByTestId('sidebar-user-id')).toBeInTheDocument();
+        });
+        expect(screen.getByTestId('tech-id-value')).toHaveTextContent('did:key:z6MkAlice');
 
         // By default collapsed
         expect(screen.queryByTestId('sidebar-more-content')).not.toBeInTheDocument();
@@ -81,10 +111,10 @@ describe('Sidebar Component', () => {
         const toggleBtn = screen.getByTestId('sidebar-more-toggle');
         fireEvent.click(toggleBtn);
 
-        // Now open
+        // Now open (Help lives permanently in footer, not duplicated here)
         expect(screen.getByTestId('sidebar-more-content')).toBeInTheDocument();
         expect(screen.getByTestId('sidebar-more-item-conflicts')).toBeInTheDocument();
-        expect(screen.getByTestId('sidebar-more-item-help')).toBeInTheDocument();
+        expect(screen.queryByTestId('sidebar-more-item-help')).not.toBeInTheDocument();
         expect(screen.getByTestId('sidebar-more-item-support')).toBeInTheDocument();
         expect(screen.getByTestId('sidebar-more-item-bug')).toBeInTheDocument();
         expect(localStorage.getItem('humoco_sidebar_more_open')).toBe('true');
@@ -95,14 +125,29 @@ describe('Sidebar Component', () => {
         expect(localStorage.getItem('humoco_sidebar_more_open')).toBe('false');
     });
 
-    it('hides top-level Konflikte when openClaimsCount is 0', () => {
+    it('hides top-level Konflikte when openClaimsCount is 0 in both modes', () => {
+        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
         render(<Sidebar openClaimsCount={0} />);
 
         expect(screen.queryByTestId('sidebar-conflict-top-entry')).not.toBeInTheDocument();
         expect(screen.queryByTestId('sidebar-more-indicator-dot')).not.toBeInTheDocument();
     });
 
-    it('renders top-level Konflikte with badge and red dot on "Mehr" when openClaimsCount > 0', () => {
+    it('renders top-level Konflikte in simple mode even without "Mehr" disclosure when openClaimsCount > 0', () => {
+        render(<Sidebar openClaimsCount={3} />);
+
+        const topConflictEntry = screen.getByTestId('sidebar-conflict-top-entry');
+        expect(topConflictEntry).toBeInTheDocument();
+        expect(topConflictEntry).toHaveTextContent('3');
+        expect(screen.queryByTestId('sidebar-more-toggle')).not.toBeInTheDocument();
+
+        fireEvent.click(topConflictEntry);
+        expect(mockNavigate).toHaveBeenCalledWith({ view: 'conflict_list' });
+        expect(mockSetSidebarOpen).toHaveBeenCalledWith(false);
+    });
+
+    it('renders top-level Konflikte with badge and red dot on "Mehr" in expert mode when openClaimsCount > 0', () => {
+        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
         render(<Sidebar openClaimsCount={3} />);
 
         // Top-level Konflikte entry visible

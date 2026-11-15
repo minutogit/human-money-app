@@ -8,11 +8,12 @@ import { translateError, stringifyError } from '../utils/errorHelper';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { Button } from './ui/Button';
-import { TransactionRecord, Contact } from '../types';
+import { TransactionRecord, Contact, WalletEvent } from '../types';
 import { PageLayout } from './ui/PageLayout';
 import { AlertBanner } from './ui/AlertBanner';
 import { Advanced } from './ui/Advanced';
 import { AdvancedDisclosure } from './ui/AdvancedDisclosure';
+import { Disclosure } from './ui/Disclosure';
 import { TechId } from './ui/TechId';
 import { formatDateTime, formatSummary, formatAmount } from '../utils/format';
 import { buildStatementCsv } from '../utils/csvExport';
@@ -30,12 +31,16 @@ import {
     Info, 
     Search, 
     CheckCircle2, 
-    ClipboardList, 
     FileSpreadsheet, 
     UserPlus, 
     Filter,
     RefreshCw,
-    UploadCloud
+    UploadCloud,
+    PlusCircle,
+    ShieldAlert,
+    XCircle,
+    Clock,
+    History
 } from 'lucide-react';
 import { suggestFilename } from '../utils/userIdHelper';
 import { useNavigation } from '../context/NavigationContext';
@@ -51,6 +56,7 @@ export function TransactionHistoryView() {
     const { resolveIdentity, isKnownContact, refresh: refreshContacts } = useContactResolver();
 
     const [history, setHistory] = useState<TransactionRecord[]>([]);
+    const [events, setEvents] = useState<WalletEvent[]>([]);
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(true);
     const [bundleFeedback, setBundleFeedback] = useState<{ [key: string]: string }>({});
@@ -80,10 +86,16 @@ export function TransactionHistoryView() {
         async function fetchHistory() {
             logger.info("TransactionHistoryView: Loading history.");
             try {
-                const records = await transferService.getHistory();
+                const [records, eventList] = await Promise.all([
+                    transferService.getHistory(),
+                    typeof transferService.getEventHistory === 'function'
+                        ? Promise.resolve(transferService.getEventHistory(0, 100)).catch(() => [])
+                        : Promise.resolve([]),
+                ]);
                 records.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
                 if (!active) return;
                 setHistory(records);
+                setEvents(Array.isArray(eventList) ? eventList : []);
             } catch (e) {
                 if (!active) return;
                 const msg = t('history.loadFailed', { error: translateError(e, t) });
@@ -291,35 +303,80 @@ export function TransactionHistoryView() {
         }
     }
 
+    function getEventDetails(event: WalletEvent): { label: string; icon: React.ElementType; color: string; bgColor: string } {
+        const type = event.eventType;
+        const bff = event.bffData;
+
+        if (typeof type === 'string') {
+            switch (type) {
+                case 'voucherCreated':
+                    return { label: t('history.eventCreated'), icon: PlusCircle, color: 'text-blue-600', bgColor: 'bg-blue-50' };
+                case 'transferSent': {
+                    const recipientName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
+                    return {
+                        label: t('history.eventSent', { recipient: recipientName }),
+                        icon: ArrowUpRight,
+                        color: 'text-rose-600',
+                        bgColor: 'bg-rose-50'
+                    };
+                }
+                case 'transferReceived': {
+                    const senderName = resolveIdentity(bff.counterpartyId, bff.counterpartyName);
+                    return {
+                        label: t('history.eventReceived', { sender: senderName }),
+                        icon: ArrowDownLeft,
+                        color: 'text-emerald-600',
+                        bgColor: 'bg-emerald-50'
+                    };
+                }
+                case 'voucherQuarantined':
+                    return { label: t('history.eventQuarantine'), icon: ShieldAlert, color: 'text-amber-600', bgColor: 'bg-amber-50' };
+                case 'voucherActivated':
+                    return { label: t('history.eventActivated'), icon: CheckCircle2, color: 'text-emerald-600', bgColor: 'bg-emerald-50' };
+                case 'voucherVoided':
+                    return { label: t('history.eventVoided'), icon: XCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
+                case 'voucherExpired':
+                    return { label: t('history.eventExpired'), icon: Clock, color: 'text-orange-600', bgColor: 'bg-orange-50' };
+            }
+        }
+
+        return { label: t('history.eventDefault'), icon: Info, color: 'text-gray-600', bgColor: 'bg-gray-50' };
+    }
+
+    function getMatchingEventsForRecord(record: TransactionRecord): WalletEvent[] {
+        const recordMs = new Date(record.timestamp).getTime();
+        return events.filter((ev) => {
+            if (record.involvedVouchers?.includes(ev.localInstanceId)) return true;
+            if (record.involvedVouchers?.includes(ev.voucherId)) return true;
+            if (record.involvedSourcesDetails?.some((d) => d.localInstanceId === ev.localInstanceId)) return true;
+            const matchesDirection =
+                (record.direction === 'sent' && ev.eventType === 'transferSent') ||
+                (record.direction === 'received' && ev.eventType === 'transferReceived');
+            if (matchesDirection && !isNaN(recordMs)) {
+                const evMs = new Date(ev.timestamp).getTime();
+                if (!isNaN(evMs) && Math.abs(evMs - recordMs) <= 60_000) return true;
+            }
+            return false;
+        });
+    }
+
     return (
         <PageLayout 
             title={t('history.transactionHistory')} 
             description={t('history.auditDescription')} 
             onBack={goBack}
             advancedActions={
-                <>
-                    <Button 
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => navigate({ view: 'activities', previousView: { view: 'transaction_history' } })}
-                        className="gap-1.5 text-xs justify-start"
-                        title={t('history.eventLogButton')}
-                    >
-                        <ClipboardList size={14} />
-                        <span>{t('history.eventLogButton')}</span>
-                    </Button>
-                    <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={handleExportCsv}
-                        className="gap-1.5 text-xs justify-start"
-                        title={t('history.exportCsv')}
-                        disabled={filteredHistory.length === 0}
-                    >
-                        <FileSpreadsheet size={14} />
-                        <span>{t('history.exportCsv')}</span>
-                    </Button>
-                </>
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleExportCsv}
+                    className="gap-1.5 text-xs justify-start"
+                    title={t('history.exportCsv')}
+                    disabled={filteredHistory.length === 0}
+                >
+                    <FileSpreadsheet size={14} />
+                    <span>{t('history.exportCsv')}</span>
+                </Button>
             }
         >
             <div className="max-w-4xl mx-auto space-y-5">
@@ -764,6 +821,61 @@ export function TransactionHistoryView() {
                                                     </div>
                                                 </div>
                                             )}
+
+                                            {/* Related Cryptographic Events (Expert mode only) */}
+                                            {(() => {
+                                                const matchingEvents = getMatchingEventsForRecord(record);
+                                                if (matchingEvents.length === 0) return null;
+                                                return (
+                                                    <Advanced>
+                                                        <div className="pt-2" onClick={(e) => e.stopPropagation()}>
+                                                            <Disclosure
+                                                                toggleTestId="tx-event-log-toggle"
+                                                                contentTestId="tx-event-log-content"
+                                                                icon={<History size={13} className="text-theme-light" />}
+                                                                title={
+                                                                    <span className="text-[11px] font-bold text-theme-secondary">
+                                                                        {t('history.txEventsToggle', { count: matchingEvents.length })}
+                                                                    </span>
+                                                                }
+                                                                className="border border-theme-subtle rounded-xl bg-white overflow-hidden"
+                                                                buttonClassName="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left hover:bg-bg-app/40 transition-colors cursor-pointer"
+                                                                contentClassName="px-3.5 pb-3 pt-1 border-t border-theme-subtle/50 space-y-2"
+                                                            >
+                                                                {matchingEvents.map((ev) => {
+                                                                    const { label, icon: Icon, color, bgColor } = getEventDetails(ev);
+                                                                    return (
+                                                                        <div
+                                                                            key={ev.eventId}
+                                                                            className="flex items-center justify-between gap-3 py-1.5 text-xs"
+                                                                        >
+                                                                            <div className="flex items-center gap-2.5 min-w-0">
+                                                                                <span className={`inline-flex items-center justify-center h-6 w-6 rounded-lg shrink-0 ${bgColor} ${color}`}>
+                                                                                    <Icon size={13} />
+                                                                                </span>
+                                                                                <div className="min-w-0">
+                                                                                    <p className="font-semibold text-theme-secondary truncate">{label}</p>
+                                                                                    <div className="flex items-center gap-2 text-[10px] font-mono text-theme-light">
+                                                                                        <span>#{ev.localInstanceId.slice(0, 8)}</span>
+                                                                                        {ev.bffData.displayCurrency && (
+                                                                                            <span className="font-bold text-theme-accent">
+                                                                                                {ev.bffData.amount} {ev.bffData.displayCurrency}
+                                                                                            </span>
+                                                                                        )}
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                            <span className="text-[10px] text-theme-light shrink-0">
+                                                                                {formatDateTime(ev.timestamp)}
+                                                                            </span>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </Disclosure>
+                                                        </div>
+                                                    </Advanced>
+                                                );
+                                            })()}
                                         </div>
                                     )}
                                 </div>
@@ -803,6 +915,69 @@ export function TransactionHistoryView() {
                             </div>
                         )}
                     </div>
+                )}
+
+                {!isLoading && !error && events.length > 0 && (
+                    <Advanced>
+                        <Disclosure
+                            toggleTestId="history-event-log-toggle"
+                            contentTestId="history-event-log-content"
+                            icon={<History size={16} className="text-theme-light" />}
+                            title={
+                                <span className="text-xs font-bold text-theme-secondary uppercase tracking-wider">
+                                    {t('history.eventLogSectionTitle', { count: events.length })}
+                                </span>
+                            }
+                            className="bg-white/80 border border-theme-subtle rounded-2xl overflow-hidden shadow-xs"
+                            buttonClassName="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-bg-app/50 transition-colors cursor-pointer"
+                            contentClassName="px-4 pb-4 pt-2 border-t border-theme-subtle/60 space-y-2"
+                        >
+                            {events.map((ev) => {
+                                const { label, icon: Icon, color, bgColor } = getEventDetails(ev);
+                                const isTransferEvent = ev.eventType === 'transferSent' || ev.eventType === 'transferReceived';
+                                return (
+                                    <button
+                                        key={ev.eventId}
+                                        type="button"
+                                        onClick={() => {
+                                            if (!isTransferEvent) {
+                                                navigate({
+                                                    view: 'voucher_details',
+                                                    voucherId: ev.localInstanceId,
+                                                    previousView: { view: 'transaction_history' },
+                                                });
+                                            }
+                                        }}
+                                        className={`w-full text-left p-3 rounded-xl border border-theme-subtle/70 bg-white flex items-center justify-between gap-3 transition-colors ${
+                                            isTransferEvent
+                                                ? 'cursor-default'
+                                                : 'hover:border-theme-primary/40 hover:bg-bg-app/30 cursor-pointer'
+                                        }`}
+                                    >
+                                        <div className="flex items-center gap-3 min-w-0">
+                                            <div className={`flex items-center justify-center h-9 w-9 rounded-xl shrink-0 ${bgColor} ${color}`}>
+                                                <Icon size={17} />
+                                            </div>
+                                            <div className="min-w-0">
+                                                <p className="text-xs font-bold text-theme-secondary truncate">{label}</p>
+                                                <div className="flex items-center gap-2 mt-0.5 text-[10px] font-mono text-theme-light">
+                                                    <span>#{ev.localInstanceId.slice(0, 8)}</span>
+                                                    {ev.bffData.displayCurrency && (
+                                                        <span className="font-bold text-theme-accent">
+                                                            {ev.bffData.amount} {ev.bffData.displayCurrency}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <span className="text-[11px] font-medium text-theme-light shrink-0">
+                                            {formatDateTime(ev.timestamp)}
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </Disclosure>
+                    </Advanced>
                 )}
             </div>
 

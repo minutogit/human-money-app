@@ -12,7 +12,6 @@ const VIEW_TITLE_KEYS: Record<string, string> = {
     logged_in: "dashboard.title",
     wallet: "wallet.title",
     marketplace: "marketplace.title",
-    activities: "dashboard.recentActivity",
     transaction_history: "history.transactionHistory",
     address_book: "contacts.addressBook",
     conflict_list: "conflict.fraudReports",

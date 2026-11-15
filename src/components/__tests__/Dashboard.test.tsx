@@ -286,4 +286,50 @@ describe('Dashboard Component', () => {
         fireEvent.click(createBtn);
         expect(mockNavigate).toHaveBeenCalledWith({ view: 'create_voucher', previousView: { view: 'logged_in' } });
     });
+
+    it('shows collapsible voucher overview with issuer and expiry, hiding full wallet button in simple mode and showing it in expert mode', async () => {
+        localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
+        const simpleRender = render(
+            <UiModeProvider>
+                <Dashboard />
+            </UiModeProvider>
+        );
+
+        const toggleBtn = await screen.findByTestId('dashboard-vouchers-toggle');
+        expect(screen.queryByTestId('dashboard-vouchers-list')).not.toBeInTheDocument();
+
+        fireEvent.click(toggleBtn);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('dashboard-vouchers-list')).toBeInTheDocument();
+        });
+
+        const row = screen.getByTestId('dashboard-voucher-row');
+        expect(row).toHaveTextContent(/700[.,]00 Minuto/);
+        expect(row).toHaveTextContent('dashboard.voucherIssuedBy');
+        expect(row).toHaveTextContent('dashboard.expiresInDays:15');
+        expect(screen.queryByTestId('dashboard-open-wallet-btn')).not.toBeInTheDocument();
+
+        fireEvent.click(row);
+        expect(mockNavigate).toHaveBeenCalledWith({
+            view: 'voucher_details',
+            voucherId: 'inst-1',
+            previousView: { view: 'logged_in' },
+        });
+
+        simpleRender.unmount();
+
+        // Expert mode exposes button to open full voucher list with filters
+        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
+        render(
+            <UiModeProvider>
+                <Dashboard />
+            </UiModeProvider>
+        );
+
+        fireEvent.click(await screen.findByTestId('dashboard-vouchers-toggle'));
+        const openWalletBtn = await screen.findByTestId('dashboard-open-wallet-btn');
+        fireEvent.click(openWalletBtn);
+        expect(mockNavigate).toHaveBeenCalledWith({ view: 'wallet' });
+    });
 });

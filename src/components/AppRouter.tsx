@@ -8,7 +8,6 @@ import { SettingsView } from "./SettingsView";
 import { TransactionHistoryView } from "./TransactionHistoryView";
 import { TransferSuccessView } from "./TransferSuccessView";
 import { VoucherDetailsView } from './VoucherDetailsView';
-import { Activities } from './Activities';
 import { ReceiveView } from './ReceiveView';
 import { ReceiveSuccessView } from './ReceiveSuccessView';
 import { Dashboard } from './Dashboard';
@@ -142,8 +141,6 @@ export const AppRouter: React.FC = () => {
             />;
         case "transaction_history":
             return <TransactionHistoryView />;
-        case "activities":
-            return <Activities />;
         case "transfer_success":
             return <TransferSuccessView
                 bundleData={appState.bundleData}

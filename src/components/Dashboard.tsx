@@ -20,6 +20,7 @@ import { FirstStepsChecklist } from "./FirstStepsChecklist";
 import { InfoHint } from "./ui/InfoHint";
 import { PageLayout } from "./ui/PageLayout";
 import { Advanced } from "./ui/Advanced";
+import { Disclosure } from "./ui/Disclosure";
 import { TechId } from "./ui/TechId";
 import { 
     Plus, 
@@ -35,7 +36,8 @@ import {
     FileSignature,
     UserCheck,
     X,
-    RefreshCw
+    RefreshCw,
+    Layers
 } from "lucide-react";
 import { truncateUserId } from "../utils/userIdHelper";
 import { stringifyError, translateError } from "../utils/errorHelper";
@@ -45,12 +47,15 @@ import { useContactResolver } from "../hooks/useContactResolver";
 
 export function Dashboard() {
     const { t } = useTranslation();
+    const tRef = useRef(t);
+    tRef.current = t;
     const { navigate } = useNavigation();
     const { profileName, integrityReport, protectAction } = useSession();
     const { resolveIdentity } = useContactResolver();
 
     const [userId, setUserId] = useState("");
     const [balances, setBalances] = useState<AggregatedBalance[]>([]);
+    const [activeVouchers, setActiveVouchers] = useState<VoucherSummary[]>([]);
     const [recentEvents, setRecentEvents] = useState<WalletEvent[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [activeVouchersCount, setActiveVouchersCount] = useState(0);
@@ -137,7 +142,15 @@ export function Dashboard() {
                 setProtectionStatus(recoveryProtection);
                 setSyncConnectedCount(syncOverview?.connectedCount || 0);
                 
-                const activeCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "active").length;
+                const activeVoucherList = (voucherSummaries || [])
+                    .filter((v: VoucherSummary) => v.status === "active")
+                    .sort((a: VoucherSummary, b: VoucherSummary) => {
+                        const aTime = a.validUntil ? new Date(a.validUntil).getTime() : Number.MAX_SAFE_INTEGER;
+                        const bTime = b.validUntil ? new Date(b.validUntil).getTime() : Number.MAX_SAFE_INTEGER;
+                        return aTime - bTime;
+                    });
+                setActiveVouchers(activeVoucherList);
+                const activeCount = activeVoucherList.length;
                 const incompleteCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "incomplete").length;
                 const quarantinedCount = (voucherSummaries || []).filter((v: VoucherSummary) => v.status === "quarantined").length;
 
@@ -186,7 +199,7 @@ export function Dashboard() {
                 if (!active) return;
                 const msg = `Failed to fetch dashboard data: ${stringifyError(e)}`;
                 console.error(msg);
-                setFeedbackMsg(translateError(e, t));
+                setFeedbackMsg(translateError(e, tRef.current));
             } finally {
                 if (active) setIsLoading(false);
             }
@@ -321,6 +334,18 @@ export function Dashboard() {
                 };
         }
     };
+
+    function formatRelativeExpiry(validUntil?: string): string {
+        if (!validUntil) return '';
+        const targetMs = new Date(validUntil).getTime();
+        if (isNaN(targetMs)) return '';
+        const diffDays = Math.ceil((targetMs - Date.now()) / (24 * 60 * 60 * 1000));
+        if (diffDays < 0) return t('dashboard.voucherExpiredShort');
+        if (diffDays === 0) return t('dashboard.expiresToday');
+        if (diffDays < 60) return t('dashboard.expiresInDays', { count: diffDays });
+        if (diffDays < 730) return t('dashboard.expiresInMonths', { count: Math.max(1, Math.round(diffDays / 30)) });
+        return t('dashboard.expiresInYears', { count: Math.max(1, Math.round(diffDays / 365)) });
+    }
 
     function formatAmount(amountStr: string): string {
         const num = parseFloat(amountStr);
@@ -853,6 +878,80 @@ export function Dashboard() {
                         </div>
                     )}
                 </section>
+
+                {/* Zone 2b: Merged Voucher Overview (Simple + Expert; full wallet button Expert-only) */}
+                {!isLoading && activeVouchers.length > 0 && (
+                    <section>
+                        <Disclosure
+                            toggleTestId="dashboard-vouchers-toggle"
+                            contentTestId="dashboard-vouchers-list"
+                            icon={<Layers size={16} className="text-theme-primary" />}
+                            title={
+                                <span className="text-xs font-black text-theme-secondary uppercase tracking-wider">
+                                    {t('dashboard.showMyVouchers', { count: activeVouchers.length })}
+                                </span>
+                            }
+                            className="bg-white/80 dark:bg-slate-900/80 border border-theme-subtle rounded-2xl overflow-hidden shadow-xs"
+                            buttonClassName="w-full flex items-center justify-between gap-3 px-5 py-3.5 text-left hover:bg-bg-app/50 transition-colors cursor-pointer"
+                            contentClassName="px-5 pb-4 pt-2 border-t border-theme-subtle/60 space-y-2.5"
+                        >
+                            <div className="space-y-2">
+                                {activeVouchers.map((voucher) => {
+                                    const fullCreatorName = [voucher.creatorFirstName, voucher.creatorLastName].filter(Boolean).join(' ');
+                                    const issuerLabel = fullCreatorName || resolveIdentity(voucher.creatorId);
+                                    const expiryLabel = formatRelativeExpiry(voucher.validUntil);
+                                    return (
+                                        <button
+                                            key={voucher.localInstanceId}
+                                            type="button"
+                                            data-testid="dashboard-voucher-row"
+                                            onClick={() => navigate({
+                                                view: 'voucher_details',
+                                                voucherId: voucher.localInstanceId,
+                                                previousView: { view: 'logged_in' },
+                                            })}
+                                            className="w-full text-left px-4 py-3 rounded-xl border border-theme-subtle/80 bg-white dark:bg-slate-900 hover:border-theme-primary/40 hover:bg-bg-app/40 transition-all flex items-center justify-between gap-3 cursor-pointer"
+                                        >
+                                            <div className="min-w-0 space-y-0.5">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <span className="font-bold text-sm text-theme-secondary tabular-nums">
+                                                        {formatAmount(voucher.currentAmount)} {voucher.displayCurrency}
+                                                    </span>
+                                                    {voucher.isTestVoucher && (
+                                                        <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase rounded bg-amber-100 text-amber-800 border border-amber-200">
+                                                            {t('voucher.testVoucher')}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs text-theme-light truncate">
+                                                    {t('dashboard.voucherIssuedBy', { issuer: issuerLabel })}
+                                                </p>
+                                            </div>
+                                            {expiryLabel && (
+                                                <span className="text-[11px] font-medium text-theme-light shrink-0">
+                                                    {expiryLabel}
+                                                </span>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            <Advanced>
+                                <div className="pt-1 flex justify-end">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        data-testid="dashboard-open-wallet-btn"
+                                        onClick={() => navigate({ view: 'wallet' })}
+                                    >
+                                        {t('dashboard.openFullVoucherList')}
+                                    </Button>
+                                </div>
+                            </Advanced>
+                        </Disclosure>
+                    </section>
+                )}
 
                 {/* Zone 4: Tasks / Pending */}
                 {incompleteCount > 0 && (
