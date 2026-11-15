@@ -1,11 +1,12 @@
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use human_money_core::crypto::{create_user_id, ed25519_sk_to_x25519_sk};
 use humoco_market::{
-    build_card_bundle, open_multi_class_slot_blob, open_slot_blob, open_slot_payload,
-    pad_backup_slot_bytes, seal_multi_class_slot_blob, seal_slot_blob, seal_slot_payload,
-    unpad_backup_slot_bytes, CardBundle, CardEnvelope, CardPayload, CardStore, MarketError, SdCard,
+    build_card_bundle, derive_delta_prefix, open_multi_class_slot_blob, open_slot_blob,
+    open_slot_payload, pad_backup_slot_bytes, seal_multi_class_slot_blob, seal_slot_blob,
+    seal_slot_payload, sign_sd_card, unpad_backup_slot_bytes, validate_sync_prefix, CardBundle,
+    CardEnvelope, CardItem, CardPayload, CardPayloadInput, CardStore, MarketError, SdCard, Skill,
     StoredCard, BACKUP_PAD_BLOCK_BYTES, BACKUP_SLOT_MAGIC, CARD_SD_PADDED_LEN,
-    DROP_BACKUP_MAX_BYTES, SLOT_MULTI_MAGIC,
+    DROP_BACKUP_MAX_BYTES, MAX_DECOMPRESSED_SLOT_BYTES, SLOT_MAGIC, SLOT_MULTI_MAGIC,
 };
 use proptest::prelude::*;
 
@@ -45,6 +46,7 @@ fn test_slot_blob_seal_open_and_unauthorized() {
     };
 
     let blob = seal_slot_blob(&bundle, &[reader_vk], 65536).unwrap();
+    assert_eq!(&blob[0..8], SLOT_MAGIC);
 
     // Authorized reader opens successfully
     let opened = open_slot_blob(&blob, &reader_x_sk).unwrap();
@@ -155,12 +157,149 @@ fn test_build_card_bundle_sorting_and_trimming() {
         }
     };
 
-    let bundle = build_card_bundle(Some("own-wire~"), &store, &trust_level, 65536);
+    let now = 1_700_000_000;
+    let card_refs: Vec<&StoredCard> = store.cards.values().collect();
+    let bundle = build_card_bundle(Some("own-wire~"), &card_refs, None, now, &trust_level, 16, 524_288);
     // Own card is first
     assert_eq!(bundle.envelopes[0].card_wire, "own-wire~");
     assert_eq!(bundle.envelopes[0].hops, 1);
-    // Max 1 own + 20 forwarded = 21 cards
-    assert_eq!(bundle.envelopes.len(), 21);
+    // No 20-card limit: all 1 own + 30 forwarded = 31 cards fit cleanly
+    assert_eq!(bundle.envelopes.len(), 31);
+
+    // Quiet friend (own_card_wire == None) still forwards stored cards
+    let quiet_bundle = build_card_bundle(None, &card_refs, None, now, &trust_level, 16, 524_288);
+    assert_eq!(quiet_bundle.envelopes.len(), 30);
+}
+
+#[test]
+fn test_slot_deflate_compression_and_zip_bomb_cap() {
+    let reader_sk = SigningKey::from_bytes(&[31u8; 32]);
+    let reader_vk = reader_sk.verifying_key();
+    let reader_x_sk = ed25519_sk_to_x25519_sk(&reader_sk);
+
+    // Build repetitive realistic JSON CardBundle (~40 KB raw JSON)
+    let envelopes: Vec<CardEnvelope> = (0..100)
+        .map(|i| CardEnvelope {
+            card_wire: format!(
+                "eyJhbGciOiJFZERTQSJ9.eyJkaWQiOiJkaWQ6a2V5OnoxMjM0NTY3ODkwIn0.{:04}~disclosure_abcdef_{:04}~",
+                i, i
+            ),
+            hops: (i % 2 + 1) as u8,
+        })
+        .collect();
+    let bundle = CardBundle { envelopes };
+    let raw_json = serde_json::to_vec(&bundle).unwrap();
+    let sealed = seal_slot_blob(&bundle, &[reader_vk], 65_536).unwrap();
+
+    // Compressed sealed blob (including 16-recipient overhead ~1.5 KB) must be far smaller than raw JSON
+    assert!(
+        sealed.len() * 2 < raw_json.len(),
+        "Expected Deflate sealed blob ({}) to be < 50% of raw JSON ({})",
+        sealed.len(),
+        raw_json.len()
+    );
+    assert_eq!(open_slot_blob(&sealed, &reader_x_sk).unwrap(), Some(bundle));
+
+    // Zip-bomb test: 9 MiB zeros Deflate-compress to ~9 KiB, seal succeeds, open must reject (> 8 MiB limit)
+    let oversized_zeros = vec![0u8; MAX_DECOMPRESSED_SLOT_BYTES + 1024 * 1024];
+    let bomb_blob = seal_slot_payload(&oversized_zeros, &[reader_vk], 65_536).unwrap();
+    let open_err = open_slot_payload(&bomb_blob, &reader_x_sk);
+    assert!(matches!(open_err, Err(MarketError::PayloadTooLarge(_))));
+}
+
+#[test]
+fn test_build_card_bundle_fair_hop_interleave_and_geo_remote_priority() {
+    let make_signed = |seed_byte: u8, coords: Option<&str>, remote: bool| -> StoredCard {
+        let sk = SigningKey::from_bytes(&[seed_byte; 32]);
+        let vk = sk.verifying_key();
+        let did = create_user_id(&vk, None).unwrap();
+        let mut items = Vec::new();
+        if let Some(c) = coords {
+            items.push((CardItem::Coordinates(c.to_string()), 3));
+        }
+        if remote {
+            items.push((
+                CardItem::Skill(Skill {
+                    title: "Online tutoring".to_string(),
+                    text: None,
+                    pricing: None,
+                    is_remote: true,
+                }),
+                3,
+            ));
+        }
+        let card = sign_sd_card(
+            CardPayloadInput {
+                did,
+                v: 100,
+                valid_until: 1_800_000_000,
+                max_hops: 3,
+                ad_count: 0,
+                allow_inquiries: true,
+                drops: vec![],
+            },
+            items,
+            &sk,
+        )
+        .unwrap();
+        StoredCard {
+            card,
+            card_wire: format!("wire-{:02}", seed_byte),
+            hops: if seed_byte < 50 { 1 } else { 2 },
+            received_at: 1000,
+        }
+    };
+
+    // Hop 1: near Berlin (~0km) vs far Munich (~500km) vs unknown remote
+    let h1_far = make_signed(10, Some("48.1351, 11.5820"), false);
+    let h1_near = make_signed(11, Some("52.5200, 13.4050"), false);
+    // Hop 2: one card with remote skill
+    let h2_remote = make_signed(60, Some("48.1351, 11.5820"), true);
+    let h2_far = make_signed(61, Some("48.1351, 11.5820"), false);
+
+    let h1_near_did = h1_near.card.payload.did.clone();
+    let h1_far_did = h1_far.card.payload.did.clone();
+    let h2_remote_did = h2_remote.card.payload.did.clone();
+    let h2_far_did = h2_far.card.payload.did.clone();
+
+    let refs = vec![&h1_far, &h1_near, &h2_far, &h2_remote];
+    let trust_level = |_did: &str| -> u8 { 2 };
+    let berlin = Some((52.52, 13.405));
+    let bundle = build_card_bundle(Some("own~"), &refs, berlin, 1_700_000_000, &trust_level, 16, 524_288);
+
+    // Expect fair 50/50 interleave with geo/remote priority:
+    // [own, H1_near, H2_remote, H1_far, H2_far]
+    assert_eq!(bundle.envelopes.len(), 5);
+    assert_eq!(bundle.envelopes[0].card_wire, "own~");
+    assert_eq!(bundle.envelopes[1].hops, 2);
+    assert_eq!(bundle.envelopes[2].hops, 3);
+    assert_eq!(bundle.envelopes[3].hops, 2);
+    assert_eq!(bundle.envelopes[4].hops, 3);
+    assert!(
+        humoco_market::verify_sd_card(&bundle.envelopes[1].card_wire).unwrap().payload.did == h1_near_did
+    );
+    assert!(
+        humoco_market::verify_sd_card(&bundle.envelopes[2].card_wire).unwrap().payload.did == h2_remote_did
+    );
+    assert!(
+        humoco_market::verify_sd_card(&bundle.envelopes[3].card_wire).unwrap().payload.did == h1_far_did
+    );
+    assert!(
+        humoco_market::verify_sd_card(&bundle.envelopes[4].card_wire).unwrap().payload.did == h2_far_did
+    );
+}
+
+#[test]
+fn test_derive_delta_prefix_valid_under_sync_spec() {
+    assert_eq!(derive_delta_prefix(None), "delta");
+    assert_eq!(derive_delta_prefix(Some("")), "delta");
+    assert_eq!(derive_delta_prefix(Some("work")), "work-delta");
+
+    let long_prefix = "a".repeat(63);
+    let derived = derive_delta_prefix(Some(&long_prefix));
+    assert!(derived.len() <= 63);
+    assert!(derived.ends_with("-delta"));
+    assert!(validate_sync_prefix(Some(&derived)).is_ok());
 }
 
 #[test]

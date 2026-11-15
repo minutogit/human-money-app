@@ -3,14 +3,17 @@ use std::collections::{BTreeMap, HashSet};
 use base64::Engine;
 use tauri::State;
 
-use crate::sync_client::{self as sync_client, IndexFetchResult, PutSlotOutcome};
+use crate::sync_client::{self as sync_client, IndexFetchResult, PutSlotOutcome, SlotFetchResult};
 use crate::models::{
     FrontendDiscoveredSync, FrontendSyncAdminStatus, FrontendSyncAdminUpdateRequest,
     FrontendSyncConnectionTestResult, FrontendSyncDescriptor, FrontendSyncOverviewStatus,
     FrontendSyncSetupDraft, FrontendMarketSyncResult, FrontendError, FrontendMemberPolicyDto,
     FrontendPublicSyncInfo, FrontendTrustChangeImpact,
 };
-use crate::settings::{StoredPublicSync, SYNC_CARD_MAX_BYTES, SYNC_HEARTBEAT_SECS, MAX_POLLED_SYNCS};
+use crate::settings::{
+    StoredPublicSync, MAX_POLLED_SYNCS, SYNC_BASE_MAX_AGE_SECS, SYNC_CARD_MAX_BYTES,
+    SYNC_HEARTBEAT_SECS, SYNC_MARKET_POLL_COOLDOWN_SECS, SYNC_WOT_MAX_BYTES,
+};
 use crate::state::{
     canonicalize_did, AppState, StoredSyncAdmin, StoredSyncState,
     CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY, MARKET_SYNC_ADMIN_KEY, MARKET_SYNC_KEY,
@@ -1306,6 +1309,7 @@ pub async fn probe_contact_syncs_impl(
         (String, String, String, bool, Option<sync_client::SyncRevocationNotice>),
     > = std::collections::HashMap::new();
     let mut verified_revocations: Vec<(String, sync_client::SyncRevocationNotice)> = Vec::new();
+    let mut channel_max_bytes_updates: Vec<(String, String, usize)> = Vec::new();
 
     for contact in address_book.contacts.values_mut() {
         for ep in &mut contact.syncs {
@@ -1428,6 +1432,11 @@ pub async fn probe_contact_syncs_impl(
                             Ok((stealth_pk, slot_pfx)) => {
                                 let cap_prefix = slot_pfx.as_deref().or(my_prefix.as_deref());
                                 let card_cap = sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, cap_prefix, "card").await;
+                                if let Ok(ref cap) = card_cap {
+                                    if let Some(mb) = cap.max_bytes.filter(|&v| v > 0) {
+                                        channel_max_bytes_updates.push((canonical_write.clone(), "card".to_string(), mb));
+                                    }
+                                }
                                 let post_cap = if card_cap.as_ref().map(|c| c.authorized).unwrap_or(false) {
                                     Ok(sync_client::SyncCapabilityResult { authorized: true, ..Default::default() })
                                 } else {
@@ -1556,6 +1565,8 @@ pub async fn probe_contact_syncs_impl(
         }
     }
 
+    save_channel_max_bytes_updates(state, password.as_deref(), &channel_max_bytes_updates);
+
     let mut all_syncs = Vec::new();
     for c in address_book.contacts.values() {
         all_syncs.extend(c.syncs.clone());
@@ -1627,9 +1638,258 @@ pub async fn set_selected_upload_syncs(
     set_selected_upload_syncs_impl(syncs, password, &state).await
 }
 
+const DELTA_MAX_BYTES: usize = 32 * 1024;
+
+fn norm_write_url(url: &str) -> String {
+    url.trim().trim_end_matches('/').to_string()
+}
+
+fn channel_max_bytes_key(write_url: &str, channel: &str) -> String {
+    format!("{}:{}", norm_write_url(write_url), channel)
+}
+
+fn save_channel_max_bytes_updates(
+    state: &AppState,
+    password: Option<&str>,
+    updates: &[(String, String, usize)],
+) {
+    if updates.is_empty() {
+        return;
+    }
+    let mut service = state.service.lock().unwrap();
+    let mut sync_state: StoredSyncState = service
+        .load_encrypted_data(MARKET_SYNC_KEY, password)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    let mut changed = false;
+    for (write_url, channel, mb) in updates {
+        if *mb > 0 {
+            let key = channel_max_bytes_key(write_url, channel);
+            if sync_state.channel_max_bytes_by_write_url.get(&key) != Some(mb) {
+                sync_state.channel_max_bytes_by_write_url.insert(key, *mb);
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        if let Ok(bytes) = serde_json::to_vec(&sync_state) {
+            let _ = service.save_encrypted_data(MARKET_SYNC_KEY, &bytes, password);
+        }
+    }
+}
+
+fn derive_drop_slot_pubkey(
+    master_seed: &[u8; 32],
+    my_ed_sk: &ed25519_dalek::SigningKey,
+    drop_desc: &humoco_market::DropDescriptor,
+) -> Result<String, String> {
+    if drop_desc.slot_id.is_some() {
+        humoco_market::derive_public_drop_keypair(master_seed, &drop_desc.write_url)
+            .map(|(_, _, pk)| pk)
+            .map_err(|e| e.to_string())
+    } else {
+        humoco_market::derive_member_stealth_pubkey(my_ed_sk, &drop_desc.drop_pub)
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ensure_cached_channel_max_bytes(
+    client: &reqwest::Client,
+    sync_state: &mut StoredSyncState,
+    master_seed: &[u8; 32],
+    my_ed_sk: &ed25519_dalek::SigningKey,
+    drop_desc: &humoco_market::DropDescriptor,
+    prefix: Option<&str>,
+    channel: &str,
+    default_max: usize,
+) -> usize {
+    let key = channel_max_bytes_key(&drop_desc.write_url, channel);
+    if let Some(&cached) = sync_state.channel_max_bytes_by_write_url.get(&key) {
+        return cached;
+    }
+    if let Ok(slot_pk) = derive_drop_slot_pubkey(master_seed, my_ed_sk, drop_desc) {
+        if let Ok(cap) = sync_client::head_slot_capability(
+            client,
+            &drop_desc.write_url,
+            &slot_pk,
+            prefix,
+            channel,
+        )
+        .await
+        {
+            if let Some(mb) = cap.max_bytes.filter(|&v| v > 0) {
+                sync_state.channel_max_bytes_by_write_url.insert(key, mb);
+                return mb;
+            }
+        }
+    }
+    default_max
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sign_drop_channel_request(
+    master_seed: &[u8; 32],
+    my_ed_sk: &ed25519_dalek::SigningKey,
+    drop_desc: &humoco_market::DropDescriptor,
+    method: &str,
+    channel: &str,
+    prefix: Option<&str>,
+    now_secs: u64,
+    payload: &[u8],
+) -> Result<humoco_market::SignedDropHeaders, String> {
+    let nonce = sync_client::generate_sync_nonce();
+    if drop_desc.slot_id.is_some() {
+        let (r_sk, _, _) = humoco_market::derive_public_drop_keypair(master_seed, &drop_desc.write_url)
+            .map_err(|e| format!("Public drop key derivation error: {}", e))?;
+        Ok(humoco_market::sign_member_request_direct(
+            &r_sk, method, channel, prefix, now_secs, &nonce, payload,
+        ))
+    } else {
+        humoco_market::sign_member_request_stealth(
+            my_ed_sk,
+            &drop_desc.drop_pub,
+            method,
+            channel,
+            prefix,
+            now_secs,
+            &nonce,
+            payload,
+        )
+        .map_err(|e| format!("Stealth signing error: {}", e))
+    }
+}
+
+async fn delete_delta_card_slot(
+    client: &reqwest::Client,
+    master_seed: &[u8; 32],
+    my_ed_sk: &ed25519_dalek::SigningKey,
+    drop_desc: &humoco_market::DropDescriptor,
+    delta_prefix: &str,
+    now_secs: u64,
+) -> bool {
+    let Ok(del_signed) = sign_drop_channel_request(
+        master_seed,
+        my_ed_sk,
+        drop_desc,
+        "DELETE",
+        "card",
+        Some(delta_prefix),
+        now_secs,
+        b"",
+    ) else {
+        return false;
+    };
+    sync_client::delete_slot(client, &drop_desc.write_url, &del_signed, "card")
+        .await
+        .is_ok()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn import_decrypted_card_bundle(
+    bundle: humoco_market::CardBundle,
+    read_url: &str,
+    now_secs: u64,
+    max_stored_cards: usize,
+    state: &AppState,
+    store: &mut humoco_market::CardStore,
+    sync_state: &mut StoredSyncState,
+    password: Option<&str>,
+) -> usize {
+    let mut count = 0;
+    for env in bundle.envelopes {
+        let mut service = state.service.lock().unwrap();
+        let outcome = service.with_wallet(|wallet| {
+            let is_offender = |did: &str| -> bool {
+                use human_money_core::models::conflict::TrustStatus;
+                matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_))
+            };
+            let own_coords = wallet
+                .profile
+                .coordinates
+                .as_deref()
+                .and_then(humoco_market::parse_coordinates_pair);
+            humoco_market::accept_envelope(
+                store,
+                &env,
+                now_secs,
+                max_stored_cards,
+                own_coords,
+                &is_offender,
+            )
+        });
+
+        if let Ok(humoco_market::AcceptOutcome::Accepted { did, .. }) = outcome {
+            count += 1;
+            let can_did = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
+            sync_state
+                .sync_sources_by_did
+                .insert(can_did, read_url.to_string());
+
+            if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
+                let card_syncs: Vec<FrontendSyncDescriptor> = stored
+                    .card
+                    .payload
+                    .drops
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect();
+                state.update_contact_syncs_from_card(
+                    &mut service,
+                    &did,
+                    &card_syncs,
+                    password,
+                );
+            }
+        }
+    }
+    count
+}
+
+fn import_decrypted_wot_package(
+    pkg: &humoco_wot::WotSyncPackage,
+    read_url: &str,
+    now_secs: u64,
+    state: &AppState,
+    password: Option<&str>,
+    errors: &mut Vec<String>,
+) -> usize {
+    let mut service = state.service.lock().unwrap();
+    if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password) {
+        match reg.import_sync_package(pkg, None, now_secs) {
+            Ok(stats) => {
+                let accepted = stats.accepted_total() + stats.merged;
+                if accepted > 0 || reg.own_list_dirty {
+                    if reg.own_list_dirty {
+                        let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
+                    }
+                    let _ = state.save_wot_register(&mut service, &reg, password);
+                }
+                return accepted;
+            }
+            Err(e) => {
+                errors.push(format!("Failed to import wot package from {}: {}", read_url, e));
+            }
+        }
+    }
+    0
+}
+
 pub async fn sync_market_channels_impl(
     is_wifi: Option<bool>,
     force_upload: Option<bool>,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<FrontendMarketSyncResult, FrontendError> {
+    sync_market_channels_with_options(is_wifi, force_upload, None, password, state).await
+}
+
+pub async fn sync_market_channels_with_options(
+    is_wifi: Option<bool>,
+    force_upload: Option<bool>,
+    respect_cooldown: Option<bool>,
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMarketSyncResult, FrontendError> {
@@ -1771,49 +2031,79 @@ pub async fn sync_market_channels_impl(
         }
     }
 
-    if settings.market_sync_enabled {
-        if let Some(ref own_card) = own_card_opt {
-            if now_secs < own_card.payload.valid_until && !upload_targets.is_empty() {
-            let needs_upload = force_upload == Some(true)
-                || sync_state.last_uploaded_card_v != Some(own_card.payload.v)
-                || sync_state.last_readers_hash.as_deref() != Some(&readers_hash)
-                || now_secs.saturating_sub(sync_state.last_upload_at.unwrap_or(0)) >= SYNC_HEARTBEAT_SECS;
+    if settings.market_sync_enabled && !upload_targets.is_empty() && !readers.is_empty() {
+        let active_own_card = own_card_opt
+            .as_ref()
+            .filter(|c| now_secs < c.payload.valid_until);
+        let own_wire_info: Option<(String, String, u64)> = active_own_card.and_then(|own_card| {
+            let can_did =
+                canonicalize_did(&own_card.payload.did).unwrap_or_else(|_| own_card.payload.did.clone());
+            humoco_market::render_wire(own_card, 1, humoco_market::WireFilter::Full)
+                .map(|wire| (can_did, wire, own_card.payload.v))
+        });
 
-            if needs_upload {
-                let own_wire = humoco_market::render_wire(own_card, 1, humoco_market::WireFilter::Full);
-                let bundle = {
-                    let mut service = state.service.lock().unwrap();
-                    let store: humoco_market::CardStore = service
-                        .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
-                        .ok()
-                        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                        .unwrap_or_default();
-                    let reg = state.get_or_load_wot_register(&mut service, password.as_deref()).ok();
-                    let trust_level_of = |did: &str| -> u8 {
-                        if let Some(ref r) = reg {
-                            let can_did = canonicalize_did(did).unwrap_or_else(|_| did.to_string());
-                            r.own_contacts.get(&can_did).map(|e| e.level).unwrap_or(0)
-                        } else {
-                            0
-                        }
-                    };
-                    humoco_market::build_card_bundle(
-                        own_wire.as_deref(),
-                        &store,
-                        &trust_level_of,
-                        SYNC_CARD_MAX_BYTES,
-                    )
-                };
+        let (store, own_coords, trust_by_did, offenders, active_media_blobs) = {
+            let mut service = state.service.lock().unwrap();
+            let store: humoco_market::CardStore = service
+                .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default();
+            let reg = state
+                .get_or_load_wot_register(&mut service, password.as_deref())
+                .ok();
+            let own_coords = service
+                .with_wallet(|wallet| {
+                    wallet
+                        .profile
+                        .coordinates
+                        .as_deref()
+                        .and_then(humoco_market::parse_coordinates_pair)
+                })
+                .ok()
+                .flatten();
 
-                let active_media_blobs: Vec<(String, Vec<u8>)> = if let Some(ref prof) = own_profile_opt {
+            let mut trust_by_did = std::collections::HashMap::new();
+            let mut offenders = HashSet::new();
+            if let Some(ref r) = reg {
+                for (did, entry) in &r.own_contacts {
+                    let can = canonicalize_did(did).unwrap_or_else(|_| did.clone());
+                    trust_by_did.insert(can, entry.level);
+                }
+            }
+            for sc in store.cards.values() {
+                let can = canonicalize_did(&sc.card.payload.did)
+                    .unwrap_or_else(|_| sc.card.payload.did.clone());
+                let is_off = service
+                    .with_wallet(|wallet| {
+                        use human_money_core::models::conflict::TrustStatus;
+                        matches!(
+                            wallet.check_reputation(&sc.card.payload.did),
+                            TrustStatus::KnownOffender(_)
+                        )
+                    })
+                    .unwrap_or(false);
+                if is_off {
+                    offenders.insert(can);
+                }
+            }
+
+            let media_blobs: Vec<(String, Vec<u8>)> =
+                if let (Some(own_card), Some(prof)) = (active_own_card, own_profile_opt.as_ref()) {
                     let mut blobs = Vec::new();
-                    let mut service = state.service.lock().unwrap();
                     for ad in &prof.ads {
                         if ad.expires_at > now_secs {
                             if let Some(ref token) = ad.image_token {
                                 let storage_key = crate::state::own_media_storage_key(token);
-                                if let Ok(webp_bytes) = service.load_encrypted_data(&storage_key, password.as_deref()) {
-                                    if let Ok((_tok, blob_id, ciphertext)) = humoco_market::seal_media_blob(&own_card.payload.did, &webp_bytes) {
+                                if let Ok(webp_bytes) =
+                                    service.load_encrypted_data(&storage_key, password.as_deref())
+                                {
+                                    if let Ok((_tok, blob_id, ciphertext)) =
+                                        humoco_market::seal_media_blob(
+                                            &own_card.payload.did,
+                                            &webp_bytes,
+                                        )
+                                    {
                                         blobs.push((blob_id, ciphertext));
                                     }
                                 }
@@ -1825,150 +2115,435 @@ pub async fn sync_market_channels_impl(
                     Vec::new()
                 };
 
-                match humoco_market::seal_slot_blob(&bundle, &readers, SYNC_CARD_MAX_BYTES) {
-                    Ok(blob) => {
-                        for drop_desc in &mut upload_targets {
-                            let nonce = sync_client::generate_sync_nonce();
-                            let signed_res = if drop_desc.slot_id.is_some() {
-                                // Public drop upload signed with derived r
-                                match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
-                                    Ok((r_sk, _, _)) => {
-                                        Ok(humoco_market::sign_member_request_direct(
-                                            &r_sk,
-                                            "PUT",
-                                            "card",
-                                            my_prefix.as_deref(),
-                                            now_secs,
-                                            &nonce,
-                                            &blob,
-                                        ))
-                                    }
-                                    Err(e) => Err(format!("Public drop key derivation error: {}", e)),
+            (store, own_coords, trust_by_did, offenders, media_blobs)
+        };
+
+        let trust_level_of = |did: &str| -> u8 {
+            let can = canonicalize_did(did).unwrap_or_else(|_| did.to_string());
+            trust_by_did.get(&can).copied().unwrap_or(0)
+        };
+
+        let own_can_did_opt = own_wire_info.as_ref().map(|(d, _, _)| d.clone());
+        let mut wire_meta: std::collections::HashMap<String, (String, u64)> =
+            std::collections::HashMap::new();
+        let mut card_by_did: std::collections::HashMap<String, &humoco_market::StoredCard> =
+            std::collections::HashMap::new();
+
+        if let Some((ref own_did, ref own_wire, own_v)) = own_wire_info {
+            wire_meta.insert(own_wire.clone(), (own_did.clone(), own_v));
+        }
+
+        let mut forward_candidates: Vec<&humoco_market::StoredCard> = Vec::new();
+        for sc in store.cards.values() {
+            if sc.card.payload.valid_until <= now_secs {
+                continue;
+            }
+            let can = canonicalize_did(&sc.card.payload.did)
+                .unwrap_or_else(|_| sc.card.payload.did.clone());
+            if own_can_did_opt.as_ref() == Some(&can) || offenders.contains(&can) {
+                continue;
+            }
+            if let Some(env) = humoco_market::forward_envelope(sc) {
+                wire_meta.insert(env.card_wire, (can.clone(), sc.card.payload.v));
+                card_by_did.insert(can, sc);
+                forward_candidates.push(sc);
+            }
+        }
+
+        if own_wire_info.is_some() || !forward_candidates.is_empty() {
+            let readers_changed = sync_state.last_readers_hash.as_deref() != Some(&readers_hash);
+            let heartbeat_due =
+                now_secs.saturating_sub(sync_state.last_upload_at.unwrap_or(0)) >= SYNC_HEARTBEAT_SECS;
+            let delta_prefix = humoco_market::derive_delta_prefix(my_prefix.as_deref());
+            let mut any_card_uploaded = false;
+            let mut any_card_failed = false;
+
+            for drop_desc in &mut upload_targets {
+                let target_key = norm_write_url(&drop_desc.write_url);
+                if target_key.is_empty() {
+                    continue;
+                }
+
+                let effective_card_max_bytes = ensure_cached_channel_max_bytes(
+                    &client,
+                    &mut sync_state,
+                    &master_seed,
+                    &my_ed_sk,
+                    drop_desc,
+                    my_prefix.as_deref(),
+                    "card",
+                    SYNC_CARD_MAX_BYTES,
+                )
+                .await;
+
+                let full_bundle = humoco_market::build_card_bundle(
+                    own_wire_info.as_ref().map(|(_, w, _)| w.as_str()),
+                    &forward_candidates,
+                    own_coords,
+                    now_secs,
+                    &trust_level_of,
+                    readers.len(),
+                    effective_card_max_bytes,
+                );
+
+                if !full_bundle.envelopes.is_empty() {
+                    let mut desired_versions: BTreeMap<String, u64> = BTreeMap::new();
+                    for env in &full_bundle.envelopes {
+                        if let Some((did, v)) = wire_meta.get(&env.card_wire) {
+                            desired_versions.insert(did.clone(), *v);
+                        }
+                    }
+
+                    let prev_base_at = sync_state
+                        .card_base_uploaded_at_by_write_url
+                        .get(&target_key)
+                        .copied();
+                    let prev_base_size = sync_state
+                        .card_base_size_by_write_url
+                        .get(&target_key)
+                        .copied();
+                    let prev_base_versions = sync_state
+                        .card_base_versions_by_write_url
+                        .get(&target_key)
+                        .cloned();
+                    let prev_last_versions = sync_state
+                        .card_last_uploaded_versions_by_write_url
+                        .get(&target_key)
+                        .cloned();
+                    let delta_active = sync_state
+                        .card_delta_active_by_write_url
+                        .get(&target_key)
+                        .copied()
+                        .unwrap_or(false);
+                    let base_fresh = prev_base_at
+                        .is_some_and(|ts| now_secs.saturating_sub(ts) < SYNC_BASE_MAX_AGE_SECS);
+
+                    let skip_card_put = force_upload != Some(true)
+                        && !readers_changed
+                        && base_fresh
+                        && !heartbeat_due
+                        && prev_last_versions.as_ref() == Some(&desired_versions);
+
+                    if skip_card_put
+                        && delta_active
+                        && prev_base_versions.as_ref() == Some(&desired_versions)
+                        && delete_delta_card_slot(
+                            &client,
+                            &master_seed,
+                            &my_ed_sk,
+                            drop_desc,
+                            &delta_prefix,
+                            now_secs,
+                        )
+                        .await
+                    {
+                        sync_state
+                            .card_delta_active_by_write_url
+                            .insert(target_key.clone(), false);
+                    }
+
+                    if !skip_card_put {
+                        let maybe_delta_blob: Option<Vec<u8>> = if !readers_changed && base_fresh {
+                            if let Some(ref base_vers) = prev_base_versions {
+                                let any_removed =
+                                    base_vers.keys().any(|did| !desired_versions.contains_key(did));
+                                let diff_dids: HashSet<String> = desired_versions
+                                    .iter()
+                                    .filter(|(did, v)| base_vers.get(*did) != Some(*v))
+                                    .map(|(did, _)| did.clone())
+                                    .collect();
+                                if !any_removed && !diff_dids.is_empty() {
+                                    let delta_own_wire = own_wire_info
+                                        .as_ref()
+                                        .filter(|(did, _, _)| diff_dids.contains(did))
+                                        .map(|(_, w, _)| w.as_str());
+                                    let delta_cards: Vec<&humoco_market::StoredCard> = diff_dids
+                                        .iter()
+                                        .filter_map(|did| card_by_did.get(did).copied())
+                                        .collect();
+                                    let delta_bundle = humoco_market::build_card_bundle(
+                                        delta_own_wire,
+                                        &delta_cards,
+                                        own_coords,
+                                        now_secs,
+                                        &trust_level_of,
+                                        readers.len(),
+                                        effective_card_max_bytes,
+                                    );
+                                    let base_sz = prev_base_size.unwrap_or(0);
+                                    humoco_market::seal_slot_blob(
+                                        &delta_bundle,
+                                        &readers,
+                                        effective_card_max_bytes,
+                                    )
+                                    .ok()
+                                    .filter(|blob| {
+                                        blob.len() <= DELTA_MAX_BYTES
+                                            && blob.len().saturating_mul(4) <= base_sz
+                                            && base_sz.saturating_add(blob.len())
+                                                <= effective_card_max_bytes
+                                    })
+                                } else {
+                                    None
                                 }
                             } else {
-                                // Stealth drop upload signed with stealth key
-                                humoco_market::sign_member_request_stealth(
-                                    &my_ed_sk,
-                                    &drop_desc.drop_pub,
-                                    "PUT",
-                                    "card",
-                                    my_prefix.as_deref(),
-                                    now_secs,
-                                    &nonce,
-                                    &blob,
-                                )
-                                .map_err(|e| format!("Stealth signing error: {}", e))
-                            };
+                                None
+                            }
+                        } else {
+                            None
+                        };
 
-                            match signed_res {
+                        if let Some(delta_blob) = maybe_delta_blob {
+                            match sign_drop_channel_request(
+                                &master_seed,
+                                &my_ed_sk,
+                                drop_desc,
+                                "PUT",
+                                "card",
+                                Some(&delta_prefix),
+                                now_secs,
+                                &delta_blob,
+                            ) {
                                 Ok(signed) => {
                                     match sync_client::put_slot(
                                         &client,
                                         &drop_desc.write_url,
                                         &signed,
                                         "card",
-                                        &blob,
+                                        &delta_blob,
                                         None,
                                     )
                                     .await
                                     {
                                         Ok(PutSlotOutcome::Saved { .. }) => {
                                             uploaded_to += 1;
+                                            any_card_uploaded = true;
+                                            sync_state
+                                                .card_delta_active_by_write_url
+                                                .insert(target_key.clone(), true);
+                                            sync_state
+                                                .card_last_uploaded_versions_by_write_url
+                                                .insert(target_key.clone(), desired_versions);
                                         }
                                         Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
-                                            errors.push(format!("Upload to {}: Precondition failed (ETag)", drop_desc.write_url));
+                                            any_card_failed = true;
+                                            errors.push(format!(
+                                                "Upload delta to {}: Precondition failed (ETag)",
+                                                drop_desc.write_url
+                                            ));
                                         }
                                         Err(e) => {
-                                            errors.push(format!("Upload to {}: {}", drop_desc.write_url, e));
+                                            any_card_failed = true;
+                                            errors.push(format!(
+                                                "Upload delta to {}: {}",
+                                                drop_desc.write_url, e
+                                            ));
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    errors.push(format!("Signing error for {}: {}", drop_desc.write_url, e));
+                                    any_card_failed = true;
+                                    errors.push(format!(
+                                        "Signing delta error for {}: {}",
+                                        drop_desc.write_url, e
+                                    ));
                                 }
                             }
-
-                            // Upload active media blobs to this drop target
-                            for (blob_id, ciphertext) in &active_media_blobs {
-                                let upload_key = format!("{}::{}", drop_desc.write_url, blob_id);
-                                let force = force_upload == Some(true);
-                                if !force && sync_state.uploaded_media_blobs.contains(&upload_key) {
-                                    continue;
-                                }
-
-                                let nonce = sync_client::generate_sync_nonce();
-                                let signed_res = if drop_desc.slot_id.is_some() {
-                                    match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
-                                        Ok((r_sk, _, _)) => {
-                                            Ok(humoco_market::sign_member_request_direct(
-                                                &r_sk,
-                                                "PUT",
-                                                &format!("media:{}", blob_id),
-                                                None,
-                                                now_secs,
-                                                &nonce,
-                                                ciphertext,
-                                            ))
-                                        }
-                                        Err(e) => Err(format!("Public drop key derivation error: {}", e)),
-                                    }
-                                } else {
-                                    humoco_market::sign_member_request_stealth(
+                        } else {
+                            match humoco_market::seal_slot_blob(
+                                &full_bundle,
+                                &readers,
+                                effective_card_max_bytes,
+                            ) {
+                                Ok(base_blob) => {
+                                    let base_len = base_blob.len();
+                                    match sign_drop_channel_request(
+                                        &master_seed,
                                         &my_ed_sk,
-                                        &drop_desc.drop_pub,
+                                        drop_desc,
                                         "PUT",
-                                        &format!("media:{}", blob_id),
-                                        None,
+                                        "card",
+                                        my_prefix.as_deref(),
                                         now_secs,
-                                        &nonce,
-                                        ciphertext,
-                                    )
-                                    .map_err(|e| format!("Stealth signing error for media: {}", e))
-                                };
-
-                                match signed_res {
-                                    Ok(signed) => {
-                                        match sync_client::put_media_blob(
-                                            &client,
-                                            &drop_desc.write_url,
-                                            &signed,
-                                            blob_id,
-                                            ciphertext,
-                                        )
-                                        .await
-                                        {
-                                            Ok(PutSlotOutcome::Saved { .. }) => {
-                                                sync_state.uploaded_media_blobs.insert(upload_key);
-                                            }
-                                            Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
-                                                log::warn!("Media upload to {} precondition failed", drop_desc.write_url);
-                                            }
-                                            Err(e) => {
-                                                log::warn!("Media upload to {} non-fatal error: {}", drop_desc.write_url, e);
+                                        &base_blob,
+                                    ) {
+                                        Ok(signed) => {
+                                            match sync_client::put_slot(
+                                                &client,
+                                                &drop_desc.write_url,
+                                                &signed,
+                                                "card",
+                                                &base_blob,
+                                                None,
+                                            )
+                                            .await
+                                            {
+                                                Ok(PutSlotOutcome::Saved { .. }) => {
+                                                    uploaded_to += 1;
+                                                    any_card_uploaded = true;
+                                                    sync_state
+                                                        .card_base_uploaded_at_by_write_url
+                                                        .insert(target_key.clone(), now_secs);
+                                                    sync_state
+                                                        .card_base_size_by_write_url
+                                                        .insert(target_key.clone(), base_len);
+                                                    sync_state
+                                                        .card_base_versions_by_write_url
+                                                        .insert(
+                                                            target_key.clone(),
+                                                            desired_versions.clone(),
+                                                        );
+                                                    sync_state
+                                                        .card_last_uploaded_versions_by_write_url
+                                                        .insert(target_key.clone(), desired_versions);
+                                                    let delta_cleared = if delta_active {
+                                                        delete_delta_card_slot(
+                                                            &client,
+                                                            &master_seed,
+                                                            &my_ed_sk,
+                                                            drop_desc,
+                                                            &delta_prefix,
+                                                            now_secs,
+                                                        )
+                                                        .await
+                                                    } else {
+                                                        true
+                                                    };
+                                                    sync_state
+                                                        .card_delta_active_by_write_url
+                                                        .insert(target_key.clone(), !delta_cleared);
+                                                }
+                                                Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
+                                                    any_card_failed = true;
+                                                    errors.push(format!(
+                                                        "Upload to {}: Precondition failed (ETag)",
+                                                        drop_desc.write_url
+                                                    ));
+                                                }
+                                                Err(e) => {
+                                                    any_card_failed = true;
+                                                    errors.push(format!(
+                                                        "Upload to {}: {}",
+                                                        drop_desc.write_url, e
+                                                    ));
+                                                }
                                             }
                                         }
-                                    }
-                                    Err(e) => {
-                                        log::warn!("Media request signing for {} non-fatal error: {}", drop_desc.write_url, e);
+                                        Err(e) => {
+                                            any_card_failed = true;
+                                            errors.push(format!(
+                                                "Signing error for {}: {}",
+                                                drop_desc.write_url, e
+                                            ));
+                                        }
                                     }
                                 }
+                                Err(e) => {
+                                    any_card_failed = true;
+                                    errors.push(format!("Failed to seal slot blob: {}", e));
+                                }
                             }
-                        }
-
-
-                        if uploaded_to > 0 {
-                            sync_state.last_upload_at = Some(now_secs);
-                            sync_state.last_readers_hash = Some(readers_hash);
-                            sync_state.last_uploaded_card_v = Some(own_card.payload.v);
                         }
                     }
-                    Err(e) => {
-                        errors.push(format!("Failed to seal slot blob: {}", e));
+                }
+
+                // Upload active media blobs to this drop target
+                for (blob_id, ciphertext) in &active_media_blobs {
+                    let upload_key = format!("{}::{}", drop_desc.write_url, blob_id);
+                    let force = force_upload == Some(true);
+                    if !force && sync_state.uploaded_media_blobs.contains(&upload_key) {
+                        continue;
+                    }
+
+                    let media_ch = format!("media:{}", blob_id);
+                    match sign_drop_channel_request(
+                        &master_seed,
+                        &my_ed_sk,
+                        drop_desc,
+                        "PUT",
+                        &media_ch,
+                        None,
+                        now_secs,
+                        ciphertext,
+                    ) {
+                        Ok(signed) => {
+                            match sync_client::put_media_blob(
+                                &client,
+                                &drop_desc.write_url,
+                                &signed,
+                                blob_id,
+                                ciphertext,
+                            )
+                            .await
+                            {
+                                Ok(PutSlotOutcome::Saved { .. }) => {
+                                    sync_state.uploaded_media_blobs.insert(upload_key);
+                                }
+                                Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
+                                    log::warn!(
+                                        "Media upload to {} precondition failed",
+                                        drop_desc.write_url
+                                    );
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "Media upload to {} non-fatal error: {}",
+                                        drop_desc.write_url,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Media request signing for {} non-fatal error: {}",
+                                drop_desc.write_url,
+                                e
+                            );
+                        }
                     }
                 }
             }
+
+            if any_card_uploaded {
+                sync_state.last_upload_at = Some(now_secs);
+                if !any_card_failed {
+                    sync_state.last_readers_hash = Some(readers_hash);
+                }
+            }
         }
-    }
+    } else if settings.market_sync_enabled
+        && !upload_targets.is_empty()
+        && sync_state.last_readers_hash.is_some()
+    {
+        let delta_prefix = humoco_market::derive_delta_prefix(my_prefix.as_deref());
+        for drop_desc in &upload_targets {
+            if drop_desc.write_url.is_empty() {
+                continue;
+            }
+            for pfx in [my_prefix.as_deref(), Some(delta_prefix.as_str())] {
+                if let Ok(signed) = sign_drop_channel_request(
+                    &master_seed,
+                    &my_ed_sk,
+                    drop_desc,
+                    "DELETE",
+                    "card",
+                    pfx,
+                    now_secs,
+                    b"",
+                ) {
+                    let _ =
+                        sync_client::delete_slot(&client, &drop_desc.write_url, &signed, "card")
+                            .await;
+                }
+            }
+        }
+        sync_state.last_readers_hash = None;
+        sync_state.card_base_uploaded_at_by_write_url.clear();
+        sync_state.card_base_size_by_write_url.clear();
+        sync_state.card_base_versions_by_write_url.clear();
+        sync_state.card_delta_active_by_write_url.clear();
+        sync_state.card_last_uploaded_versions_by_write_url.clear();
     }
 
     // 2b. Upload Channel "wot"
@@ -2034,7 +2609,18 @@ pub async fn sync_market_channels_impl(
                     }
                 }
 
-                let class_budget = crate::settings::SYNC_WOT_MAX_BYTES / 3;
+                let active_classes = (1u8..=3)
+                    .filter(|&d| filtered_readers.iter().any(|(_, cls)| *cls == d))
+                    .count()
+                    .max(1);
+                let mut total_overhead: usize = 32;
+                for d in 1u8..=3 {
+                    let cnt = filtered_readers.iter().filter(|(_, cls)| *cls == d).count();
+                    if cnt > 0 {
+                        total_overhead += humoco_market::slot_overhead_bytes(cnt).unwrap_or(8_250);
+                    }
+                }
+
                 let mut reg_modified = false;
 
                 for drop_desc in &mut wot_upload_targets {
@@ -2042,121 +2628,150 @@ pub async fn sync_market_channels_impl(
                         continue;
                     }
 
-                    match reg.prepare_drop_sync_subpackages(
-                        &drop_desc.write_url,
-                        Some(&readers_refs),
-                        Some(class_budget),
-                        force_upload.unwrap_or(false),
-                    ) {
-                        Ok(Some((subpackages, receipt))) => {
-                            if subpackages.is_empty() {
-                                continue;
-                            }
+                    let effective_wot_max_bytes = ensure_cached_channel_max_bytes(
+                        &client,
+                        &mut sync_state,
+                        &master_seed,
+                        &my_ed_sk,
+                        drop_desc,
+                        None,
+                        "wot",
+                        SYNC_WOT_MAX_BYTES,
+                    )
+                    .await;
+                    let initial_class_budget = effective_wot_max_bytes
+                        .saturating_sub(total_overhead)
+                        / active_classes;
 
-                            let mut class_payloads = Vec::with_capacity(subpackages.len());
-                            for sub in &subpackages {
-                                match serde_json::to_vec(&sub.package) {
-                                    Ok(pkg_bytes) => {
-                                        let mut reader_vks = Vec::with_capacity(sub.reader_dids.len());
-                                        for did in &sub.reader_dids {
-                                            if let Ok(vk) = human_money_core::crypto::get_pubkey_from_user_id(did) {
-                                                reader_vks.push(vk);
+                    for attempt in 0..2 {
+                        let class_budget = if attempt == 0 {
+                            initial_class_budget
+                        } else {
+                            (initial_class_budget / 2).max(1024)
+                        };
+
+                        match reg.prepare_drop_sync_subpackages(
+                            &drop_desc.write_url,
+                            Some(&readers_refs),
+                            Some(class_budget),
+                            force_upload.unwrap_or(false),
+                        ) {
+                            Ok(Some((subpackages, receipt))) => {
+                                if subpackages.is_empty() {
+                                    break;
+                                }
+
+                                let mut class_payloads = Vec::with_capacity(subpackages.len());
+                                for sub in &subpackages {
+                                    match serde_json::to_vec(&sub.package) {
+                                        Ok(pkg_bytes) => {
+                                            let mut reader_vks = Vec::with_capacity(sub.reader_dids.len());
+                                            for did in &sub.reader_dids {
+                                                if let Ok(vk) = human_money_core::crypto::get_pubkey_from_user_id(did) {
+                                                    reader_vks.push(vk);
+                                                }
                                             }
+                                            class_payloads.push((pkg_bytes, reader_vks));
                                         }
-                                        class_payloads.push((pkg_bytes, reader_vks));
-                                    }
-                                    Err(e) => {
-                                        errors.push(format!("Failed to serialize WoT subpackage: {}", e));
+                                        Err(e) => {
+                                            errors.push(format!("Failed to serialize WoT subpackage: {}", e));
+                                        }
                                     }
                                 }
-                            }
 
-                            let class_slices: Vec<(&[u8], &[ed25519_dalek::VerifyingKey])> = class_payloads
-                                .iter()
-                                .map(|(b, v)| (b.as_slice(), v.as_slice()))
-                                .filter(|(_, v)| !v.is_empty())
-                                .collect();
+                                let class_slices: Vec<(&[u8], &[ed25519_dalek::VerifyingKey])> = class_payloads
+                                    .iter()
+                                    .map(|(b, v)| (b.as_slice(), v.as_slice()))
+                                    .filter(|(_, v)| !v.is_empty())
+                                    .collect();
 
-                            if class_slices.is_empty() {
-                                continue;
-                            }
+                                if class_slices.is_empty() {
+                                    break;
+                                }
 
-                            match humoco_market::seal_multi_class_slot_blob(&class_slices, crate::settings::SYNC_WOT_MAX_BYTES) {
-                                Ok(blob) => {
-                                    let nonce = sync_client::generate_sync_nonce();
-                                    let signed_res = if drop_desc.slot_id.is_some() {
-                                        match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
-                                            Ok((r_sk, _, _)) => {
-                                                Ok(humoco_market::sign_member_request_direct(
-                                                    &r_sk,
-                                                    "PUT",
-                                                    "wot",
-                                                    None,
-                                                    now_secs,
-                                                    &nonce,
-                                                    &blob,
-                                                ))
-                                            }
-                                            Err(e) => Err(format!("Public drop key derivation error: {}", e)),
-                                        }
-                                    } else {
-                                        humoco_market::sign_member_request_stealth(
+                                match humoco_market::seal_multi_class_slot_blob(
+                                    &class_slices,
+                                    effective_wot_max_bytes,
+                                ) {
+                                    Ok(blob) => {
+                                        match sign_drop_channel_request(
+                                            &master_seed,
                                             &my_ed_sk,
-                                            &drop_desc.drop_pub,
+                                            drop_desc,
                                             "PUT",
                                             "wot",
                                             None,
                                             now_secs,
-                                            &nonce,
                                             &blob,
-                                        )
-                                        .map_err(|e| format!("Stealth signing error: {}", e))
-                                    };
-
-                                    match signed_res {
-                                        Ok(signed) => {
-                                            match sync_client::put_slot(
-                                                &client,
-                                                &drop_desc.write_url,
-                                                &signed,
-                                                "wot",
-                                                &blob,
-                                                None,
-                                            )
-                                            .await
-                                            {
-                                                Ok(PutSlotOutcome::Saved { .. }) => {
-                                                    uploaded_to += 1;
-                                                    reg.commit_drop_sync_receipt(receipt, now_secs);
-                                                    reg_modified = true;
-                                                }
-                                                Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
-                                                    errors.push(format!("Upload wot to {}: Precondition failed (ETag)", drop_desc.write_url));
-                                                }
-                                                Err(e) => {
-                                                    errors.push(format!("Upload wot to {}: {}", drop_desc.write_url, e));
+                                        ) {
+                                            Ok(signed) => {
+                                                match sync_client::put_slot(
+                                                    &client,
+                                                    &drop_desc.write_url,
+                                                    &signed,
+                                                    "wot",
+                                                    &blob,
+                                                    None,
+                                                )
+                                                .await
+                                                {
+                                                    Ok(PutSlotOutcome::Saved { .. }) => {
+                                                        uploaded_to += 1;
+                                                        sync_state.last_upload_at = Some(now_secs);
+                                                        reg.commit_drop_sync_receipt(receipt, now_secs);
+                                                        reg_modified = true;
+                                                    }
+                                                    Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
+                                                        errors.push(format!(
+                                                            "Upload wot to {}: Precondition failed (ETag)",
+                                                            drop_desc.write_url
+                                                        ));
+                                                    }
+                                                    Err(e) => {
+                                                        errors.push(format!(
+                                                            "Upload wot to {}: {}",
+                                                            drop_desc.write_url, e
+                                                        ));
+                                                    }
                                                 }
                                             }
+                                            Err(e) => {
+                                                errors.push(format!(
+                                                    "Signing error for wot on {}: {}",
+                                                    drop_desc.write_url, e
+                                                ));
+                                            }
                                         }
-                                        Err(e) => {
-                                            errors.push(format!("Signing error for wot on {}: {}", drop_desc.write_url, e));
-                                        }
+                                        break;
+                                    }
+                                    Err(humoco_market::MarketError::PayloadTooLarge(_))
+                                        if attempt == 0 =>
+                                    {
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        errors.push(format!(
+                                            "Failed to seal multi-class wot slot blob: {}",
+                                            e
+                                        ));
+                                        break;
                                     }
                                 }
-                                Err(e) => {
-                                    errors.push(format!("Failed to seal multi-class wot slot blob: {}", e));
-                                }
                             }
-                        }
-                        Ok(None) => {
-                            // Slot on transport_id is already 100% up-to-date!
-                        }
-                        Err(e) => {
-                            errors.push(format!("Failed to prepare drop sync subpackages for {}: {}", drop_desc.write_url, e));
+                            Ok(None) => {
+                                // Slot on transport_id is already 100% up-to-date!
+                                break;
+                            }
+                            Err(e) => {
+                                errors.push(format!(
+                                    "Failed to prepare drop sync subpackages for {}: {}",
+                                    drop_desc.write_url, e
+                                ));
+                                break;
+                            }
                         }
                     }
                 }
-
 
                 if reg_modified {
                     let mut service = state.service.lock().unwrap();
@@ -2341,404 +2956,510 @@ pub async fn sync_market_channels_impl(
     }
 
     // 3. Download poll
-    // Split into direct O(1) slot fetches (for drops with slot_id) and index-based fetches
-    let (direct_slot_fetches, candidate_read_urls) = {
-        let mut service = state.service.lock().unwrap();
-        let mut direct_fetches: Vec<(String, String, Option<String>)> = Vec::new(); // (read_url, slot_id, prefix)
-        let mut index_urls = Vec::new();
+    let skip_poll = respect_cooldown == Some(true)
+        && force_upload != Some(true)
+        && sync_state
+            .last_poll_at
+            .is_some_and(|last| now_secs.saturating_sub(last) < SYNC_MARKET_POLL_COOLDOWN_SECS);
 
-        // Own selected drops
-        for d in &settings.market_selected_syncs {
-            if !d.read_url.is_empty() {
-                if let Some(ref sid) = d.slot_id {
-                    direct_fetches.push((d.read_url.clone(), sid.clone(), my_prefix.clone()));
-                } else {
-                    index_urls.push(d.read_url.clone());
+    let mut sync_health_updates: Vec<(String, bool)> = Vec::new();
+    let mut updated_card_store: Option<humoco_market::CardStore> = None;
+
+    if !skip_poll {
+        sync_state.last_poll_at = Some(now_secs);
+
+        // Split into direct O(1) slot fetches (for drops with slot_id) and index-based fetches
+        let (direct_slot_fetches, candidate_read_urls) = {
+            let mut service = state.service.lock().unwrap();
+            let mut direct_fetches: Vec<(String, String, Option<String>)> = Vec::new(); // (read_url, slot_id, prefix)
+            let mut index_urls = Vec::new();
+
+            // Own selected drops
+            for d in &settings.market_selected_syncs {
+                if !d.read_url.is_empty() {
+                    if let Some(ref sid) = d.slot_id {
+                        direct_fetches.push((d.read_url.clone(), sid.clone(), my_prefix.clone()));
+                    } else {
+                        index_urls.push(d.read_url.clone());
+                    }
                 }
             }
-        }
 
-        let reg = state.get_or_load_wot_register(&mut service, password.as_deref()).ok();
-        let card_store: Option<humoco_market::CardStore> = service
-            .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+            let reg = state.get_or_load_wot_register(&mut service, password.as_deref()).ok();
+            let card_store: Option<humoco_market::CardStore> = service
+                .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
-        // Contacts drops with level >= share_min_level
-        if let Ok(contacts) = state.load_contacts(&mut service, password.as_deref()) {
-            for c in contacts {
-                let lvl = c.trust_level.unwrap_or_else(|| {
-                    if let Some(ref r) = reg {
-                        let can = canonicalize_did(&c.did).unwrap_or_else(|_| c.did.clone());
-                        r.own_contacts.get(&can).map(|e| e.level).unwrap_or(0)
+            // Contacts drops with level >= share_min_level
+            if let Ok(contacts) = state.load_contacts(&mut service, password.as_deref()) {
+                for c in contacts {
+                    let lvl = c.trust_level.unwrap_or_else(|| {
+                        if let Some(ref r) = reg {
+                            let can = canonicalize_did(&c.did).unwrap_or_else(|_| c.did.clone());
+                            r.own_contacts.get(&can).map(|e| e.level).unwrap_or(0)
+                        } else {
+                            0
+                        }
+                    });
+                    if lvl >= settings.share_min_level {
+                        for d in c.syncs {
+                            if !d.read_url.is_empty() {
+                                if let Some(ref sid) = d.slot_id {
+                                    direct_fetches.push((d.read_url.clone(), sid.clone(), None));
+                                } else {
+                                    index_urls.push(d.read_url.clone());
+                                }
+                            }
+                            if let Some(ref rep) = d.replacement {
+                                if !rep.read_url.is_empty() && rep.read_url != d.read_url {
+                                    index_urls.push(rep.read_url.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Stored cards drops where author has level >= share_min_level
+            if let Some(ref store) = card_store {
+                for sc in store.cards.values() {
+                    let author_can = canonicalize_did(&sc.card.payload.did)
+                        .unwrap_or_else(|_| sc.card.payload.did.clone());
+                    let lvl = if let Some(ref r) = reg {
+                        r.own_contacts.get(&author_can).map(|e| e.level).unwrap_or(0)
                     } else {
                         0
-                    }
-                });
-                if lvl >= settings.share_min_level {
-                    for d in c.syncs {
-                        if !d.read_url.is_empty() {
-                            if let Some(ref sid) = d.slot_id {
-                                direct_fetches.push((d.read_url.clone(), sid.clone(), None));
-                            } else {
-                                index_urls.push(d.read_url.clone());
-                            }
-                        }
-                        if let Some(ref rep) = d.replacement {
-                            if !rep.read_url.is_empty() && rep.read_url != d.read_url {
-                                index_urls.push(rep.read_url.clone());
+                    };
+                    if lvl >= settings.share_min_level {
+                        for d in &sc.card.payload.drops {
+                            if !d.read_url.is_empty() {
+                                if let Some(ref sid) = d.slot_id {
+                                    direct_fetches.push((d.read_url.clone(), sid.clone(), None));
+                                } else {
+                                    index_urls.push(d.read_url.clone());
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // Stored cards drops where author has level >= share_min_level
-        if let Some(ref store) = card_store {
-            for sc in store.cards.values() {
-                let author_can = canonicalize_did(&sc.card.payload.did).unwrap_or_else(|_| sc.card.payload.did.clone());
-                let lvl = if let Some(ref r) = reg {
-                    r.own_contacts.get(&author_can).map(|e| e.level).unwrap_or(0)
-                } else {
-                    0
-                };
-                if lvl >= settings.share_min_level {
-                    for d in &sc.card.payload.drops {
-                        if !d.read_url.is_empty() {
-                            if let Some(ref sid) = d.slot_id {
-                                direct_fetches.push((d.read_url.clone(), sid.clone(), None));
-                            } else {
-                                index_urls.push(d.read_url.clone());
-                            }
-                        }
+            let mut deduped_urls = Vec::new();
+            let mut seen_urls = HashSet::new();
+            for u in index_urls {
+                if seen_urls.insert(u.clone()) {
+                    deduped_urls.push(u);
+                    if deduped_urls.len() >= MAX_POLLED_SYNCS {
+                        break;
                     }
                 }
             }
-        }
 
-        let mut deduped_urls = Vec::new();
-        let mut seen_urls = HashSet::new();
-        for u in index_urls {
-            if seen_urls.insert(u.clone()) {
-                deduped_urls.push(u);
-                if deduped_urls.len() >= MAX_POLLED_SYNCS {
-                    break;
+            let mut deduped_direct = Vec::new();
+            let mut seen_direct = HashSet::new();
+            for item in direct_fetches {
+                if seen_direct.insert(item.clone()) {
+                    deduped_direct.push(item);
                 }
             }
-        }
 
-        let mut deduped_direct = Vec::new();
-        let mut seen_direct = HashSet::new();
-        for item in direct_fetches {
-            if seen_direct.insert(item.clone()) {
-                deduped_direct.push(item);
+            (deduped_direct, deduped_urls)
+        };
+
+        let mut store: humoco_market::CardStore = {
+            let mut service = state.service.lock().unwrap();
+            service
+                .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default()
+        };
+
+        let max_stored_cards = settings.max_stored_cards.clamp(100, 10_000);
+        let my_x25519_sk = human_money_core::crypto::ed25519_sk_to_x25519_sk(&my_ed_sk);
+
+        // 3a. Direct O(1) fetches
+        for (read_url, slot_id, prefix_opt) in direct_slot_fetches {
+            polled_syncs += 1;
+            let (base_slot_pk, slot_prefix) =
+                humoco_market::parse_slot_id(&slot_id).unwrap_or_else(|_| (slot_id.clone(), None));
+            let card_prefix = slot_prefix.as_deref().or(prefix_opt.as_deref());
+
+            // Fetch Base + Delta card slots (Base first, then optional Delta)
+            if settings.market_sync_enabled {
+                let base_pfx_str = card_prefix.unwrap_or("");
+                let base_etag_key = format!("{}:card:{}:{}", read_url, base_slot_pk, base_pfx_str);
+                let base_cached_etag = sync_state.slot_etags.get(&base_etag_key).map(|s| s.as_str());
+                match sync_client::get_slot(
+                    &client,
+                    &read_url,
+                    &base_slot_pk,
+                    card_prefix,
+                    "card",
+                    base_cached_etag,
+                )
+                .await
+                {
+                    Ok(SlotFetchResult::Modified { bytes: blob, etag }) => {
+                        sync_health_updates.push((read_url.clone(), true));
+                        if let Some(et) = etag {
+                            sync_state.slot_etags.insert(base_etag_key, et);
+                        }
+                        match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
+                            Ok(Some(bundle)) => {
+                                decrypted_slots += 1;
+                                imported_cards += import_decrypted_card_bundle(
+                                    bundle,
+                                    &read_url,
+                                    now_secs,
+                                    max_stored_cards,
+                                    state,
+                                    &mut store,
+                                    &mut sync_state,
+                                    password.as_deref(),
+                                );
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                errors.push(format!("Error opening card slot {}: {}", slot_id, e));
+                            }
+                        }
+                    }
+                    Ok(SlotFetchResult::NotModified) => {
+                        sync_health_updates.push((read_url.clone(), true));
+                    }
+                    Ok(SlotFetchResult::NotFound) => {
+                        sync_health_updates.push((read_url.clone(), true));
+                        sync_state.slot_etags.remove(&base_etag_key);
+                    }
+                    Err(e) => {
+                        sync_health_updates.push((read_url.clone(), false));
+                        errors.push(format!(
+                            "Failed to get direct card slot {} from {}: {}",
+                            slot_id, read_url, e
+                        ));
+                    }
+                }
+
+                let delta_pfx = humoco_market::derive_delta_prefix(card_prefix);
+                let delta_etag_key = format!("{}:card:{}:{}", read_url, base_slot_pk, delta_pfx);
+                let delta_cached_etag = sync_state.slot_etags.get(&delta_etag_key).map(|s| s.as_str());
+                match sync_client::get_slot(
+                    &client,
+                    &read_url,
+                    &base_slot_pk,
+                    Some(&delta_pfx),
+                    "card",
+                    delta_cached_etag,
+                )
+                .await
+                {
+                    Ok(SlotFetchResult::Modified { bytes: blob, etag }) => {
+                        if let Some(et) = etag {
+                            sync_state.slot_etags.insert(delta_etag_key, et);
+                        }
+                        match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
+                            Ok(Some(bundle)) => {
+                                decrypted_slots += 1;
+                                imported_cards += import_decrypted_card_bundle(
+                                    bundle,
+                                    &read_url,
+                                    now_secs,
+                                    max_stored_cards,
+                                    state,
+                                    &mut store,
+                                    &mut sync_state,
+                                    password.as_deref(),
+                                );
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                errors.push(format!("Error opening delta card slot {}: {}", slot_id, e));
+                            }
+                        }
+                    }
+                    Ok(SlotFetchResult::NotModified) => {}
+                    Ok(SlotFetchResult::NotFound) => {
+                        sync_state.slot_etags.remove(&delta_etag_key);
+                    }
+                    Err(e) => {
+                        errors.push(format!(
+                            "Failed to get direct delta card slot {} from {}: {}",
+                            slot_id, read_url, e
+                        ));
+                    }
+                }
             }
-        }
 
-        (deduped_direct, deduped_urls)
-    };
-
-    let mut store: humoco_market::CardStore = {
-        let mut service = state.service.lock().unwrap();
-        service
-            .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
-    };
-
-    let max_stored_cards = settings.max_stored_cards.clamp(100, 10_000);
-    let my_x25519_sk = human_money_core::crypto::ed25519_sk_to_x25519_sk(&my_ed_sk);
-    let mut sync_health_updates: Vec<(String, bool)> = Vec::new();
-
-    // 3a. Direct O(1) fetches
-    for (read_url, slot_id, prefix_opt) in direct_slot_fetches {
-        polled_syncs += 1;
-        let (base_slot_pk, slot_prefix) =
-            humoco_market::parse_slot_id(&slot_id).unwrap_or_else(|_| (slot_id.clone(), None));
-        let card_prefix = slot_prefix.as_deref().or(prefix_opt.as_deref());
-
-        // Fetch card slot
-        if settings.market_sync_enabled {
-            match sync_client::get_slot(&client, &read_url, &base_slot_pk, card_prefix, "card").await {
-                Ok(Some(blob)) => {
+            // Fetch wot slot
+            let wot_etag_key = format!("{}:wot:{}:", read_url, base_slot_pk);
+            let wot_cached_etag = sync_state.slot_etags.get(&wot_etag_key).map(|s| s.as_str());
+            match sync_client::get_slot(
+                &client,
+                &read_url,
+                &base_slot_pk,
+                None,
+                "wot",
+                wot_cached_etag,
+            )
+            .await
+            {
+                Ok(SlotFetchResult::Modified { bytes: blob, etag }) => {
                     sync_health_updates.push((read_url.clone(), true));
-                    match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
-                        Ok(Some(bundle)) => {
+                    if let Some(et) = etag {
+                        sync_state.slot_etags.insert(wot_etag_key, et);
+                    }
+                    match humoco_market::open_multi_class_slot_blob(&blob, &my_x25519_sk) {
+                        Ok(Some(bytes)) => {
                             decrypted_slots += 1;
-                            for env in bundle.envelopes {
-                                let mut service = state.service.lock().unwrap();
-                                let outcome = service.with_wallet(|wallet| {
-                                    let is_offender = |did: &str| -> bool {
-                                        use human_money_core::models::conflict::TrustStatus;
-                                        matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_))
-                                    };
-                                    let own_coords = wallet
-                                        .profile
-                                        .coordinates
-                                        .as_deref()
-                                        .and_then(humoco_market::parse_coordinates_pair);
-                                    humoco_market::accept_envelope(
-                                        &mut store,
-                                        &env,
+                            match serde_json::from_slice::<humoco_wot::WotSyncPackage>(&bytes) {
+                                Ok(pkg) => {
+                                    imported_wot_lists += import_decrypted_wot_package(
+                                        &pkg,
+                                        &read_url,
                                         now_secs,
-                                        max_stored_cards,
-                                        own_coords,
-                                        &is_offender,
-                                    )
-                                });
-
-                                if let Ok(humoco_market::AcceptOutcome::Accepted { did, .. }) = outcome {
-                                    imported_cards += 1;
-                                    let can_did = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
-                                    sync_state.sync_sources_by_did.insert(can_did, read_url.clone());
-
-                                    if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
-                                        let card_syncs: Vec<FrontendSyncDescriptor> = stored
-                                            .card
-                                            .payload
-                                            .drops
-                                            .iter()
-                                            .cloned()
-                                            .map(Into::into)
-                                            .collect();
-                                        state.update_contact_syncs_from_card(
-                                            &mut service,
-                                            &did,
-                                            &card_syncs,
-                                            password.as_deref(),
-                                        );
-                                    }
+                                        state,
+                                        password.as_deref(),
+                                        &mut errors,
+                                    );
+                                }
+                                Err(e) => {
+                                    errors.push(format!(
+                                        "Failed to parse direct wot sync package from {}: {}",
+                                        read_url, e
+                                    ));
                                 }
                             }
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            errors.push(format!("Error opening card slot {}: {}", slot_id, e));
+                            errors.push(format!("Error opening direct wot slot {}: {}", slot_id, e));
                         }
                     }
                 }
-                Ok(None) => {
+                Ok(SlotFetchResult::NotModified) => {
                     sync_health_updates.push((read_url.clone(), true));
-                    // Graceful 404: slot not uploaded yet
+                }
+                Ok(SlotFetchResult::NotFound) => {
+                    sync_health_updates.push((read_url.clone(), true));
+                    sync_state.slot_etags.remove(&wot_etag_key);
                 }
                 Err(e) => {
                     sync_health_updates.push((read_url.clone(), false));
-                    errors.push(format!("Failed to get direct card slot {} from {}: {}", slot_id, read_url, e));
+                    errors.push(format!(
+                        "Failed to get direct wot slot {} from {}: {}",
+                        slot_id, read_url, e
+                    ));
                 }
             }
         }
 
-        // Fetch wot slot
-        match sync_client::get_slot(&client, &read_url, &base_slot_pk, None, "wot").await {
-            Ok(Some(blob)) => {
-                sync_health_updates.push((read_url.clone(), true));
-                match humoco_market::open_multi_class_slot_blob(&blob, &my_x25519_sk) {
-                    Ok(Some(bytes)) => {
-                        decrypted_slots += 1;
-                        match serde_json::from_slice::<humoco_wot::WotSyncPackage>(&bytes) {
-                            Ok(pkg) => {
-                                let mut service = state.service.lock().unwrap();
-                                if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
-                                    match reg.import_sync_package(&pkg, None, now_secs) {
-                                        Ok(stats) => {
-                                            let accepted = stats.accepted_total() + stats.merged;
-                                            imported_wot_lists += accepted;
-                                            if accepted > 0 || reg.own_list_dirty {
-                                                if reg.own_list_dirty {
-                                                    let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
-                                                }
-                                                let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
-                                            }
+        // 3b. Index-based fetches
+        for read_url in candidate_read_urls {
+            polled_syncs += 1;
+            let cached_etag = sync_state.etags_by_read_url.get(&read_url).map(|s| s.as_str());
+            let cached_lm = sync_state.last_modified_by_read_url.get(&read_url).map(|s| s.as_str());
+
+            match sync_client::list_index(&client, &read_url, cached_etag, cached_lm).await {
+                Ok(IndexFetchResult::NotModified) => {
+                    sync_health_updates.push((read_url.clone(), true));
+                }
+                Ok(IndexFetchResult::Modified {
+                    mut entries,
+                    etag,
+                    last_modified,
+                }) => {
+                    sync_health_updates.push((read_url.clone(), true));
+                    if let Some(et) = etag {
+                        sync_state.etags_by_read_url.insert(read_url.clone(), et);
+                    }
+                    if let Some(lm) = last_modified {
+                        sync_state.last_modified_by_read_url.insert(read_url.clone(), lm);
+                    }
+
+                    // Order Base card entries before Delta card entries
+                    entries.sort_by_key(|e| {
+                        let ch_rank = match e.channel.as_str() {
+                            "card" => 0u8,
+                            "wot" => 1u8,
+                            _ => 2u8,
+                        };
+                        let delta_rank = if e.channel == "card"
+                            && e.prefix
+                                .as_deref()
+                                .is_some_and(|p| p == "delta" || p.ends_with("-delta"))
+                        {
+                            1u8
+                        } else {
+                            0u8
+                        };
+                        (ch_rank, delta_rank)
+                    });
+
+                    // Prune slot ETags for entries no longer advertised by this read_url index
+                    let present_keys: HashSet<String> = entries
+                        .iter()
+                        .filter(|e| e.channel == "card" || e.channel == "wot")
+                        .map(|e| {
+                            let pfx = if e.channel == "wot" {
+                                ""
+                            } else {
+                                e.prefix.as_deref().unwrap_or("")
+                            };
+                            format!("{}:{}:{}:{}", read_url, e.channel, e.id, pfx)
+                        })
+                        .collect();
+                    let url_prefix = format!("{}:", read_url);
+                    sync_state.slot_etags.retain(|k, _| {
+                        if k.starts_with(&url_prefix) {
+                            present_keys.contains(k)
+                        } else {
+                            true
+                        }
+                    });
+
+                    for entry in entries {
+                        if entry.channel != "card" && entry.channel != "wot" {
+                            continue;
+                        }
+                        if entry.channel == "card" && !settings.market_sync_enabled {
+                            continue;
+                        }
+                        let pfx_opt = if entry.channel == "wot" {
+                            None
+                        } else {
+                            entry.prefix.as_deref()
+                        };
+                        let pfx_str = pfx_opt.unwrap_or("");
+                        let etag_key = format!("{}:{}:{}:{}", read_url, entry.channel, entry.id, pfx_str);
+                        let cached_slot_etag =
+                            sync_state.slot_etags.get(&etag_key).map(|s| s.as_str());
+                        if let (Some(e_tag), Some(c_tag)) = (
+                            entry
+                                .etag
+                                .as_deref()
+                                .map(|s| s.trim().trim_matches('"'))
+                                .filter(|s| !s.is_empty()),
+                            cached_slot_etag,
+                        ) {
+                            if e_tag == c_tag.trim().trim_matches('"') {
+                                continue;
+                            }
+                        }
+
+                        match sync_client::get_slot(
+                            &client,
+                            &read_url,
+                            &entry.id,
+                            pfx_opt,
+                            &entry.channel,
+                            cached_slot_etag,
+                        )
+                        .await
+                        {
+                            Ok(SlotFetchResult::Modified { bytes: blob, etag }) => {
+                                if let Some(et) = etag.or_else(|| entry.etag.clone()) {
+                                    sync_state.slot_etags.insert(etag_key, et);
+                                }
+                                if entry.channel == "card" {
+                                    match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
+                                        Ok(Some(bundle)) => {
+                                            decrypted_slots += 1;
+                                            imported_cards += import_decrypted_card_bundle(
+                                                bundle,
+                                                &read_url,
+                                                now_secs,
+                                                max_stored_cards,
+                                                state,
+                                                &mut store,
+                                                &mut sync_state,
+                                                password.as_deref(),
+                                            );
                                         }
+                                        Ok(None) => {}
                                         Err(e) => {
-                                            errors.push(format!("Failed to import direct wot package from {}: {}", read_url, e));
+                                            errors.push(format!(
+                                                "Error opening card slot {}: {}",
+                                                entry.id, e
+                                            ));
                                         }
                                     }
-                                }
-                            }
-                            Err(e) => {
-                                errors.push(format!("Failed to parse direct wot sync package from {}: {}", read_url, e));
-                            }
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        errors.push(format!("Error opening direct wot slot {}: {}", slot_id, e));
-                    }
-                }
-            }
-            Ok(None) => {
-                sync_health_updates.push((read_url.clone(), true));
-                // Graceful 404: slot not uploaded yet
-            }
-            Err(e) => {
-                sync_health_updates.push((read_url.clone(), false));
-                errors.push(format!("Failed to get direct wot slot {} from {}: {}", slot_id, read_url, e));
-            }
-        }
-    }
-
-    // 3b. Index-based fetches
-    for read_url in candidate_read_urls {
-        polled_syncs += 1;
-        let cached_etag = sync_state.etags_by_read_url.get(&read_url).map(|s| s.as_str());
-        let cached_lm = sync_state.last_modified_by_read_url.get(&read_url).map(|s| s.as_str());
-
-        match sync_client::list_index(&client, &read_url, cached_etag, cached_lm).await {
-            Ok(IndexFetchResult::NotModified) => {
-                sync_health_updates.push((read_url.clone(), true));
-            }
-            Ok(IndexFetchResult::Modified {
-                entries,
-                etag,
-                last_modified,
-            }) => {
-                sync_health_updates.push((read_url.clone(), true));
-                if let Some(et) = etag {
-                    sync_state.etags_by_read_url.insert(read_url.clone(), et);
-                }
-                if let Some(lm) = last_modified {
-                    sync_state.last_modified_by_read_url.insert(read_url.clone(), lm);
-                }
-
-                for entry in entries {
-                    if entry.channel != "card" && entry.channel != "wot" {
-                        continue;
-                    }
-                    if entry.channel == "card" && !settings.market_sync_enabled {
-                        continue;
-                    }
-                    let pfx_str = entry.prefix.as_deref().unwrap_or("");
-                    let mtime_key = format!("{}:{}:{}:{}", read_url, entry.channel, entry.id, pfx_str);
-                    if sync_state.slot_mtimes.get(&mtime_key) == Some(&entry.mtime) {
-                        continue;
-                    }
-
-                    if entry.channel == "card" {
-                        match sync_client::get_slot(&client, &read_url, &entry.id, entry.prefix.as_deref(), "card").await {
-                            Ok(Some(blob)) => {
-                                sync_state.slot_mtimes.insert(mtime_key, entry.mtime);
-                                match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
-                                    Ok(Some(bundle)) => {
-                                        decrypted_slots += 1;
-                                        for env in bundle.envelopes {
-                                            let mut service = state.service.lock().unwrap();
-                                            let outcome = service.with_wallet(|wallet| {
-                                                let is_offender = |did: &str| -> bool {
-                                                    use human_money_core::models::conflict::TrustStatus;
-                                                    matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_))
-                                                };
-                                                let own_coords = wallet
-                                                    .profile
-                                                    .coordinates
-                                                    .as_deref()
-                                                    .and_then(humoco_market::parse_coordinates_pair);
-                                                humoco_market::accept_envelope(
-                                                    &mut store,
-                                                    &env,
-                                                    now_secs,
-                                                    max_stored_cards,
-                                                    own_coords,
-                                                    &is_offender,
-                                                )
-                                            });
-
-                                            if let Ok(humoco_market::AcceptOutcome::Accepted { did, .. }) = outcome {
-                                                imported_cards += 1;
-                                                let can_did = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
-                                                sync_state.sync_sources_by_did.insert(can_did, read_url.clone());
-
-                                                if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
-                                                    let card_syncs: Vec<FrontendSyncDescriptor> = stored
-                                                        .card
-                                                        .payload
-                                                        .drops
-                                                        .iter()
-                                                        .cloned()
-                                                        .map(Into::into)
-                                                        .collect();
-                                                    state.update_contact_syncs_from_card(
-                                                        &mut service,
-                                                        &did,
-                                                        &card_syncs,
-                                                        password.as_deref(),
-                                                    );
+                                } else {
+                                    match humoco_market::open_multi_class_slot_blob(
+                                        &blob,
+                                        &my_x25519_sk,
+                                    ) {
+                                        Ok(Some(bytes)) => {
+                                            decrypted_slots += 1;
+                                            match serde_json::from_slice::<humoco_wot::WotSyncPackage>(
+                                                &bytes,
+                                            ) {
+                                                Ok(pkg) => {
+                                                    imported_wot_lists +=
+                                                        import_decrypted_wot_package(
+                                                            &pkg,
+                                                            &read_url,
+                                                            now_secs,
+                                                            state,
+                                                            password.as_deref(),
+                                                            &mut errors,
+                                                        );
+                                                }
+                                                Err(e) => {
+                                                    errors.push(format!(
+                                                        "Failed to parse wot sync package from {}: {}",
+                                                        read_url, e
+                                                    ));
                                                 }
                                             }
                                         }
-                                    }
-                                    Ok(None) => {}
-                                    Err(e) => {
-                                        errors.push(format!("Error opening card slot {}: {}", entry.id, e));
-                                    }
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                errors.push(format!("Failed to get card slot {}: {}", entry.id, e));
-                            }
-                        }
-                    } else if entry.channel == "wot" {
-                        match sync_client::get_slot(&client, &read_url, &entry.id, None, "wot").await {
-                            Ok(Some(blob)) => {
-                                sync_state.slot_mtimes.insert(mtime_key, entry.mtime);
-                                match humoco_market::open_multi_class_slot_blob(&blob, &my_x25519_sk) {
-                                    Ok(Some(bytes)) => {
-                                        decrypted_slots += 1;
-                                        match serde_json::from_slice::<humoco_wot::WotSyncPackage>(&bytes) {
-                                            Ok(pkg) => {
-                                                let mut service = state.service.lock().unwrap();
-                                                if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
-                                                    match reg.import_sync_package(&pkg, None, now_secs) {
-                                                        Ok(stats) => {
-                                                            let accepted = stats.accepted_total() + stats.merged;
-                                                            imported_wot_lists += accepted;
-                                                            if accepted > 0 || reg.own_list_dirty {
-                                                                if reg.own_list_dirty {
-                                                                    let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
-                                                                }
-                                                                let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
-                                                            }
-                                                        }
-                                                        Err(e) => {
-                                                            errors.push(format!("Failed to import wot package from {}: {}", read_url, e));
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                errors.push(format!("Failed to parse wot sync package from {}: {}", read_url, e));
-                                            }
+                                        Ok(None) => {}
+                                        Err(e) => {
+                                            errors.push(format!(
+                                                "Error opening wot slot {}: {}",
+                                                entry.id, e
+                                            ));
                                         }
                                     }
-                                    Ok(None) => {}
-                                    Err(e) => {
-                                        errors.push(format!("Error opening wot slot {}: {}", entry.id, e));
+                                }
+                            }
+                            Ok(SlotFetchResult::NotModified) => {
+                                if cached_slot_etag.is_none() {
+                                    if let Some(et) = entry.etag.clone() {
+                                        sync_state.slot_etags.insert(etag_key, et);
                                     }
                                 }
                             }
-                            Ok(None) => {}
+                            Ok(SlotFetchResult::NotFound) => {
+                                sync_state.slot_etags.remove(&etag_key);
+                            }
                             Err(e) => {
-                                errors.push(format!("Failed to get wot slot {}: {}", entry.id, e));
+                                errors.push(format!(
+                                    "Failed to get {} slot {}: {}",
+                                    entry.channel, entry.id, e
+                                ));
                             }
                         }
                     }
                 }
-            }
-            Err(e) => {
-                sync_health_updates.push((read_url.clone(), false));
-                errors.push(format!("Failed to list index from {}: {}", read_url, e));
+                Err(e) => {
+                    sync_health_updates.push((read_url.clone(), false));
+                    errors.push(format!("Failed to list index from {}: {}", read_url, e));
+                }
             }
         }
+
+        updated_card_store = Some(store);
     }
 
     // Save updated CardStore, StoredSyncState, and contact health updates
     {
         let mut service = state.service.lock().unwrap();
-        if let Ok(bytes) = serde_json::to_vec(&store) {
-            let _ = service.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password.as_deref());
+        if let Some(ref store) = updated_card_store {
+            if let Ok(bytes) = serde_json::to_vec(store) {
+                let _ = service.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password.as_deref());
+            }
         }
         if let Ok(bytes) = serde_json::to_vec(&sync_state) {
             let _ = service.save_encrypted_data(MARKET_SYNC_KEY, &bytes, password.as_deref());
@@ -2772,10 +3493,11 @@ pub async fn sync_market_channels_impl(
 pub async fn sync_market_channels(
     is_wifi: Option<bool>,
     force_upload: Option<bool>,
+    respect_cooldown: Option<bool>,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendMarketSyncResult, FrontendError> {
-    sync_market_channels_impl(is_wifi, force_upload, password, &state).await
+    sync_market_channels_with_options(is_wifi, force_upload, respect_cooldown, password, &state).await
 }
 
 pub async fn delete_own_sync_slots_impl(
@@ -2802,33 +3524,27 @@ pub async fn delete_own_sync_slots_impl(
     let client = sync_client::create_sync_http_client();
     let mut deleted_count = 0;
     let now = sync_client::current_unix_timestamp();
+    let delta_prefix = humoco_market::derive_delta_prefix(my_prefix.as_deref());
 
     for drop_desc in &drops {
-        for ch in ["card", "wot", "backup", "post"] {
-            let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
-            let nonce = sync_client::generate_sync_nonce();
-            let signed_res = if drop_desc.slot_id.is_some() {
-                match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
-                    Ok((r_sk, _, _)) => {
-                        Ok(humoco_market::sign_member_request_direct(&r_sk, "DELETE", ch, ch_prefix, now, &nonce, b""))
-                    }
-                    Err(e) => Err(e.to_string()),
-                }
-            } else {
-                humoco_market::sign_member_request_stealth(
-                    &my_ed_sk,
-                    &drop_desc.drop_pub,
-                    "DELETE",
-                    ch,
-                    ch_prefix,
-                    now,
-                    &nonce,
-                    b"",
-                )
-                .map_err(|e| e.to_string())
-            };
-
-            if let Ok(signed) = signed_res {
+        let desc: humoco_market::DropDescriptor = drop_desc.clone().into();
+        for (ch, ch_prefix) in [
+            ("card", my_prefix.as_deref()),
+            ("card", Some(delta_prefix.as_str())),
+            ("wot", None),
+            ("backup", my_prefix.as_deref()),
+            ("post", my_prefix.as_deref()),
+        ] {
+            if let Ok(signed) = sign_drop_channel_request(
+                &master_seed,
+                &my_ed_sk,
+                &desc,
+                "DELETE",
+                ch,
+                ch_prefix,
+                now,
+                b"",
+            ) {
                 if sync_client::delete_slot(&client, &drop_desc.write_url, &signed, ch)
                     .await
                     .is_ok()
@@ -2848,7 +3564,7 @@ pub async fn delete_own_sync_slots_impl(
         }
     }
 
-    // Clear upload state in sync_state
+    // Clear upload and poll state in sync_state
     {
         let mut service = state.service.lock().unwrap();
         if let Ok(mut sync_state) = service
@@ -2860,8 +3576,13 @@ pub async fn delete_own_sync_slots_impl(
             })
         {
             sync_state.last_upload_at = None;
+            sync_state.last_poll_at = None;
             sync_state.last_readers_hash = None;
-            sync_state.last_uploaded_card_v = None;
+            sync_state.card_base_uploaded_at_by_write_url.clear();
+            sync_state.card_base_size_by_write_url.clear();
+            sync_state.card_base_versions_by_write_url.clear();
+            sync_state.card_delta_active_by_write_url.clear();
+            sync_state.card_last_uploaded_versions_by_write_url.clear();
             if let Ok(bytes) = serde_json::to_vec(&sync_state) {
                 let _ = service.save_encrypted_data(MARKET_SYNC_KEY, &bytes, password.as_deref());
             }
@@ -3017,16 +3738,21 @@ pub async fn probe_public_sync_impl(
             .map_err(|e| FrontendError::from(e.to_string()))?;
 
     let mut authorized_channels = Vec::new();
+    let mut channel_max_bytes_updates = Vec::new();
     for ch in ["card", "wot", "backup", "post"] {
         let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
         if let Ok(cap) =
             sync_client::head_slot_capability(&probe_client, &canonical_url, &access_pubkey, ch_prefix, ch).await
         {
+            if let Some(mb) = cap.max_bytes.filter(|&v| v > 0) {
+                channel_max_bytes_updates.push((canonical_url.clone(), ch.to_string(), mb));
+            }
             if cap.authorized {
                 authorized_channels.push(ch.to_string());
             }
         }
     }
+    save_channel_max_bytes_updates(state, password.as_deref(), &channel_max_bytes_updates);
 
     Ok(FrontendPublicSyncInfo {
         write_url: canonical_url,
@@ -3088,16 +3814,21 @@ pub async fn save_public_sync_impl(
         .or_else(|| info_opt.as_ref().and_then(|i| i.register_url.clone()));
 
     let mut authorized_channels = Vec::new();
+    let mut channel_max_bytes_updates = Vec::new();
     for ch in ["card", "wot", "backup", "post"] {
         let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
         if let Ok(cap) =
             sync_client::head_slot_capability(&probe_client, &canonical_url, &access_pubkey, ch_prefix, ch).await
         {
+            if let Some(mb) = cap.max_bytes.filter(|&v| v > 0) {
+                channel_max_bytes_updates.push((canonical_url.clone(), ch.to_string(), mb));
+            }
             if cap.authorized {
                 authorized_channels.push(ch.to_string());
             }
         }
     }
+    save_channel_max_bytes_updates(state, password.as_deref(), &channel_max_bytes_updates);
 
     {
         let mut service = state.service.lock().unwrap();
@@ -3356,7 +4087,7 @@ pub fn get_sync_overview_status_impl(
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
-    let last_sync_at = sync_state.and_then(|s| s.last_upload_at);
+    let last_sync_at = sync_state.and_then(|s| s.last_upload_at.into_iter().chain(s.last_poll_at).max());
 
     Ok(FrontendSyncOverviewStatus {
         connected_count,
@@ -3563,15 +4294,31 @@ pub(crate) mod tests {
                                     ).into_bytes()
                                 } else if method == "HEAD" && path.starts_with("/sync.php") {
                                     let req_pub = headers.get("x-drop-pubkey").cloned().unwrap_or_default();
-                                    let m = members.lock().unwrap();
-                                    if m.contains(&req_pub) {
-                                        format!(
-                                            "HTTP/1.1 200 OK\r\nX-Drop-Max-Bytes: 65536\r\nX-Drop-TTL-Days: 30\r\n{}Content-Length: 0\r\n\r\n",
-                                            rot_hdr_line
-                                        ).into_bytes()
+                                    let ch = headers.get("x-channel").cloned().unwrap_or_else(|| "card".to_string());
+                                    let prefix_opt = headers.get("x-drop-prefix").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                                    let key = match prefix_opt {
+                                        Some(ref pfx) => format!("{}_{}.{}", req_pub, pfx, ch),
+                                        None => format!("{}.{}", req_pub, ch),
+                                    };
+                                    let is_auth = members.lock().unwrap().contains(&req_pub);
+                                    let occupied = slots.lock().unwrap().contains_key(&key);
+                                    let etag_hdr = if is_auth && occupied {
+                                        etags
+                                            .lock()
+                                            .unwrap()
+                                            .get(&key)
+                                            .map(|e| format!("ETag: {}\r\n", e))
+                                            .unwrap_or_default()
                                     } else {
-                                        format!("HTTP/1.1 403 Forbidden\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
-                                    }
+                                        String::new()
+                                    };
+                                    format!(
+                                        "HTTP/1.1 200 OK\r\nCache-Control: no-store\r\nX-Drop-Authorized: {}\r\nX-Drop-Channels: card,wot,backup,post\r\nX-Channel-Max-Bytes: 524288\r\nX-Channel-Ttl-Days: 30\r\nX-Slot-Occupied: {}\r\n{}{}Content-Length: 0\r\n\r\n",
+                                        if is_auth { "true" } else { "false" },
+                                        if occupied { "true" } else { "false" },
+                                        etag_hdr,
+                                        rot_hdr_line
+                                    ).into_bytes()
                                 } else if method == "PUT" && path.starts_with("/sync.php") && path.contains("members") {
                                     *put_members.lock().unwrap() += 1;
                                     #[derive(serde::Deserialize)]
@@ -3665,6 +4412,7 @@ pub(crate) mod tests {
                                         let dot_prefix = format!("{}.", pubkey);
                                         let under_prefix = format!("{}_", pubkey);
                                         slots.lock().unwrap().retain(|k, _| !k.starts_with(&dot_prefix) && !k.starts_with(&under_prefix));
+                                        etags.lock().unwrap().retain(|k, _| !k.starts_with(&dot_prefix) && !k.starts_with(&under_prefix));
                                     } else {
                                         let channel = headers.get("x-channel").cloned().unwrap_or_else(|| "card".to_string());
                                         let prefix_opt = headers.get("x-drop-prefix").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -3673,10 +4421,12 @@ pub(crate) mod tests {
                                             None => format!("{}.{}", pubkey, channel),
                                         };
                                         slots.lock().unwrap().remove(&key);
+                                        etags.lock().unwrap().remove(&key);
                                     }
                                     format!("HTTP/1.1 204 No Content\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
                                 } else if method == "GET" && path.contains("index.json") {
                                     let s_map = slots.lock().unwrap();
+                                    let e_map = etags.lock().unwrap();
                                     let mut entries = Vec::new();
                                     for (k, v) in s_map.iter() {
                                         if let Some((id_part, ch)) = k.split_once('.') {
@@ -3684,12 +4434,16 @@ pub(crate) mod tests {
                                                 Some((pk, pfx)) => (pk, Some(pfx)),
                                                 None => (id_part, None),
                                             };
+                                            let slot_etag = e_map
+                                                .get(k)
+                                                .map(|e| e.trim_matches('"').to_string())
+                                                .unwrap_or_else(|| hex::encode(&sha2::Sha256::digest(v)[..16]));
                                             let mut obj = serde_json::json!({
                                                 "id": id,
                                                 "channel": ch,
                                                 "mtime": 1000,
                                                 "size": v.len(),
-                                                "etag": "etag123"
+                                                "etag": slot_etag
                                             });
                                             if let Some(pfx) = prefix {
                                                 obj["prefix"] = serde_json::Value::String(pfx.to_string());
@@ -3698,21 +4452,44 @@ pub(crate) mod tests {
                                         }
                                     }
                                     let body_str = serde_json::to_string(&entries).unwrap();
-                                    format!(
-                                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: \"index_etag\"\r\nContent-Length: {}\r\n\r\n{}",
-                                        body_str.len(), body_str
-                                    ).into_bytes()
+                                    let idx_hash = hex::encode(&sha2::Sha256::digest(body_str.as_bytes())[..16]);
+                                    let idx_etag = format!("\"{}\"", idx_hash);
+                                    let not_modified = headers
+                                        .get("if-none-match")
+                                        .is_some_and(|inm| inm.trim().trim_matches('"') == idx_hash || inm.trim() == "*");
+                                    if not_modified {
+                                        format!("HTTP/1.1 304 Not Modified\r\nETag: {}\r\nContent-Length: 0\r\n\r\n", idx_etag).into_bytes()
+                                    } else {
+                                        format!(
+                                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: {}\r\nContent-Length: {}\r\n\r\n{}",
+                                            idx_etag, body_str.len(), body_str
+                                        ).into_bytes()
+                                    }
                                 } else if method == "GET" && path.ends_with(".bin") {
                                     let fname = path.rsplit('/').next().unwrap_or("");
                                     let slot_key = fname.strip_suffix(".bin").unwrap_or(fname);
                                     let s_map = slots.lock().unwrap();
                                     if let Some(data) = s_map.get(slot_key) {
-                                        let mut resp = format!(
-                                            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
-                                            data.len()
-                                        ).into_bytes();
-                                        resp.extend_from_slice(data);
-                                        resp
+                                        let cur_etag = etags
+                                            .lock()
+                                            .unwrap()
+                                            .get(slot_key)
+                                            .cloned()
+                                            .unwrap_or_else(|| format!("\"{}\"", hex::encode(&sha2::Sha256::digest(data)[..16])));
+                                        let clean_etag = cur_etag.trim_matches('"');
+                                        let not_modified = headers
+                                            .get("if-none-match")
+                                            .is_some_and(|inm| inm.trim().trim_matches('"') == clean_etag || inm.trim() == "*");
+                                        if not_modified {
+                                            format!("HTTP/1.1 304 Not Modified\r\nETag: {}\r\nContent-Length: 0\r\n\r\n", cur_etag).into_bytes()
+                                        } else {
+                                            let mut resp = format!(
+                                                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nETag: {}\r\nContent-Length: {}\r\n\r\n",
+                                                cur_etag, data.len()
+                                            ).into_bytes();
+                                            resp.extend_from_slice(data);
+                                            resp
+                                        }
                                     } else {
                                         b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
                                     }
@@ -3720,7 +4497,17 @@ pub(crate) mod tests {
                                     b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
                                 };
 
-                                let _ = stream.write_all(&response).await;
+                                if let Some(crlf_pos) = response.windows(2).position(|w| w == b"\r\n") {
+                                    let insert_at = crlf_pos + 2;
+                                    let mut framed = Vec::with_capacity(response.len() + 19);
+                                    framed.extend_from_slice(&response[..insert_at]);
+                                    framed.extend_from_slice(b"Connection: close\r\n");
+                                    framed.extend_from_slice(&response[insert_at..]);
+                                    let _ = stream.write_all(&framed).await;
+                                } else {
+                                    let _ = stream.write_all(&response).await;
+                                }
+                                let _ = stream.shutdown().await;
                             });
                         }
                     }
@@ -4950,5 +5737,370 @@ pub(crate) mod tests {
         assert!(pushed_after_downgrade > 0, "Trust change must trigger channel member re-upload");
         let puts_after_downgrade = *server.put_members_count.lock().unwrap();
         assert!(puts_after_downgrade > puts_after_add, "Server must receive updated members PUT");
+    }
+
+    fn build_signed_test_card_envelope(
+        seed_byte: u8,
+        v: u64,
+        valid_until: u64,
+        item_count: usize,
+        hops: u8,
+    ) -> humoco_market::CardEnvelope {
+        use ed25519_dalek::SigningKey;
+        use rand::rngs::StdRng;
+        use rand::{RngCore, SeedableRng};
+
+        let sk = SigningKey::from_bytes(&[seed_byte; 32]);
+        let did = human_money_core::crypto::create_user_id(&sk.verifying_key(), Some("tx")).unwrap();
+        let mut rng = StdRng::seed_from_u64((seed_byte as u64) * 1000 + v);
+        let mut items = Vec::with_capacity(item_count + 1);
+        items.push((
+            humoco_market::CardItem::Name {
+                first_name: Some(format!("Maker-{}", seed_byte)),
+                last_name: Some(format!("V{}", v)),
+            },
+            1,
+        ));
+        for idx in 0..item_count {
+            let mut entropy = [0u8; 24];
+            rng.fill_bytes(&mut entropy);
+            let title = format!("Craft-{}-{}", idx, hex::encode(&entropy[..6]));
+            let desc = format!("Local work batch {}", hex::encode(&entropy[6..24]));
+            items.push((
+                humoco_market::CardItem::Skill(humoco_market::Skill {
+                    title,
+                    text: Some(desc),
+                    pricing: Some("10 M/h".to_string()),
+                    is_remote: idx % 2 == 0,
+                }),
+                1,
+            ));
+        }
+
+        let card = humoco_market::sign_sd_card(
+            humoco_market::CardPayloadInput {
+                did,
+                v,
+                valid_until,
+                max_hops: 3,
+                ad_count: 0,
+                allow_inquiries: true,
+                drops: vec![],
+            },
+            items,
+            &sk,
+        )
+        .unwrap();
+        let wire = humoco_market::render_wire(&card, hops, humoco_market::WireFilter::Full).unwrap();
+        humoco_market::CardEnvelope {
+            card_wire: wire,
+            hops,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_base_and_delta_card_bundle_and_compaction_on_new_reader() {
+        let base_dir = temp_test_dir("base_delta_compaction");
+        let password = "TestPassword123!";
+
+        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+        let r1_service = setup_test_app(&base_dir.join("r1"), "Reader1", READER1_PHRASE, password);
+        let r2_service = setup_test_app(&base_dir.join("r2"), "Reader2", READER2_PHRASE, password);
+
+        let bob_state = create_test_state(bob_service);
+        let r1_state = create_test_state(r1_service);
+        let r2_state = create_test_state(r2_service);
+
+        let r1_did = r1_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let r2_did = r2_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let draft = prepare_sync_setup_impl(None, None, None, Some(password.to_string()), &bob_state).unwrap();
+        let server = MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+        let finalize_status = finalize_sync_setup_impl(server.base_url.clone(), Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+
+        set_selected_upload_syncs_impl(
+            vec![finalize_status.descriptor.clone()],
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .await
+        .unwrap();
+
+        // Bob trusts Reader 1 initially and disables WoT share so we assert pure card upload counts cleanly
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let mut settings = bob_state.get_cached_settings().unwrap_or_default();
+            settings.wot_share_via_sync = false;
+            bob_state.save_settings(&mut s, settings, Some(password)).unwrap();
+            bob_state
+                .save_contact(
+                    &mut s,
+                    FrontendContact {
+                        did: r1_did.clone(),
+                        profile: FrontendUserProfile {
+                            first_name: Some("Reader1".to_string()),
+                            ..Default::default()
+                        },
+                        tags: vec![],
+                        added_at: "2026-01-01T00:00:00Z".into(),
+                        notes: None,
+                        trust_level: Some(2),
+                        desired_hops: Some(3),
+                        has_peer_list: false,
+                        peer_list_updated_at: None,
+                        syncs: vec![],
+                    },
+                    Some(password),
+                )
+                .unwrap();
+        }
+        sync_channel_members_impl(Some(password), &bob_state).await.unwrap();
+
+        // Populate Bob's CardStore with 18 rich cards (~8-10 KB compressed Base)
+        let now_secs = sync_client::current_unix_timestamp();
+        let valid_until = now_secs + 365 * 86_400;
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let mut store = humoco_market::CardStore::default();
+            for seed in 20u8..38u8 {
+                let env = build_signed_test_card_envelope(seed, now_secs, valid_until, 5, 1);
+                humoco_market::accept_envelope(&mut store, &env, now_secs, 2000, None, &|_| false);
+            }
+            let bytes = serde_json::to_vec(&store).unwrap();
+            s.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, Some(password))
+                .unwrap();
+        }
+
+        // 1. Cold upload creates Base card slot (no delta yet)
+        let first_up = sync_market_channels_impl(None, Some(true), Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+        assert_eq!(first_up.uploaded_to, 1);
+
+        let keys_after_base: Vec<String> = server.slots.lock().unwrap().keys().cloned().collect();
+        assert_eq!(keys_after_base.len(), 1);
+        let base_key = keys_after_base[0].clone();
+        assert!(!base_key.contains("delta"));
+        let base_bytes_before = server.slots.lock().unwrap().get(&base_key).unwrap().clone();
+        assert!(base_bytes_before.len() > 4096, "Base should be large enough for <25% delta");
+
+        // 2. Update 1 small card -> Delta upload ONLY (Base bytes untouched!)
+        let updated_v = now_secs + 120;
+        let updated_env = build_signed_test_card_envelope(20, updated_v, valid_until, 0, 1);
+        let updated_did = humoco_market::verify_sd_card(&updated_env.card_wire).unwrap().payload.did;
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let raw = s.load_encrypted_data(MARKET_CARD_STORE_KEY, Some(password)).unwrap();
+            let mut store: humoco_market::CardStore = serde_json::from_slice(&raw).unwrap();
+            humoco_market::accept_envelope(&mut store, &updated_env, updated_v, 2000, None, &|_| false);
+            let bytes = serde_json::to_vec(&store).unwrap();
+            s.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, Some(password))
+                .unwrap();
+        }
+
+        let delta_up = sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+        assert_eq!(delta_up.uploaded_to, 1);
+        let keys_after_delta: Vec<String> = server.slots.lock().unwrap().keys().cloned().collect();
+        assert_eq!(keys_after_delta.len(), 2, "Server must hold Base + Delta slots");
+        assert!(keys_after_delta.iter().any(|k| k.contains("-delta.card")));
+        assert_eq!(
+            server.slots.lock().unwrap().get(&base_key).unwrap().as_slice(),
+            base_bytes_before.as_slice(),
+            "Base slot must stay unchanged on Delta upload"
+        );
+
+        // 3. Reader 1 syncs and gets both Base and Delta (including updated_v), and subsequent background poll hits 20m cooldown
+        {
+            let mut s = r1_state.service.lock().unwrap();
+            let mut settings = r1_state.get_cached_settings().unwrap_or_default();
+            settings.market_selected_syncs = vec![finalize_status.descriptor.clone()];
+            r1_state.save_settings(&mut s, settings, Some(password)).unwrap();
+        }
+        let r1_res = sync_market_channels_impl(None, None, Some(password.to_string()), &r1_state)
+            .await
+            .unwrap();
+        assert_eq!(r1_res.decrypted_slots, 2, "Reader 1 must decrypt Base and Delta slots");
+        assert_eq!(r1_res.imported_cards, 19);
+        {
+            let mut s = r1_state.service.lock().unwrap();
+            let raw = s.load_encrypted_data(MARKET_CARD_STORE_KEY, Some(password)).unwrap();
+            let r1_store: humoco_market::CardStore = serde_json::from_slice(&raw).unwrap();
+            assert_eq!(r1_store.cards.len(), 18);
+            let imported = r1_store.cards.values().find(|c| c.card.payload.did == updated_did).unwrap();
+            assert_eq!(imported.card.payload.v, updated_v);
+        }
+
+        let r1_cooldown = sync_market_channels_with_options(
+            None,
+            None,
+            Some(true),
+            Some(password.to_string()),
+            &r1_state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r1_cooldown.polled_syncs, 0, "Background poll inside 20m cooldown must skip download polling");
+
+        // 4. Bob authorizes Reader 2 -> readers_hash changes -> Compaction (new Base + DELETE Delta)
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            bob_state
+                .save_contact(
+                    &mut s,
+                    FrontendContact {
+                        did: r2_did.clone(),
+                        profile: FrontendUserProfile {
+                            first_name: Some("Reader2".to_string()),
+                            ..Default::default()
+                        },
+                        tags: vec![],
+                        added_at: "2026-01-01T00:00:00Z".into(),
+                        notes: None,
+                        trust_level: Some(2),
+                        desired_hops: Some(3),
+                        has_peer_list: false,
+                        peer_list_updated_at: None,
+                        syncs: vec![],
+                    },
+                    Some(password),
+                )
+                .unwrap();
+        }
+        sync_channel_members_impl(Some(password), &bob_state).await.unwrap();
+
+        let compact_up = sync_market_channels_impl(None, Some(true), Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+        assert_eq!(compact_up.uploaded_to, 1);
+        let keys_after_compact: Vec<String> = server.slots.lock().unwrap().keys().cloned().collect();
+        assert_eq!(
+            keys_after_compact.len(),
+            1,
+            "Compaction must delete Delta slot after Base PUT (keys={:?}, errors={:?})",
+            keys_after_compact,
+            compact_up.errors
+        );
+        assert!(!keys_after_compact[0].contains("delta"));
+
+        // Reader 2 decrypts consolidated Base and receives all 18 cards incl. updated_v
+        {
+            let mut s = r2_state.service.lock().unwrap();
+            let mut settings = r2_state.get_cached_settings().unwrap_or_default();
+            settings.market_selected_syncs = vec![finalize_status.descriptor.clone()];
+            r2_state.save_settings(&mut s, settings, Some(password)).unwrap();
+        }
+        let r2_res = sync_market_channels_impl(None, None, Some(password.to_string()), &r2_state)
+            .await
+            .unwrap();
+        assert_eq!(r2_res.decrypted_slots, 1);
+        assert_eq!(r2_res.imported_cards, 18);
+        {
+            let mut s = r2_state.service.lock().unwrap();
+            let raw = s.load_encrypted_data(MARKET_CARD_STORE_KEY, Some(password)).unwrap();
+            let r2_store: humoco_market::CardStore = serde_json::from_slice(&raw).unwrap();
+            let imported = r2_store.cards.values().find(|c| c.card.payload.did == updated_did).unwrap();
+            assert_eq!(imported.card.payload.v, updated_v);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_quiet_friend_without_own_card_forwards_stored_cards() {
+        let base_dir = temp_test_dir("quiet_friend_forward");
+        let password = "TestPassword123!";
+
+        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+
+        let alice_state = create_test_state(alice_service);
+        let bob_state = create_test_state(bob_service);
+
+        let bob_did = bob_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let draft = prepare_sync_setup_impl(None, None, None, Some(password.to_string()), &alice_state).unwrap();
+        let server = MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+        let finalize_status = finalize_sync_setup_impl(server.base_url.clone(), Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+
+        set_selected_upload_syncs_impl(
+            vec![finalize_status.descriptor.clone()],
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+
+        // Alice trusts Bob (Level 2), has NO published own market profile, and holds Carol's stored card
+        let now_secs = sync_client::current_unix_timestamp();
+        let third_party_env = build_signed_test_card_envelope(77, now_secs, now_secs + 365 * 86_400, 1, 1);
+        let third_party_did = humoco_market::verify_sd_card(&third_party_env.card_wire)
+            .unwrap()
+            .payload
+            .did;
+
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_contact(
+                    &mut s,
+                    FrontendContact {
+                        did: bob_did.clone(),
+                        profile: FrontendUserProfile {
+                            first_name: Some("Bob".to_string()),
+                            ..Default::default()
+                        },
+                        tags: vec![],
+                        added_at: "2026-01-01T00:00:00Z".into(),
+                        notes: None,
+                        trust_level: Some(2),
+                        desired_hops: Some(3),
+                        has_peer_list: false,
+                        peer_list_updated_at: None,
+                        syncs: vec![],
+                    },
+                    Some(password),
+                )
+                .unwrap();
+
+            let mut store = humoco_market::CardStore::default();
+            humoco_market::accept_envelope(&mut store, &third_party_env, now_secs, 2000, None, &|_| false);
+            let bytes = serde_json::to_vec(&store).unwrap();
+            s.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, Some(password))
+                .unwrap();
+        }
+        sync_channel_members_impl(Some(password), &alice_state).await.unwrap();
+
+        // Quiet Alice uploads stored third-party card even without own card
+        let alice_sync = sync_market_channels_impl(None, Some(true), Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert!(alice_sync.uploaded_to >= 1, "Quiet friend must still upload forwarded card bundle");
+
+        // Bob syncs and receives the forwarded card with hops == 2
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let mut settings = bob_state.get_cached_settings().unwrap_or_default();
+            settings.market_selected_syncs = vec![finalize_status.descriptor.clone()];
+            bob_state.save_settings(&mut s, settings, Some(password)).unwrap();
+        }
+        let bob_sync = sync_market_channels_impl(None, None, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+        assert!(bob_sync.imported_cards >= 1, "Newcomer Bob must receive forwarded card from quiet friend");
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let raw = s.load_encrypted_data(MARKET_CARD_STORE_KEY, Some(password)).unwrap();
+            let bob_store: humoco_market::CardStore = serde_json::from_slice(&raw).unwrap();
+            let imported = bob_store
+                .cards
+                .values()
+                .find(|c| c.card.payload.did == third_party_did)
+                .expect("Forwarded card must be in Bob's CardStore");
+            assert_eq!(imported.hops, 2);
+        }
     }
 }

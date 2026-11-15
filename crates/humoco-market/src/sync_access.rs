@@ -685,6 +685,25 @@ pub fn parse_slot_id(slot_id: &str) -> Result<(String, Option<String>), MarketEr
     }
 }
 
+/// Derive the `X-Drop-Prefix` used for the differential card bundle slot (`delta` or `<pfx>-delta`).
+pub fn derive_delta_prefix(base_prefix: Option<&str>) -> String {
+    match base_prefix.map(str::trim).filter(|p| !p.is_empty()) {
+        None => "delta".to_string(),
+        Some(pfx) => {
+            if pfx.len() + 6 <= 63 {
+                format!("{}-delta", pfx)
+            } else {
+                let truncated = pfx[..57].trim_end_matches('-');
+                if truncated.is_empty() {
+                    "delta".to_string()
+                } else {
+                    format!("{}-delta", truncated)
+                }
+            }
+        }
+    }
+}
+
 /// Sign a full remote account deletion request (`DELETE <write_url>?account`).
 pub fn sign_delete_account_request(
     signing_key: &SigningKey,

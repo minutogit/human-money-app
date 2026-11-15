@@ -438,6 +438,31 @@ async fn delete_remote_card_slots(state: &AppState, password: Option<&str>) {
         if let Ok(signed) = signed_res {
             let _ = sync_client::delete_slot(&client, &drop_desc.write_url, &signed, "card").await;
         }
+        let delta_prefix = humoco_market::derive_delta_prefix(my_prefix.as_deref());
+        let delta_nonce = sync_client::generate_sync_nonce();
+        let delta_signed_res = if drop_desc.slot_id.is_some() {
+            match humoco_market::derive_public_drop_keypair(&master_seed, &drop_desc.write_url) {
+                Ok((r_sk, _, _)) => {
+                    Ok(humoco_market::sign_member_request_direct(&r_sk, "DELETE", "card", Some(&delta_prefix), now, &delta_nonce, b""))
+                }
+                Err(e) => Err(e.to_string()),
+            }
+        } else {
+            humoco_market::sign_member_request_stealth(
+                &my_ed_sk,
+                &drop_desc.drop_pub,
+                "DELETE",
+                "card",
+                Some(&delta_prefix),
+                now,
+                &delta_nonce,
+                b"",
+            )
+            .map_err(|e| e.to_string())
+        };
+        if let Ok(delta_signed) = delta_signed_res {
+            let _ = sync_client::delete_slot(&client, &drop_desc.write_url, &delta_signed, "card").await;
+        }
     }
 }
 

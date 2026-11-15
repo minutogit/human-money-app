@@ -206,6 +206,16 @@ export class ChannelMembersSyncManager {
         }, delayMs);
     }
 
+    public async flushIfPending(): Promise<void> {
+        if (
+            this.syncTimer !== null
+            && (!this.status.rateLimitedUntil || this.status.rateLimitedUntil <= Date.now())
+        ) {
+            this.cancelTimer();
+            await this.executeSync();
+        }
+    }
+
     public cancelTimer(): void {
         if (this.syncTimer !== null) {
             clearTimeout(this.syncTimer);

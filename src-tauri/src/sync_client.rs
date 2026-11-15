@@ -24,6 +24,16 @@ pub enum IndexFetchResult {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlotFetchResult {
+    NotModified,
+    NotFound,
+    Modified {
+        bytes: Vec<u8>,
+        etag: Option<String>,
+    },
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SyncReplacementTarget {
     pub write_url: String,
@@ -443,45 +453,51 @@ pub async fn head_slot_capability(
     let status = resp.status();
 
     if status.as_u16() == 200 {
+        let authorized = resp
+            .headers()
+            .get("x-drop-authorized")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
         let max_bytes = resp
             .headers()
-            .get("x-drop-max-bytes")
+            .get("x-channel-max-bytes")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<usize>().ok());
+            .and_then(|s| s.trim().parse::<usize>().ok());
         let ttl_days = resp
             .headers()
-            .get("x-drop-ttl-days")
+            .get("x-channel-ttl-days")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<u32>().ok());
+            .and_then(|s| s.trim().parse::<u32>().ok());
         let slot_etag = resp
             .headers()
-            .get("x-drop-slot-etag")
+            .get("etag")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.trim().trim_matches('"').to_string())
             .filter(|s| !s.is_empty());
         let media_max_count = resp
             .headers()
-            .get("x-drop-media-max-count")
+            .get("x-media-max-count")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<usize>().ok());
+            .and_then(|s| s.trim().parse::<usize>().ok());
         let media_max_user_bytes = resp
             .headers()
-            .get("x-drop-media-max-user-bytes")
+            .get("x-media-max-bytes")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<usize>().ok());
+            .and_then(|s| s.trim().parse::<usize>().ok());
         let media_used_count = resp
             .headers()
-            .get("x-drop-media-used-count")
+            .get("x-media-count")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<usize>().ok());
+            .and_then(|s| s.trim().parse::<usize>().ok());
         let media_used_bytes = resp
             .headers()
-            .get("x-drop-media-used-bytes")
+            .get("x-media-bytes")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<usize>().ok());
+            .and_then(|s| s.trim().parse::<usize>().ok());
 
         Ok(SyncCapabilityResult {
-            authorized: true,
+            authorized,
             max_bytes,
             ttl_days,
             slot_etag,
@@ -489,17 +505,6 @@ pub async fn head_slot_capability(
             media_max_user_bytes,
             media_used_count,
             media_used_bytes,
-        })
-    } else if status.as_u16() == 403 {
-        Ok(SyncCapabilityResult {
-            authorized: false,
-            max_bytes: None,
-            ttl_days: None,
-            slot_etag: None,
-            media_max_count: None,
-            media_max_user_bytes: None,
-            media_used_count: None,
-            media_used_bytes: None,
         })
     } else if status.as_u16() == 429 {
         let secs = parse_retry_after(resp.headers());
@@ -605,7 +610,7 @@ pub async fn delete_slot(
         .map_err(|e| format!("Network error deleting slot: {}", e))?;
 
     let status = resp.status();
-    if status.as_u16() == 200 || status.as_u16() == 204 {
+    if status.as_u16() == 200 || status.as_u16() == 204 || status.as_u16() == 404 {
         Ok(())
     } else if status.as_u16() == 429 {
         let secs = parse_retry_after(resp.headers());
@@ -640,7 +645,7 @@ pub async fn delete_account(
         .map_err(|e| format!("Network error deleting account: {}", e))?;
 
     let status = resp.status();
-    if status.as_u16() == 200 || status.as_u16() == 204 {
+    if status.as_u16() == 200 || status.as_u16() == 204 || status.as_u16() == 404 {
         Ok(())
     } else if status.as_u16() == 429 {
         let secs = parse_retry_after(resp.headers());
@@ -730,7 +735,7 @@ pub async fn delete_media_blob(
         .map_err(|e| format!("Network error deleting media blob: {}", e))?;
 
     let status = resp.status();
-    if status.as_u16() == 200 || status.as_u16() == 204 {
+    if status.as_u16() == 200 || status.as_u16() == 204 || status.as_u16() == 404 {
         Ok(())
     } else if status.as_u16() == 429 {
         let secs = parse_retry_after(resp.headers());
@@ -924,7 +929,8 @@ pub async fn get_slot(
     id: &str,
     prefix: Option<&str>,
     channel: &str,
-) -> Result<Option<Vec<u8>>, String> {
+    cached_etag: Option<&str>,
+) -> Result<SlotFetchResult, String> {
     validate_sync_url(read_url)?;
     let base = read_url.trim().trim_end_matches('/');
     let slot_key = match prefix.filter(|s| !s.is_empty()) {
@@ -933,14 +939,25 @@ pub async fn get_slot(
     };
     let url = format!("{}/{}.{}.bin", base, slot_key, channel);
 
-    let resp = client
-        .get(&url)
+    let mut req = client.get(&url);
+    if let Some(etag) = cached_etag
+        .map(|s| s.trim().trim_matches('"'))
+        .filter(|s| !s.is_empty())
+    {
+        req = req.header("If-None-Match", format!("\"{}\"", etag));
+    }
+
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("Network error fetching slot: {}", e))?;
 
+    if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+        return Ok(SlotFetchResult::NotModified);
+    }
+
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
+        return Ok(SlotFetchResult::NotFound);
     }
 
     if resp.status().as_u16() == 429 {
@@ -956,12 +973,22 @@ pub async fn get_slot(
         ));
     }
 
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty());
+
     let bytes = resp
         .bytes()
         .await
         .map_err(|e| format!("Failed to read slot bytes: {}", e))?;
 
-    Ok(Some(bytes.to_vec()))
+    Ok(SlotFetchResult::Modified {
+        bytes: bytes.to_vec(),
+        etag,
+    })
 }
 
 pub async fn get_media_blob(
@@ -975,7 +1002,10 @@ pub async fn get_media_blob(
             blob_id
         ));
     }
-    get_slot(client, read_url, blob_id, None, "media").await
+    match get_slot(client, read_url, blob_id, None, "media", None).await? {
+        SlotFetchResult::Modified { bytes, .. } => Ok(Some(bytes)),
+        SlotFetchResult::NotFound | SlotFetchResult::NotModified => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -1098,5 +1128,84 @@ mod tests {
 
         // Newline injection in reason rejected
         assert!(sign_revocation_notice(&sk, 100, 200, Some("bad\nline".to_string()), None).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_slot_etag_304_not_modified() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen_if_none_match = Arc::new(AtomicUsize::new(0));
+        let seen_clone = Arc::clone(&seen_if_none_match);
+
+        let server = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let seen_inner = Arc::clone(&seen_clone);
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).await.unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let mut lines = req.lines();
+                let req_line = lines.next().unwrap_or("");
+                let path = req_line.split_whitespace().nth(1).unwrap_or("");
+                let inm = lines
+                    .filter_map(|l| l.split_once(':'))
+                    .find(|(k, _)| k.eq_ignore_ascii_case("if-none-match"))
+                    .map(|(_, v)| v.trim().to_string());
+
+                let resp: Vec<u8> = if path.ends_with("missing.card.bin") {
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
+                } else if inm.as_deref() == Some("\"slot-v1\"") {
+                    seen_inner.fetch_add(1, Ordering::SeqCst);
+                    b"HTTP/1.1 304 Not Modified\r\nETag: \"slot-v1\"\r\nContent-Length: 0\r\n\r\n"
+                        .to_vec()
+                } else {
+                    let payload = b"opaque-slot-bytes";
+                    let mut out = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nETag: \"slot-v1\"\r\nContent-Length: {}\r\n\r\n",
+                        payload.len()
+                    )
+                    .into_bytes();
+                    out.extend_from_slice(payload);
+                    out
+                };
+                stream.write_all(&resp).await.unwrap();
+            }
+        });
+
+        let client = create_sync_http_client();
+        let read_url = format!("http://127.0.0.1:{}/d-test", addr.port());
+
+        // 1. Cold fetch without cached ETag -> 200 Modified with ETag
+        let first = get_slot(&client, &read_url, "alice", None, "card", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            first,
+            SlotFetchResult::Modified {
+                bytes: b"opaque-slot-bytes".to_vec(),
+                etag: Some("slot-v1".to_string()),
+            }
+        );
+
+        // 2. Conditional fetch with cached ETag -> 304 NotModified
+        let second = get_slot(&client, &read_url, "alice", None, "card", Some("slot-v1"))
+            .await
+            .unwrap();
+        assert_eq!(second, SlotFetchResult::NotModified);
+        assert_eq!(seen_if_none_match.load(Ordering::SeqCst), 1);
+
+        // 3. Missing slot -> NotFound
+        let third = get_slot(&client, &read_url, "missing", None, "card", None)
+            .await
+            .unwrap();
+        assert_eq!(third, SlotFetchResult::NotFound);
+
+        server.await.unwrap();
     }
 }

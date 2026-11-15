@@ -9,6 +9,7 @@ import { AuthModal } from '../components/ui/AuthModal';
 import { startSealSyncLoop, stopSealSyncLoop } from '../utils/sealSync';
 import { startAutoBackupLoop, stopAutoBackupLoop } from '../utils/autoBackup';
 import { startPostSyncLoop, stopPostSyncLoop } from '../utils/postSync';
+import { startMarketSyncLoop, stopMarketSyncLoop } from '../utils/marketSync';
 import { useWindowTitleSync } from '../hooks/useWindowTitleSync';
 import { useIntegrityCheck } from '../hooks/useIntegrityCheck';
 import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
@@ -116,6 +117,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         startSealSyncLoop();
         startAutoBackupLoop();
         startPostSyncLoop();
+        startMarketSyncLoop();
         checkIntegrity();
 
         authService.isSessionActive()
@@ -141,6 +143,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         stopSealSyncLoop();
         stopAutoBackupLoop();
         stopPostSyncLoop();
+        stopMarketSyncLoop();
     }, []);
 
     const protectAction = useCallback(async <T,>(action: (password: string | null) => Promise<T>): Promise<T | void> => {

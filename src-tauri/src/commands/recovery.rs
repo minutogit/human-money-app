@@ -452,11 +452,11 @@ pub(crate) async fn discover_best_backup_from_mirrors(
             set.spawn(async move {
                 let res = tokio::time::timeout(
                     std::time::Duration::from_millis(4000),
-                    crate::sync_client::get_slot(&cl, &r_url, &pubkey_hex, p.as_deref(), "backup"),
+                    crate::sync_client::get_slot(&cl, &r_url, &pubkey_hex, p.as_deref(), "backup", None),
                 )
                 .await;
                 match res {
-                    Ok(Ok(Some(bytes))) => Some(bytes),
+                    Ok(Ok(crate::sync_client::SlotFetchResult::Modified { bytes, .. })) => Some(bytes),
                     _ => None,
                 }
             });

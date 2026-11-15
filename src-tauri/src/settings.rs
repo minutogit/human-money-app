@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 pub const SETTINGS_KEY: &str = "app_settings";
 pub const MAX_POLLED_SYNCS: usize = 10;
 pub const SYNC_HEARTBEAT_SECS: u64 = 7 * 86_400;
-pub const SYNC_CARD_MAX_BYTES: usize = 65_536;
+pub const SYNC_BASE_MAX_AGE_SECS: u64 = 7 * 86_400;
+pub const SYNC_MARKET_POLL_COOLDOWN_SECS: u64 = 1_200;
+pub const SYNC_CARD_MAX_BYTES: usize = 524_288;
 pub const SYNC_WOT_MAX_BYTES: usize = 131_072;
 
 fn default_active_network() -> String {

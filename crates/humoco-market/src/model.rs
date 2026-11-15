@@ -31,7 +31,6 @@ pub const MAX_QR_SHARE_BYTES: usize = 2900;
 pub const DEFAULT_MAX_HOPS: u8 = 2;
 pub const MAX_CARD_DROPS: usize = 3;
 pub const MAX_STORED_CARDS: usize = 2000;
-pub const MAX_FORWARDED_CARDS: usize = 20;
 pub const MAX_SLOT_RECIPIENTS: usize = 256;
 
 pub fn is_false(v: &bool) -> bool {

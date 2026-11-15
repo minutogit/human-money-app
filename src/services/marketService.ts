@@ -241,14 +241,15 @@ export const marketService = {
     },
 
     syncMarketChannels: async (
-        args?: { isWifi?: boolean; forceUpload?: boolean },
+        args?: { isWifi?: boolean; forceUpload?: boolean; background?: boolean },
         password?: string
     ): Promise<FrontendMarketSyncResult> => {
-        return await invoke<FrontendMarketSyncResult>("sync_market_channels", {
-            isWifi: args?.isWifi,
-            forceUpload: args?.forceUpload,
-            password: password || undefined,
-        });
+        const payload: Record<string, unknown> = {};
+        if (args?.isWifi !== undefined) payload.isWifi = args.isWifi;
+        if (args?.forceUpload !== undefined) payload.forceUpload = args.forceUpload;
+        if (args?.background) payload.respectCooldown = true;
+        if (password) payload.password = password;
+        return await invoke<FrontendMarketSyncResult>("sync_market_channels", payload);
     },
 
     deleteOwnSyncSlots: async (password?: string): Promise<number> => {

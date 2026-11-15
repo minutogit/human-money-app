@@ -7,6 +7,18 @@ last_updated: "2026-11-15"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-SYNC-01"
+    title: "Sync Reach: ETag / If-None-Match in sync_client::get_slot & Predictable Channel Cooldowns"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-068"]
+    description: "Replaced Option<Vec<u8>> in sync_client::get_slot with SlotFetchResult (NotModified/NotFound/Modified), persisted slot_etags and channel_max_bytes_by_write_url in StoredSyncState, enforced fixed poll cooldowns (post 90s, card/wot 20m, force_poll/respect_cooldown overrides), and exposed honest last_sync_at telemetry. Plan: ../docs/plans/SYNC_REACH_PLAN.md."
+  - id: "APP-SYNC-02"
+    title: "Sync Reach: Deflate Compression (HMSLOT02), Base + Delta Card Bundles, First-Contact 3s Auto-Publish & Quiet-Friend Forwarding"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-SYNC-01"]
+    description: "Added pure-Rust flate2/miniz_oxide Deflate compression (`HMSLOT02`/`HMSLOTM2`) with 8 MiB zip-bomb cap before bucket padding & AEAD; removed MAX_FORWARDED_CARDS=20 and replaced flat 23,602 B deduction with real recipient bucket overhead + 50/50 Hop-1/Hop-2+ interleave & geo/remote sorting; implemented Base + Delta (`delta` / `<pfx>-delta`) differential card bundles capped at base+delta <= channel_max_bytes with 7-day Base TTL refresh and safe compaction DELETE retry; enabled quiet-friend forwarding without own_card while guarding 0-reader card uploads + cleaning revoked slots when last reader is removed; enabled dynamic active-class WoT budgeting with 413 retry; triggered 3s-debounced card/wot re-seal on trust >= 1 contact onboarding; aligned `far` reach preset with `own_list_max_hops = 3`. Verified with 622/622 Vitest tests (77 files), 106/106 src-tauri tests, 99/99 humoco-market tests, cargo clippy (0 warnings), npm run i18n:check, and npm run build. Plan: ../docs/plans/SYNC_REACH_PLAN.md."
   - id: "APP-UX-09"
     title: "Simple & Expert Mode (`uiMode`): 10-Phase UX Simplification, Visibility Presets, Unified Flows, Help Center & Conflict Overhaul"
     status: "completed"

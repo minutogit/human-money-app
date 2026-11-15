@@ -10,6 +10,8 @@ import {
     InquiryTarget,
 } from "../types";
 import { triggerAutoBackup } from "../utils/autoBackup";
+import { scheduleContactOnboardingMarketSync } from "../utils/marketSync";
+import { channelMembersSyncManager } from "./channelMembersSyncManager";
 
 export const POST_INBOX_UPDATED_EVENT = 'humoco:post-inbox-updated';
 
@@ -93,6 +95,10 @@ export const postService = {
             password: password || undefined,
         });
         triggerAutoBackup();
+        channelMembersSyncManager.trigger({ delayMs: 250, resetQuota: true, password });
+        if (trustLevel >= 1) {
+            scheduleContactOnboardingMarketSync(3_000, password);
+        }
         notifyPostInboxUpdated();
         return res;
     },

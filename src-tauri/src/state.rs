@@ -86,14 +86,29 @@ fn default_max_total_storage_mb() -> usize {
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct StoredSyncState {
     pub last_upload_at: Option<u64>,
+    #[serde(default)]
+    pub last_poll_at: Option<u64>,
     pub last_readers_hash: Option<String>,
-    pub last_uploaded_card_v: Option<u64>,
     #[serde(default)]
     pub etags_by_read_url: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub last_modified_by_read_url: std::collections::BTreeMap<String, String>,
     #[serde(default)]
-    pub slot_mtimes: std::collections::BTreeMap<String, u64>,
+    pub slot_etags: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub channel_max_bytes_by_write_url: std::collections::BTreeMap<String, usize>,
+    #[serde(default)]
+    pub card_base_uploaded_at_by_write_url: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    pub card_base_size_by_write_url: std::collections::BTreeMap<String, usize>,
+    #[serde(default)]
+    pub card_base_versions_by_write_url:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>>,
+    #[serde(default)]
+    pub card_delta_active_by_write_url: std::collections::BTreeMap<String, bool>,
+    #[serde(default)]
+    pub card_last_uploaded_versions_by_write_url:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>>,
     #[serde(default)]
     pub last_revocation_check_at: std::collections::BTreeMap<String, u64>,
     #[serde(default)]

@@ -448,8 +448,9 @@ pub(crate) async fn flush_post_slots_impl(
             }
             Ok(PutSlotOutcome::PreconditionFailed { current_etag }) => {
                 // Multi-device conflict! Fetch current remote slot, merge local additions, and retry.
-                let remote_bytes = match sync_client::get_slot(&client, &sync_desc.read_url, &id, my_prefix.as_deref(), "post").await {
-                    Ok(b) => b,
+                let remote_bytes = match sync_client::get_slot(&client, &sync_desc.read_url, &id, my_prefix.as_deref(), "post", None).await {
+                    Ok(sync_client::SlotFetchResult::Modified { bytes, .. }) => Some(bytes),
+                    Ok(sync_client::SlotFetchResult::NotFound | sync_client::SlotFetchResult::NotModified) => None,
                     Err(e) => {
                         health_updates.push((sync_desc.write_url.clone(), false));
                         errors.push(format!(
@@ -1654,12 +1655,12 @@ pub async fn sync_post_channels_impl(
         let (base_slot_pk, slot_prefix) =
             humoco_market::parse_slot_id(&slot_id).unwrap_or_else(|_| (slot_id.clone(), None));
         let post_prefix = slot_prefix.as_deref().or(prefix_opt.as_deref());
-        match sync_client::get_slot(&client, &read_url, &base_slot_pk, post_prefix, "post").await {
-            Ok(Some(bytes)) => {
+        match sync_client::get_slot(&client, &read_url, &base_slot_pk, post_prefix, "post", None).await {
+            Ok(sync_client::SlotFetchResult::Modified { bytes, .. }) => {
                 post_sync_health_updates.push((read_url.clone(), true));
                 fetched_slots.push(bytes);
             }
-            Ok(None) => {
+            Ok(sync_client::SlotFetchResult::NotFound | sync_client::SlotFetchResult::NotModified) => {
                 post_sync_health_updates.push((read_url.clone(), true));
             }
             Err(e) => {
@@ -1679,9 +1680,9 @@ pub async fn sync_post_channels_impl(
                     if entry.channel != "post" {
                         continue;
                     }
-                    match sync_client::get_slot(&client, &read_url, &entry.id, entry.prefix.as_deref(), "post").await {
-                        Ok(Some(bytes)) => fetched_slots.push(bytes),
-                        Ok(None) => {}
+                    match sync_client::get_slot(&client, &read_url, &entry.id, entry.prefix.as_deref(), "post", None).await {
+                        Ok(sync_client::SlotFetchResult::Modified { bytes, .. }) => fetched_slots.push(bytes),
+                        Ok(sync_client::SlotFetchResult::NotFound | sync_client::SlotFetchResult::NotModified) => {}
                         Err(e) => errors.push(format!("Failed to fetch post slot {} from {}: {}", entry.id, read_url, e)),
                     }
                 }

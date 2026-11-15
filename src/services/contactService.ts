@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { triggerAutoBackup } from "../utils/autoBackup";
+import { scheduleContactOnboardingMarketSync } from "../utils/marketSync";
 import { channelMembersSyncManager } from "./channelMembersSyncManager";
 import { Contact } from "../types";
 
@@ -16,6 +17,9 @@ export const contactService = {
         const result = await invoke<void>("save_contact", { contact, password });
         triggerAutoBackup();
         triggerSyncMembersUpdate(250, password);
+        if ((contact.trustLevel ?? 0) >= 1) {
+            scheduleContactOnboardingMarketSync(3_000, password);
+        }
         return result;
     },
 

@@ -42,8 +42,8 @@ return [
 
     // Configured channels: max byte sizes and retention TTL
     'channels' => [
-        'card'   => ['max_bytes' => 131072,  'ttl_days' => 30],
-        'wot'    => ['max_bytes' => 131072,  'ttl_days' => 30],
+        'card'   => ['max_bytes' => 524288,  'ttl_days' => 30],
+        'wot'    => ['max_bytes' => 524288,  'ttl_days' => 30],
         'backup' => ['max_bytes' => 5242880, 'ttl_days' => 180],
         'post'   => ['max_bytes' => 524288,  'ttl_days' => 21],
         'media'  => [
@@ -454,7 +454,7 @@ mod tests {
         assert!(cfg_str.contains("'disable_rate_limit'"));
         assert!(cfg_str.contains("https://example.com/register"));
         assert!(cfg_str.contains("'card'"));
-        assert!(cfg_str.contains("131072"));
+        assert!(cfg_str.contains("524288"));
         assert!(cfg_str.contains("'wot'"));
         assert!(cfg_str.contains("'backup'"));
         assert!(cfg_str.contains("'post'"));

@@ -1,8 +1,12 @@
 use std::collections::BTreeSet;
+use std::io::{Read, Write};
 
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce, XChaCha20Poly1305, XNonce};
 use ed25519_dalek::VerifyingKey;
+use flate2::read::DeflateDecoder;
+use flate2::write::DeflateEncoder;
+use flate2::Compression;
 use hkdf::Hkdf;
 use human_money_core::crypto::ed25519_pub_to_x25519;
 use rand::seq::SliceRandom;
@@ -12,14 +16,17 @@ use sha2::Sha256;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
 use crate::card::forward_envelope;
+use crate::card_store::{haversine_km, parse_coordinates_pair};
 use crate::error::MarketError;
-use crate::model::{CardEnvelope, CardStore, MAX_FORWARDED_CARDS, MAX_SLOT_RECIPIENTS};
+use crate::model::{CardEnvelope, StoredCard, MAX_SLOT_RECIPIENTS};
+use crate::sd_card::{decoded_items, CardItem};
 
-pub const SLOT_MAGIC: &[u8; 8] = b"HMSLOT01";
-pub const SLOT_MULTI_MAGIC: &[u8; 8] = b"HMSLOTM1";
+pub const SLOT_MAGIC: &[u8; 8] = b"HMSLOT02";
+pub const SLOT_MULTI_MAGIC: &[u8; 8] = b"HMSLOTM2";
 pub const BACKUP_SLOT_MAGIC: &[u8; 8] = b"HMBKP001";
 pub const BACKUP_PAD_BLOCK_BYTES: usize = 65_536; // 64 KB
 pub const DROP_BACKUP_MAX_BYTES: usize = 5 * 1024 * 1024; // 5 MB, §2
+pub const MAX_DECOMPRESSED_SLOT_BYTES: usize = 8 * 1024 * 1024; // 8 MiB zip-bomb cap
 const RECIPIENT_ENTRY_SIZE: usize = 92; // 32 (eph_pk) + 12 (nonce) + 48 (ct)
 const MAX_RECIPIENT_OVERHEAD: usize = 8 + 2 + 256 * RECIPIENT_ENTRY_SIZE + 24 + 16; // 23602 bytes
 
@@ -28,10 +35,92 @@ pub struct CardBundle {
     pub envelopes: Vec<CardEnvelope>,
 }
 
+/// Computes exact cryptographic envelope overhead for `recipient_count` padded into `{16, 32, 64, 128, 256}`.
+pub fn slot_overhead_bytes(recipient_count: usize) -> Result<usize, MarketError> {
+    let bucket = target_recipient_bucket(recipient_count)?;
+    Ok(8 + 2 + bucket * RECIPIENT_ENTRY_SIZE + 24 + 16)
+}
+
+fn deflate_compress(data: &[u8]) -> Result<Vec<u8>, MarketError> {
+    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(data)
+        .map_err(|e| MarketError::Serialization(format!("Deflate encode failed: {}", e)))?;
+    encoder
+        .finish()
+        .map_err(|e| MarketError::Serialization(format!("Deflate finish failed: {}", e)))
+}
+
+fn deflate_decompress_bounded(compressed: &[u8]) -> Result<Vec<u8>, MarketError> {
+    let decoder = DeflateDecoder::new(compressed);
+    let mut limited = decoder.take((MAX_DECOMPRESSED_SLOT_BYTES + 1) as u64);
+    let mut out = Vec::new();
+    limited
+        .read_to_end(&mut out)
+        .map_err(|e| MarketError::Slot(format!("Invalid compressed slot payload: {}", e)))?;
+    if out.len() > MAX_DECOMPRESSED_SLOT_BYTES {
+        return Err(MarketError::PayloadTooLarge(format!(
+            "Decompressed slot payload exceeds {} bytes safety limit",
+            MAX_DECOMPRESSED_SLOT_BYTES
+        )));
+    }
+    Ok(out)
+}
+
+fn card_relevance_rank(stored: &StoredCard, own_coords: Option<(f64, f64)>, now_secs: u64) -> u64 {
+    let items = decoded_items(&stored.card);
+    let has_remote = items.iter().any(|(item, _)| match item {
+        CardItem::Skill(s) => s.is_remote,
+        CardItem::Ad(a) => a.is_remote && a.expires_at > now_secs,
+        _ => false,
+    });
+    match own_coords {
+        Some(my_pos) => {
+            let their_pos = items.iter().find_map(|(item, _)| match item {
+                CardItem::Coordinates(s) => parse_coordinates_pair(s),
+                _ => None,
+            });
+            match their_pos {
+                Some(pos) => {
+                    let km = haversine_km(my_pos, pos);
+                    if km <= 50.0 {
+                        0
+                    } else if has_remote {
+                        1
+                    } else {
+                        (km / 50.0).ceil() as u64 + 1
+                    }
+                }
+                None => {
+                    if has_remote {
+                        0
+                    } else {
+                        5
+                    }
+                }
+            }
+        }
+        None => u64::from(!has_remote),
+    }
+}
+
+fn compressed_bundle_len(envelopes: &[CardEnvelope]) -> usize {
+    #[derive(Serialize)]
+    struct BundleRef<'a> {
+        envelopes: &'a [CardEnvelope],
+    }
+    let json = serde_json::to_vec(&BundleRef { envelopes }).unwrap_or_default();
+    deflate_compress(&json).map(|v| v.len()).unwrap_or(json.len())
+}
+
+/// Builds a prioritized, Deflate-budget-trimmed card bundle without hard card count limits.
 pub fn build_card_bundle(
     own_card_wire: Option<&str>,
-    store: &CardStore,
+    cards: &[&StoredCard],
+    own_coords: Option<(f64, f64)>,
+    now_secs: u64,
     trust_level_of: &dyn Fn(&str) -> u8,
+    recipient_count: usize,
     max_bytes: usize,
 ) -> CardBundle {
     let mut envelopes = Vec::new();
@@ -43,40 +132,72 @@ pub fn build_card_bundle(
         });
     }
 
-    // Collect forwardable stored cards
-    let mut forwardable: Vec<(&crate::model::StoredCard, CardEnvelope)> = Vec::new();
-    for stored in store.cards.values() {
+    let mut hop1: Vec<(&StoredCard, CardEnvelope, u64)> = Vec::new();
+    let mut hop2_plus: Vec<(&StoredCard, CardEnvelope, u64)> = Vec::new();
+
+    for &stored in cards {
+        if stored.card.payload.valid_until <= now_secs {
+            continue;
+        }
         if let Some(env) = forward_envelope(stored) {
-            forwardable.push((stored, env));
+            let rank = card_relevance_rank(stored, own_coords, now_secs);
+            if stored.hops <= 1 {
+                hop1.push((stored, env, rank));
+            } else {
+                hop2_plus.push((stored, env, rank));
+            }
         }
     }
 
-    // Sort by trust_level desc, then v desc, then did asc
-    forwardable.sort_by(|(s1, _), (s2, _)| {
+    let cmp_candidates = |(s1, _, r1): &(&StoredCard, CardEnvelope, u64),
+                          (s2, _, r2): &(&StoredCard, CardEnvelope, u64)| {
         let t1 = trust_level_of(&s1.card.payload.did);
         let t2 = trust_level_of(&s2.card.payload.did);
-        t2.cmp(&t1)
+        s1.hops
+            .cmp(&s2.hops)
+            .then_with(|| t2.cmp(&t1))
+            .then_with(|| r1.cmp(r2))
             .then_with(|| s2.card.payload.v.cmp(&s1.card.payload.v))
             .then_with(|| s1.card.payload.did.cmp(&s2.card.payload.did))
-    });
+    };
 
-    for (_, env) in forwardable.into_iter().take(MAX_FORWARDED_CARDS) {
-        envelopes.push(env);
-    }
+    hop1.sort_by(cmp_candidates);
+    hop2_plus.sort_by(cmp_candidates);
 
-    // Trim so resulting bundle fits within max_bytes accounting for max recipient overhead
-    let payload_budget = max_bytes.saturating_sub(MAX_RECIPIENT_OVERHEAD);
-
-    let mut bundle = CardBundle { envelopes };
-    while bundle.envelopes.len() > 1 {
-        let serialized_len = serde_json::to_vec(&bundle).map(|v| v.len()).unwrap_or(0);
-        if serialized_len <= payload_budget {
-            break;
+    // Fair 50/50 interleave between Hop-1 and Hop-2+ with full spillover once one pool exhausts
+    let mut h1_iter = hop1.into_iter();
+    let mut h2_iter = hop2_plus.into_iter();
+    loop {
+        match (h1_iter.next(), h2_iter.next()) {
+            (None, None) => break,
+            (Some((_, e1, _)), Some((_, e2, _))) => {
+                envelopes.push(e1);
+                envelopes.push(e2);
+            }
+            (Some((_, e1, _)), None) => envelopes.push(e1),
+            (None, Some((_, e2, _))) => envelopes.push(e2),
         }
-        bundle.envelopes.pop();
     }
 
-    bundle
+    let overhead = slot_overhead_bytes(recipient_count).unwrap_or(MAX_RECIPIENT_OVERHEAD);
+    let payload_budget = max_bytes.saturating_sub(overhead);
+
+    if !envelopes.is_empty() && compressed_bundle_len(&envelopes) > payload_budget {
+        let min_keep = usize::from(own_card_wire.is_some());
+        let mut low = min_keep;
+        let mut high = envelopes.len();
+        while low < high {
+            let mid = (low + high).div_ceil(2);
+            if compressed_bundle_len(&envelopes[..mid]) <= payload_budget {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        envelopes.truncate(low);
+    }
+
+    CardBundle { envelopes }
 }
 
 fn target_recipient_bucket(count: usize) -> Result<usize, MarketError> {
@@ -114,11 +235,14 @@ pub fn seal_slot_payload(
 
     let bucket_size = target_recipient_bucket(unique_readers.len())?;
 
-    // 2. Random 32-byte content key k
+    // 2. Deflate-compress plaintext before AEAD encryption
+    let compressed_plaintext = deflate_compress(plaintext)?;
+
+    // 3. Random 32-byte content key k
     let mut k = [0u8; 32];
     OsRng.fill_bytes(&mut k);
 
-    // 3. Encrypt payload with XChaCha20Poly1305
+    // 4. Encrypt compressed payload with XChaCha20Poly1305
     let mut payload_nonce_bytes = [0u8; 24];
     OsRng.fill_bytes(&mut payload_nonce_bytes);
     let payload_nonce = XNonce::from_slice(&payload_nonce_bytes);
@@ -126,7 +250,7 @@ pub fn seal_slot_payload(
     let payload_cipher = XChaCha20Poly1305::new_from_slice(&k)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
     let payload_ciphertext = payload_cipher
-        .encrypt(payload_nonce, plaintext)
+        .encrypt(payload_nonce, compressed_plaintext.as_slice())
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
 
     // 4. Encapsulate content key for each reader
@@ -284,8 +408,9 @@ pub fn open_slot_payload(
                     Ok(c) => c,
                     Err(_) => continue,
                 };
-                if let Ok(payload_bytes) = payload_cipher.decrypt(payload_nonce, payload_ciphertext) {
-                    return Ok(Some(payload_bytes));
+                if let Ok(compressed_bytes) = payload_cipher.decrypt(payload_nonce, payload_ciphertext) {
+                    let decompressed = deflate_decompress_bounded(&compressed_bytes)?;
+                    return Ok(Some(decompressed));
                 }
             }
         }
@@ -311,7 +436,7 @@ pub fn open_slot_blob(
 /// Seals up to 3 distance-class payloads into a single multi-class `SlotBlob`.
 ///
 /// Multi-class slot format:
-/// `[b"HMSLOTM1" (8B) || count: u8 || for each class: (blob_len: u32_be || sub_blob_bytes)]`
+/// `[b"HMSLOTM2" (8B) || count: u8 || for each class: (blob_len: u32_be || sub_blob_bytes)]`
 ///
 /// Guarantees that a reader in Class 2 cannot decrypt the payload of Class 1.
 pub fn seal_multi_class_slot_blob(

@@ -1311,8 +1311,8 @@ pub async fn fetch_and_inspect_backup(
     let normalized_prefix = user_prefix.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_lowercase);
 
     for (read_url, pubkey_hex, kind) in candidates {
-        match crate::sync_client::get_slot(&fetch_client, &read_url, &pubkey_hex, normalized_prefix.as_deref(), "backup").await {
-            Ok(Some(bytes)) => {
+        match crate::sync_client::get_slot(&fetch_client, &read_url, &pubkey_hex, normalized_prefix.as_deref(), "backup", None).await {
+            Ok(crate::sync_client::SlotFetchResult::Modified { bytes, .. }) => {
                 downloaded_bytes = Some((bytes, kind, read_url));
                 break;
             }
