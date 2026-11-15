@@ -549,6 +549,8 @@ pub struct FrontendSyncSetupDraft {
     pub max_total_storage_mb: usize,
     pub policy: FrontendMemberPolicyDto,
     pub zip_base64: String,
+    #[serde(default)]
+    pub rust_config_toml: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

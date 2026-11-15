@@ -332,6 +332,13 @@ pub fn prepare_sync_setup_impl(
         None,
     );
     let zip_base64 = base64::engine::general_purpose::STANDARD.encode(&zip_bytes);
+    let rust_config_toml = crate::sync_zip::generate_rust_sync_config_toml(
+        &admin_pubkey,
+        &data_dir,
+        max_mem,
+        max_storage_mb,
+        None,
+    );
 
     Ok(FrontendSyncSetupDraft {
         descriptor: stored_admin.descriptor.into(),
@@ -341,6 +348,7 @@ pub fn prepare_sync_setup_impl(
         max_total_storage_mb: max_storage_mb,
         policy: card_policy,
         zip_base64,
+        rust_config_toml,
     })
 }
 
@@ -353,6 +361,48 @@ pub fn prepare_sync_setup(
     state: State<'_, AppState>,
 ) -> Result<FrontendSyncSetupDraft, FrontendError> {
     prepare_sync_setup_impl(policy, max_members, max_total_storage_mb, password, &state)
+}
+
+pub fn get_rust_sync_config_impl(
+    password: Option<String>,
+    state: &AppState,
+) -> Result<String, FrontendError> {
+    let mut service = state.service.lock().unwrap();
+    let admin_opt: Option<StoredSyncAdmin> = service
+        .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+
+    if let Some(admin) = admin_opt {
+        return Ok(crate::sync_zip::generate_rust_sync_config_toml(
+            &admin.descriptor.drop_pub,
+            &admin.data_dir,
+            admin.max_members,
+            admin.max_total_storage_mb,
+            admin.register_url.as_deref(),
+        ));
+    }
+
+    let master_seed = get_wallet_master_seed(&mut service)?;
+    let drop_index = 0u32;
+    let (_admin_sk, _admin_vk, admin_pubkey) =
+        humoco_market::derive_drop_admin_keypair(&master_seed, drop_index);
+    let data_dir = humoco_market::derive_drop_data_dir(&master_seed, drop_index);
+    Ok(crate::sync_zip::generate_rust_sync_config_toml(
+        &admin_pubkey,
+        &data_dir,
+        300,
+        256,
+        None,
+    ))
+}
+
+#[tauri::command]
+pub fn get_rust_sync_config(
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, FrontendError> {
+    get_rust_sync_config_impl(password, &state)
 }
 
 pub fn save_sync_setup_zip_impl(
@@ -1356,12 +1406,14 @@ pub async fn probe_contact_syncs_impl(
                         // 2. Check authorization on resolved drop
                         let stealth_pk_res = if let Some(ref slot_id) = ep.slot_id {
                             if !slot_id.is_empty() {
-                                Ok(slot_id.clone())
+                                humoco_market::parse_slot_id(slot_id)
                             } else {
                                 humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &ep.drop_pub)
+                                    .map(|pk| (pk, None))
                             }
                         } else {
                             humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &ep.drop_pub)
+                                .map(|pk| (pk, None))
                         };
 
                         let mut probe_ok = false;
@@ -1373,12 +1425,13 @@ pub async fn probe_contact_syncs_impl(
                                 ep.fail_count = ep.fail_count.saturating_add(1);
                                 ep.last_probed_at = Some(now);
                             }
-                            Ok(stealth_pk) => {
-                                let card_cap = sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, my_prefix.as_deref(), "card").await;
+                            Ok((stealth_pk, slot_pfx)) => {
+                                let cap_prefix = slot_pfx.as_deref().or(my_prefix.as_deref());
+                                let card_cap = sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, cap_prefix, "card").await;
                                 let post_cap = if card_cap.as_ref().map(|c| c.authorized).unwrap_or(false) {
                                     Ok(sync_client::SyncCapabilityResult { authorized: true, ..Default::default() })
                                 } else {
-                                    sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, my_prefix.as_deref(), "post").await
+                                    sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, cap_prefix, "post").await
                                 };
 
                                 let is_authorized = card_cap.as_ref().map(|c| c.authorized).unwrap_or(false)
@@ -1534,7 +1587,7 @@ pub async fn set_selected_upload_syncs_impl(
         humoco_market::parse_ed25519_pubkey_hex64(&d.drop_pub)
             .map_err(|e| FrontendError::from(format!("Invalid drop_pub: {}", e)))?;
         if let Some(ref sid) = d.slot_id {
-            humoco_market::parse_ed25519_pubkey_hex64(sid)
+            humoco_market::parse_slot_id(sid)
                 .map_err(|e| FrontendError::from(format!("Invalid slot_id: {}", e)))?;
         }
     }
@@ -2402,10 +2455,13 @@ pub async fn sync_market_channels_impl(
     // 3a. Direct O(1) fetches
     for (read_url, slot_id, prefix_opt) in direct_slot_fetches {
         polled_syncs += 1;
+        let (base_slot_pk, slot_prefix) =
+            humoco_market::parse_slot_id(&slot_id).unwrap_or_else(|_| (slot_id.clone(), None));
+        let card_prefix = slot_prefix.as_deref().or(prefix_opt.as_deref());
 
         // Fetch card slot
         if settings.market_sync_enabled {
-            match sync_client::get_slot(&client, &read_url, &slot_id, prefix_opt.as_deref(), "card").await {
+            match sync_client::get_slot(&client, &read_url, &base_slot_pk, card_prefix, "card").await {
                 Ok(Some(blob)) => {
                     sync_health_updates.push((read_url.clone(), true));
                     match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
@@ -2475,7 +2531,7 @@ pub async fn sync_market_channels_impl(
         }
 
         // Fetch wot slot
-        match sync_client::get_slot(&client, &read_url, &slot_id, None, "wot").await {
+        match sync_client::get_slot(&client, &read_url, &base_slot_pk, None, "wot").await {
             Ok(Some(blob)) => {
                 sync_health_updates.push((read_url.clone(), true));
                 match humoco_market::open_multi_class_slot_blob(&blob, &my_x25519_sk) {
@@ -3026,6 +3082,11 @@ pub async fn save_public_sync_impl(
 
     let probe_client = sync_client::create_sync_probe_client();
     let info_opt = sync_client::fetch_sync_info(&probe_client, &canonical_url).await.ok();
+    let clean_register_url = register_url
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty() && sync_client::validate_sync_url(u).is_ok())
+        .or_else(|| info_opt.as_ref().and_then(|i| i.register_url.clone()));
+
     let mut authorized_channels = Vec::new();
     for ch in ["card", "wot", "backup", "post"] {
         let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
@@ -3049,7 +3110,7 @@ pub async fn save_public_sync_impl(
             write_url: canonical_url.clone(),
             read_url: read_url.clone(),
             drop_pub: drop_pub.clone(),
-            register_url: register_url.clone(),
+            register_url: clean_register_url.clone(),
             access_pubkey: access_pubkey.clone(),
             enabled,
             authorized_channels: authorized_channels.clone(),
@@ -3079,9 +3140,16 @@ pub async fn save_public_sync_impl(
             settings.public_syncs.push(stored);
         }
 
+        let selected_syncs = settings.market_selected_syncs.clone();
         state
             .save_settings(&mut service, settings, password.as_deref())
             .map_err(FrontendError::from)?;
+
+        crate::commands::market::sync_own_card_drops_on_settings_change(
+            &mut service,
+            &selected_syncs,
+            password.as_deref(),
+        );
     }
 
     let _ = crate::commands::recovery::enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
@@ -3090,7 +3158,7 @@ pub async fn save_public_sync_impl(
         write_url: canonical_url,
         read_url,
         drop_pub,
-        register_url,
+        register_url: clean_register_url,
         access_pubkey,
         authorized_channels,
     })
@@ -3134,11 +3202,21 @@ pub async fn remove_public_sync_impl(
         if let Ok((r_sk, _, _)) = humoco_market::derive_public_drop_keypair(&master_seed, &canonical_url) {
             let client = sync_client::create_sync_http_client();
             let now = sync_client::current_unix_timestamp();
-            for ch in ["card", "wot", "backup", "post"] {
-                let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
-                let nonce = sync_client::generate_sync_nonce();
-                let signed = humoco_market::sign_member_request_direct(&r_sk, "DELETE", ch, ch_prefix, now, &nonce, b"");
-                let _ = sync_client::delete_slot(&client, &canonical_url, &signed, ch).await;
+            let acct_nonce = sync_client::generate_sync_nonce();
+            let acct_signed = humoco_market::sign_delete_account_request(&r_sk, now, &acct_nonce);
+            if sync_client::delete_account(&client, &canonical_url, &acct_signed)
+                .await
+                .is_err()
+            {
+                for ch in ["card", "wot", "backup", "post"] {
+                    let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
+                    let nonce = sync_client::generate_sync_nonce();
+                    let signed = humoco_market::sign_member_request_direct(&r_sk, "DELETE", ch, ch_prefix, now, &nonce, b"");
+                    let _ = sync_client::delete_slot(&client, &canonical_url, &signed, ch).await;
+                }
+                let media_nonce = sync_client::generate_sync_nonce();
+                let media_signed = humoco_market::sign_member_request_direct(&r_sk, "DELETE", "media", None, now, &media_nonce, b"");
+                let _ = sync_client::delete_media_blob(&client, &canonical_url, &media_signed, None).await;
             }
         }
     }
@@ -3151,9 +3229,16 @@ pub async fn remove_public_sync_impl(
             .unwrap_or_default();
 
         settings.public_syncs.retain(|d| d.write_url != canonical_url);
+        let selected_syncs = settings.market_selected_syncs.clone();
         state
             .save_settings(&mut service, settings, password.as_deref())
             .map_err(FrontendError::from)?;
+
+        crate::commands::market::sync_own_card_drops_on_settings_change(
+            &mut service,
+            &selected_syncs,
+            password.as_deref(),
+        );
 
         if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
             reg.clear_drop_sent_log(Some(&canonical_url));
@@ -3510,8 +3595,9 @@ pub(crate) mod tests {
                                         *m = union_members.into_iter().collect();
                                         let mut s = slots.lock().unwrap();
                                         s.retain(|k, _| {
-                                            if let Some((id, _)) = k.split_once('.') {
-                                                m.contains(&id.to_string())
+                                            if let Some((id_part, _)) = k.split_once('.') {
+                                                let base_pk = id_part.split_once('_').map(|(pk, _)| pk).unwrap_or(id_part);
+                                                m.iter().any(|id| id == base_pk)
                                             } else {
                                                 false
                                             }
@@ -3541,9 +3627,13 @@ pub(crate) mod tests {
                                 } else if method == "PUT" && path.starts_with("/sync.php") {
                                     let pubkey = headers.get("x-drop-pubkey").cloned().unwrap_or_default();
                                     let channel = headers.get("x-channel").cloned().unwrap_or_else(|| "card".to_string());
+                                    let prefix_opt = headers.get("x-drop-prefix").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
                                     let is_member = members.lock().unwrap().contains(&pubkey);
                                     if is_member {
-                                        let key = format!("{}.{}", pubkey, channel);
+                                        let key = match prefix_opt {
+                                            Some(ref pfx) => format!("{}_{}.{}", pubkey, pfx, channel),
+                                            None => format!("{}.{}", pubkey, channel),
+                                        };
                                         let if_match_hdr = headers.get("if-match").cloned();
                                         let cur_etag = etags.lock().unwrap().get(&key).cloned().unwrap_or_else(|| "\"etag123\"".to_string());
                                         if let Some(ref im) = if_match_hdr {
@@ -3571,22 +3661,40 @@ pub(crate) mod tests {
                                     }
                                 } else if method == "DELETE" && path.starts_with("/sync.php") {
                                     let pubkey = headers.get("x-drop-pubkey").cloned().unwrap_or_default();
-                                    let channel = headers.get("x-channel").cloned().unwrap_or_else(|| "card".to_string());
-                                    let key = format!("{}.{}", pubkey, channel);
-                                    slots.lock().unwrap().remove(&key);
+                                    if path.contains("account") {
+                                        let dot_prefix = format!("{}.", pubkey);
+                                        let under_prefix = format!("{}_", pubkey);
+                                        slots.lock().unwrap().retain(|k, _| !k.starts_with(&dot_prefix) && !k.starts_with(&under_prefix));
+                                    } else {
+                                        let channel = headers.get("x-channel").cloned().unwrap_or_else(|| "card".to_string());
+                                        let prefix_opt = headers.get("x-drop-prefix").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                                        let key = match prefix_opt {
+                                            Some(ref pfx) => format!("{}_{}.{}", pubkey, pfx, channel),
+                                            None => format!("{}.{}", pubkey, channel),
+                                        };
+                                        slots.lock().unwrap().remove(&key);
+                                    }
                                     format!("HTTP/1.1 204 No Content\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
                                 } else if method == "GET" && path.contains("index.json") {
                                     let s_map = slots.lock().unwrap();
                                     let mut entries = Vec::new();
                                     for (k, v) in s_map.iter() {
-                                        if let Some((id, ch)) = k.split_once('.') {
-                                            entries.push(serde_json::json!({
+                                        if let Some((id_part, ch)) = k.split_once('.') {
+                                            let (id, prefix) = match id_part.split_once('_') {
+                                                Some((pk, pfx)) => (pk, Some(pfx)),
+                                                None => (id_part, None),
+                                            };
+                                            let mut obj = serde_json::json!({
                                                 "id": id,
                                                 "channel": ch,
                                                 "mtime": 1000,
                                                 "size": v.len(),
                                                 "etag": "etag123"
-                                            }));
+                                            });
+                                            if let Some(pfx) = prefix {
+                                                obj["prefix"] = serde_json::Value::String(pfx.to_string());
+                                            }
+                                            entries.push(obj);
                                         }
                                     }
                                     let body_str = serde_json::to_string(&entries).unwrap();
@@ -3997,7 +4105,9 @@ pub(crate) mod tests {
         assert!(!block_status.active_slot_ids.contains(&bob_stealth_pk_a));
         assert!(!server_a.members.lock().unwrap().contains(&bob_stealth_pk_a));
         assert!(!server_a.slots.lock().unwrap().contains_key(&format!("{}.card", bob_stealth_pk_a)), "Slot file should be purged on Server A");
+        assert!(!server_a.slots.lock().unwrap().contains_key(&format!("{}_pc.card", bob_stealth_pk_a)), "Prefixed slot file should be purged on Server A");
         assert!(!server_a.slots.lock().unwrap().contains_key(&format!("{}.wot", bob_stealth_pk_a)), "WoT slot file should be purged on Server A");
+        assert!(!server_a.slots.lock().unwrap().contains_key(&format!("{}_pc.wot", bob_stealth_pk_a)), "Prefixed WoT slot file should be purged on Server A");
 
         // 9. Check overview status
         let overview = get_sync_overview_status_impl(
@@ -4725,11 +4835,13 @@ pub(crate) mod tests {
 
         let remaining_slots = server.slots.lock().unwrap().clone();
         assert!(
-            !remaining_slots.contains_key(&format!("{}.wot", alice_stealth)),
+            !remaining_slots.contains_key(&format!("{}.wot", alice_stealth))
+                && !remaining_slots.contains_key(&format!("{}_pc.wot", alice_stealth)),
             "Alice's WOT slot must be deleted from server"
         );
         assert!(
-            !remaining_slots.contains_key(&format!("{}.card", alice_stealth)),
+            !remaining_slots.contains_key(&format!("{}.card", alice_stealth))
+                && !remaining_slots.contains_key(&format!("{}_pc.card", alice_stealth)),
             "Alice's card slot must be deleted from server"
         );
 

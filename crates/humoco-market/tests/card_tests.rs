@@ -1036,3 +1036,34 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn test_card_accepts_prefixed_slot_id_and_rejects_malformed_slot_id() {
+    let sk = make_key(77);
+    let valid_vk_hex = hex::encode(make_key(78).verifying_key().as_bytes());
+    let slot_pk_hex = hex::encode(make_key(79).verifying_key().as_bytes());
+
+    let mut payload = valid_payload_input(&sk);
+    payload.drops = vec![DropDescriptor {
+        write_url: "https://sync.example.com/sync.php".to_string(),
+        read_url: "https://sync.example.com/sync-data/".to_string(),
+        slot_id: Some(format!("{}_basti-2026", slot_pk_hex)),
+        drop_pub: valid_vk_hex.clone(),
+    }];
+    let card = sign_sd_card(payload, sample_items(), &sk).unwrap();
+    let wire = render_wire(&card, 1, WireFilter::Full).unwrap();
+    let verified = verify_sd_card(&wire).unwrap();
+    assert_eq!(
+        verified.payload.drops[0].slot_id.as_deref(),
+        Some(format!("{}_basti-2026", slot_pk_hex).as_str())
+    );
+
+    let mut bad_payload = valid_payload_input(&sk);
+    bad_payload.drops = vec![DropDescriptor {
+        write_url: "https://sync.example.com/sync.php".to_string(),
+        read_url: "https://sync.example.com/sync-data/".to_string(),
+        slot_id: Some(format!("{}_INVALID_PREFIX", slot_pk_hex)),
+        drop_pub: valid_vk_hex,
+    }];
+    assert!(sign_sd_card(bad_payload, sample_items(), &sk).is_err());
+}

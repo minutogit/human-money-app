@@ -403,10 +403,16 @@ pub async fn fetch_sync_info(
         ));
     }
 
-    let info: SyncServerInfo = resp
+    let mut info: SyncServerInfo = resp
         .json()
         .await
         .map_err(|e| format!("Failed to parse sync info JSON: {}", e))?;
+
+    info.register_url = info
+        .register_url
+        .take()
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty() && validate_sync_url(u).is_ok());
 
     Ok(info)
 }
@@ -608,6 +614,41 @@ pub async fn delete_slot(
         let text = resp.text().await.unwrap_or_default();
         Err(format!(
             "Server returned HTTP {} on slot DELETE: {}",
+            status,
+            text.trim()
+        ))
+    }
+}
+
+pub async fn delete_account(
+    client: &reqwest::Client,
+    write_url: &str,
+    signed_headers: &SignedDropHeaders,
+) -> Result<(), String> {
+    validate_sync_url(write_url)?;
+    let sep = if write_url.contains('?') { "&" } else { "?" };
+    let url = format!("{}{}account", write_url, sep);
+
+    let resp = client
+        .delete(&url)
+        .header("X-Drop-Pubkey", &signed_headers.pubkey_hex)
+        .header("X-Drop-Timestamp", signed_headers.timestamp.to_string())
+        .header("X-Drop-Nonce", &signed_headers.nonce_hex)
+        .header("X-Drop-Signature", &signed_headers.signature_hex)
+        .send()
+        .await
+        .map_err(|e| format!("Network error deleting account: {}", e))?;
+
+    let status = resp.status();
+    if status.as_u16() == 200 || status.as_u16() == 204 {
+        Ok(())
+    } else if status.as_u16() == 429 {
+        let secs = parse_retry_after(resp.headers());
+        Err(format!("Rate limited deleting account (HTTP 429). Retry-After: {}s", secs))
+    } else {
+        let text = resp.text().await.unwrap_or_default();
+        Err(format!(
+            "Server returned HTTP {} on account DELETE: {}",
             status,
             text.trim()
         ))

@@ -79,7 +79,7 @@ pub(crate) fn save_post_state(
 
 pub(crate) fn collect_own_reply_syncs(
     settings: &AppSettings,
-    _master_seed: &[u8; 32],
+    my_prefix: Option<&str>,
 ) -> Vec<FrontendSyncDescriptor> {
     let mut reply_syncs = Vec::new();
     for d in &settings.market_selected_syncs {
@@ -89,10 +89,12 @@ pub(crate) fn collect_own_reply_syncs(
     }
     for pd in &settings.public_syncs {
         if pd.enabled && !pd.read_url.is_empty() {
+            let slot_id = humoco_market::format_slot_id(&pd.access_pubkey, my_prefix)
+                .unwrap_or_else(|_| pd.access_pubkey.clone());
             reply_syncs.push(FrontendSyncDescriptor {
                 write_url: pd.write_url.clone(),
                 read_url: pd.read_url.clone(),
-                slot_id: Some(pd.access_pubkey.clone()),
+                slot_id: Some(slot_id),
                 drop_pub: pd.drop_pub.clone(),
                 last_seen_at: None,
                 last_error_at: None,
@@ -604,8 +606,12 @@ pub async fn deposit_transfer_to_post_impl(
     } else {
         let (my_ed_sk, recipient_ed_pk, own_reply_syncs, now_secs) = {
             let mut service = state.service.lock().unwrap();
-            let my_ed_sk = service
-                .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+            let (my_ed_sk, my_prefix) = service
+                .with_wallet_and_identity(|_w, id| {
+                    let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                        .map(|s| s.to_string());
+                    (id.signing_key.clone(), pfx)
+                })
                 .map_err(FrontendError::from)?;
             let recipient_ed_pk = get_pubkey_from_user_id(&record.recipient_id)
                 .map_err(FrontendError::from)?;
@@ -614,8 +620,7 @@ pub async fn deposit_transfer_to_post_impl(
                 .or_else(|_| state.load_settings(&mut service, password.as_deref()))
                 .unwrap_or_default();
             let now_secs = sync_client::current_unix_timestamp();
-            let master_seed = my_ed_sk.to_bytes();
-            let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+            let reply_syncs = collect_own_reply_syncs(&settings, my_prefix.as_deref());
             (my_ed_sk, recipient_ed_pk, reply_syncs, now_secs)
         };
 
@@ -672,15 +677,18 @@ pub async fn send_signing_request_via_post_impl(
 
     let (my_ed_sk, own_reply_syncs, now_secs) = {
         let mut service = state.service.lock().unwrap();
-        let my_ed_sk = service
-            .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+        let (my_ed_sk, my_prefix) = service
+            .with_wallet_and_identity(|_w, id| {
+                let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                    .map(|s| s.to_string());
+                (id.signing_key.clone(), pfx)
+            })
             .map_err(FrontendError::from)?;
         let settings = state
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
-        let master_seed = my_ed_sk.to_bytes();
-        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        let reply_syncs = collect_own_reply_syncs(&settings, my_prefix.as_deref());
         let now_secs = sync_client::current_unix_timestamp();
         (my_ed_sk, reply_syncs, now_secs)
     };
@@ -738,15 +746,18 @@ pub async fn reply_detached_signature_via_post_impl(
 
     let (my_ed_sk, own_reply_syncs, now_secs) = {
         let mut service = state.service.lock().unwrap();
-        let my_ed_sk = service
-            .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+        let (my_ed_sk, my_prefix) = service
+            .with_wallet_and_identity(|_w, id| {
+                let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                    .map(|s| s.to_string());
+                (id.signing_key.clone(), pfx)
+            })
             .map_err(FrontendError::from)?;
         let settings = state
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
-        let master_seed = my_ed_sk.to_bytes();
-        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        let reply_syncs = collect_own_reply_syncs(&settings, my_prefix.as_deref());
         let now_secs = sync_client::current_unix_timestamp();
         (my_ed_sk, reply_syncs, now_secs)
     };
@@ -869,8 +880,10 @@ pub async fn send_wot_handshake_via_post_impl(
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
-        let master_seed = my_ed_sk.to_bytes();
-        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        let reply_syncs = collect_own_reply_syncs(
+            &settings,
+            human_money_core::crypto::get_prefix_from_user_id(&my_did),
+        );
         let now_secs = sync_client::current_unix_timestamp();
 
         let assertion = WotHandshakeAssertion {
@@ -1099,8 +1112,10 @@ pub async fn send_market_inquiry_via_post_impl(
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
-        let master_seed = my_ed_sk.to_bytes();
-        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        let reply_syncs = collect_own_reply_syncs(
+            &settings,
+            human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
+        );
         (my_identity, my_ed_sk, reply_syncs)
     };
 
@@ -1243,8 +1258,10 @@ pub async fn reply_market_inquiry_via_post_impl(
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
-        let master_seed = my_ed_sk.to_bytes();
-        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        let reply_syncs = collect_own_reply_syncs(
+            &settings,
+            human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
+        );
         (my_identity, my_ed_sk, reply_syncs)
     };
 
@@ -1442,7 +1459,7 @@ pub async fn sync_post_channels_impl(
         let master_seed = my_ed_sk.to_bytes();
         let my_prefix = human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id)
             .map(|s| s.to_string());
-        let reply_syncs = collect_own_reply_syncs(&settings, &master_seed);
+        let reply_syncs = collect_own_reply_syncs(&settings, my_prefix.as_deref());
         (my_identity, my_ed_sk, master_seed, my_prefix, reply_syncs)
     };
 
@@ -1634,7 +1651,10 @@ pub async fn sync_post_channels_impl(
 
     for (read_url, slot_id, prefix_opt) in direct_slot_fetches {
         polled_syncs += 1;
-        match sync_client::get_slot(&client, &read_url, &slot_id, prefix_opt.as_deref(), "post").await {
+        let (base_slot_pk, slot_prefix) =
+            humoco_market::parse_slot_id(&slot_id).unwrap_or_else(|_| (slot_id.clone(), None));
+        let post_prefix = slot_prefix.as_deref().or(prefix_opt.as_deref());
+        match sync_client::get_slot(&client, &read_url, &base_slot_pk, post_prefix, "post").await {
             Ok(Some(bytes)) => {
                 post_sync_health_updates.push((read_url.clone(), true));
                 fetched_slots.push(bytes);
@@ -2680,7 +2700,7 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_b_url.clone(),
                     read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
-                    slot_id: Some(bob_drop.access_pubkey.clone()),
+                    slot_id: Some(humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap()),
                     drop_pub: DROP_PUB_B.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -2711,7 +2731,7 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_a_url.clone(),
                     read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
-                    slot_id: Some(alice_drop.access_pubkey.clone()),
+                    slot_id: Some(humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc")).unwrap()),
                     drop_pub: DROP_PUB_A.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -2874,7 +2894,7 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_a_url.clone(),
                     read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
-                    slot_id: Some(alice_drop.access_pubkey.clone()),
+                    slot_id: Some(humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc")).unwrap()),
                     drop_pub: DROP_PUB_A.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -3022,7 +3042,7 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_b_url.clone(),
                     read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
-                    slot_id: Some(bob_drop.access_pubkey.clone()),
+                    slot_id: Some(humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap()),
                     drop_pub: DROP_PUB_B.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -3054,7 +3074,7 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_b_url.clone(),
                     read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
-                    slot_id: Some(alice_drop_probe.access_pubkey.clone()),
+                    slot_id: Some(humoco_market::format_slot_id(&alice_drop_probe.access_pubkey, Some("pc")).unwrap()),
                     drop_pub: DROP_PUB_B.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -3172,7 +3192,7 @@ mod tests {
             (sk, seed)
         };
         let dummy_slot = humoco_market::encode_post_slot(&master_seed, &[], DROP_POST_MAX_BYTES).unwrap();
-        let slot_key = format!("{}.post", alice_drop.access_pubkey);
+        let slot_key = format!("{}_pc.post", alice_drop.access_pubkey);
         server_a.slots.lock().unwrap().insert(slot_key.clone(), dummy_slot);
         server_a.etags.lock().unwrap().insert(slot_key, "\"etag_device_2\"".to_string());
 
@@ -3231,7 +3251,7 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_b_url.clone(),
                     read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
-                    slot_id: Some(bob_drop.access_pubkey.clone()),
+                    slot_id: Some(humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap()),
                     drop_pub: DROP_PUB_B.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -3262,7 +3282,7 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_a_url.clone(),
                     read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
-                    slot_id: Some(alice_drop.access_pubkey.clone()),
+                    slot_id: Some(humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc")).unwrap()),
                     drop_pub: DROP_PUB_A.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -3397,7 +3417,7 @@ mod tests {
         let alice_syncs = vec![FrontendSyncDescriptor {
             write_url: server_a_url.clone(),
             read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
-            slot_id: Some(alice_drop.access_pubkey.clone()),
+            slot_id: Some(humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc")).unwrap()),
             drop_pub: DROP_PUB_A.to_string(),
             last_seen_at: None,
             last_error_at: None,
@@ -3410,7 +3430,7 @@ mod tests {
         let bob_syncs = vec![FrontendSyncDescriptor {
             write_url: server_b_url.clone(),
             read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
-            slot_id: Some(bob_drop.access_pubkey.clone()),
+            slot_id: Some(humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap()),
             drop_pub: DROP_PUB_B.to_string(),
             last_seen_at: None,
             last_error_at: None,

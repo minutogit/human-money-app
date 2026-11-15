@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/no-require-imports, no-undef, @typescript-eslint/no-explicit-any */
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SyncServiceSettingsCard, normalizeSyncUrlInput } from '../settings/SyncServiceSettingsCard';
 import { marketService } from '../../services/marketService';
 import { settingsService } from '../../services/settingsService';
 import { save } from '@tauri-apps/plugin-dialog';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import { copyToClipboard } from '../../utils/clipboard';
 import { AppSettings, FrontendSyncAdminStatus } from '../../types';
 
 vi.mock('react-i18next', () => {
@@ -44,13 +46,23 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
     save: vi.fn(),
 }));
 
+vi.mock('@tauri-apps/plugin-opener', () => ({
+    openUrl: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../utils/clipboard', () => ({
+    copyToClipboard: vi.fn().mockResolvedValue(true),
+}));
+
 vi.mock('../../services/marketService', () => ({
     marketService: {
         discoverAvailableSyncs: vi.fn(),
         getSyncAdminStatus: vi.fn(),
         probePublicSync: vi.fn(),
         savePublicSync: vi.fn(),
+        removePublicSync: vi.fn(),
         prepareSyncSetup: vi.fn(),
+        getRustSyncConfig: vi.fn(),
         saveSyncSetupZip: vi.fn(),
         testSyncConnection: vi.fn(),
         finalizeSyncSetup: vi.fn(),
@@ -442,6 +454,168 @@ describe('SyncServiceSettingsCard Component', () => {
             expect(screen.getByText('Reachable, not authorized')).toBeInTheDocument();
             expect(screen.getByText('Unreachable (offline)')).toBeInTheDocument();
             expect(screen.getAllByText('Connected').length).toBeGreaterThan(0);
+        });
+    });
+
+    it('opens registration URL with key and re-checks authorization for public syncs', async () => {
+        const publicSettings: AppSettings = {
+            ...defaultSettings,
+            publicSyncs: [
+                {
+                    writeUrl: 'https://community.example.org/sync.php',
+                    readUrl: 'https://community.example.org/data',
+                    dropPub: 'a'.repeat(64),
+                    registerUrl: 'https://community.example.org/register',
+                    accessPubkey: 'b'.repeat(64),
+                    enabled: false,
+                    authorizedChannels: [],
+                    status: 'pending_auth',
+                },
+            ],
+        };
+        vi.mocked(settingsService.getSettings).mockResolvedValue(publicSettings);
+        vi.mocked(marketService.probePublicSync).mockResolvedValue({
+            writeUrl: 'https://community.example.org/sync.php',
+            readUrl: 'https://community.example.org/data',
+            dropPub: 'a'.repeat(64),
+            registerUrl: 'https://community.example.org/register',
+            accessPubkey: 'b'.repeat(64),
+            authorizedChannels: ['card', 'wot', 'backup', 'post'],
+        });
+        vi.mocked(marketService.savePublicSync).mockResolvedValue({
+            writeUrl: 'https://community.example.org/sync.php',
+            readUrl: 'https://community.example.org/data',
+            dropPub: 'a'.repeat(64),
+            registerUrl: 'https://community.example.org/register',
+            accessPubkey: 'b'.repeat(64),
+            authorizedChannels: ['card', 'wot', 'backup', 'post'],
+        });
+
+        render(
+            <SyncServiceSettingsCard
+                settings={publicSettings}
+                onSettingsUpdated={vi.fn()}
+            />
+        );
+
+        const openRegBtn = await screen.findByRole('button', { name: /Unlock on website/i });
+        fireEvent.click(openRegBtn);
+        await waitFor(() => {
+            expect(openUrl).toHaveBeenCalledWith(
+                `https://community.example.org/register?key=${'b'.repeat(64)}`
+            );
+        });
+
+        const copyKeyBtn = screen.getByRole('button', { name: /Copy key/i });
+        fireEvent.click(copyKeyBtn);
+        await waitFor(() => {
+            expect(copyToClipboard).toHaveBeenCalledWith('b'.repeat(64));
+        });
+
+        const checkAuthBtn = screen.getByRole('button', { name: /Check activation/i });
+        fireEvent.click(checkAuthBtn);
+        await waitFor(() => {
+            expect(marketService.probePublicSync).toHaveBeenCalledWith('https://community.example.org/sync.php');
+            expect(marketService.savePublicSync).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    writeUrl: 'https://community.example.org/sync.php',
+                    enabled: true,
+                })
+            );
+        });
+    });
+
+    it('opens delete confirmation dialog for public syncs and respects deleteRemoteSlots checkbox', async () => {
+        const publicSettings: AppSettings = {
+            ...defaultSettings,
+            publicSyncs: [
+                {
+                    writeUrl: 'https://community.example.org/sync.php',
+                    readUrl: 'https://community.example.org/data',
+                    dropPub: 'a'.repeat(64),
+                    accessPubkey: 'b'.repeat(64),
+                    enabled: true,
+                    authorizedChannels: ['card', 'post'],
+                    status: 'active',
+                },
+            ],
+        };
+        let currentSettings: AppSettings = publicSettings;
+        vi.mocked(settingsService.getSettings).mockImplementation(async () => currentSettings);
+        vi.mocked(marketService.removePublicSync).mockImplementation(async () => {
+            currentSettings = {
+                ...publicSettings,
+                publicSyncs: [],
+            };
+        });
+
+        render(
+            <SyncServiceSettingsCard
+                settings={publicSettings}
+                onSettingsUpdated={vi.fn()}
+            />
+        );
+
+        const deleteTrigger = await screen.findByRole('button', { name: 'Delete' });
+        fireEvent.click(deleteTrigger);
+
+        const dialog = await screen.findByRole('dialog');
+        const remoteCheckbox = within(dialog).getByRole('checkbox', {
+            name: /Also delete all my stored data/i,
+        });
+        expect(remoteCheckbox).toBeChecked();
+
+        // Uncheck and verify false is passed
+        fireEvent.click(remoteCheckbox);
+        expect(remoteCheckbox).not.toBeChecked();
+
+        const confirmBtn = within(dialog).getByRole('button', { name: /^Delete$/i });
+        fireEvent.click(confirmBtn);
+
+        await waitFor(() => {
+            expect(marketService.removePublicSync).toHaveBeenCalledWith(
+                'https://community.example.org/sync.php',
+                false
+            );
+        });
+    });
+
+    it('copies Rust config.toml from the Host setup wizard', async () => {
+        const sampleToml = '[server]\nadmin_pubkey = "abcd"\n';
+        vi.mocked(marketService.prepareSyncSetup).mockResolvedValue({
+            descriptor: {
+                writeUrl: '',
+                readUrl: '',
+                dropPub: 'abcd',
+            },
+            dataDir: 'd-1234',
+            adminPubkey: 'abcd',
+            maxMembers: 300,
+            maxTotalStorageMb: 50,
+            policy: {
+                directMin: 2,
+                hop2Enabled: true,
+                bridgeMin: 2,
+                hop2Min: 2,
+            },
+            zipBase64: '',
+            rustConfigToml: sampleToml,
+        });
+
+        render(
+            <SyncServiceSettingsCard
+                settings={defaultSettings}
+                onSettingsUpdated={vi.fn()}
+                mode="host"
+            />
+        );
+
+        const copyTomlBtn = await screen.findByRole('button', { name: /Copy Rust config\.toml/i });
+        fireEvent.click(copyTomlBtn);
+
+        await waitFor(() => {
+            expect(marketService.prepareSyncSetup).toHaveBeenCalled();
+            expect(copyToClipboard).toHaveBeenCalledWith(sampleToml);
         });
     });
 });

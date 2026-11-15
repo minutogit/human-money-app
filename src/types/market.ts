@@ -213,6 +213,7 @@ export interface FrontendSyncSetupDraft {
     maxTotalStorageMb: number;
     policy: FrontendMemberPolicyDto;
     zipBase64: string;
+    rustConfigToml?: string;
 }
 
 export interface FrontendSyncAdminStatus {

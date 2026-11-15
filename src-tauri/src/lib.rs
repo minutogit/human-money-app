@@ -170,6 +170,7 @@ pub fn run() {
             recommend_market_card,
             // Sync Services
             prepare_sync_setup,
+            get_rust_sync_config,
             save_sync_setup_zip,
             finalize_sync_setup,
             test_sync_connection,

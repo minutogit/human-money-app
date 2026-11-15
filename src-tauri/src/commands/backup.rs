@@ -1033,11 +1033,14 @@ pub async fn sync_backup_impl(
     let mut authorized_targets = Vec::new();
 
     for sync_desc in candidate_targets {
-        let (cap_pubkey, is_public) = if let Some(ref slot_id) = sync_desc.slot_id {
-            (slot_id.clone(), true)
+        let (cap_pubkey, is_public, cap_prefix) = if let Some(ref slot_id) = sync_desc.slot_id {
+            match humoco_market::parse_slot_id(slot_id) {
+                Ok((base_pk, sid_pfx)) => (base_pk, true, sid_pfx.or_else(|| my_prefix.clone())),
+                Err(_) => (slot_id.clone(), true, my_prefix.clone()),
+            }
         } else {
             match humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &sync_desc.drop_pub) {
-                Ok(pk) => (pk, false),
+                Ok(pk) => (pk, false, my_prefix.clone()),
                 Err(_) => continue,
             }
         };
@@ -1046,7 +1049,7 @@ pub async fn sync_backup_impl(
             &probe_client,
             &sync_desc.write_url,
             &cap_pubkey,
-            my_prefix.as_deref(),
+            cap_prefix.as_deref(),
             "backup",
         )
         .await

@@ -4,9 +4,9 @@ use humoco_market::{
     canonicalize_write_url, derive_drop_admin_keypair, derive_drop_admin_seed,
     derive_drop_data_dir, derive_member_stealth_pubkey, derive_member_stealth_pubkey_admin,
     derive_public_drop_keypair, format_admin_request_message, format_member_request_message,
-    sign_admin_request, sign_member_request_direct, sign_member_request_stealth,
-    sign_member_stealth_message, validate_sync_prefix, verify_ed25519_detached_hex,
-    MemberPolicy, SignedDropHeaders,
+    format_slot_id, parse_slot_id, sign_admin_request, sign_delete_account_request,
+    sign_member_request_direct, sign_member_request_stealth, sign_member_stealth_message,
+    validate_sync_prefix, verify_ed25519_detached_hex, MemberPolicy, SignedDropHeaders,
 };
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -493,4 +493,50 @@ proptest! {
 
         prop_assert_ne!(r1_hex, r2_hex);
     }
+}
+
+#[test]
+fn test_format_and_parse_slot_id() {
+    let sk = SigningKey::from_bytes(&[42u8; 32]);
+    let pk_hex = hex::encode(sk.verifying_key().as_bytes());
+
+    let unprefixed = format_slot_id(&pk_hex, None).unwrap();
+    assert_eq!(unprefixed, pk_hex);
+    assert_eq!(parse_slot_id(&unprefixed).unwrap(), (pk_hex.clone(), None));
+
+    let empty_pfx = format_slot_id(&pk_hex, Some("")).unwrap();
+    assert_eq!(empty_pfx, pk_hex);
+
+    let prefixed = format_slot_id(&pk_hex, Some("alice-1")).unwrap();
+    assert_eq!(prefixed, format!("{}_alice-1", pk_hex));
+    assert_eq!(
+        parse_slot_id(&prefixed).unwrap(),
+        (pk_hex.clone(), Some("alice-1".to_string()))
+    );
+
+    assert!(parse_slot_id(&format!("{}_", pk_hex)).is_err());
+    assert!(parse_slot_id(&format!("{}_BAD", pk_hex)).is_err());
+    assert!(parse_slot_id(&format!("{}_a_b", pk_hex)).is_err());
+    assert!(parse_slot_id("not-a-pubkey").is_err());
+}
+
+#[test]
+fn test_sign_delete_account_request_matches_spec() {
+    let sk = SigningKey::from_bytes(&[7u8; 32]);
+    let headers = sign_delete_account_request(&sk, 1700000123, "abcdef0123456789abcdef0123456789");
+    let expected_msg = format_member_request_message(
+        "DELETE_ACCOUNT",
+        "",
+        None,
+        1700000123,
+        "abcdef0123456789abcdef0123456789",
+        &[],
+    );
+    verify_ed25519_detached_hex(
+        &headers.pubkey_hex,
+        expected_msg.as_bytes(),
+        &headers.signature_hex,
+    )
+    .unwrap();
+    assert_eq!(headers.prefix, None);
 }

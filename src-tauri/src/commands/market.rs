@@ -53,6 +53,62 @@ pub fn build_share_artifacts(card: &humoco_market::SdCard) -> Result<ShareArtifa
     })
 }
 
+pub(crate) fn build_card_drops(
+    selected_syncs: &[crate::models::FrontendSyncDescriptor],
+    public_syncs: &[crate::settings::StoredPublicSync],
+    my_prefix: Option<&str>,
+) -> Vec<humoco_market::DropDescriptor> {
+    let mut drops: Vec<humoco_market::DropDescriptor> = selected_syncs
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .collect();
+
+    for pd in public_syncs {
+        if pd.enabled
+            && !pd.write_url.is_empty()
+            && !pd.read_url.is_empty()
+            && !pd.drop_pub.is_empty()
+            && !drops.iter().any(|d| d.write_url == pd.write_url)
+        {
+            let slot_id = humoco_market::format_slot_id(&pd.access_pubkey, my_prefix)
+                .unwrap_or_else(|_| pd.access_pubkey.clone());
+            drops.push(humoco_market::DropDescriptor {
+                write_url: pd.write_url.clone(),
+                read_url: pd.read_url.clone(),
+                slot_id: Some(slot_id),
+                drop_pub: pd.drop_pub.clone(),
+            });
+        }
+    }
+
+    drops.truncate(humoco_market::MAX_CARD_DROPS);
+    drops
+}
+
+fn load_drops_from_settings(
+    service: &mut AppService,
+    selected_override: Option<&[crate::models::FrontendSyncDescriptor]>,
+    password: Option<&str>,
+) -> Option<Vec<humoco_market::DropDescriptor>> {
+    let settings: crate::settings::AppSettings = service
+        .load_encrypted_data(crate::settings::SETTINGS_KEY, password)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())?;
+    let my_prefix = service
+        .with_wallet_and_identity(|_w, id| {
+            human_money_core::crypto::get_prefix_from_user_id(&id.user_id).map(|s| s.to_string())
+        })
+        .ok()
+        .flatten();
+    let selected = selected_override.unwrap_or(&settings.market_selected_syncs);
+    Some(build_card_drops(
+        selected,
+        &settings.public_syncs,
+        my_prefix.as_deref(),
+    ))
+}
+
 pub fn sync_own_card_drops_on_settings_change(
     service: &mut AppService,
     syncs: &[crate::models::FrontendSyncDescriptor],
@@ -66,10 +122,15 @@ pub fn sync_own_card_drops_on_settings_change(
     if let Some(mut existing) = existing_opt {
         if existing.published {
             let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
-            if let Some(ref mut last_card) = existing.last_card {
-                last_card.payload.drops = syncs.iter().cloned().map(Into::into).collect();
-            }
-            let _ = rebuild_and_sign_own_card(service, &mut existing, now_unix);
+            let drops = load_drops_from_settings(service, Some(syncs), password).unwrap_or_else(|| {
+                syncs
+                    .iter()
+                    .take(humoco_market::MAX_CARD_DROPS)
+                    .cloned()
+                    .map(Into::into)
+                    .collect()
+            });
+            let _ = rebuild_and_sign_own_card_with_drops(service, &mut existing, now_unix, Some(drops));
             if let Ok(bytes) = serde_json::to_vec(&existing) {
                 let _ = service.save_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, &bytes, password);
             }
@@ -81,6 +142,15 @@ pub fn rebuild_and_sign_own_card(
     service: &mut AppService,
     stored: &mut StoredOwnMarketProfile,
     now: u64,
+) -> Result<(), FrontendError> {
+    rebuild_and_sign_own_card_with_drops(service, stored, now, None)
+}
+
+pub fn rebuild_and_sign_own_card_with_drops(
+    service: &mut AppService,
+    stored: &mut StoredOwnMarketProfile,
+    now: u64,
+    override_drops: Option<Vec<humoco_market::DropDescriptor>>,
 ) -> Result<(), FrontendError> {
     let (_my_identity, my_signing_key) = service
         .with_wallet_and_identity(|_w, id| (id.clone(), id.signing_key.clone()))
@@ -241,11 +311,13 @@ pub fn rebuild_and_sign_own_card(
     let validity_years = stored.validity_years.clamp(1, 3) as u64;
     let valid_until = now.saturating_add(validity_years * 365 * 86_400);
 
-    let drops = stored
-        .last_card
-        .as_ref()
-        .map(|c| c.payload.drops.clone())
-        .unwrap_or_default();
+    let drops = override_drops.unwrap_or_else(|| {
+        stored
+            .last_card
+            .as_ref()
+            .map(|c| c.payload.drops.clone())
+            .unwrap_or_default()
+    });
 
     let payload_input = humoco_market::CardPayloadInput {
         did: root_did,
@@ -474,7 +546,8 @@ pub fn save_my_market_profile_impl(
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     if stored.published {
-        rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
+        let drops_opt = load_drops_from_settings(&mut service, None, password.as_deref());
+        rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, drops_opt)?;
     }
 
     let bytes = serde_json::to_vec(&stored)
@@ -513,7 +586,8 @@ pub async fn set_card_published_impl(
 
         if published {
             stored.published = true;
-            rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
+            let drops_opt = load_drops_from_settings(&mut service, None, password.as_deref());
+            rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, drops_opt)?;
         } else {
             stored.published = false;
             stored.last_card = None;

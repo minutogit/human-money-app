@@ -117,22 +117,31 @@ pub fn collect_candidate_backup_sync_descriptors(
         .map(Into::into)
         .collect();
 
-    {
+    let (admin_opt, my_prefix) = {
         let mut service = state
             .service
             .lock()
             .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        if let Ok(Some(admin)) = service
+        let pfx = service
+            .with_wallet_and_identity(|_w, i| {
+                human_money_core::crypto::get_prefix_from_user_id(&i.user_id)
+                    .map(|s| s.to_string())
+            })
+            .ok()
+            .flatten();
+        let admin = service
             .load_encrypted_data(crate::state::MARKET_SYNC_ADMIN_KEY, password)
-            .map(|bytes| serde_json::from_slice::<crate::state::StoredSyncAdmin>(&bytes).ok())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<crate::state::StoredSyncAdmin>(&bytes).ok());
+        (admin, pfx)
+    };
+    if let Some(admin) = admin_opt {
+        if !admin.descriptor.write_url.is_empty()
+            && !candidate_targets
+                .iter()
+                .any(|d| d.write_url == admin.descriptor.write_url)
         {
-            if !admin.descriptor.write_url.is_empty()
-                && !candidate_targets
-                    .iter()
-                    .any(|d| d.write_url == admin.descriptor.write_url)
-            {
-                candidate_targets.push(admin.descriptor.clone());
-            }
+            candidate_targets.push(admin.descriptor);
         }
     }
 
@@ -143,10 +152,12 @@ pub fn collect_candidate_backup_sync_descriptors(
                 .iter()
                 .any(|d| d.write_url == pd.write_url)
         {
+            let slot_id = humoco_market::format_slot_id(&pd.access_pubkey, my_prefix.as_deref())
+                .unwrap_or_else(|_| pd.access_pubkey.clone());
             candidate_targets.push(DropDescriptor {
                 write_url: pd.write_url.clone(),
                 read_url: pd.read_url.clone(),
-                slot_id: Some(pd.access_pubkey.clone()),
+                slot_id: Some(slot_id),
                 drop_pub: pd.drop_pub.clone(),
             });
         }
@@ -179,8 +190,10 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
 
     let candidate_descriptors = collect_candidate_backup_sync_descriptors(state, password.as_deref())?;
     let settings = get_or_load_settings_from_state(state, password.as_deref());
-    let own_master_seed = my_signing_key.to_bytes();
-    let own_reply_syncs = collect_own_reply_syncs(&settings, &own_master_seed);
+    let own_reply_syncs = collect_own_reply_syncs(
+        &settings,
+        human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
+    );
 
     let now_secs = Utc::now().timestamp() as u64;
     let mut post_state = load_post_state(state, password.as_deref())?;
@@ -393,13 +406,13 @@ pub(crate) async fn discover_best_backup_from_mirrors(
             continue;
         }
 
-        let mut candidate_keys: Vec<(String, String)> = Vec::new();
+        let mut candidate_keys: Vec<(String, Option<String>, &'static str)> = Vec::new();
 
         if !desc.drop_pub.is_empty() {
             if let Ok(stealth) =
                 humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &desc.drop_pub)
             {
-                candidate_keys.push((stealth, "stealth".to_string()));
+                candidate_keys.push((stealth, normalized_prefix.clone(), "stealth"));
             }
         }
 
@@ -407,13 +420,16 @@ pub(crate) async fn discover_best_backup_from_mirrors(
             if let Ok((_, _, pub_hex)) =
                 humoco_market::derive_public_drop_keypair(&master_seed, &desc.write_url)
             {
-                candidate_keys.push((pub_hex, "public".to_string()));
+                candidate_keys.push((pub_hex, normalized_prefix.clone(), "public"));
             }
         }
 
         if let Some(ref sid) = desc.slot_id {
-            if !candidate_keys.iter().any(|(k, _)| k == sid) {
-                candidate_keys.push((sid.clone(), "slot_id".to_string()));
+            let (base_pk, sid_pfx) =
+                humoco_market::parse_slot_id(sid).unwrap_or_else(|_| (sid.clone(), None));
+            let eff_pfx = sid_pfx.or_else(|| normalized_prefix.clone());
+            if !candidate_keys.iter().any(|(k, kp, _)| k == &base_pk && kp == &eff_pfx) {
+                candidate_keys.push((base_pk, eff_pfx, "slot_id"));
             }
         }
 
@@ -421,19 +437,18 @@ pub(crate) async fn discover_best_backup_from_mirrors(
         if let Ok(own_stealth) =
             humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &admin_vk)
         {
-            if !candidate_keys.iter().any(|(k, _)| k == &own_stealth) {
-                candidate_keys.push((own_stealth, "own".to_string()));
+            if !candidate_keys.iter().any(|(k, kp, _)| k == &own_stealth && kp == &normalized_prefix) {
+                candidate_keys.push((own_stealth, normalized_prefix.clone(), "own"));
             }
         }
 
         let read_url = desc.read_url.clone();
         let client = fetch_client.clone();
-        let pfx = normalized_prefix.clone();
 
-        for (pubkey_hex, _kind) in candidate_keys {
+        for (pubkey_hex, pfx_opt, _kind) in candidate_keys {
             let r_url = read_url.clone();
             let cl = client.clone();
-            let p = pfx.clone();
+            let p = pfx_opt.clone();
             set.spawn(async move {
                 let res = tokio::time::timeout(
                     std::time::Duration::from_millis(4000),
@@ -967,8 +982,10 @@ pub async fn setup_social_recovery_guardians_with_params(
     let now_secs = Utc::now().timestamp() as u64;
 
     let settings = get_or_load_settings_from_state(state, Some(password.as_str()));
-    let own_master_seed = my_signing_key.to_bytes();
-    let own_reply_syncs = collect_own_reply_syncs(&settings, &own_master_seed);
+    let own_reply_syncs = collect_own_reply_syncs(
+        &settings,
+        human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
+    );
     let mut post_state = load_post_state(state, Some(&password))?;
 
     // Send revoke to any old guardians being removed
@@ -1197,8 +1214,10 @@ pub async fn revoke_social_recovery_impl(
     let new_epoch = old_epoch + 1;
     let now_secs = Utc::now().timestamp() as u64;
     let settings = get_or_load_settings_from_state(state, password.as_deref());
-    let own_master_seed = my_signing_key.to_bytes();
-    let own_reply_syncs = collect_own_reply_syncs(&settings, &own_master_seed);
+    let own_reply_syncs = collect_own_reply_syncs(
+        &settings,
+        human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
+    );
     let mut post_state = load_post_state(state, password.as_deref())?;
 
     for g in &old_guardians {

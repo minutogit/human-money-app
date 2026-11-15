@@ -108,6 +108,12 @@ export const marketService = {
         });
     },
 
+    getRustSyncConfig: async (password?: string): Promise<string> => {
+        return await invoke<string>("get_rust_sync_config", {
+            password: password || undefined,
+        });
+    },
+
     saveSyncSetupZip: async (filePath: string, password?: string): Promise<void> => {
         return await invoke<void>("save_sync_setup_zip", {
             filePath,

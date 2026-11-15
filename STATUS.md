@@ -7,6 +7,12 @@ last_updated: "2026-11-15"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-068"
+    title: "humoco-sync Ecosystem Split, Prefixed slot_id Fix, Rust config.toml Generator & Public Sync Onboarding UX"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-067"]
+    description: "Moved PHP sync server files into standalone 6th repo `/humoco-sync` (`SYNC-001`–`SYNC-004` ✅; deleted `tools/humoco-sync/` cleanly per Zero-Compat); updated `sync_zip.rs` `include_bytes!` paths and added `generate_rust_sync_config_toml` + `get_rust_sync_config` Tauri command + Host tab `[Copy Rust config.toml]`; fixed prefixed `slot_id` (`<R>_<prefix>`) across `humoco-market` (`format_slot_id`, `parse_slot_id`, `sd_card.rs`) and `src-tauri` (`sync.rs`, `market.rs`, `post.rs`, `backup.rs`, `recovery.rs`); aligned `MockSyncServer` in `commands/sync.rs` with `X-Drop-Prefix`; sanitized `register_url` in `fetch_sync_info`; added `sign_delete_account_request` + `sync_client::delete_account` (`DELETE ?account` with per-channel + media fallback); updated `SyncServiceSettingsCard.tsx` with opt-in community preset, `[Unlock on website]` (`registerUrl?key=<R>`), key copy, `[Check activation]`, and delete confirmation dialog with remote account wipe checkbox across all 5 locales. Verified with 569/569 Vitest tests across 74 test files, 98 src-tauri tests, 96 humoco-market tests, cargo clippy (0 warnings), npm run i18n:check, and npm run build."
   - id: "APP-067"
     title: "Sync-Service Revocation & Graceful Migration (Signed revocation.json, 410 Gone, Grace Period, Auto Contact URL Migration)"
     status: "completed"

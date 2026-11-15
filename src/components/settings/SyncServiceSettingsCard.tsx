@@ -15,10 +15,13 @@ import {
     Shield,
     HardDrive,
     FileArchive,
+    FileCode,
+    ExternalLink,
     HelpCircle,
     HeartHandshake,
 } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import {
     AppSettings,
     FrontendDiscoveredSync,
@@ -41,6 +44,27 @@ import { runSyncBackupPass } from '../../utils/autoBackup';
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
 import { translateError } from '../../utils/errorHelper';
 import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
+
+const COMMUNITY_SYNC_PRESET_URL = 'https://sync.menschlich-miteinander.org/sync.php';
+
+const isSafeExternalSyncUrl = (raw?: string | null): raw is string => {
+    if (!raw) return false;
+    try {
+        const u = new URL(raw.trim());
+        if (u.protocol === 'https:') return true;
+        if (u.protocol === 'http:') {
+            return (
+                u.hostname === '127.0.0.1' ||
+                u.hostname === 'localhost' ||
+                u.hostname === '::1' ||
+                u.hostname === '[::1]'
+            );
+        }
+        return false;
+    } catch {
+        return false;
+    }
+};
 
 export const HOST_SYNC_DRAFT_KEY = 'humoco_draft_host_webspace_url';
 export const CONSUMER_SYNC_DRAFT_KEY = 'humoco_draft_consumer_sync_url';
@@ -335,10 +359,16 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         setSessionDraft(HOST_SYNC_DRAFT_KEY, val);
     };
     const [isDownloadingZip, setIsDownloadingZip] = useState(false);
+    const [isCopyingRustConfig, setIsCopyingRustConfig] = useState(false);
     const [isTestingHost, setIsTestingHost] = useState(false);
     const [isUpdatingPolicy, setIsUpdatingPolicy] = useState(false);
     const [isDeletingAdmin, setIsDeletingAdmin] = useState(false);
     const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+    const [pendingPublicDelete, setPendingPublicDelete] = useState<StoredPublicSync | null>(null);
+    const [deletePublicRemoteData, setDeletePublicRemoteData] = useState(true);
+    const [isDeletingPublicDrop, setIsDeletingPublicDrop] = useState(false);
+    const [checkingPublicUrl, setCheckingPublicUrl] = useState<string | null>(null);
+    const [copiedPublicKeyUrl, setCopiedPublicKeyUrl] = useState<string | null>(null);
     const [isRevokeModalOpen, setIsRevokeModalOpen] = useState(false);
     const [revokeGraceDays, setRevokeGraceDays] = useState<'30' | '14' | '0'>('30');
     const [revokeReplacementUrl, setRevokeReplacementUrl] = useState('');
@@ -532,9 +562,18 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         }
     };
 
-    const handleDeletePublicDrop = async (writeUrl: string) => {
+    const handleOpenDeletePublicDrop = (drop: StoredPublicSync) => {
+        setDeletePublicRemoteData(true);
+        setPendingPublicDelete(drop);
+    };
+
+    const handleConfirmDeletePublicDrop = async () => {
+        if (!pendingPublicDelete) return;
+        setIsDeletingPublicDrop(true);
+        setFeedback(null);
         try {
-            await marketService.removePublicSync(writeUrl, false);
+            await marketService.removePublicSync(pendingPublicDelete.writeUrl, deletePublicRemoteData);
+            setPendingPublicDelete(null);
             const s = await settingsService.getSettings();
             if (s.publicSyncs) {
                 setConfiguredPublicDrops(s.publicSyncs);
@@ -543,8 +582,78 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 onSettingsUpdated(s);
             }
             notifySyncStatusUpdated();
+            setFeedback({
+                type: 'success',
+                message: t('settings.syncPublicRemovedSuccess'),
+            });
         } catch (err) {
             setFeedback({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsDeletingPublicDrop(false);
+        }
+    };
+
+    const handleOpenPublicRegister = async (drop: StoredPublicSync) => {
+        if (!isSafeExternalSyncUrl(drop.registerUrl)) return;
+        const sep = drop.registerUrl.includes('?') ? '&' : '?';
+        const fullUrl = `${drop.registerUrl}${sep}key=${encodeURIComponent(drop.accessPubkey)}`;
+        try {
+            await openUrl(fullUrl);
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        }
+    };
+
+    const handleCopyPublicAccessKey = async (drop: StoredPublicSync) => {
+        try {
+            await copyToClipboard(drop.accessPubkey);
+            setCopiedPublicKeyUrl(drop.writeUrl);
+            setFeedback({ type: 'success', message: t('settings.syncPublicKeyCopied') });
+            setTimeout(() => {
+                setCopiedPublicKeyUrl((prev) => (prev === drop.writeUrl ? null : prev));
+            }, 2000);
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        }
+    };
+
+    const handleCheckPublicDropAuth = async (drop: StoredPublicSync) => {
+        setCheckingPublicUrl(drop.writeUrl);
+        setFeedback(null);
+        try {
+            const info = await marketService.probePublicSync(drop.writeUrl);
+            if (info) {
+                const hasAuth = (info.authorizedChannels || []).length > 0;
+                await marketService.savePublicSync({
+                    writeUrl: info.writeUrl,
+                    readUrl: info.readUrl,
+                    dropPub: info.dropPub,
+                    registerUrl: info.registerUrl ?? drop.registerUrl,
+                    enabled: hasAuth,
+                });
+                const s = await settingsService.getSettings();
+                if (s.publicSyncs) {
+                    setConfiguredPublicDrops(s.publicSyncs);
+                }
+                if (onSettingsUpdated) {
+                    onSettingsUpdated(s);
+                }
+                notifySyncStatusUpdated();
+                setFeedback({
+                    type: hasAuth ? 'success' : 'info',
+                    message: hasAuth
+                        ? t('settings.syncProbeSuccess')
+                        : t('settings.syncProbeUnauthorized'),
+                });
+            }
+        } catch (err) {
+            checkAndTriggerCooldown(err);
+            setFeedback({
+                type: 'error',
+                message: `${t('settings.syncProbeError')}: ${translateError(err, t)}`,
+            });
+        } finally {
+            setCheckingPublicUrl(null);
         }
     };
 
@@ -645,6 +754,36 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             setFeedback({ type: 'error', message: translateError(err, t) });
         } finally {
             setIsDownloadingZip(false);
+        }
+    };
+
+    const handleCopyRustConfig = async (useWizardPolicy: boolean) => {
+        setIsCopyingRustConfig(true);
+        setFeedback(null);
+        try {
+            await protectAction(async (pwd) => {
+                let toml = '';
+                if (useWizardPolicy) {
+                    const draft = await marketService.prepareSyncSetup({
+                        policy: hostPolicy,
+                        maxMembers: hostMaxMembers,
+                        maxTotalStorageMb: hostMaxStorageMb,
+                    }, pwd || undefined);
+                    toml = draft?.rustConfigToml || '';
+                }
+                if (!toml) {
+                    toml = await marketService.getRustSyncConfig(pwd || undefined);
+                }
+                await copyToClipboard(toml);
+            });
+            setFeedback({
+                type: 'success',
+                message: t('settings.syncHostRustConfigCopied'),
+            });
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsCopyingRustConfig(false);
         }
     };
 
@@ -1092,6 +1231,17 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         </span>
                                     </div>
                                 )}
+
+                                <div className="flex items-center flex-wrap gap-2 pt-0.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => setInputUrl(COMMUNITY_SYNC_PRESET_URL)}
+                                        className="text-[11px] text-theme-primary hover:underline flex items-center gap-1 font-medium"
+                                    >
+                                        <Globe size={12} />
+                                        <span>{t('settings.syncCommunityQuickSelect')}</span>
+                                    </button>
+                                </div>
                             </div>
 
                             {probeResult && (
@@ -1238,44 +1388,94 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                 </p>
                             ) : (
                                 <div className="space-y-2">
-                                    {(configuredPublicDrops || []).map((drop, idx) => (
-                                        <div
-                                            key={idx}
-                                            className="p-3 bg-white rounded-xl border border-theme-subtle flex items-center justify-between gap-3 text-xs"
-                                        >
-                                            <div className="min-w-0">
-                                                <span className="font-mono text-xs text-theme-primary truncate block">
-                                                    {drop.writeUrl}
-                                                </span>
-                                                <span className="text-[10px] text-theme-light block">
-                                                    {(drop.authorizedChannels || []).length > 0
-                                                        ? `Kanäle: ${(drop.authorizedChannels || []).join(', ')}`
-                                                        : 'Schlüsselprüfung ausstehend'}
-                                                </span>
-                                            </div>
+                                    {(configuredPublicDrops || []).map((drop, idx) => {
+                                        const isChecking = checkingPublicUrl === drop.writeUrl;
+                                        const isCopied = copiedPublicKeyUrl === drop.writeUrl;
+                                        const hasRegisterUrl = isSafeExternalSyncUrl(drop.registerUrl);
+                                        return (
+                                            <div
+                                                key={drop.writeUrl || idx}
+                                                className="p-3 bg-white rounded-xl border border-theme-subtle space-y-2 text-xs"
+                                            >
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <span className="font-mono text-xs text-theme-primary truncate block">
+                                                            {drop.writeUrl}
+                                                        </span>
+                                                        <span className="text-[10px] text-theme-light block">
+                                                            {(drop.authorizedChannels || []).length > 0
+                                                                ? t('settings.syncPublicChannelsLabel', {
+                                                                      channels: (drop.authorizedChannels || []).join(', '),
+                                                                  })
+                                                                : t('settings.syncPublicPendingKey')}
+                                                        </span>
+                                                    </div>
 
-                                            <div className="flex items-center gap-2 shrink-0">
-                                                <Button
-                                                    type="button"
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => handleTogglePublicDrop(drop)}
-                                                    className="text-[11px] h-7 px-2"
-                                                >
-                                                    {drop.enabled ? 'Deaktivieren' : 'Aktivieren'}
-                                                </Button>
+                                                    <div className="flex items-center gap-2 shrink-0">
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            size="sm"
+                                                            onClick={() => handleTogglePublicDrop(drop)}
+                                                            className="text-[11px] h-7 px-2"
+                                                        >
+                                                            {drop.enabled
+                                                                ? t('settings.syncPublicDisable')
+                                                                : t('settings.syncPublicEnable')}
+                                                        </Button>
 
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleDeletePublicDrop(drop.writeUrl)}
-                                                    className="text-theme-placeholder hover:text-rose-600 p-1 rounded transition-colors"
-                                                    title={t('common.delete')}
-                                                >
-                                                    <Trash2 size={15} />
-                                                </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleOpenDeletePublicDrop(drop)}
+                                                            className="text-theme-placeholder hover:text-rose-600 p-1 rounded transition-colors"
+                                                            title={t('common.delete')}
+                                                            aria-label={t('common.delete')}
+                                                        >
+                                                            <Trash2 size={15} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-theme-subtle/40">
+                                                    {hasRegisterUrl && (
+                                                        <Button
+                                                            type="button"
+                                                            variant="primary"
+                                                            size="sm"
+                                                            onClick={() => handleOpenPublicRegister(drop)}
+                                                            className="gap-1.5 text-[11px] h-7 px-2.5"
+                                                        >
+                                                            <ExternalLink size={12} />
+                                                            <span>{t('settings.syncPublicOpenRegister')}</span>
+                                                        </Button>
+                                                    )}
+
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleCopyPublicAccessKey(drop)}
+                                                        className="gap-1.5 text-[11px] h-7 px-2.5"
+                                                    >
+                                                        {isCopied ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                                                        <span>{t('settings.syncPublicCopyKey')}</span>
+                                                    </Button>
+
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleCheckPublicDropAuth(drop)}
+                                                        disabled={isChecking}
+                                                        className="gap-1.5 text-[11px] h-7 px-2.5"
+                                                    >
+                                                        <RefreshCw size={12} className={isChecking ? 'animate-spin' : ''} />
+                                                        <span>{t('settings.syncPublicCheckAuth')}</span>
+                                                    </Button>
+                                                </div>
                                             </div>
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>
@@ -1329,7 +1529,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         idPrefix="setup"
                                     />
 
-                                    <div className="pt-2">
+                                    <div className="pt-2 flex flex-wrap items-center gap-2">
                                         <Button
                                             type="button"
                                             variant="outline"
@@ -1340,6 +1540,18 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         >
                                             <FileArchive size={14} className="text-theme-primary" />
                                             <span>{isDownloadingZip ? t('common.saving') : t('settings.syncHostDownloadZip')}</span>
+                                        </Button>
+
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => handleCopyRustConfig(true)}
+                                            disabled={isCopyingRustConfig}
+                                            className="gap-2"
+                                        >
+                                            <FileCode size={14} className="text-theme-primary" />
+                                            <span>{t('settings.syncHostCopyRustConfig')}</span>
                                         </Button>
                                     </div>
                                 </div>
@@ -1540,6 +1752,17 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                 <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-theme-subtle/50">
                                     <Button
                                         type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => handleCopyRustConfig(false)}
+                                        disabled={isCopyingRustConfig}
+                                        className="gap-1.5 text-xs"
+                                    >
+                                        <FileCode size={13} />
+                                        <span>{t('settings.syncHostCopyRustConfig')}</span>
+                                    </Button>
+                                    <Button
+                                        type="button"
                                         variant="secondary"
                                         size="sm"
                                         onClick={() => setIsRevokeModalOpen(true)}
@@ -1646,6 +1869,38 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 isProcessing={isDeletingAdmin}
                 onConfirm={handleDeleteHost}
                 onCancel={() => setIsDeleteConfirmOpen(false)}
+            />
+
+            {/* Confirmation dialog for removing a public sync service */}
+            <ConfirmationModal
+                isOpen={pendingPublicDelete !== null}
+                title={t('settings.syncPublicDeleteConfirmTitle')}
+                description={
+                    <div className="space-y-3 text-sm text-theme-secondary">
+                        <p>{t('settings.syncPublicDeleteConfirmDesc')}</p>
+                        {pendingPublicDelete && (
+                            <p className="font-mono text-xs bg-bg-app px-2.5 py-1.5 rounded-lg border border-theme-subtle break-all">
+                                {pendingPublicDelete.writeUrl}
+                            </p>
+                        )}
+                        <label className="flex items-start gap-2 cursor-pointer text-xs text-theme-primary pt-1">
+                            <input
+                                type="checkbox"
+                                checked={deletePublicRemoteData}
+                                onChange={(e) => setDeletePublicRemoteData(e.target.checked)}
+                                className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                            />
+                            <span>{t('settings.syncPublicDeleteRemoteLabel')}</span>
+                        </label>
+                    </div>
+                }
+                confirmVariant="danger"
+                confirmText={t('common.delete')}
+                isProcessing={isDeletingPublicDrop}
+                onConfirm={handleConfirmDeletePublicDrop}
+                onCancel={() => {
+                    if (!isDeletingPublicDrop) setPendingPublicDelete(null);
+                }}
             />
         </Card>
     );

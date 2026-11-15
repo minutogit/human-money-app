@@ -98,6 +98,8 @@ vi.mock('../../services/marketService', () => ({
     probePublicSync: vi.fn(),
     savePublicSync: vi.fn(),
     probeContactSyncs: vi.fn().mockResolvedValue([]),
+    prepareSyncSetup: vi.fn(),
+    getRustSyncConfig: vi.fn().mockResolvedValue(''),
   },
 }));
 
@@ -250,7 +252,7 @@ describe('SettingsView Component', () => {
     const advancedTab = screen.getByText('Advanced');
     await user.click(advancedTab);
 
-    const copyButton = screen.getByRole('button', { name: /Copy/i });
+    const copyButton = screen.getByRole('button', { name: /^Copy$/i });
     await user.click(copyButton);
 
     expect(writeTextSpy).toHaveBeenCalledWith('test-device-id-1234');

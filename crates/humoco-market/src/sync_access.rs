@@ -659,4 +659,46 @@ pub fn sign_admin_request(
     }
 }
 
+/// Format a card `DropDescriptor.slot_id` (`<pubkey_hex>` or `<pubkey_hex>_<prefix>`).
+pub fn format_slot_id(pubkey_hex: &str, prefix: Option<&str>) -> Result<String, MarketError> {
+    parse_ed25519_pubkey_hex64(pubkey_hex)?;
+    match validate_sync_prefix(prefix)? {
+        Some(p) => Ok(format!("{}_{}", pubkey_hex, p)),
+        None => Ok(pubkey_hex.to_string()),
+    }
+}
+
+/// Parse a card `DropDescriptor.slot_id` into `(pubkey_hex64, Option<prefix>)`.
+pub fn parse_slot_id(slot_id: &str) -> Result<(String, Option<String>), MarketError> {
+    if let Some((base_pk, raw_prefix)) = slot_id.split_once('_') {
+        parse_ed25519_pubkey_hex64(base_pk)?;
+        if raw_prefix.is_empty() {
+            return Err(MarketError::Validation(
+                "slot_id must not end with '_' without a prefix".to_string(),
+            ));
+        }
+        let prefix = validate_sync_prefix(Some(raw_prefix))?;
+        Ok((base_pk.to_string(), prefix))
+    } else {
+        parse_ed25519_pubkey_hex64(slot_id)?;
+        Ok((slot_id.to_string(), None))
+    }
+}
+
+/// Sign a full remote account deletion request (`DELETE <write_url>?account`).
+pub fn sign_delete_account_request(
+    signing_key: &SigningKey,
+    timestamp: u64,
+    nonce_hex: &str,
+) -> SignedDropHeaders {
+    sign_member_request_direct(
+        signing_key,
+        "DELETE_ACCOUNT",
+        "",
+        None,
+        timestamp,
+        nonce_hex,
+        &[],
+    )
+}
 

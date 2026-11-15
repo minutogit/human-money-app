@@ -183,7 +183,7 @@ fn validate_drops(drops: &[DropDescriptor]) -> Result<(), MarketError> {
             .map_err(|e| MarketError::Validation(format!("drop[{}] drop_pub error: {}", i, e)))?;
 
         if let Some(ref slot_id) = drop.slot_id {
-            crate::sync_access::parse_ed25519_pubkey_hex64(slot_id)
+            crate::sync_access::parse_slot_id(slot_id)
                 .map_err(|e| MarketError::Validation(format!("drop[{}] slot_id error: {}", i, e)))?;
         }
     }
