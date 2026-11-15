@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { UserCircle, Mail, Phone, Globe, Briefcase, Heart, ChevronDown, ChevronUp, Info } from "lucide-react";
+import { UserCircle, Mail, Phone, Globe, Briefcase, Heart, ChevronDown, ChevronUp, Info, Edit3 } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
 import { Button } from "../ui/Button";
+import { ExpertTabsLayout } from "../ui/ExpertTabsLayout";
 import { CreatorData } from "../../types";
 import { geocodeAddress, getCurrentLocation } from "../../utils/geoUtils";
 
@@ -18,6 +19,8 @@ interface CreatorIdentityFormProps {
     errors: Record<string, boolean>;
     firstNameRef: React.RefObject<HTMLInputElement | null>;
     lastNameRef: React.RefObject<HTMLInputElement | null>;
+    requiresGender?: boolean;
+    genderRef?: React.RefObject<HTMLSelectElement | null>;
 }
 
 export function CreatorIdentityForm({
@@ -28,7 +31,9 @@ export function CreatorIdentityForm({
     coordWarning,
     errors,
     firstNameRef,
-    lastNameRef
+    lastNameRef,
+    requiresGender = false,
+    genderRef
 }: CreatorIdentityFormProps) {
     const { t } = useTranslation();
     const [isLocating, setIsLocating] = useState(false);
@@ -36,6 +41,7 @@ export function CreatorIdentityForm({
     const [geoFeedback, setGeoFeedback] = useState("");
     const [geoFeedbackError, setGeoFeedbackError] = useState(false);
     const [isNeedsExpanded, setIsNeedsExpanded] = useState(false);
+    const [isEditingSimple, setIsEditingSimple] = useState(false);
 
     const handleUseGPS = async () => {
         setIsLocating(true);
@@ -86,7 +92,118 @@ export function CreatorIdentityForm({
         });
     };
 
-    return (
+    const hasCompleteName = Boolean(identity.firstName.trim() && identity.lastName.trim());
+    const showInlineEditor = isEditingSimple || !hasCompleteName || Boolean(errors.firstName || errors.lastName);
+    const displaySummary = [
+        `${identity.firstName.trim()} ${identity.lastName.trim()}`.trim(),
+        identity.address?.city?.trim(),
+    ]
+        .filter(Boolean)
+        .join(", ");
+
+    const renderGenderField = () => {
+        if (!requiresGender) return null;
+        return (
+            <div className="space-y-2">
+                <label htmlFor="creator-gender" className="text-[10px] font-black text-theme-light uppercase tracking-widest">
+                    {t('profile.gender')}
+                </label>
+                <select
+                    id="creator-gender"
+                    data-testid="creator-gender-select"
+                    ref={genderRef}
+                    value={identity.gender}
+                    onChange={(e) => handleChange('gender', e.target.value)}
+                    className={`w-full bg-white border rounded-xl px-4 py-3 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none ${errors.gender ? 'border-rose-500' : 'border-theme-subtle'}`}
+                >
+                    <option value="1">{t('gender.male')}</option>
+                    <option value="2">{t('gender.female')}</option>
+                    <option value="0">{t('gender.notKnown')}</option>
+                    <option value="9">{t('gender.notApplicable')}</option>
+                </select>
+                <p className="text-[11px] text-theme-light">
+                    {t('voucher.creator.genderRequiredHint', 'Für diesen Gutscheintyp wegen der Bürgen-Regeln erforderlich.')}
+                </p>
+            </div>
+        );
+    };
+
+    const simpleContent = (
+        <Card header={
+            <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                    <UserCircle size={18} className="text-theme-primary" />
+                    <span className="font-black text-xs uppercase tracking-widest text-theme-primary">{t('voucher.creator.yourDetails')}</span>
+                </div>
+                {showInlineEditor && (
+                    <Button type="button" variant="secondary" size="sm" onClick={onLoadProfile} className="rounded-xl px-3 h-8 text-[9px] uppercase tracking-widest">
+                        {t('voucher.creator.syncFromProfile')}
+                    </Button>
+                )}
+            </div>
+        }>
+            <div className="space-y-4">
+                {!showInlineEditor ? (
+                    <div
+                        className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-bg-app/60 border border-theme-subtle"
+                        data-testid="creator-profile-summary"
+                    >
+                        <span className="text-sm font-medium text-theme-secondary">
+                            {t('voucher.creator.profileAdoptedLine', {
+                                summary: displaySummary,
+                                defaultValue: 'Deine Angaben ({{summary}}) werden übernommen',
+                            })}
+                        </span>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setIsEditingSimple(true)}
+                            data-testid="creator-profile-edit-btn"
+                            className="gap-1.5"
+                        >
+                            <Edit3 size={14} />
+                            <span>{t('common.edit', 'Bearbeiten')}</span>
+                        </Button>
+                    </div>
+                ) : (
+                    <div className="space-y-4" data-testid="creator-simple-editor">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="space-y-2">
+                                <label htmlFor="creator-first-name" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.creator.firstNameRequired')}</label>
+                                <Input id="creator-first-name" ref={firstNameRef} value={identity.firstName} onChange={(e) => handleChange('firstName', e.target.value)} className={errors.firstName ? 'border-rose-500' : ''} />
+                            </div>
+                            <div className="space-y-2">
+                                <label htmlFor="creator-last-name" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.creator.lastNameRequired')}</label>
+                                <Input id="creator-last-name" ref={lastNameRef} value={identity.lastName} onChange={(e) => handleChange('lastName', e.target.value)} className={errors.lastName ? 'border-rose-500' : ''} />
+                            </div>
+                            <div className="space-y-2">
+                                <label htmlFor="creator-city" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.city')}</label>
+                                <Input id="creator-city" value={identity.address.city || ""} onChange={(e) => handleAddressChange('city', e.target.value)} />
+                            </div>
+                        </div>
+                        {hasCompleteName && (
+                            <div className="flex justify-end">
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => setIsEditingSimple(false)}
+                                    data-testid="creator-profile-done-btn"
+                                >
+                                    {t('common.done', 'Fertig')}
+                                </Button>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {renderGenderField()}
+            </div>
+        </Card>
+    );
+
+    const expertContent = (
         <Card header={
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -112,16 +229,8 @@ export function CreatorIdentityForm({
                             <Input id="creator-last-name" ref={lastNameRef} value={identity.lastName} onChange={(e) => handleChange('lastName', e.target.value)} className={errors.lastName ? 'border-rose-500' : ''} />
                         </div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.gender')}</label>
-                            <select value={identity.gender} onChange={(e) => handleChange('gender', e.target.value)} className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-3 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
-                                <option value="1">{t('gender.male')}</option>
-                                <option value="2">{t('gender.female')}</option>
-                                <option value="0">{t('gender.notKnown')}</option>
-                                <option value="9">{t('gender.notApplicable')}</option>
-                            </select>
-                        </div>
+                    <div className={`grid grid-cols-1 gap-4 ${requiresGender ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
+                        {renderGenderField()}
                         <div className="space-y-2">
                             <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('profile.community')}</label>
                             <Input value={identity.community || ""} onChange={(e) => handleChange('community', e.target.value)} placeholder={t('common.optional')} />
@@ -257,5 +366,12 @@ export function CreatorIdentityForm({
                 </div>
             </div>
         </Card>
+    );
+
+    return (
+        <ExpertTabsLayout
+            simpleContent={simpleContent}
+            expertContent={expertContent}
+        />
     );
 }

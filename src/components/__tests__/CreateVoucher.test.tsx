@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { CreateVoucher } from '../CreateVoucher';
@@ -50,6 +50,7 @@ amount_decimal_places = 4`,
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     (invoke as Mock).mockImplementation((cmd: string, _args?: Record<string, unknown>) => {
       if (cmd === 'get_voucher_standards') {
         return Promise.resolve(mockStandards);
@@ -97,15 +98,26 @@ amount_decimal_places = 4`,
     });
   });
 
-  it('renders voucher type dropdown and form fields', async () => {
+  it('renders voucher type dropdown and simplified simple-mode form fields', async () => {
     render(
       <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
     );
 
     expect(await screen.findByLabelText(/Voucher Type/i)).toBeInTheDocument();
     expect(await screen.findByLabelText(/Amount \(e\.g\., 60\)/i)).toBeInTheDocument();
+
+    const summary = await screen.findByTestId('creator-profile-summary');
+    expect(summary).toHaveTextContent('Your details (John Doe, Test City) are used');
+
+    expect(screen.queryByTestId('manage-standards-button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('voucher-validity-toggle')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('creator-gender-select')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('creator-profile-edit-btn'));
+
     expect(await screen.findByLabelText(/First Name \(Required\)/i)).toBeInTheDocument();
     expect(await screen.findByLabelText(/Last Name \(Required\)/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/City/i)).toBeInTheDocument();
   });
 
   it('loads and displays voucher standards', async () => {
@@ -172,21 +184,28 @@ amount_decimal_places = 4`,
       <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
     );
 
-    const firstNameInput = await screen.findByLabelText(/First Name \(Required\)/i);
+    const summary = await screen.findByTestId('creator-profile-summary');
     await waitFor(() => {
-      expect(firstNameInput).toHaveValue('John');
+      expect(summary).toHaveTextContent('John Doe, Test City');
     });
+
+    await userEvent.click(screen.getByTestId('creator-profile-edit-btn'));
+    expect(await screen.findByLabelText(/First Name \(Required\)/i)).toHaveValue('John');
     expect(screen.getByLabelText(/Last Name \(Required\)/i)).toHaveValue('Doe');
   });
 
   it('updates validity duration when standard is selected', async () => {
+    localStorage.setItem('humoco_ui_mode', 'expert');
     render(
       <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
     );
 
     // Wait for standards to load
     const select = await screen.findByLabelText(/Voucher Type/i) as HTMLSelectElement;
-    
+
+    // Expand expert validity disclosure
+    await userEvent.click(await screen.findByTestId('voucher-validity-toggle'));
+
     // Initial validity is 3 years
     const validityInput = screen.getByDisplayValue('3') as HTMLInputElement;
     expect(validityInput).toBeInTheDocument();
@@ -213,5 +232,191 @@ amount_decimal_places = 4`,
 
     // The "Missing:" text should NOT be visible
     expect(screen.queryByText(/Missing:/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a short standard description on selection and interpolates i18n description when available', async () => {
+    const firstRender = render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    const select = await screen.findByLabelText(/Voucher Type/i) as HTMLSelectElement;
+    await userEvent.selectOptions(select, 'freetaler_v1');
+
+    expect(await screen.findByTestId('standard-short-description')).toHaveTextContent(
+      'FreeTaler — Voucher denominated in Taler.'
+    );
+    firstRender.unmount();
+
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_user_profile') {
+        return Promise.resolve({
+          firstName: 'John',
+          lastName: 'Doe',
+          gender: '0',
+          serviceOffer: 'Test services',
+          address: { city: 'Test City' },
+        });
+      }
+      if (cmd === 'parse_standard_toml') {
+        return Promise.resolve({
+          immutable: {
+            identity: { uuid: 'freetaler-uuid', name: 'FreeTaler', abbreviation: 'Taler' },
+            blueprint: { unit: 'Taler', primaryRedemptionType: 'goodsOrServices', collateralType: 'personalGuarantee' },
+            features: { allowPartialTransfers: true, balancesAreSummable: true, amountDecimalPlaces: 4, privacyMode: 'public', allowedTTypes: [] },
+            issuance: { validityDurationRange: [], issuanceMinimumValidityDuration: 'P1Y', additionalSignaturesRange: [], allowedSignatureRoles: [] },
+            customRules: {},
+          },
+          mutable: {
+            metadata: { issuerName: 'Human Money Project', keywords: [] },
+            appConfig: { defaultValidityDuration: 'P1Y' },
+            i18n: {
+              descriptions: { en: 'Represents {{amount}} units of regional value.' },
+              footnotes: {},
+              collateralDescriptions: {},
+            },
+          },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />);
+    await userEvent.selectOptions(await screen.findByLabelText(/Voucher Type/i), 'freetaler_v1');
+    await userEvent.type(await screen.findByLabelText(/Amount \(e\.g\., 60\)/i), '15');
+
+    expect(await screen.findByTestId('standard-short-description')).toHaveTextContent(
+      'Represents 15 units of regional value.'
+    );
+  });
+
+  it('hides creator gender for guarantor-only rules and submits simple-mode Test voucher with gender "0"', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_user_profile') {
+        return Promise.resolve({
+          firstName: 'John',
+          lastName: 'Doe',
+          gender: '1',
+          serviceOffer: 'Test services',
+          address: { city: 'Test City' },
+        });
+      }
+      if (cmd === 'parse_standard_toml') {
+        return Promise.resolve({
+          immutable: {
+            identity: { uuid: 'minuto-uuid', name: 'Minuto', abbreviation: 'MIN' },
+            blueprint: { unit: 'Minuto', primaryRedemptionType: 'goodsOrServices', collateralType: 'personalGuarantee' },
+            features: { allowPartialTransfers: true, balancesAreSummable: true, amountDecimalPlaces: 0, privacyMode: 'public', allowedTTypes: [] },
+            issuance: { validityDurationRange: [], issuanceMinimumValidityDuration: 'P3Y', additionalSignaturesRange: [2, 5], allowedSignatureRoles: ['guarantor'] },
+            customRules: {
+              guarantor_gender_male: {
+                expression: "voucher.signatures.exists(s, s.role != 'creator' && s.details.gender == '1')",
+              },
+            },
+          },
+          mutable: {
+            metadata: { issuerName: 'Human Money Project', keywords: [] },
+            appConfig: { defaultValidityDuration: 'P3Y' },
+            i18n: { descriptions: {}, footnotes: {}, collateralDescriptions: {} },
+          },
+        });
+      }
+      if (cmd === 'create_new_voucher') {
+        return Promise.resolve({ voucherId: 'v-1' });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const { container } = render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    expect(await screen.findByTestId('creator-profile-summary')).toHaveTextContent('John Doe, Test City');
+    await userEvent.selectOptions(await screen.findByLabelText(/Voucher Type/i), 'freetaler_v1');
+    await screen.findByTestId('standard-short-description');
+
+    expect(screen.queryByTestId('creator-gender-select')).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/Amount \(e\.g\., 60\)/i), '50');
+    const submitButton = container.querySelector('form button[type="submit"]') as HTMLButtonElement;
+    await userEvent.click(submitButton);
+
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: /Create Voucher/i }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'create_new_voucher',
+        expect.objectContaining({
+          data: expect.objectContaining({
+            nonRedeemableTestVoucher: true,
+            creator: expect.objectContaining({ gender: '0' }),
+          }),
+        })
+      );
+    });
+  });
+
+  it('shows and validates creator gender when standard rules require creator gender', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_user_profile') {
+        return Promise.resolve({
+          firstName: 'John',
+          lastName: 'Doe',
+          gender: '0',
+          serviceOffer: 'Test services',
+          address: { city: 'Test City' },
+        });
+      }
+      if (cmd === 'parse_standard_toml') {
+        return Promise.resolve({
+          immutable: {
+            identity: { uuid: 'strict-uuid', name: 'Strict', abbreviation: 'STR' },
+            blueprint: { unit: 'Strict', primaryRedemptionType: 'goodsOrServices', collateralType: 'personalGuarantee' },
+            features: { allowPartialTransfers: true, balancesAreSummable: true, amountDecimalPlaces: 2, privacyMode: 'public', allowedTTypes: [] },
+            issuance: { validityDurationRange: [], issuanceMinimumValidityDuration: 'P1Y', additionalSignaturesRange: [], allowedSignatureRoles: [] },
+            customRules: {
+              creator_gender: {
+                expression: "voucher.creator.gender == '1' || voucher.creator.gender == '2'",
+              },
+            },
+          },
+          mutable: {
+            metadata: { issuerName: 'Human Money Project', keywords: [] },
+            appConfig: { defaultValidityDuration: 'P1Y' },
+            i18n: { descriptions: {}, footnotes: {}, collateralDescriptions: {} },
+          },
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const { container } = render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    await userEvent.selectOptions(await screen.findByLabelText(/Voucher Type/i), 'freetaler_v1');
+
+    const genderSelect = await screen.findByTestId('creator-gender-select');
+    expect(genderSelect).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/Amount \(e\.g\., 60\)/i), '20');
+    const submitButton = container.querySelector('form button[type="submit"]') as HTMLButtonElement;
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(genderSelect).toHaveClass('border-rose-500');
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(genderSelect, '2');
+    await waitFor(() => {
+      expect(genderSelect).not.toHaveClass('border-rose-500');
+    });
+
+    await userEvent.click(submitButton);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 });

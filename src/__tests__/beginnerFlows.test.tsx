@@ -11,6 +11,7 @@ import { AdEditorModal } from '../components/marketplace/AdEditorModal';
 import { SendView } from '../components/SendView';
 import { ReceiveView } from '../components/ReceiveView';
 import { SettingsView } from '../components/SettingsView';
+import { CreateVoucher } from '../components/CreateVoucher';
 import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../context/UiModeContext';
 import { UiModeToggle } from '../components/ui/UiModeToggle';
 import { Advanced } from '../components/ui/Advanced';
@@ -600,6 +601,99 @@ describe('Beginner User Tasks (Integration Flows)', () => {
                 }),
                 undefined
             );
+        });
+    });
+
+    /**
+     * Task 7: Simple-mode voucher creation adopts profile summary, defaults to Test mode,
+     * hides expert fields (validity, manage standards, gender for FreeTaler, collateral),
+     * and opens confirmation modal.
+     */
+    it('Task 7: beginner creates a test voucher in simple mode with adopted profile and no expert fields', async () => {
+        const simpleStandards = [
+            {
+                id: 'freetaler_v1',
+                displayName: 'FreeTaler',
+                content: 'name = "FreeTaler"\nunit = "Taler"',
+            },
+        ];
+
+        vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+            if (cmd === 'get_voucher_standards') return simpleStandards;
+            if (cmd === 'get_user_profile') {
+                return {
+                    firstName: 'Alice',
+                    lastName: 'Musterfrau',
+                    gender: '0',
+                    serviceOffer: 'Gardening',
+                    address: { city: 'Freiburg' },
+                };
+            }
+            if (cmd === 'parse_standard_toml') {
+                return {
+                    immutable: {
+                        identity: { uuid: 'freetaler-uuid', name: 'FreeTaler', abbreviation: 'Taler' },
+                        blueprint: {
+                            unit: 'Taler',
+                            primaryRedemptionType: 'goodsOrServices',
+                            collateralType: 'personalGuarantee',
+                        },
+                        features: {
+                            allowPartialTransfers: true,
+                            balancesAreSummable: true,
+                            amountDecimalPlaces: 4,
+                            privacyMode: 'public',
+                            allowedTTypes: [],
+                        },
+                        issuance: {
+                            validityDurationRange: [],
+                            issuanceMinimumValidityDuration: 'P1Y',
+                            additionalSignaturesRange: [],
+                            allowedSignatureRoles: [],
+                        },
+                        customRules: {},
+                    },
+                    mutable: {
+                        metadata: { issuerName: 'Human Money Project', keywords: [] },
+                        appConfig: { defaultValidityDuration: 'P1Y' },
+                        i18n: { descriptions: {}, footnotes: {}, collateralDescriptions: {} },
+                    },
+                };
+            }
+            return undefined;
+        });
+
+        const { container } = render(
+            <UiModeProvider>
+                <CreateVoucher onVoucherCreated={vi.fn()} onCancel={vi.fn()} />
+            </UiModeProvider>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('creator-profile-summary')).toHaveTextContent('Alice Musterfrau, Freiburg');
+        });
+
+        expect(screen.queryByTestId('manage-standards-button')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('voucher-validity-toggle')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('creator-gender-select')).not.toBeInTheDocument();
+        expect(container.textContent).not.toContain('did:key:');
+
+        const typeSelect = container.querySelector('#voucher-type') as HTMLSelectElement;
+        expect(typeSelect).toBeInTheDocument();
+        fireEvent.change(typeSelect, { target: { value: 'freetaler_v1' } });
+
+        await waitFor(() => {
+            expect(screen.getByTestId('standard-short-description')).toBeInTheDocument();
+        });
+
+        const amountInput = container.querySelector('#voucher-amount') as HTMLInputElement;
+        fireEvent.change(amountInput, { target: { value: '25' } });
+
+        const submitButton = container.querySelector('form button[type="submit"]') as HTMLButtonElement;
+        fireEvent.click(submitButton);
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
         });
     });
 });

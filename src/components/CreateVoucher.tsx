@@ -7,6 +7,8 @@ import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { translateError } from "../utils/errorHelper";
 import { PageLayout } from "./ui/PageLayout";
 import { AlertBanner } from "./ui/AlertBanner";
+import { Advanced } from "./ui/Advanced";
+import { useOptionalNavigation } from "../context/NavigationContext";
 import { 
     ShieldAlert, 
     Info, 
@@ -16,7 +18,7 @@ import {
     PlusCircle
 } from "lucide-react";
 
-import { useVoucherCreation } from "../hooks/useVoucherCreation";
+import { useVoucherCreation, standardRequiresCreatorGender } from "../hooks/useVoucherCreation";
 import { VoucherBasicsForm } from "./voucher/VoucherBasicsForm";
 import { CreatorIdentityForm } from "./voucher/CreatorIdentityForm";
 import { CollateralForm } from "./voucher/CollateralForm";
@@ -29,6 +31,7 @@ interface CreateVoucherProps {
 export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps) {
     const { t } = useTranslation();
     const { protectAction } = useSession();
+    const navigation = useOptionalNavigation();
     const {
         standards,
         selectedStandardId,
@@ -74,7 +77,8 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         standard: t('voucher.create.voucherType'),
         amount: t('voucher.create.amount'),
         firstName: t('voucher.create.firstName'),
-        lastName: t('voucher.create.lastName')
+        lastName: t('voucher.create.lastName'),
+        gender: t('profile.gender'),
     };
 
     // Helper to generate missing field names string
@@ -90,6 +94,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const amountRef = useRef<HTMLInputElement>(null);
     const firstNameRef = useRef<HTMLInputElement>(null);
     const lastNameRef = useRef<HTMLInputElement>(null);
+    const genderRef = useRef<HTMLSelectElement>(null);
+
+    const requiresGender = standardRequiresCreatorGender(parsedStandard);
 
     const handleCreateClick = (event: FormEvent) => {
         event.preventDefault();
@@ -110,6 +117,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             } else if (currentErrors.lastName) {
                 lastNameRef.current?.focus();
                 lastNameRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else if (currentErrors.gender) {
+                genderRef.current?.focus();
+                genderRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
 
             return;
@@ -169,6 +179,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         standardRef={standardRef}
                         amountRef={amountRef}
                         parsedStandard={parsedStandard}
+                        onManageStandards={navigation ? () => navigation.navigateToSettingsSection('standards') : undefined}
                     />
 
                     <CreatorIdentityForm 
@@ -180,12 +191,16 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         errors={errors}
                         firstNameRef={firstNameRef}
                         lastNameRef={lastNameRef}
+                        requiresGender={requiresGender}
+                        genderRef={genderRef}
                     />
 
-                    <CollateralForm 
-                        collateral={collateral}
-                        onCollateralChange={setCollateral}
-                    />
+                    <Advanced>
+                        <CollateralForm 
+                            collateral={collateral}
+                            onCollateralChange={setCollateral}
+                        />
+                    </Advanced>
 
                     <AlertBanner 
                         variant="warning" 

@@ -1,11 +1,14 @@
 // src/components/voucher/VoucherBasicsForm.tsx
 
 import { useTranslation } from "react-i18next";
-import { Coins, AlertCircle, FlaskConical, FileSignature } from "lucide-react";
+import { Coins, AlertCircle, FlaskConical, FileSignature, Clock } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
 import { HelpIcon } from "../ui/HelpIcon";
+import { Advanced } from "../ui/Advanced";
+import { Disclosure } from "../ui/Disclosure";
 import { VoucherStandardInfo, VoucherStandardDefinition } from "../../types";
+import { getStandardShortSummary } from "../../hooks/useVoucherCreation";
 
 interface VoucherBasicsFormProps {
     standards: VoucherStandardInfo[];
@@ -24,6 +27,7 @@ interface VoucherBasicsFormProps {
     standardRef: React.RefObject<HTMLSelectElement | null>;
     amountRef: React.RefObject<HTMLInputElement | null>;
     parsedStandard?: VoucherStandardDefinition | null;
+    onManageStandards?: () => void;
 }
 
 export function VoucherBasicsForm({
@@ -42,15 +46,28 @@ export function VoucherBasicsForm({
     errors,
     standardRef,
     amountRef,
-    parsedStandard
+    parsedStandard,
+    onManageStandards
 }: VoucherBasicsFormProps) {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
 
     const additionalSignaturesRange = parsedStandard?.immutable?.issuance?.additionalSignaturesRange;
     const minGuarantors = additionalSignaturesRange && additionalSignaturesRange[0] !== undefined ? additionalSignaturesRange[0] : 0;
     const customRules = parsedStandard?.immutable?.customRules || {};
     const hasGenderMale = Object.values(customRules).some(r => r.expression?.includes("gender == '1'"));
     const hasGenderFemale = Object.values(customRules).some(r => r.expression?.includes("gender == '2'"));
+    const shortSummary = getStandardShortSummary(
+        parsedStandard,
+        i18n.language || "de",
+        amount,
+        (name, unit) => t("voucher.basics.standardFallbackSummary", { name, unit })
+    );
+    const validityUnitLabel =
+        validityUnit === "Y"
+            ? t("voucher.basics.years")
+            : validityUnit === "M"
+              ? t("voucher.basics.months")
+              : t("voucher.basics.days");
 
     return (
         <Card header={
@@ -63,7 +80,21 @@ export function VoucherBasicsForm({
                 <div className="lg:col-span-2 space-y-6">
                     <div className="space-y-3">
                         <div className="space-y-2">
-                            <label htmlFor="voucher-type" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.create.voucherType')}</label>
+                            <div className="flex items-center justify-between gap-2">
+                                <label htmlFor="voucher-type" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.create.voucherType')}</label>
+                                {onManageStandards && (
+                                    <Advanced>
+                                        <button
+                                            type="button"
+                                            onClick={onManageStandards}
+                                            data-testid="manage-standards-button"
+                                            className="text-[11px] font-bold text-theme-primary hover:underline cursor-pointer"
+                                        >
+                                            {t('voucher.basics.manageStandards', 'Standards verwalten')}
+                                        </button>
+                                    </Advanced>
+                                )}
+                            </div>
                             <select 
                                 id="voucher-type"
                                 ref={standardRef}
@@ -77,6 +108,14 @@ export function VoucherBasicsForm({
                                     <option key={s.id} value={s.id}>{s.displayName}</option>
                                 ))}
                             </select>
+                            {shortSummary && (
+                                <p
+                                    className="text-xs text-theme-secondary leading-relaxed px-1"
+                                    data-testid="standard-short-description"
+                                >
+                                    {shortSummary}
+                                </p>
+                            )}
                         </div>
 
                         {minGuarantors > 0 && (
@@ -96,7 +135,7 @@ export function VoucherBasicsForm({
                         )}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-4">
                         <div className="space-y-2">
                             <label htmlFor="voucher-amount" className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.basics.amountLabel')}</label>
                             <Input 
@@ -109,27 +148,40 @@ export function VoucherBasicsForm({
                                 className={`font-bold text-sm ${errors.amount ? 'border-rose-500' : ''}`}
                             />
                         </div>
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('voucher.basics.validityDuration')}</label>
-                            <div className="flex gap-2">
-                                <Input 
-                                    type="number" 
-                                    value={validityValue} 
-                                    onChange={(e) => onValidityValueChange(parseInt(e.target.value, 10) || 0)}
-                                    className="w-1/2 font-bold text-sm"
-                                
-                                />
-                                <select 
-                                    value={validityUnit} 
-                                    onChange={(e) => onValidityUnitChange(e.target.value as "Y" | "M" | "D")}
-                                    className="w-1/2 bg-white border border-theme-subtle rounded-xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
-                                >
-                                    <option value="Y">{t('voucher.basics.years')}</option>
-                                    <option value="M">{t('voucher.basics.months')}</option>
-                                    <option value="D">{t('voucher.basics.days')}</option>
-                                </select>
-                            </div>
-                        </div>
+                        <Advanced>
+                            <Disclosure
+                                title={
+                                    <span className="text-xs font-bold text-theme-secondary">
+                                        {t('voucher.basics.validityDuration')}
+                                    </span>
+                                }
+                                subtitle={`${validityValue} ${validityUnitLabel}`}
+                                icon={<Clock size={14} className="text-theme-primary" />}
+                                toggleTestId="voucher-validity-toggle"
+                                contentTestId="voucher-validity-content"
+                                className="border border-theme-subtle rounded-2xl overflow-hidden bg-white/50 dark:bg-slate-900/50"
+                                buttonClassName="w-full flex items-center justify-between gap-3 p-3.5 bg-slate-50/70 dark:bg-slate-800/40 hover:bg-slate-100/70 transition-colors text-left cursor-pointer"
+                                contentClassName="p-3.5 border-t border-theme-subtle bg-white dark:bg-slate-900"
+                            >
+                                <div className="flex gap-2">
+                                    <Input 
+                                        type="number" 
+                                        value={validityValue} 
+                                        onChange={(e) => onValidityValueChange(parseInt(e.target.value, 10) || 0)}
+                                        className="w-1/2 font-bold text-sm"
+                                    />
+                                    <select 
+                                        value={validityUnit} 
+                                        onChange={(e) => onValidityUnitChange(e.target.value as "Y" | "M" | "D")}
+                                        className="w-1/2 bg-white border border-theme-subtle rounded-xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
+                                    >
+                                        <option value="Y">{t('voucher.basics.years')}</option>
+                                        <option value="M">{t('voucher.basics.months')}</option>
+                                        <option value="D">{t('voucher.basics.days')}</option>
+                                    </select>
+                                </div>
+                            </Disclosure>
+                        </Advanced>
                     </div>
                 </div>
                 
@@ -144,6 +196,7 @@ export function VoucherBasicsForm({
                             type="button"
                             disabled={isLoading}
                             onClick={() => onNonRedeemableChange(true)}
+                            data-testid="voucher-mode-test"
                             className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-[18px] text-xs font-black tracking-wider uppercase transition-all duration-300 tap-bounce cursor-pointer ${
                                 nonRedeemable
                                     ? 'bg-white text-emerald-600 shadow-premium border border-emerald-100/50 scale-[1.02]'
@@ -158,6 +211,7 @@ export function VoucherBasicsForm({
                             type="button"
                             disabled={isLoading}
                             onClick={() => onNonRedeemableChange(false)}
+                            data-testid="voucher-mode-real"
                             className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-[18px] text-xs font-black tracking-wider uppercase transition-all duration-300 tap-bounce cursor-pointer ${
                                 !nonRedeemable
                                     ? 'bg-white text-rose-600 shadow-premium border border-rose-100/50 scale-[1.02]'

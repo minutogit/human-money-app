@@ -15987,6 +15987,16 @@
       "en": "ai-translated"
     }
   },
+  "voucher.basics.manageStandards": {
+    "source_text": "Manage standards",
+    "status": {
+      "de": "ai-translated",
+      "en": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.basics.modeHeader": {
     "source_text": "Voucher Mode",
     "status": {
@@ -16015,6 +16025,16 @@
       "es": "ai-translated",
       "it": "ai-translated",
       "en": "ai-translated"
+    }
+  },
+  "voucher.basics.standardFallbackSummary": {
+    "source_text": "{{name}} — Voucher denominated in {{unit}}.",
+    "status": {
+      "de": "ai-translated",
+      "en": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.basics.validityDuration": {
@@ -16428,6 +16448,16 @@
       "en": "ai-translated"
     }
   },
+  "voucher.creator.genderRequiredHint": {
+    "source_text": "Required by this voucher standard for guarantor rules.",
+    "status": {
+      "de": "ai-translated",
+      "en": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
+    }
+  },
   "voucher.creator.invalidCoordinates": {
     "source_text": "Invalid GPS coordinate format.",
     "status": {
@@ -16466,6 +16496,16 @@
       "es": "ai-translated",
       "it": "ai-translated",
       "en": "ai-translated"
+    }
+  },
+  "voucher.creator.profileAdoptedLine": {
+    "source_text": "Your details ({{summary}}) are used",
+    "status": {
+      "de": "ai-translated",
+      "en": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated"
     }
   },
   "voucher.creator.serviceOfferPlaceholder": {

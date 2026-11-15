@@ -14,6 +14,49 @@ import {
 } from "../types";
 import { normalizeCoordinates } from "../utils/geoUtils";
 
+/**
+ * Checks whether a voucher standard's immutable custom CEL rules require the creator's own gender.
+ * Guarantor-only rules (`s.role != 'creator'`) are handled at countersignature time and return false.
+ */
+export function standardRequiresCreatorGender(
+    parsedStandard?: VoucherStandardDefinition | null
+): boolean {
+    const customRules = parsedStandard?.immutable?.customRules;
+    if (!customRules) return false;
+    return Object.values(customRules).some((rule) => {
+        const expr = rule.expression;
+        if (!expr || !expr.includes("gender")) return false;
+        if (expr.includes("creator.gender")) return true;
+        return !/role\s*!=\s*['"]creator['"]/.test(expr);
+    });
+}
+
+/**
+ * Formats a concise localized one-sentence summary for a selected voucher standard.
+ */
+export function getStandardShortSummary(
+    parsedStandard: VoucherStandardDefinition | null | undefined,
+    language: string,
+    amount: string,
+    fallback: (name: string, unit: string) => string
+): string | null {
+    if (!parsedStandard) return null;
+    const descriptions = parsedStandard.mutable?.i18n?.descriptions || {};
+    const langCode = language.split(/[-_]/)[0]?.toLowerCase() || "";
+    const rawTemplate =
+        (langCode ? descriptions[langCode] : undefined) ||
+        descriptions.de ||
+        descriptions.en ||
+        Object.values(descriptions).find((val) => typeof val === "string" && val.trim().length > 0);
+    if (rawTemplate && rawTemplate.trim().length > 0) {
+        return rawTemplate.replace(/\{\{amount\}\}/g, amount.trim() || "1");
+    }
+    return fallback(
+        parsedStandard.immutable.identity.name,
+        parsedStandard.immutable.blueprint.unit
+    );
+}
+
 export function useVoucherCreation() {
     const [standards, setStandards] = useState<VoucherStandardInfo[]>([]);
     const [selectedStandardId, setSelectedStandardId] = useState<string>("");
@@ -212,21 +255,31 @@ export function useVoucherCreation() {
         }
     }, [identity.lastName]);
 
+    useEffect(() => {
+        if (!standardRequiresCreatorGender(parsedStandard) || identity.gender === "1" || identity.gender === "2") {
+            setErrors(prev => prev.gender ? { ...prev, gender: false } : prev);
+        }
+    }, [parsedStandard, identity.gender]);
+
     const validate = useCallback(() => {
         const newErrors: Record<string, boolean> = {};
         if (!selectedStandardId) newErrors.standard = true;
         if (!amount) newErrors.amount = true;
         if (!identity.firstName) newErrors.firstName = true;
         if (!identity.lastName) newErrors.lastName = true;
+        if (standardRequiresCreatorGender(parsedStandard) && identity.gender !== "1" && identity.gender !== "2") {
+            newErrors.gender = true;
+        }
         
         setErrors(newErrors);
         return newErrors;
-    }, [selectedStandardId, amount, identity]);
+    }, [selectedStandardId, amount, identity, parsedStandard]);
 
     const prepareVoucherData = useCallback((): NewVoucherData => {
         const validityDuration = validityValue > 0 ? `P${validityValue}${validityUnit}` : null;
         const { street, houseNumber, zipCode, city, country } = identity.address;
         const fullAddress = `${street} ${houseNumber}, ${zipCode} ${city}, ${country}`.trim();
+        const creatorGender = standardRequiresCreatorGender(parsedStandard) ? identity.gender : "0";
         
         return {
             validityDuration,
@@ -235,6 +288,7 @@ export function useVoucherCreation() {
             collateral,
             creator: {
                 ...identity,
+                gender: creatorGender,
                 address: { ...identity.address, fullAddress }
             },
         };
