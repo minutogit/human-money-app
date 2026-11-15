@@ -12,8 +12,8 @@ import { Disclosure } from './ui/Disclosure';
 import { AdvancedDisclosure } from './ui/AdvancedDisclosure';
 import {
     HELP_TOPICS,
-    HELP_CATEGORIES,
-    HelpCategory,
+    HELP_GROUPS,
+    HelpGroup,
     HelpTopicId,
     HelpTopic,
 } from '../help/helpTopics';
@@ -39,9 +39,15 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
     const { isExpert } = useUiMode();
 
     const [searchQuery, setSearchQuery] = useState('');
-    const [selectedCategory, setSelectedCategory] = useState<HelpCategory | 'all'>('all');
+    const [selectedGroup, setSelectedGroup] = useState<HelpGroup | 'all'>('all');
     const [selectedTopicId, setSelectedTopicId] = useState<HelpTopicId | null>(
         initialTopic || 'conceptParadigm'
+    );
+    const effectiveGroup: HelpGroup | 'all' =
+        !isExpert && selectedGroup === 'expert' ? 'all' : selectedGroup;
+    const visibleGroups = useMemo(
+        () => (isExpert ? HELP_GROUPS : HELP_GROUPS.filter((g) => g.audience !== 'expert')),
+        [isExpert]
     );
 
     // Update selected topic if prop changes
@@ -76,13 +82,13 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
     // All topics as an array
     const allTopicsList = useMemo(() => Object.values(HELP_TOPICS), []);
 
-    // Filter topics based on search query and category
+    // Filter topics based on search query and group
     const filteredTopics = useMemo(() => {
         const query = searchQuery.trim().toLowerCase();
 
         return allTopicsList.filter((topic: HelpTopic) => {
-            // Category filter
-            if (selectedCategory !== 'all' && topic.category !== selectedCategory) {
+            // Group filter
+            if (effectiveGroup !== 'all' && topic.group !== effectiveGroup) {
                 return false;
             }
 
@@ -92,10 +98,16 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
             const title = t(topic.titleKey).toLowerCase();
             const short = t(topic.shortKey).toLowerCase();
             const long = t(topic.longKey).toLowerCase();
+            const deepDive = topic.deepDiveKey ? t(topic.deepDiveKey).toLowerCase() : '';
 
-            return title.includes(query) || short.includes(query) || long.includes(query);
+            return (
+                title.includes(query) ||
+                short.includes(query) ||
+                long.includes(query) ||
+                deepDive.includes(query)
+            );
         });
-    }, [allTopicsList, searchQuery, selectedCategory, t]);
+    }, [allTopicsList, searchQuery, effectiveGroup, t]);
 
     // Selected topic definition
     const activeTopic = useMemo(() => {
@@ -105,13 +117,13 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
         return filteredTopics[0] || null;
     }, [selectedTopicId, filteredTopics]);
 
-    const activeCategoryDef = activeTopic
-        ? HELP_CATEGORIES.find((c) => c.id === activeTopic.category)
+    const activeGroupDef = activeTopic
+        ? HELP_GROUPS.find((g) => g.id === activeTopic.group)
         : null;
 
     const renderTopicButton = (topic: HelpTopic) => {
         const isSelected = activeTopic?.id === topic.id;
-        const catDef = HELP_CATEGORIES.find((c) => c.id === topic.category);
+        const grpDef = HELP_GROUPS.find((g) => g.id === topic.group);
         return (
             <div
                 key={topic.id}
@@ -132,7 +144,7 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
                 <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1">
                         <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-theme-primary/10 text-theme-primary">
-                            {catDef ? t(catDef.labelKey) : topic.category}
+                            {grpDef ? t(grpDef.labelKey) : topic.group}
                         </span>
                     </div>
                     <h3 className="font-extrabold text-sm text-theme-secondary tracking-tight truncate">
@@ -189,31 +201,31 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
                     )}
                 </div>
 
-                {/* Category Pills */}
+                {/* Group Pills */}
                 <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
                     <button
                         type="button"
-                        onClick={() => setSelectedCategory('all')}
+                        onClick={() => setSelectedGroup('all')}
                         className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-                            selectedCategory === 'all'
+                            effectiveGroup === 'all'
                                 ? 'bg-theme-primary text-white shadow-sm'
                                 : 'bg-theme-subtle/20 text-theme-secondary hover:bg-theme-subtle/35'
                         }`}
                     >
                         {t('helpCenter.categoryAll')}
                     </button>
-                    {HELP_CATEGORIES.map((cat) => (
+                    {visibleGroups.map((grp) => (
                         <button
-                            key={cat.id}
+                            key={grp.id}
                             type="button"
-                            onClick={() => setSelectedCategory(cat.id)}
+                            onClick={() => setSelectedGroup(grp.id)}
                             className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-                                selectedCategory === cat.id
+                                effectiveGroup === grp.id
                                     ? 'bg-theme-primary text-white shadow-sm'
                                     : 'bg-theme-subtle/20 text-theme-secondary hover:bg-theme-subtle/35'
                             }`}
                         >
-                            {t(cat.labelKey)}
+                            {t(grp.labelKey)}
                         </button>
                     ))}
                 </div>
@@ -233,7 +245,31 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
                             selectedTopicId && activeTopic ? 'hidden lg:block' : 'block'
                         }`}
                     >
-                        {primaryTopics.map(renderTopicButton)}
+                        {effectiveGroup === 'all' && !hasActiveSearch ? (
+                            visibleGroups.map((grp) => {
+                                const groupTopics = filteredTopics.filter(
+                                    (topic) =>
+                                        topic.group === grp.id &&
+                                        (!shouldGroupExpertTopics || topic.audience !== 'expert')
+                                );
+                                if (groupTopics.length === 0) return null;
+                                return (
+                                    <div key={grp.id} className="space-y-2 pt-2 first:pt-0">
+                                        <h3
+                                            data-testid={`help-group-heading-${grp.id}`}
+                                            className="text-[11px] font-bold uppercase tracking-wider text-theme-light px-1"
+                                        >
+                                            {t(grp.labelKey)}
+                                        </h3>
+                                        <div className="space-y-2.5">
+                                            {groupTopics.map(renderTopicButton)}
+                                        </div>
+                                    </div>
+                                );
+                            })
+                        ) : (
+                            primaryTopics.map(renderTopicButton)
+                        )}
                         {expertTopics.length > 0 && (
                             <Disclosure
                                 title={
@@ -275,7 +311,7 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
                                 {/* Detail Header */}
                                 <div className="space-y-2">
                                     <span className="inline-block px-3 py-1 rounded-full text-xs font-bold tracking-wider uppercase bg-theme-primary/10 text-theme-primary">
-                                        {activeCategoryDef ? t(activeCategoryDef.labelKey) : activeTopic.category}
+                                        {activeGroupDef ? t(activeGroupDef.labelKey) : activeTopic.group}
                                     </span>
                                     <h2 className="text-xl md:text-2xl font-black text-theme-secondary tracking-tight">
                                         {t(activeTopic.titleKey)}

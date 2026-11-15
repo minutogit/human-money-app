@@ -7,6 +7,8 @@ import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { PageLayout } from "./ui/PageLayout";
 import { AlertBanner } from "./ui/AlertBanner";
+import { Advanced } from "./ui/Advanced";
+import { TechId } from "./ui/TechId";
 import { PageLoadingState, PageEmptyState, PageErrorState } from "./ui/PageState";
 import { FullProofDetails, Contact } from "../types";
 import { translateError, stringifyError } from "../utils/errorHelper";
@@ -266,37 +268,71 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                 </div>
             )}
 
+            <div
+                data-testid="conflict-three-questions"
+                className="bg-bg-card rounded-lg border border-theme-subtle shadow-sm p-6 grid grid-cols-1 md:grid-cols-3 gap-4"
+            >
+                <div className="space-y-1">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-theme-primary">
+                        {t('conflict.qWhatHappenedTitle')}
+                    </h3>
+                    <p className="text-sm text-theme-secondary leading-relaxed">
+                        {conflictRole === 'victim' ? t('conflict.qWhatHappenedVictim') : t('conflict.qWhatHappenedWitness')}
+                    </p>
+                </div>
+                <div className="space-y-1">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-theme-primary">
+                        {t('conflict.qVoucherValidTitle')}
+                    </h3>
+                    <p className="text-sm text-theme-secondary leading-relaxed">
+                        {conflictRole === 'victim' ? t('conflict.qVoucherValidVictim') : t('conflict.qVoucherValidWitness')}
+                    </p>
+                </div>
+                <div className="space-y-1">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-theme-primary">
+                        {t('conflict.qWhatToDoTitle')}
+                    </h3>
+                    <p className="text-sm text-theme-secondary leading-relaxed">
+                        {conflictRole === 'victim' ? t('conflict.qWhatToDoVictim') : t('conflict.qWhatToDoWitness')}
+                    </p>
+                </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-6">
                     <div className="bg-bg-card-alternate rounded-lg border border-theme-subtle shadow-sm p-6">
                         <div className="flex flex-wrap items-center justify-between gap-2 mb-4 border-b border-theme-subtle pb-2">
                             <h2 className="text-lg font-bold text-theme-primary">{t('conflict.offenderInfoTitle')}</h2>
-                            {proof.isCryptographicallyAttributed ? (
-                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                    {t('conflict.sstProvenIdentity', 'Proven Identity (SST Cryptographic Trap)')}
-                                </span>
-                            ) : (
-                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
-                                    {t('conflict.ephemeralUnverifiedHint', 'Ephemeral Key / Unverified Local Hint')}
-                                </span>
-                            )}
+                            <Advanced>
+                                {proof.isCryptographicallyAttributed ? (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                        {t('conflict.expert.sstProvenIdentity')}
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
+                                        {t('conflict.expert.ephemeralUnverifiedHint')}
+                                    </span>
+                                )}
+                            </Advanced>
                         </div>
                         <div className="space-y-4">
-                            <div className="min-w-0 break-all">
-                                <p className="text-xs font-semibold text-theme-light uppercase tracking-wider">{t('conflict.offenderIdLabel')}</p>
-                                <p className="font-mono text-sm break-all text-red-700 bg-red-50 p-2.5 rounded-xl border border-red-200 mt-1 select-all">{proof.offenderId}</p>
+                            <div className="min-w-0">
+                                <p className="text-xs font-semibold text-theme-light uppercase tracking-wider mb-1">{t('conflict.offenderIdLabel')}</p>
+                                <TechId value={proof.offenderId} kind="did" />
                             </div>
-                            {proof.isCryptographicallyAttributed ? (
-                                proof.hasVictimWitness && (
-                                    <p className="text-xs font-medium text-emerald-700 bg-emerald-50/60 p-2.5 rounded-lg border border-emerald-100">
-                                        {t((proof.victimWitnessCount ?? 0) > 1 ? 'conflict.witnessDisclosedPlural' : 'conflict.witnessDisclosed', { count: proof.victimWitnessCount ?? 1 })}
+                            <Advanced>
+                                {proof.isCryptographicallyAttributed ? (
+                                    proof.hasVictimWitness && (
+                                        <p className="text-xs font-medium text-emerald-700 bg-emerald-50/60 p-2.5 rounded-lg border border-emerald-100">
+                                            {t((proof.victimWitnessCount ?? 0) > 1 ? 'conflict.witnessDisclosedPlural' : 'conflict.witnessDisclosed', { count: proof.victimWitnessCount ?? 1 })}
+                                        </p>
+                                    )
+                                ) : (
+                                    <p className="text-xs font-medium text-amber-700 bg-amber-50/60 p-2.5 rounded-lg border border-amber-100">
+                                        {t('conflict.expert.unverifiedHintWarning')}
                                     </p>
-                                )
-                            ) : (
-                                <p className="text-xs font-medium text-amber-700 bg-amber-50/60 p-2.5 rounded-lg border border-amber-100">
-                                    {t('conflict.unverifiedHintWarning', 'The reported spender address is an ephemeral session key. Mathematical SST identity attribution has not been completed yet; this hint is unverified.')}
-                                </p>
-                            )}
+                                )}
+                            </Advanced>
                             <p className="text-sm text-theme-light leading-relaxed italic">
                                 {t('conflict.offenderDescription')}
                             </p>
@@ -357,68 +393,74 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                                 <p className="text-xs font-semibold text-theme-light uppercase">{t('conflict.affectedVoucherLabel')}</p>
                                 <p className="text-sm font-medium">{proof.affectedVoucherName || t('conflict.genericVoucherInstance')}</p>
                             </div>
-                            <div>
-                                <p className="text-xs font-semibold text-theme-light uppercase">{t('conflict.proofIdLabel')}</p>
-                                <p className="font-mono text-[10px] break-all text-theme-light">{proof.proofId}</p>
-                            </div>
+                            <Advanced>
+                                <div>
+                                    <p className="text-xs font-semibold text-theme-light uppercase mb-1">{t('conflict.proofIdLabel')}</p>
+                                    <TechId value={proof.proofId} kind="proof" />
+                                </div>
+                            </Advanced>
                         </div>
                     </div>
                 </div>
 
-                <div className="bg-bg-card rounded-lg border border-theme-subtle shadow-sm p-6">
-                    <h2 className="text-lg font-bold text-theme-primary mb-4 border-b border-theme-subtle pb-2">{t('conflict.evidenceTitle')}</h2>
-                    <p className="text-xs text-theme-light mb-4">{t('conflict.evidenceDescription')}</p>
-                    
-                    <div className="space-y-4">
-                        {sortedTransactions.map((tx, idx) => (
-                            <div key={tx.tId} className={`p-3 rounded border-l-4 ${idx === 0 ? 'border-green-500 bg-green-50/30' : 'border-red-500 bg-red-50/30'}`}>
-                                <div className="flex justify-between items-center mb-2">
-                                    <span className="text-[10px] font-bold uppercase text-gray-400">
-                                        {idx === 0 
-                                            ? t('conflict.evidenceTxWinner', { index: idx + 1 }) 
-                                            : t('conflict.evidenceTx', { index: idx + 1 })}
-                                    </span>
-                                    <span className="text-sm font-bold">{tx.amount}</span>
+                <Advanced>
+                    <div data-testid="conflict-evidence-section" className="bg-bg-card rounded-lg border border-theme-subtle shadow-sm p-6">
+                        <h2 className="text-lg font-bold text-theme-primary mb-4 border-b border-theme-subtle pb-2">{t('conflict.evidenceTitle')}</h2>
+                        <p className="text-xs text-theme-light mb-4">{t('conflict.evidenceDescription')}</p>
+                        
+                        <div className="space-y-4">
+                            {sortedTransactions.map((tx, idx) => (
+                                <div key={tx.tId} className={`p-3 rounded border-l-4 ${idx === 0 ? 'border-green-500 bg-green-50/30' : 'border-red-500 bg-red-50/30'}`}>
+                                    <div className="flex justify-between items-center mb-2">
+                                        <span className="text-[10px] font-bold uppercase text-gray-400">
+                                            {idx === 0 
+                                                ? t('conflict.evidenceTxWinner', { index: idx + 1 }) 
+                                                : t('conflict.evidenceTx', { index: idx + 1 })}
+                                        </span>
+                                        <span className="text-sm font-bold">{tx.amount}</span>
+                                    </div>
+                                    <div className="space-y-1 text-[10px] font-mono text-theme-light">
+                                        <p className="break-all"><strong>{t('conflict.evidenceId')}</strong> {tx.tId}</p>
+                                        <p><strong>{t('conflict.evidenceTime')}</strong> {formatDateTime(tx.tTime)}</p>
+                                        <p><strong>{t('conflict.evidenceRecipient')}</strong> {tx.recipientId.slice(0, 20)}...</p>
+                                    </div>
                                 </div>
-                                <div className="space-y-1 text-[10px] font-mono text-theme-light">
-                                    <p className="break-all"><strong>{t('conflict.evidenceId')}</strong> {tx.tId}</p>
-                                    <p><strong>{t('conflict.evidenceTime')}</strong> {formatDateTime(tx.tTime)}</p>
-                                    <p><strong>{t('conflict.evidenceRecipient')}</strong> {tx.recipientId.slice(0, 20)}...</p>
-                                </div>
-                            </div>
-                        ))}
+                            ))}
+                        </div>
+                        
+                        <div className="mt-6 p-3 bg-blue-50 border border-blue-100 rounded text-xs text-blue-800 leading-relaxed">
+                            <p><strong>{t('conflict.protocolRulesTitle')}</strong></p>
+                            <p className="mt-1" dangerouslySetInnerHTML={{ __html: t('conflict.protocolRulesDescription') }} />
+                        </div>
                     </div>
-                    
-                    <div className="mt-6 p-3 bg-blue-50 border border-blue-100 rounded text-xs text-blue-800 leading-relaxed">
-                        <p><strong>{t('conflict.protocolRulesTitle')}</strong></p>
-                        <p className="mt-1" dangerouslySetInnerHTML={{ __html: t('conflict.protocolRulesDescription') }} />
-                    </div>
-                </div>
+                </Advanced>
             </div>
 
             {!localOverride && !proof.isResolved && (
-                <div className="bg-white rounded-lg border border-theme-subtle p-8 shadow-sm text-center">
-                    <h3 className="text-lg font-bold text-theme-primary mb-2">{t('conflict.resolutionTitle')}</h3>
-                    <p className="text-sm text-theme-light mb-6 max-w-lg mx-auto">
-                        {t('conflict.resolutionDescription')}
-                    </p>
-                    <div className="max-w-md mx-auto space-y-4">
-                        <textarea
-                            className="w-full bg-bg-main border border-theme-subtle rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-theme-primary outline-none transition-all h-24"
-                            placeholder={t('conflict.resolutionPlaceholder')}
-                            value={localNote}
-                            onChange={(e) => setLocalNote(e.target.value)}
-                        />
-                        <Button 
-                            size="lg" 
-                            variant="secondary"
-                            className="w-full"
-                            onClick={() => setShowPasswordModal(true)}
-                        >
-                            {t('conflict.markSettledButton')}
-                        </Button>
+                <Advanced>
+                    <div data-testid="conflict-local-override-section" className="bg-white rounded-lg border border-theme-subtle p-8 shadow-sm text-center">
+                        <h3 className="text-lg font-bold text-theme-primary mb-2">{t('conflict.resolutionTitle')}</h3>
+                        <p className="text-sm text-theme-light mb-6 max-w-lg mx-auto">
+                            {t('conflict.resolutionDescription')}
+                        </p>
+                        <div className="max-w-md mx-auto space-y-4">
+                            <textarea
+                                className="w-full bg-bg-main border border-theme-subtle rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-theme-primary outline-none transition-all h-24"
+                                placeholder={t('conflict.resolutionPlaceholder')}
+                                value={localNote}
+                                onChange={(e) => setLocalNote(e.target.value)}
+                            />
+                            <Button 
+                                size="lg" 
+                                variant="secondary"
+                                className="w-full"
+                                onClick={() => setShowPasswordModal(true)}
+                            >
+                                {t('conflict.markSettledButton')}
+                            </Button>
+                        </div>
                     </div>
-                </div>
+                </Advanced>
             )}
 
             {proof.resolutions && proof.resolutions.length > 0 && (
@@ -431,7 +473,10 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                                     <p className="font-bold">{t('conflict.compensationSignatureLabel')}</p>
                                     <p className="text-xs text-gray-400">{formatDateTime(res.resolutionTimestamp)}</p>
                                 </div>
-                                <p className="text-gray-600 text-xs">{t('conflict.victimConfirmedSolution', { victim: res.victimId.slice(0, 15) })}</p>
+                                <div className="text-gray-600 text-xs flex items-center gap-1.5 flex-wrap">
+                                    <span>{t('conflict.victimConfirmedByLabel')}</span>
+                                    <TechId value={res.victimId} kind="did" />
+                                </div>
                                 {res.notes && <p className="mt-2 text-xs italic text-gray-500">"{res.notes}"</p>}
                             </div>
                         ))}
@@ -445,47 +490,49 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
 
             {/* Password Modal */}
             {showPasswordModal && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 animate-in zoom-in-95 duration-200">
-                        <h3 className="text-xl font-bold text-theme-primary mb-2">{t('conflict.verifySecurityTitle')}</h3>
-                        <p className="text-sm text-theme-light mb-6">
-                            {t('conflict.verifySecurityDescription')}
-                        </p>
-                        
-                        <input
-                            type="password"
-                            placeholder={t('conflict.verifySecurityPlaceholder')}
-                            className="w-full bg-bg-main border border-theme-subtle rounded-lg px-4 py-3 mb-4 focus:ring-2 focus:ring-theme-primary outline-none transition-all"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            autoFocus
-                        />
+                <Advanced>
+                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                        <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 animate-in zoom-in-95 duration-200">
+                            <h3 className="text-xl font-bold text-theme-primary mb-2">{t('conflict.verifySecurityTitle')}</h3>
+                            <p className="text-sm text-theme-light mb-6">
+                                {t('conflict.verifySecurityDescription')}
+                            </p>
+                            
+                            <input
+                                type="password"
+                                placeholder={t('conflict.verifySecurityPlaceholder')}
+                                className="w-full bg-bg-main border border-theme-subtle rounded-lg px-4 py-3 mb-4 focus:ring-2 focus:ring-theme-primary outline-none transition-all"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                autoFocus
+                            />
 
-                        {overrideError && (
-                            <div className="p-3 bg-red-50 text-red-600 text-xs rounded-lg mb-4 border border-red-100">
-                                {overrideError}
+                            {overrideError && (
+                                <div className="p-3 bg-red-50 text-red-600 text-xs rounded-lg mb-4 border border-red-100">
+                                    {overrideError}
+                                </div>
+                            )}
+
+                            <div className="flex gap-3">
+                                <Button 
+                                    className="flex-1" 
+                                    variant="secondary" 
+                                    onClick={() => { setShowPasswordModal(false); setOverrideError(""); setPassword(""); }}
+                                >
+                                    {t('common.cancel')}
+                                </Button>
+                                <Button 
+                                    className="flex-1" 
+                                    variant="primary" 
+                                    onClick={handleLocalOverride}
+                                    disabled={isOverriding}
+                                >
+                                    {isOverriding ? t('common.processing') : t('common.confirm')}
+                                </Button>
                             </div>
-                        )}
-
-                        <div className="flex gap-3">
-                            <Button 
-                                className="flex-1" 
-                                variant="secondary" 
-                                onClick={() => { setShowPasswordModal(false); setOverrideError(""); setPassword(""); }}
-                            >
-                                {t('common.cancel')}
-                            </Button>
-                            <Button 
-                                className="flex-1" 
-                                variant="primary" 
-                                onClick={handleLocalOverride}
-                                disabled={isOverriding}
-                            >
-                                {isOverriding ? t('common.processing') : t('common.confirm')}
-                            </Button>
                         </div>
                     </div>
-                </div>
+                </Advanced>
             )}
             </div>
         </PageLayout>

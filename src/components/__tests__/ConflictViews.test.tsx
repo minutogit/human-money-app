@@ -5,6 +5,7 @@ import { ConflictListView } from '../ConflictListView';
 import { invoke } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
+import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../../context/UiModeContext';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock('../../context/SessionContext', () => ({
   useSession: () => ({
     protectAction: vi.fn((callback) => callback('test-password')),
   }),
+  useOptionalSession: () => null,
 }));
 
 describe('Conflict Views (.hmcproof export and import)', () => {
@@ -44,6 +46,7 @@ describe('Conflict Views (.hmcproof export and import)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.removeItem(UI_MODE_STORAGE_KEY);
   });
 
   describe('ConflictDetailsView', () => {
@@ -90,9 +93,130 @@ describe('Conflict Views (.hmcproof export and import)', () => {
         expect(screen.getByText('/tmp/proof.hmcproof')).toBeInTheDocument();
       });
     });
+
+    it('renders 3-question guide and hides SST, evidence, proofId, and override in simple mode', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_proof_of_double_spend') {
+          return Promise.resolve({
+            proof: {
+              proofId: mockProofId,
+              offenderId: 'did:key:z6MkvOffenderSecretKey123456',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              affectedVoucherName: 'Minuto Test',
+              conflictingTransactions: [
+                { tId: 'tx-1', tTime: '2024-01-01T00:00:00Z', amount: '10', recipientId: 'did:key:r1' },
+                { tId: 'tx-2', tTime: '2024-01-01T00:01:00Z', amount: '10', recipientId: 'did:key:r2' },
+              ],
+              isResolved: false,
+              isCryptographicallyAttributed: true,
+            },
+            localOverride: false,
+            conflictRole: 'victim',
+          });
+        }
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      const { container } = render(
+        <UiModeProvider>
+          <ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('conflict-three-questions')).toBeInTheDocument();
+      });
+
+      expect(screen.getByText('What happened?')).toBeInTheDocument();
+      expect(screen.getByText('Is my voucher still valid?')).toBeInTheDocument();
+      expect(screen.getByText('What should I do?')).toBeInTheDocument();
+      expect(container.textContent).not.toContain('did:key:z6MkvOffender');
+      expect(screen.queryByTestId('conflict-evidence-section')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('conflict-local-override-section')).not.toBeInTheDocument();
+      expect(screen.queryByText(/SST V4/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(mockProofId)).not.toBeInTheDocument();
+    });
+
+    it('reveals SST attribution, evidence portfolio, and local override in expert mode', async () => {
+      window.localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_proof_of_double_spend') {
+          return Promise.resolve({
+            proof: {
+              proofId: mockProofId,
+              offenderId: 'did:key:z6MkvOffenderSecretKey123456',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              affectedVoucherName: 'Minuto Test',
+              conflictingTransactions: [
+                { tId: 'tx-1', tTime: '2024-01-01T00:00:00Z', amount: '10', recipientId: 'did:key:r1' },
+                { tId: 'tx-2', tTime: '2024-01-01T00:01:00Z', amount: '10', recipientId: 'did:key:r2' },
+              ],
+              isResolved: false,
+              isCryptographicallyAttributed: true,
+            },
+            localOverride: false,
+            conflictRole: 'victim',
+          });
+        }
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <UiModeProvider>
+          <ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('conflict-evidence-section')).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId('conflict-local-override-section')).toBeInTheDocument();
+      expect(screen.getByText(/SST V4 Cryptographically Proven Identity/i)).toBeInTheDocument();
+      expect(screen.getByText(mockProofId)).toBeInTheDocument();
+    });
   });
 
   describe('ConflictListView', () => {
+    it('shows calm 1-line summary and hides proofId/forkPoint in simple mode', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_double_spend_conflicts') {
+          return Promise.resolve([
+            {
+              proofId: 'proof-secret-id-999',
+              offenderId: 'did:key:z6MkOffenderList123456',
+              forkPointPrevHash: 'hash-fork-point-888',
+              affectedVoucherName: 'Minuto Sample',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              conflictRole: 'victim',
+              isResolved: false,
+              localOverride: false,
+              hasL2Verdict: true,
+            },
+          ]);
+        }
+        return Promise.resolve(undefined);
+      });
+
+      const { container } = render(
+        <UiModeProvider>
+          <ConflictListView onBack={mockOnBack} onViewConflict={mockOnViewConflict} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('conflict-card-summary')).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId('conflict-card-summary')).toHaveTextContent(
+        'A received voucher was spent more than once.'
+      );
+      expect(container.textContent).not.toContain('did:key:z6MkOffender');
+      expect(container.textContent).not.toContain('proof-secret-id-999');
+      expect(container.textContent).not.toContain('hash-fork-point-888');
+    });
     it('imports double spend proof from .hmcproof file and navigates to conflict details', async () => {
       (invoke as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_double_spend_conflicts') {

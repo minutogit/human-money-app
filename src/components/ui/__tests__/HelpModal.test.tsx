@@ -20,7 +20,7 @@ describe('HelpModal Component', () => {
 
         expect(screen.getByText(en['help.voucherBasics.title'])).toBeInTheDocument();
         expect(screen.getByText(en['help.voucherBasics.short'])).toBeInTheDocument();
-        expect(screen.getByText(en['helpCenter.categoryBasics'])).toBeInTheDocument();
+        expect(screen.getByText(en['helpCenter.groupFirstSteps'])).toBeInTheDocument();
     });
 
     it('allows switching topic via related topic chip', () => {

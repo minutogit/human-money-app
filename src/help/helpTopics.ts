@@ -1,77 +1,108 @@
 // src/help/helpTopics.ts
-export type HelpCategory = 'basics' | 'vouchers' | 'trust' | 'marketplace' | 'security' | 'connection';
+export type HelpGroup =
+    | 'firstSteps'
+    | 'dailyVouchers'
+    | 'contactsTrust'
+    | 'marketplace'
+    | 'securityBackup'
+    | 'faq'
+    | 'expert';
 
 export type HelpTopicId =
-    // Basics
+    // Erste Schritte / Getting Started
     | 'conceptParadigm'
     | 'voucherBasics'
+    | 'profile'
     | 'benutzerId'
-    | 'conceptCommunity'
+    | 'uiModes'
     | 'conceptPrivacy'
     | 'conceptFuture'
-    | 'profile'
-    // Vouchers
+    // Gutscheine im Alltag / Everyday Vouchers
+    | 'sendReceive'
     | 'voucherMode'
+    | 'voucherStandards'
+    | 'voucherExpiry'
     | 'voucherCreator'
+    | 'senderName'
+    | 'privacy'
+    | 'settingsPrivacy'
+    // Kontakte & Vertrauen / Contacts & Trust
+    | 'conceptCommunity'
+    | 'trustLevels'
+    | 'guarantorVsRecommendation'
+    | 'wotNetwork'
+    | 'visibilityReach'
     | 'voucherSignatures'
     | 'signatureRequest'
     | 'voucherTrust'
-    | 'senderName'
-    | 'privacy'
-    // Trust
-    | 'wotNetwork'
-    | 'trustLevels'
-    | 'wotReach'
-    | 'wotSharing'
-    // Marketplace
+    // Marktplatz & Angebote / Marketplace & Offers
     | 'marketplace'
     | 'marketCard'
     | 'cardVisibility'
     | 'ads'
-    // Security
+    // Sicherheit & Sicherung / Security & Backup
+    | 'whichBackup'
+    | 'deviceLoss'
     | 'backup'
-    | 'offlineProtection'
-    | 'conflicts'
     | 'mnemonic'
+    | 'socialRecovery'
+    | 'emergencySheet'
+    | 'offlineProtection'
+    | 'offlineRisk'
+    | 'conflicts'
+    | 'multiDevice'
+    | 'connection'
+    // Häufige Fragen / FAQ
+    | 'faqIsItCrypto'
+    | 'faqWhatDoesItCost'
+    | 'faqCanIBeCheated'
+    | 'faqSyncDown'
+    // Für Fortgeschrittene / For Advanced Users
+    | 'profileSeal'
     | 'passphrase'
     | 'subaccount'
     | 'handover'
     | 'deviceBinding'
-    | 'settingsPrivacy'
-    // Connection
-    | 'connection'
     | 'posMode'
+    | 'l2Protection'
     | 'exclusiveGateways'
-    | 'gatewayTokens'
-    | 'l2Protection';
+    | 'gatewayTokens';
 
 export type HelpAudience = 'everyone' | 'expert';
 
 export interface HelpTopic {
     id: HelpTopicId;
-    category: HelpCategory;
-    audience?: HelpAudience;
-    titleKey: string;   // help.<id>.title
-    shortKey: string;   // help.<id>.short  – max. 1 sentence, ~120 chars
-    longKey: string;    // help.<id>.long   – Markdown-light: paragraphs (\n\n), "• " bullet lists, **bold**
-    deepDiveKey?: string; // help.<id>.deepDive - Collapsible "Mehr erfahren / Technischer Hintergrund" section
+    group: HelpGroup;
+    audience: HelpAudience;
+    titleKey: string; // help.<id>.title
+    shortKey: string; // help.<id>.short - max. 1 sentence, ~120 chars
+    longKey: string; // help.<id>.long - Markdown-light: paragraphs (\n\n), "• " bullet lists, **bold**
+    deepDiveKey?: string; // help.<id>.deepDive - Collapsible technical background section
     related?: HelpTopicId[];
 }
 
-export const HELP_CATEGORIES: { id: HelpCategory; labelKey: string }[] = [
-    { id: 'basics', labelKey: 'helpCenter.categoryBasics' },
-    { id: 'vouchers', labelKey: 'helpCenter.categoryVouchers' },
-    { id: 'trust', labelKey: 'helpCenter.categoryTrust' },
-    { id: 'marketplace', labelKey: 'helpCenter.categoryMarketplace' },
-    { id: 'security', labelKey: 'helpCenter.categorySecurity' },
-    { id: 'connection', labelKey: 'helpCenter.categoryConnection' },
+export interface HelpGroupDefinition {
+    id: HelpGroup;
+    audience: HelpAudience;
+    labelKey: string;
+}
+
+export const HELP_GROUPS: HelpGroupDefinition[] = [
+    { id: 'firstSteps', audience: 'everyone', labelKey: 'helpCenter.groupFirstSteps' },
+    { id: 'dailyVouchers', audience: 'everyone', labelKey: 'helpCenter.groupDailyVouchers' },
+    { id: 'contactsTrust', audience: 'everyone', labelKey: 'helpCenter.groupContactsTrust' },
+    { id: 'marketplace', audience: 'everyone', labelKey: 'helpCenter.groupMarketplace' },
+    { id: 'securityBackup', audience: 'everyone', labelKey: 'helpCenter.groupSecurityBackup' },
+    { id: 'faq', audience: 'everyone', labelKey: 'helpCenter.groupFaq' },
+    { id: 'expert', audience: 'expert', labelKey: 'helpCenter.groupExpert' },
 ];
 
 export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
-    // --- Basics ---
+    // --- Erste Schritte / Getting Started ---
     conceptParadigm: {
         id: 'conceptParadigm',
-        category: 'basics',
+        group: 'firstSteps',
+        audience: 'everyone',
         titleKey: 'help.conceptParadigm.title',
         shortKey: 'help.conceptParadigm.short',
         longKey: 'help.conceptParadigm.long',
@@ -79,31 +110,45 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     },
     voucherBasics: {
         id: 'voucherBasics',
-        category: 'basics',
+        group: 'firstSteps',
+        audience: 'everyone',
         titleKey: 'help.voucherBasics.title',
         shortKey: 'help.voucherBasics.short',
         longKey: 'help.voucherBasics.long',
-        related: ['conceptParadigm', 'voucherMode', 'voucherCreator', 'voucherTrust'],
+        related: ['conceptParadigm', 'sendReceive', 'voucherMode', 'voucherTrust'],
+    },
+    profile: {
+        id: 'profile',
+        group: 'firstSteps',
+        audience: 'everyone',
+        titleKey: 'help.profile.title',
+        shortKey: 'help.profile.short',
+        longKey: 'help.profile.long',
+        related: ['benutzerId', 'whichBackup', 'deviceLoss', 'multiDevice'],
     },
     benutzerId: {
         id: 'benutzerId',
-        category: 'basics',
+        group: 'firstSteps',
+        audience: 'everyone',
         titleKey: 'help.benutzerId.title',
         shortKey: 'help.benutzerId.short',
         longKey: 'help.benutzerId.long',
+        deepDiveKey: 'help.benutzerId.deepDive',
         related: ['profile', 'subaccount', 'mnemonic'],
     },
-    conceptCommunity: {
-        id: 'conceptCommunity',
-        category: 'basics',
-        titleKey: 'help.conceptCommunity.title',
-        shortKey: 'help.conceptCommunity.short',
-        longKey: 'help.conceptCommunity.long',
-        related: ['voucherSignatures', 'signatureRequest', 'wotNetwork'],
+    uiModes: {
+        id: 'uiModes',
+        group: 'firstSteps',
+        audience: 'everyone',
+        titleKey: 'help.uiModes.title',
+        shortKey: 'help.uiModes.short',
+        longKey: 'help.uiModes.long',
+        related: ['profile', 'posMode', 'multiDevice'],
     },
     conceptPrivacy: {
         id: 'conceptPrivacy',
-        category: 'basics',
+        group: 'firstSteps',
+        audience: 'everyone',
         titleKey: 'help.conceptPrivacy.title',
         shortKey: 'help.conceptPrivacy.short',
         longKey: 'help.conceptPrivacy.long',
@@ -111,65 +156,65 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     },
     conceptFuture: {
         id: 'conceptFuture',
-        category: 'basics',
+        group: 'firstSteps',
+        audience: 'everyone',
         titleKey: 'help.conceptFuture.title',
         shortKey: 'help.conceptFuture.short',
         longKey: 'help.conceptFuture.long',
         related: ['conceptParadigm', 'marketplace'],
     },
-    profile: {
-        id: 'profile',
-        category: 'basics',
-        titleKey: 'help.profile.title',
-        shortKey: 'help.profile.short',
-        longKey: 'help.profile.long',
-        related: ['benutzerId', 'backup', 'mnemonic', 'handover'],
-    },
 
-    // --- Vouchers ---
+    // --- Gutscheine im Alltag / Everyday Vouchers ---
+    sendReceive: {
+        id: 'sendReceive',
+        group: 'dailyVouchers',
+        audience: 'everyone',
+        titleKey: 'help.sendReceive.title',
+        shortKey: 'help.sendReceive.short',
+        longKey: 'help.sendReceive.long',
+        related: ['voucherBasics', 'offlineRisk', 'connection', 'senderName'],
+    },
     voucherMode: {
         id: 'voucherMode',
-        category: 'vouchers',
+        group: 'dailyVouchers',
+        audience: 'everyone',
         titleKey: 'help.voucherMode.title',
         shortKey: 'help.voucherMode.short',
         longKey: 'help.voucherMode.long',
         related: ['voucherBasics', 'voucherCreator'],
     },
+    voucherStandards: {
+        id: 'voucherStandards',
+        group: 'dailyVouchers',
+        audience: 'everyone',
+        titleKey: 'help.voucherStandards.title',
+        shortKey: 'help.voucherStandards.short',
+        longKey: 'help.voucherStandards.long',
+        related: ['voucherBasics', 'signatureRequest', 'voucherSignatures'],
+    },
+    voucherExpiry: {
+        id: 'voucherExpiry',
+        group: 'dailyVouchers',
+        audience: 'everyone',
+        titleKey: 'help.voucherExpiry.title',
+        shortKey: 'help.voucherExpiry.short',
+        longKey: 'help.voucherExpiry.long',
+        related: ['voucherBasics', 'voucherStandards'],
+    },
     voucherCreator: {
         id: 'voucherCreator',
-        category: 'vouchers',
+        group: 'dailyVouchers',
+        audience: 'everyone',
         titleKey: 'help.voucherCreator.title',
         shortKey: 'help.voucherCreator.short',
         longKey: 'help.voucherCreator.long',
+        deepDiveKey: 'help.voucherCreator.deepDive',
         related: ['voucherBasics', 'voucherSignatures', 'voucherTrust'],
-    },
-    voucherSignatures: {
-        id: 'voucherSignatures',
-        category: 'vouchers',
-        titleKey: 'help.voucherSignatures.title',
-        shortKey: 'help.voucherSignatures.short',
-        longKey: 'help.voucherSignatures.long',
-        related: ['signatureRequest', 'voucherCreator', 'conceptCommunity'],
-    },
-    signatureRequest: {
-        id: 'signatureRequest',
-        category: 'vouchers',
-        titleKey: 'help.signatureRequest.title',
-        shortKey: 'help.signatureRequest.short',
-        longKey: 'help.signatureRequest.long',
-        related: ['voucherSignatures', 'voucherCreator'],
-    },
-    voucherTrust: {
-        id: 'voucherTrust',
-        category: 'vouchers',
-        titleKey: 'help.voucherTrust.title',
-        shortKey: 'help.voucherTrust.short',
-        longKey: 'help.voucherTrust.long',
-        related: ['wotNetwork', 'trustLevels', 'voucherCreator'],
     },
     senderName: {
         id: 'senderName',
-        category: 'vouchers',
+        group: 'dailyVouchers',
+        audience: 'everyone',
         titleKey: 'help.senderName.title',
         shortKey: 'help.senderName.short',
         longKey: 'help.senderName.long',
@@ -177,52 +222,105 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     },
     privacy: {
         id: 'privacy',
-        category: 'vouchers',
+        group: 'dailyVouchers',
+        audience: 'everyone',
         titleKey: 'help.privacy.title',
         shortKey: 'help.privacy.short',
         longKey: 'help.privacy.long',
+        deepDiveKey: 'help.privacy.deepDive',
         related: ['settingsPrivacy', 'conceptPrivacy', 'senderName'],
     },
+    settingsPrivacy: {
+        id: 'settingsPrivacy',
+        group: 'dailyVouchers',
+        audience: 'everyone',
+        titleKey: 'help.settingsPrivacy.title',
+        shortKey: 'help.settingsPrivacy.short',
+        longKey: 'help.settingsPrivacy.long',
+        related: ['privacy', 'conceptPrivacy'],
+    },
 
-    // --- Trust ---
-    wotNetwork: {
-        id: 'wotNetwork',
-        category: 'trust',
-        titleKey: 'help.wotNetwork.title',
-        shortKey: 'help.wotNetwork.short',
-        longKey: 'help.wotNetwork.long',
-        related: ['trustLevels', 'wotReach', 'wotSharing', 'voucherTrust'],
+    // --- Kontakte & Vertrauen / Contacts & Trust ---
+    conceptCommunity: {
+        id: 'conceptCommunity',
+        group: 'contactsTrust',
+        audience: 'everyone',
+        titleKey: 'help.conceptCommunity.title',
+        shortKey: 'help.conceptCommunity.short',
+        longKey: 'help.conceptCommunity.long',
+        related: ['voucherSignatures', 'signatureRequest', 'wotNetwork'],
     },
     trustLevels: {
         id: 'trustLevels',
-        category: 'trust',
+        group: 'contactsTrust',
+        audience: 'everyone',
         titleKey: 'help.trustLevels.title',
         shortKey: 'help.trustLevels.short',
         longKey: 'help.trustLevels.long',
-        related: ['wotNetwork', 'wotReach', 'wotSharing'],
+        related: ['wotNetwork', 'guarantorVsRecommendation', 'visibilityReach'],
     },
-    wotReach: {
-        id: 'wotReach',
-        category: 'trust',
-        titleKey: 'help.wotReach.title',
-        shortKey: 'help.wotReach.short',
-        longKey: 'help.wotReach.long',
-        related: ['wotNetwork', 'trustLevels', 'wotSharing'],
+    guarantorVsRecommendation: {
+        id: 'guarantorVsRecommendation',
+        group: 'contactsTrust',
+        audience: 'everyone',
+        titleKey: 'help.guarantorVsRecommendation.title',
+        shortKey: 'help.guarantorVsRecommendation.short',
+        longKey: 'help.guarantorVsRecommendation.long',
+        related: ['trustLevels', 'voucherSignatures', 'wotNetwork'],
     },
-    wotSharing: {
-        id: 'wotSharing',
-        category: 'trust',
-        titleKey: 'help.wotSharing.title',
-        shortKey: 'help.wotSharing.short',
-        longKey: 'help.wotSharing.long',
-        deepDiveKey: 'help.wotSharing.deepDive',
-        related: ['wotNetwork', 'wotReach', 'trustLevels'],
+    wotNetwork: {
+        id: 'wotNetwork',
+        group: 'contactsTrust',
+        audience: 'everyone',
+        titleKey: 'help.wotNetwork.title',
+        shortKey: 'help.wotNetwork.short',
+        longKey: 'help.wotNetwork.long',
+        related: ['trustLevels', 'guarantorVsRecommendation', 'visibilityReach', 'voucherTrust'],
+    },
+    visibilityReach: {
+        id: 'visibilityReach',
+        group: 'contactsTrust',
+        audience: 'everyone',
+        titleKey: 'help.visibilityReach.title',
+        shortKey: 'help.visibilityReach.short',
+        longKey: 'help.visibilityReach.long',
+        deepDiveKey: 'help.visibilityReach.deepDive',
+        related: ['wotNetwork', 'trustLevels', 'cardVisibility'],
+    },
+    voucherSignatures: {
+        id: 'voucherSignatures',
+        group: 'contactsTrust',
+        audience: 'everyone',
+        titleKey: 'help.voucherSignatures.title',
+        shortKey: 'help.voucherSignatures.short',
+        longKey: 'help.voucherSignatures.long',
+        related: ['signatureRequest', 'guarantorVsRecommendation', 'voucherCreator'],
+    },
+    signatureRequest: {
+        id: 'signatureRequest',
+        group: 'contactsTrust',
+        audience: 'everyone',
+        titleKey: 'help.signatureRequest.title',
+        shortKey: 'help.signatureRequest.short',
+        longKey: 'help.signatureRequest.long',
+        related: ['voucherSignatures', 'voucherStandards'],
+    },
+    voucherTrust: {
+        id: 'voucherTrust',
+        group: 'contactsTrust',
+        audience: 'everyone',
+        titleKey: 'help.voucherTrust.title',
+        shortKey: 'help.voucherTrust.short',
+        longKey: 'help.voucherTrust.long',
+        deepDiveKey: 'help.voucherTrust.deepDive',
+        related: ['wotNetwork', 'trustLevels', 'voucherCreator'],
     },
 
-    // --- Marketplace ---
+    // --- Marktplatz & Angebote / Marketplace & Offers ---
     marketplace: {
         id: 'marketplace',
-        category: 'marketplace',
+        group: 'marketplace',
+        audience: 'everyone',
         titleKey: 'help.marketplace.title',
         shortKey: 'help.marketplace.short',
         longKey: 'help.marketplace.long',
@@ -230,7 +328,8 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     },
     marketCard: {
         id: 'marketCard',
-        category: 'marketplace',
+        group: 'marketplace',
+        audience: 'everyone',
         titleKey: 'help.marketCard.title',
         shortKey: 'help.marketCard.short',
         longKey: 'help.marketCard.long',
@@ -238,57 +337,181 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     },
     cardVisibility: {
         id: 'cardVisibility',
-        category: 'marketplace',
+        group: 'marketplace',
+        audience: 'everyone',
         titleKey: 'help.cardVisibility.title',
         shortKey: 'help.cardVisibility.short',
         longKey: 'help.cardVisibility.long',
-        related: ['marketCard', 'marketplace'],
+        related: ['marketCard', 'visibilityReach', 'marketplace'],
     },
     ads: {
         id: 'ads',
-        category: 'marketplace',
+        group: 'marketplace',
+        audience: 'everyone',
         titleKey: 'help.ads.title',
         shortKey: 'help.ads.short',
         longKey: 'help.ads.long',
         related: ['marketplace', 'marketCard'],
     },
 
-    // --- Security ---
+    // --- Sicherheit & Sicherung / Security & Backup ---
+    whichBackup: {
+        id: 'whichBackup',
+        group: 'securityBackup',
+        audience: 'everyone',
+        titleKey: 'help.whichBackup.title',
+        shortKey: 'help.whichBackup.short',
+        longKey: 'help.whichBackup.long',
+        related: ['backup', 'emergencySheet', 'socialRecovery', 'deviceLoss'],
+    },
+    deviceLoss: {
+        id: 'deviceLoss',
+        group: 'securityBackup',
+        audience: 'everyone',
+        titleKey: 'help.deviceLoss.title',
+        shortKey: 'help.deviceLoss.short',
+        longKey: 'help.deviceLoss.long',
+        related: ['whichBackup', 'socialRecovery', 'emergencySheet', 'multiDevice'],
+    },
     backup: {
         id: 'backup',
-        category: 'security',
+        group: 'securityBackup',
+        audience: 'everyone',
         titleKey: 'help.backup.title',
         shortKey: 'help.backup.short',
         longKey: 'help.backup.long',
-        related: ['profile', 'mnemonic', 'passphrase'],
-    },
-    offlineProtection: {
-        id: 'offlineProtection',
-        category: 'security',
-        titleKey: 'help.offlineProtection.title',
-        shortKey: 'help.offlineProtection.short',
-        longKey: 'help.offlineProtection.long',
-        related: ['conflicts', 'conceptPrivacy'],
-    },
-    conflicts: {
-        id: 'conflicts',
-        category: 'security',
-        titleKey: 'help.conflicts.title',
-        shortKey: 'help.conflicts.short',
-        longKey: 'help.conflicts.long',
-        related: ['offlineProtection'],
+        related: ['whichBackup', 'profile', 'mnemonic', 'deviceLoss'],
     },
     mnemonic: {
         id: 'mnemonic',
-        category: 'security',
+        group: 'securityBackup',
+        audience: 'everyone',
         titleKey: 'help.mnemonic.title',
         shortKey: 'help.mnemonic.short',
         longKey: 'help.mnemonic.long',
-        related: ['passphrase', 'backup', 'profile'],
+        deepDiveKey: 'help.mnemonic.deepDive',
+        related: ['emergencySheet', 'passphrase', 'backup'],
+    },
+    socialRecovery: {
+        id: 'socialRecovery',
+        group: 'securityBackup',
+        audience: 'everyone',
+        titleKey: 'help.socialRecovery.title',
+        shortKey: 'help.socialRecovery.short',
+        longKey: 'help.socialRecovery.long',
+        deepDiveKey: 'help.socialRecovery.deepDive',
+        related: ['whichBackup', 'deviceLoss', 'emergencySheet'],
+    },
+    emergencySheet: {
+        id: 'emergencySheet',
+        group: 'securityBackup',
+        audience: 'everyone',
+        titleKey: 'help.emergencySheet.title',
+        shortKey: 'help.emergencySheet.short',
+        longKey: 'help.emergencySheet.long',
+        related: ['whichBackup', 'mnemonic', 'deviceLoss'],
+    },
+    offlineProtection: {
+        id: 'offlineProtection',
+        group: 'securityBackup',
+        audience: 'everyone',
+        titleKey: 'help.offlineProtection.title',
+        shortKey: 'help.offlineProtection.short',
+        longKey: 'help.offlineProtection.long',
+        deepDiveKey: 'help.offlineProtection.deepDive',
+        related: ['conflicts', 'offlineRisk', 'conceptPrivacy'],
+    },
+    offlineRisk: {
+        id: 'offlineRisk',
+        group: 'securityBackup',
+        audience: 'everyone',
+        titleKey: 'help.offlineRisk.title',
+        shortKey: 'help.offlineRisk.short',
+        longKey: 'help.offlineRisk.long',
+        related: ['offlineProtection', 'sendReceive', 'l2Protection'],
+    },
+    conflicts: {
+        id: 'conflicts',
+        group: 'securityBackup',
+        audience: 'everyone',
+        titleKey: 'help.conflicts.title',
+        shortKey: 'help.conflicts.short',
+        longKey: 'help.conflicts.long',
+        deepDiveKey: 'help.conflicts.deepDive',
+        related: ['offlineProtection', 'multiDevice'],
+    },
+    multiDevice: {
+        id: 'multiDevice',
+        group: 'securityBackup',
+        audience: 'everyone',
+        titleKey: 'help.multiDevice.title',
+        shortKey: 'help.multiDevice.short',
+        longKey: 'help.multiDevice.long',
+        related: ['handover', 'subaccount', 'profileSeal', 'conflicts'],
+    },
+    connection: {
+        id: 'connection',
+        group: 'securityBackup',
+        audience: 'everyone',
+        titleKey: 'help.connection.title',
+        shortKey: 'help.connection.short',
+        longKey: 'help.connection.long',
+        deepDiveKey: 'help.connection.deepDive',
+        related: ['conceptPrivacy', 'faqSyncDown', 'visibilityReach'],
+    },
+
+    // --- Häufige Fragen / FAQ ---
+    faqIsItCrypto: {
+        id: 'faqIsItCrypto',
+        group: 'faq',
+        audience: 'everyone',
+        titleKey: 'help.faqIsItCrypto.title',
+        shortKey: 'help.faqIsItCrypto.short',
+        longKey: 'help.faqIsItCrypto.long',
+        related: ['conceptParadigm', 'voucherBasics', 'conceptPrivacy'],
+    },
+    faqWhatDoesItCost: {
+        id: 'faqWhatDoesItCost',
+        group: 'faq',
+        audience: 'everyone',
+        titleKey: 'help.faqWhatDoesItCost.title',
+        shortKey: 'help.faqWhatDoesItCost.short',
+        longKey: 'help.faqWhatDoesItCost.long',
+        related: ['conceptParadigm', 'connection'],
+    },
+    faqCanIBeCheated: {
+        id: 'faqCanIBeCheated',
+        group: 'faq',
+        audience: 'everyone',
+        titleKey: 'help.faqCanIBeCheated.title',
+        shortKey: 'help.faqCanIBeCheated.short',
+        longKey: 'help.faqCanIBeCheated.long',
+        related: ['offlineProtection', 'offlineRisk', 'conflicts', 'voucherTrust'],
+    },
+    faqSyncDown: {
+        id: 'faqSyncDown',
+        group: 'faq',
+        audience: 'everyone',
+        titleKey: 'help.faqSyncDown.title',
+        shortKey: 'help.faqSyncDown.short',
+        longKey: 'help.faqSyncDown.long',
+        related: ['connection', 'sendReceive', 'whichBackup'],
+    },
+
+    // --- Für Fortgeschrittene / For Advanced Users ---
+    profileSeal: {
+        id: 'profileSeal',
+        group: 'expert',
+        audience: 'expert',
+        titleKey: 'help.profileSeal.title',
+        shortKey: 'help.profileSeal.short',
+        longKey: 'help.profileSeal.long',
+        deepDiveKey: 'help.profileSeal.deepDive',
+        related: ['multiDevice', 'whichBackup', 'connection'],
     },
     passphrase: {
         id: 'passphrase',
-        category: 'security',
+        group: 'expert',
         audience: 'expert',
         titleKey: 'help.passphrase.title',
         shortKey: 'help.passphrase.short',
@@ -297,61 +520,56 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     },
     subaccount: {
         id: 'subaccount',
-        category: 'security',
+        group: 'expert',
         audience: 'expert',
         titleKey: 'help.subaccount.title',
         shortKey: 'help.subaccount.short',
         longKey: 'help.subaccount.long',
-        related: ['handover', 'deviceBinding', 'benutzerId'],
+        deepDiveKey: 'help.subaccount.deepDive',
+        related: ['multiDevice', 'handover', 'deviceBinding', 'benutzerId'],
     },
     handover: {
         id: 'handover',
-        category: 'security',
+        group: 'expert',
         audience: 'expert',
         titleKey: 'help.handover.title',
         shortKey: 'help.handover.short',
         longKey: 'help.handover.long',
-        related: ['subaccount', 'deviceBinding', 'offlineProtection'],
+        deepDiveKey: 'help.handover.deepDive',
+        related: ['multiDevice', 'subaccount', 'deviceBinding', 'offlineProtection'],
     },
     deviceBinding: {
         id: 'deviceBinding',
-        category: 'security',
+        group: 'expert',
         audience: 'expert',
         titleKey: 'help.deviceBinding.title',
         shortKey: 'help.deviceBinding.short',
         longKey: 'help.deviceBinding.long',
-        related: ['profile', 'handover'],
-    },
-    settingsPrivacy: {
-        id: 'settingsPrivacy',
-        category: 'security',
-        titleKey: 'help.settingsPrivacy.title',
-        shortKey: 'help.settingsPrivacy.short',
-        longKey: 'help.settingsPrivacy.long',
-        related: ['privacy', 'conceptPrivacy'],
-    },
-
-    // --- Connection ---
-    connection: {
-        id: 'connection',
-        category: 'connection',
-        titleKey: 'help.connection.title',
-        shortKey: 'help.connection.short',
-        longKey: 'help.connection.long',
-        related: ['conceptPrivacy', 'wotSharing'],
+        deepDiveKey: 'help.deviceBinding.deepDive',
+        related: ['profile', 'handover', 'multiDevice'],
     },
     posMode: {
         id: 'posMode',
-        category: 'connection',
+        group: 'expert',
         audience: 'expert',
         titleKey: 'help.posMode.title',
         shortKey: 'help.posMode.short',
         longKey: 'help.posMode.long',
-        related: ['voucherBasics'],
+        related: ['voucherBasics', 'l2Protection'],
+    },
+    l2Protection: {
+        id: 'l2Protection',
+        group: 'expert',
+        audience: 'expert',
+        titleKey: 'help.l2Protection.title',
+        shortKey: 'help.l2Protection.short',
+        longKey: 'help.l2Protection.long',
+        deepDiveKey: 'help.l2Protection.deepDive',
+        related: ['connection', 'offlineProtection', 'posMode', 'offlineRisk'],
     },
     exclusiveGateways: {
         id: 'exclusiveGateways',
-        category: 'connection',
+        group: 'expert',
         audience: 'expert',
         titleKey: 'help.exclusiveGateways.title',
         shortKey: 'help.exclusiveGateways.short',
@@ -360,21 +578,11 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     },
     gatewayTokens: {
         id: 'gatewayTokens',
-        category: 'connection',
+        group: 'expert',
         audience: 'expert',
         titleKey: 'help.gatewayTokens.title',
         shortKey: 'help.gatewayTokens.short',
         longKey: 'help.gatewayTokens.long',
         related: ['exclusiveGateways'],
-    },
-    l2Protection: {
-        id: 'l2Protection',
-        category: 'connection',
-        audience: 'expert',
-        titleKey: 'help.l2Protection.title',
-        shortKey: 'help.l2Protection.short',
-        longKey: 'help.l2Protection.long',
-        deepDiveKey: 'help.l2Protection.deepDive',
-        related: ['connection', 'offlineProtection', 'posMode'],
     },
 };

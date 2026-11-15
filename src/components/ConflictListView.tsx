@@ -4,11 +4,12 @@ import { integrityService } from "../services/integrityService";
 import { useSession } from "../context/SessionContext";
 import { logger } from "../utils/log";
 import { translateError, stringifyError } from "../utils/errorHelper";
-import { truncateUserId } from "../utils/userIdHelper";
 import { ProofOfDoubleSpendSummary } from "../types";
 import { PageLayout } from "./ui/PageLayout";
 import { Button } from "./ui/Button";
 import { AlertBanner } from "./ui/AlertBanner";
+import { Advanced } from "./ui/Advanced";
+import { TechId } from "./ui/TechId";
 import { PageLoadingState, PageEmptyState, PageErrorState } from "./ui/PageState";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -34,7 +35,7 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
             const selected = await open({
                 multiple: false,
                 filters: [
-                    { name: t('conflict.filterName', 'Double Spend Proof (.hmcproof)'), extensions: ['hmcproof'] },
+                    { name: t('conflict.filterName'), extensions: ['hmcproof'] },
                     { name: t('voucher.export.allFiles'), extensions: ['*'] }
                 ]
             });
@@ -122,14 +123,19 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                                 </span>
                             )}
                             {conflict.hasL2Verdict && (
-                                <span className="px-3 py-1 text-xs font-bold rounded-full bg-purple-100 text-purple-800">
-                                    {t('conflict.l2VerdictAvailable')}
-                                </span>
+                                <Advanced>
+                                    <span className="px-3 py-1 text-xs font-bold rounded-full bg-purple-100 text-purple-800">
+                                        {t('conflict.l2VerdictAvailable')}
+                                    </span>
+                                </Advanced>
                             )}
                         </div>
                         <h3 className="font-semibold text-theme-primary mb-1">
                             {conflict.affectedVoucherName || t('conflict.unknownVoucher')}
                         </h3>
+                        <p data-testid="conflict-card-summary" className="text-xs text-theme-secondary mb-2 leading-relaxed">
+                            {conflict.conflictRole === 'victim' ? t('conflict.listVictimSummary') : t('conflict.listWitnessSummary')}
+                        </p>
                         {conflict.localNote && (
                              <div className="mb-3">
                                 <p className="text-[10px] font-bold text-blue-600 uppercase tracking-tight mb-1">{t('conflict.personalNote')}</p>
@@ -138,13 +144,17 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                                 </p>
                              </div>
                         )}
-                        <p className="text-sm text-theme-light">
-                            {t('conflict.idLabel')} <span className="font-mono text-xs">{truncateUserId(conflict.proofId)}</span>
-                        </p>
-                        <p className="text-sm text-theme-light">
-                            {t('conflict.offenderLabel')} <span className="font-mono text-xs">{truncateUserId(conflict.offenderId)}</span>
-                        </p>
-                        <p className="text-sm text-theme-light">
+                        <Advanced>
+                            <p className="text-sm text-theme-light flex items-center gap-1.5 flex-wrap">
+                                <span>{t('conflict.idLabel')}</span>
+                                <TechId value={conflict.proofId} kind="proof" />
+                            </p>
+                        </Advanced>
+                        <div className="text-sm text-theme-light flex items-center gap-1.5 flex-wrap mt-1">
+                            <span>{t('conflict.offenderLabel')}</span>
+                            <TechId value={conflict.offenderId} kind="did" />
+                        </div>
+                        <p className="text-sm text-theme-light mt-1">
                             {t('conflict.reportedLabel', { date: formatTimestamp(conflict.reportTimestamp) })}
                         </p>
                     </div>
@@ -157,11 +167,14 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                         {t('conflict.viewDetails')}
                     </Button>
                 </div>
-                <div className="border-t border-theme-subtle pt-3">
-                    <p className="text-xs text-theme-light">
-                        <strong>{t('conflict.forkPointLabel')}</strong> <span className="font-mono">{truncateUserId(conflict.forkPointPrevHash)}</span>
-                    </p>
-                </div>
+                <Advanced>
+                    <div className="border-t border-theme-subtle pt-3">
+                        <p className="text-xs text-theme-light flex items-center gap-1.5 flex-wrap">
+                            <strong>{t('conflict.forkPointLabel')}</strong>
+                            <TechId value={conflict.forkPointPrevHash} kind="hash" />
+                        </p>
+                    </div>
+                </Advanced>
             </div>
         </div>
     );

@@ -398,7 +398,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                     ? t('settings.backupBannerProtected', { time: new Date(settings.lastBackupAt).toLocaleString() })
                                     : t('settings.backupBannerUnprotected')}
                             </span>
-                            <InfoHint topic="backup" />
+                            <InfoHint topic="whichBackup" />
                         </div>
                     </div>
                     <Button

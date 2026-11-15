@@ -14,6 +14,9 @@ import {
 } from "lucide-react";
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
+import { Advanced } from './ui/Advanced';
+import { HelpModal } from './ui/HelpModal';
+import { HelpCircle } from 'lucide-react';
 import { useSession } from '../context/SessionContext';
 import { useNavigation } from '../context/NavigationContext';
 import { authService } from '../services/authService';
@@ -37,6 +40,7 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
     const [reclaimError, setReclaimError] = useState("");
 
     const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [showMultiDeviceHelp, setShowMultiDeviceHelp] = useState(false);
     const [deletePassword, setDeletePassword] = useState("");
     const [isDeleting, setIsDeleting] = useState(false);
     const [deleteError, setDeleteError] = useState("");
@@ -131,14 +135,38 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
                     <div className="p-6 sm:p-8 space-y-6">
                         <div className="text-center space-y-2">
                             <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">
-                                {t('auth.handoverTitle', 'Wallet Active on Another Device')}
+                                {t('auth.handoverTitle')}
                             </h2>
                             <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
-                                {t('auth.handoverDesc', 'This wallet was transferred to another device (Epoch {{targetEpoch}}). On this device, transactions are deactivated to prevent conflicting spends.', {
-                                    targetEpoch: targetEpoch !== undefined ? targetEpoch : '?'
-                                })}
+                                {t('auth.handoverSimpleDesc')}
                             </p>
+                            <Advanced>
+                                <p
+                                    data-testid="forklock-epoch-detail"
+                                    className="text-xs font-mono text-gray-500 dark:text-gray-400"
+                                >
+                                    {t('auth.handoverEpochDetail', {
+                                        targetEpoch: targetEpoch !== undefined ? targetEpoch : '?'
+                                    })}
+                                </p>
+                            </Advanced>
+                            <div className="pt-1">
+                                <button
+                                    type="button"
+                                    data-testid="forklock-help-button"
+                                    onClick={() => setShowMultiDeviceHelp(true)}
+                                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-theme-primary hover:underline cursor-pointer"
+                                >
+                                    <HelpCircle size={14} />
+                                    {t('auth.multiDeviceHelpLink')}
+                                </button>
+                            </div>
                         </div>
+                        <HelpModal
+                            isOpen={showMultiDeviceHelp}
+                            onClose={() => setShowMultiDeviceHelp(false)}
+                            topic="multiDevice"
+                        />
 
                         <div className="space-y-3">
                             <Button 
@@ -286,20 +314,36 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
 
                     <div className="p-8 text-center space-y-6">
                         <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-                            {t('auth.concurrentCloneTitle', 'Security Alert: Concurrent Clone Detected')}
+                            {t('auth.concurrentCloneTitle')}
                         </h2>
                         <p className="text-gray-600 dark:text-gray-300 leading-relaxed text-sm">
-                            {t('auth.concurrentCloneDesc', 'Multiple devices are actively signing transactions for this wallet with the same credentials. To protect your funds against double-spend penalties, all operations have been halted. Please recover your wallet with your recovery seed to establish a clean state.')}
+                            {t('auth.concurrentCloneDesc')}
                         </p>
+                        <div className="text-center">
+                            <button
+                                type="button"
+                                data-testid="forklock-help-button"
+                                onClick={() => setShowMultiDeviceHelp(true)}
+                                className="inline-flex items-center gap-1.5 text-xs font-semibold text-theme-primary hover:underline cursor-pointer"
+                            >
+                                <HelpCircle size={14} />
+                                {t('auth.multiDeviceHelpLink')}
+                            </button>
+                        </div>
+                        <HelpModal
+                            isOpen={showMultiDeviceHelp}
+                            onClose={() => setShowMultiDeviceHelp(false)}
+                            topic="multiDevice"
+                        />
 
                         <div className="space-y-3 pt-2">
                             <Button 
                                 variant="primary" 
                                 size="lg" 
-                                className="w-full bg-rose-600 hover:bg-rose-700 text-white border-none py-4 text-base"
+                                className="w-full bg-amber-600 hover:bg-amber-700 text-white border-none py-4 text-base"
                                 onClick={onStartRecovery}
                             >
-                                {t('auth.recoverWalletSeed', 'Recover Wallet with Seed Phrase')}
+                                {t('auth.recoverWalletSeed')}
                             </Button>
 
                             <Button
@@ -308,7 +352,7 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
                                 className="w-full"
                                 onClick={handleLogout}
                             >
-                                {t('auth.handoverLogoutBtn', 'Switch Profile / Log Out')}
+                                {t('auth.handoverLogoutBtn')}
                             </Button>
                         </div>
                     </div>
@@ -320,39 +364,66 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
     // 3. Fork / Default Security Lockdown View
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-            <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl shadow-2xl overflow-hidden border border-red-500/30">
-                <div className="bg-red-500 p-6 flex justify-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-white animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl shadow-2xl overflow-hidden border border-amber-500/30">
+                <div className="bg-amber-500 p-6 flex justify-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                     </svg>
                 </div>
                 
                 <div className="p-8 text-center">
-                    <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">{t('auth.securityLockdown')}</h2>
-                    <p className="text-gray-600 dark:text-gray-300 mb-6 leading-relaxed">
+                    <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">{t('auth.forkConflictTitle')}</h2>
+                    <p className="text-gray-600 dark:text-gray-300 mb-4 leading-relaxed">
                         {t('auth.forkDetected')}
                     </p>
+                    <p className="text-center mb-5">
+                        <button
+                            type="button"
+                            data-testid="forklock-help-button"
+                            onClick={() => setShowMultiDeviceHelp(true)}
+                            className="inline-flex items-center gap-1.5 text-xs font-semibold text-theme-primary hover:underline cursor-pointer"
+                        >
+                            <HelpCircle size={14} />
+                            {t('auth.multiDeviceHelpLink')}
+                        </button>
+                    </p>
+                    <HelpModal
+                        isOpen={showMultiDeviceHelp}
+                        onClose={() => setShowMultiDeviceHelp(false)}
+                        topic="multiDevice"
+                    />
                     
-                    <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-4 mb-8 text-left border border-red-100 dark:border-red-900/30">
-                        <p className="text-sm text-red-700 dark:text-red-400 font-medium flex items-center gap-2">
+                    <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-4 mb-6 text-left border border-amber-100 dark:border-amber-900/30">
+                        <p className="text-sm text-amber-800 dark:text-amber-300 font-medium flex items-center gap-2">
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                                 <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                             </svg>
-                            {t('auth.actionRequired')}
+                            {t('auth.forkNextStepTitle')}
                         </p>
-                        <p className="text-sm text-red-600 dark:text-red-500 mt-1">
+                        <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
                             {t('auth.forkRecoveryRequired')}
                         </p>
                     </div>
                     
-                    <Button 
-                        variant="primary" 
-                        size="lg" 
-                        className="w-full bg-red-600 hover:bg-red-700 text-white border-none py-4 text-lg"
-                        onClick={onStartRecovery}
-                    >
-                        {t('auth.recoverWalletSeed')}
-                    </Button>
+                    <div className="space-y-3">
+                        <Button 
+                            variant="primary" 
+                            size="lg" 
+                            className="w-full bg-amber-600 hover:bg-amber-700 text-white border-none py-4 text-lg"
+                            onClick={onStartRecovery}
+                        >
+                            {t('auth.recoverWalletSeed')}
+                        </Button>
+
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            className="w-full"
+                            onClick={handleLogout}
+                        >
+                            {t('auth.handoverLogoutBtn')}
+                        </Button>
+                    </div>
                     
                     <p className="text-xs text-theme-subtle mt-4">
                         {t('auth.functionsSuspended')}

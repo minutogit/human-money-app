@@ -159,7 +159,7 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
                                     {t('settings.reachTitle')}
                                 </span>
                             </div>
-                            <InfoHint topic="wotReach" />
+                            <InfoHint topic="visibilityReach" />
                         </div>
                     }
                 >

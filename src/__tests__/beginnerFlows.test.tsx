@@ -12,6 +12,8 @@ import { SendView } from '../components/SendView';
 import { ReceiveView } from '../components/ReceiveView';
 import { SettingsView } from '../components/SettingsView';
 import { CreateVoucher } from '../components/CreateVoucher';
+import { HelpCenterView } from '../components/HelpCenterView';
+import { ConflictDetailsView } from '../components/ConflictDetailsView';
 import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../context/UiModeContext';
 import { UiModeToggle } from '../components/ui/UiModeToggle';
 import { Advanced } from '../components/ui/Advanced';
@@ -695,5 +697,63 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         await waitFor(() => {
             expect(screen.getByRole('dialog')).toBeInTheDocument();
         });
+    });
+
+    it('Task 8: P10 organizes Help Center for beginners and answers 3 conflict questions calmly', async () => {
+        render(
+            <UiModeProvider>
+                <HelpCenterView onBack={vi.fn()} />
+            </UiModeProvider>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('help-group-heading-firstSteps')).toBeInTheDocument();
+        });
+
+        expect(screen.getByTestId('help-group-heading-faq')).toBeInTheDocument();
+        expect(screen.getByTestId('help-center-expert-topics-toggle')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'For Advanced Users' })).not.toBeInTheDocument();
+        expect(screen.getByText('Which Backup Do I Need?')).toBeInTheDocument();
+        expect(screen.getByText('Is This Bitcoin or Cryptocurrency?')).toBeInTheDocument();
+
+        vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+            if (cmd === 'get_proof_of_double_spend') {
+                return {
+                    proof: {
+                        proofId: 'proof-task8-abc',
+                        offenderId: 'did:key:z6MkTask8OffenderXYZ999',
+                        reportTimestamp: '2024-06-01T12:00:00Z',
+                        affectedVoucherName: 'Minuto Neighbor',
+                        conflictingTransactions: [
+                            { tId: 'tx-a', tTime: '2024-06-01T10:00:00Z', amount: '15', recipientId: 'did:key:rec1' },
+                            { tId: 'tx-b', tTime: '2024-06-01T10:05:00Z', amount: '15', recipientId: 'did:key:rec2' },
+                        ],
+                        isResolved: false,
+                        isCryptographicallyAttributed: true,
+                    },
+                    localOverride: false,
+                    conflictRole: 'victim',
+                };
+            }
+            if (cmd === 'get_contacts') return [];
+            return undefined;
+        });
+
+        const { container: conflictContainer } = render(
+            <UiModeProvider>
+                <ConflictDetailsView proofId="proof-task8-abc" onBack={vi.fn()} />
+            </UiModeProvider>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('conflict-three-questions')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('What happened?')).toBeInTheDocument();
+        expect(screen.getByText('Is my voucher still valid?')).toBeInTheDocument();
+        expect(screen.getByText('What should I do?')).toBeInTheDocument();
+        expect(conflictContainer.textContent).not.toContain('did:key:z6MkTask8');
+        expect(screen.queryByTestId('conflict-evidence-section')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('conflict-local-override-section')).not.toBeInTheDocument();
     });
 });

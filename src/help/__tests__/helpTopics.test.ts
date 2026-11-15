@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { HELP_TOPICS, HelpTopicId, HELP_CATEGORIES } from '../helpTopics';
+import { HELP_TOPICS, HelpTopicId, HELP_GROUPS } from '../helpTopics';
 import deJson from '../../locales/de.json';
 import enJson from '../../locales/en.json';
 
@@ -12,12 +12,16 @@ describe('helpTopics Registry', () => {
         expect(topicIds.length).toBeGreaterThan(20);
     });
 
-    it('ensures every topic has valid category defined in HELP_CATEGORIES', () => {
-        const validCategories = new Set(HELP_CATEGORIES.map((c) => c.id));
+    it('ensures every topic has valid group defined in HELP_GROUPS and required audience', () => {
+        const validGroups = new Set(HELP_GROUPS.map((g) => g.id));
+        expect(HELP_GROUPS).toHaveLength(7);
         for (const id of topicIds) {
             const topic = HELP_TOPICS[id];
-            expect(validCategories.has(topic.category)).toBe(true);
+            expect(validGroups.has(topic.group)).toBe(true);
+            expect(['everyone', 'expert']).toContain(topic.audience);
         }
+        expect('wotReach' in HELP_TOPICS).toBe(false);
+        expect('wotSharing' in HELP_TOPICS).toBe(false);
     });
 
     it('ensures every topic has non-empty titleKey, shortKey, and longKey in de.json and en.json', () => {
@@ -79,12 +83,14 @@ describe('helpTopics Registry', () => {
             'helpCenter.noResults',
             'helpCenter.clearSearch',
             'helpCenter.categoryAll',
-            'helpCenter.categoryBasics',
-            'helpCenter.categoryVouchers',
-            'helpCenter.categoryTrust',
-            'helpCenter.categoryMarketplace',
-            'helpCenter.categorySecurity',
-            'helpCenter.categoryConnection',
+            'helpCenter.groupFirstSteps',
+            'helpCenter.groupDailyVouchers',
+            'helpCenter.groupContactsTrust',
+            'helpCenter.groupMarketplace',
+            'helpCenter.groupSecurityBackup',
+            'helpCenter.groupFaq',
+            'helpCenter.groupExpert',
+            'helpCenter.forAdvancedUsers',
             'helpCenter.relatedTopics',
             'helpCenter.openInHelpCenter',
             'helpCenter.learnMore',
@@ -99,6 +105,39 @@ describe('helpTopics Registry', () => {
             expect(de[k].trim().length).toBeGreaterThan(0);
             expect(en[k], `Missing EN key ${k}`).toBeDefined();
             expect(en[k].trim().length).toBeGreaterThan(0);
+        }
+
+        const expectedNewIds: HelpTopicId[] = [
+            'whichBackup',
+            'deviceLoss',
+            'socialRecovery',
+            'emergencySheet',
+            'voucherStandards',
+            'voucherExpiry',
+            'offlineRisk',
+            'multiDevice',
+            'profileSeal',
+            'guarantorVsRecommendation',
+            'visibilityReach',
+            'uiModes',
+            'sendReceive',
+            'faqIsItCrypto',
+            'faqWhatDoesItCost',
+            'faqCanIBeCheated',
+            'faqSyncDown',
+        ];
+        for (const newId of expectedNewIds) {
+            expect(HELP_TOPICS[newId]).toBeDefined();
+        }
+
+        for (const id of topicIds) {
+            const topic = HELP_TOPICS[id];
+            if (topic.deepDiveKey) {
+                expect(de[topic.deepDiveKey], `Missing DE deepDive ${topic.deepDiveKey}`).toBeDefined();
+                expect(de[topic.deepDiveKey].trim().length).toBeGreaterThan(0);
+                expect(en[topic.deepDiveKey], `Missing EN deepDive ${topic.deepDiveKey}`).toBeDefined();
+                expect(en[topic.deepDiveKey].trim().length).toBeGreaterThan(0);
+            }
         }
     });
 });

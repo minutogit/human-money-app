@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
 import { HelpCircle, ExternalLink } from 'lucide-react';
-import { HELP_TOPICS, HelpTopicId, HELP_CATEGORIES } from '../../help/helpTopics';
+import { HELP_TOPICS, HelpTopicId, HELP_GROUPS } from '../../help/helpTopics';
 import { HelpContentRenderer } from '../../help/HelpContentRenderer';
 import { AdvancedDisclosure } from './AdvancedDisclosure';
 
@@ -48,8 +48,8 @@ export function HelpModal({ isOpen, onClose, topic, onNavigateToHelpCenter }: He
     const short = t(currentTopic.shortKey);
     const long = t(currentTopic.longKey);
     const relatedTopics = currentTopic.related || [];
-    const categoryDef = HELP_CATEGORIES.find((c) => c.id === currentTopic.category);
-    const categoryLabel = categoryDef ? t(categoryDef.labelKey) : currentTopic.category;
+    const groupDef = HELP_GROUPS.find((g) => g.id === currentTopic.group);
+    const groupLabel = groupDef ? t(groupDef.labelKey) : currentTopic.group;
 
     const handleOpenInHelpCenter = () => {
         onClose();
@@ -84,7 +84,7 @@ export function HelpModal({ isOpen, onClose, topic, onNavigateToHelpCenter }: He
                         </div>
                         <div className="min-w-0">
                             <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-theme-primary/10 text-theme-primary mb-1">
-                                {categoryLabel}
+                                {groupLabel}
                             </span>
                             <h2 className="text-lg font-black text-theme-secondary tracking-tight leading-snug truncate">
                                 {title}

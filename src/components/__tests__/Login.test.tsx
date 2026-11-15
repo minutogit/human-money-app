@@ -226,7 +226,8 @@ describe('Login Component', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/(Profile|Wallet) Active on Another Device/i)).toBeInTheDocument();
-      expect(screen.getByText(/Epoch 3/i)).toBeInTheDocument();
+      expect(screen.getByText(/Payments on this device are paused/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Epoch 3/i)).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Switch Profile/i })).toBeInTheDocument();
     });
   });
@@ -265,7 +266,7 @@ describe('Login Component', () => {
     fireEvent.click(loginButton);
 
     await waitFor(() => {
-      expect(screen.getByText(/Security Alert: Concurrent Clone Detected/i)).toBeInTheDocument();
+      expect(screen.getByText(/Multi-Device Conflict Detected/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Recover (Profile|Wallet) with (Seed Phrase|Recovery Words)/i })).toBeInTheDocument();
     });
   });

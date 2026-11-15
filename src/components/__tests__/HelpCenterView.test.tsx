@@ -34,9 +34,11 @@ describe('HelpCenterView Component', () => {
 
         expect(screen.getByPlaceholderText(en['helpCenter.searchPlaceholder'])).toBeInTheDocument();
         expect(screen.getByRole('button', { name: en['helpCenter.categoryAll'] })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: en['helpCenter.categoryBasics'] })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: en['helpCenter.categoryVouchers'] })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: en['helpCenter.categoryTrust'] })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: en['helpCenter.groupFirstSteps'] })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: en['helpCenter.groupDailyVouchers'] })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: en['helpCenter.groupContactsTrust'] })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: en['helpCenter.groupFaq'] })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: en['helpCenter.groupExpert'] })).not.toBeInTheDocument();
     });
 
     it('renders deep-linked initial topic', () => {
@@ -63,8 +65,8 @@ describe('HelpCenterView Component', () => {
     it('filters topics by category pill click', () => {
         render(<HelpCenterView />);
 
-        const vouchersCategoryBtn = screen.getByRole('button', { name: en['helpCenter.categoryVouchers'] });
-        fireEvent.click(vouchersCategoryBtn);
+        const vouchersGroupBtn = screen.getByRole('button', { name: en['helpCenter.groupDailyVouchers'] });
+        fireEvent.click(vouchersGroupBtn);
 
         expect(screen.getAllByText(en['help.voucherMode.title']).length).toBeGreaterThanOrEqual(1);
     });

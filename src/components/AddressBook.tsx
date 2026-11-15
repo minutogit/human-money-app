@@ -1294,7 +1294,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                 description={t('contacts.trustListMenuDesc', 'Vertrauenslisten offline teilen oder einlesen')}
             >
                 <div className="space-y-4 py-2">
-                    <InfoHint topic="wotSharing" variant="banner" />
+                    <InfoHint topic="visibilityReach" variant="banner" />
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                         <button

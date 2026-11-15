@@ -269,8 +269,10 @@ mod tests {
         let deserialized_missing: AppSettings = serde_json::from_str(r#"{}"#).unwrap();
         assert_eq!(deserialized_missing.ui_mode, "simple");
 
-        let mut expert = AppSettings::default();
-        expert.ui_mode = "expert".to_string();
+        let expert = AppSettings {
+            ui_mode: "expert".to_string(),
+            ..Default::default()
+        };
         let serialized = serde_json::to_string(&expert).unwrap();
         assert!(serialized.contains(r#""uiMode":"expert""#));
         let roundtrip: AppSettings = serde_json::from_str(&serialized).unwrap();
@@ -285,8 +287,10 @@ mod tests {
         let deserialized_missing: AppSettings = serde_json::from_str(r#"{}"#).unwrap();
         assert_eq!(deserialized_missing.media_auto_load_max_hops, 2);
 
-        let mut custom = AppSettings::default();
-        custom.media_auto_load_max_hops = 1;
+        let custom = AppSettings {
+            media_auto_load_max_hops: 1,
+            ..Default::default()
+        };
         let serialized = serde_json::to_string(&custom).unwrap();
         assert!(serialized.contains(r#""mediaAutoLoadMaxHops":1"#));
         let roundtrip: AppSettings = serde_json::from_str(&serialized).unwrap();

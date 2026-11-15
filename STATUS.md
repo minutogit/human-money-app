@@ -1,12 +1,18 @@
 ---
 project: human-money-app
-version: "0.5.5"
+version: "0.5.6"
 phase: "beta"
 health: "green"
 last_updated: "2026-11-15"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-UX-09"
+    title: "Simple & Expert Mode (`uiMode`): 10-Phase UX Simplification, Visibility Presets, Unified Flows, Help Center & Conflict Overhaul"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-068", "APP-UX-08"]
+    description: "Completed all UI-track phases (P0–P4, P6–P10; P5 deferred to SYNC_REACH_PLAN.md) of `docs/SIMPLE_EXPERT_MODE_PLAN.md` across `v0.5.6` (plus WoT 3-hop cap in `humoco-web-of-trust` `e578c14`): P0 quick fixes (send amount input always visible, deduplicated sync probe, empty state CTAs, calm integrity banner, per-currency history summary, dynamic tour package version, WoT max-3-hop cap with default 2); P1 `uiMode` infrastructure (`AppSettings.ui_mode`, `UiModeContext`, `UiModeToggle`, `<Advanced>`, `<AdvancedDisclosure>`, `<TechId>`, `<PresetOrCustom>`, `PageLayout.advancedActions`, `NavItem.mode`, `uiModeLint.test.ts`); P2 jargon hiding & `<TechId>` rollout; P3 3-step Send flow & unified Receive QR-first flow; P4 3-tier visibility presets (`near`/`medium`/`far` via `apply_reach_preset`/`get_reach_preset`, `ReachPresetSelector`, `mediaAutoLoadMaxHops`); P6 single-page 6-block Settings with auto-save & unified sync toggle; P7 4+3 Sidebar, merged Dashboard+Wallet, Activity-absorbed History; P8 slim AddressBook & Marketplace presets/chips/1-click ad renewal; P9 streamlined CreateVoucher form with conditional gender prompt; P10 7-group Help Center (`HELP_GROUPS`, required `audience`, 51 topics incl. H1–H12 + `sendReceive` + 4 FAQs, 15 `.deepDive` extractions, removed `wotReach`/`wotSharing`), calm multi-device ForkLock copy, 3-question `ConflictDetailsView` & plain `ConflictListView` summary across all 5 locales (`glossaryLint.test.ts`, `i18n-lock.json`). Verified with 618/618 Vitest tests across 76 test files, 103 src-tauri tests, 96 humoco-market tests, cargo clippy --all-targets (0 warnings), npm run i18n:check, and 62/62 automated UI tour steps (Simple & Expert modes)."
   - id: "APP-068"
     title: "humoco-sync Ecosystem Split, Prefixed slot_id Fix, Rust config.toml Generator & Public Sync Onboarding UX"
     status: "completed"

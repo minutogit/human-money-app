@@ -442,7 +442,7 @@ export function ReachPresetSelector({
                         <h4 className="text-sm font-bold text-theme-secondary">
                             {t('settings.reachTitle')}
                         </h4>
-                        <InfoHint topic="wotReach" />
+                        <InfoHint topic="visibilityReach" />
                     </div>
                     <p className="text-xs text-theme-light leading-relaxed">
                         {t('settings.reachSubtitle')}

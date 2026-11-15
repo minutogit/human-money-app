@@ -14,6 +14,7 @@ import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
 import { ProfileInfo } from "../types";
 import { HelpIcon } from "./ui/HelpIcon";
+import { Advanced } from "./ui/Advanced";
 import { useNavigation } from "../context/NavigationContext";
 import { translateError, isBackendError, stringifyError } from "../utils/errorHelper";
 import { 
@@ -242,17 +243,22 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                             </div>
                             <div className="space-y-1">
                                 <h2 className="text-2xl font-bold text-gray-900 tracking-tight">
-                                    {t('auth.handoverTitle', 'Wallet Active on Another Device')}
+                                    {t('auth.handoverTitle')}
                                 </h2>
                                 <p className="text-xs font-semibold uppercase tracking-wider text-amber-600">
                                     {activeProfileName}
                                 </p>
                             </div>
                             <p className="text-sm text-gray-600 leading-relaxed">
-                                {t('auth.handoverDesc', 'This wallet was transferred to another device (Epoch {{targetEpoch}}). On this device, transactions are deactivated to prevent conflicting spends.', {
-                                    targetEpoch: supersededTargetEpoch !== undefined ? supersededTargetEpoch : '?'
-                                })}
+                                {t('auth.handoverSimpleDesc')}
                             </p>
+                            <Advanced>
+                                <p className="text-xs font-mono text-gray-500">
+                                    {t('auth.handoverEpochDetail', {
+                                        targetEpoch: supersededTargetEpoch !== undefined ? supersededTargetEpoch : '?'
+                                    })}
+                                </p>
+                            </Advanced>
                         </div>
 
                         <div className="space-y-3 pt-2">
@@ -340,14 +346,14 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRecreate, on
                             </div>
                             <div className="space-y-1">
                                 <h2 className="text-2xl font-bold text-gray-900 tracking-tight">
-                                    {t('auth.concurrentCloneTitle', 'Security Alert: Concurrent Clone Detected')}
+                                    {t('auth.concurrentCloneTitle')}
                                 </h2>
                                 <p className="text-xs font-semibold uppercase tracking-wider text-rose-600">
                                     {activeProfileName}
                                 </p>
                             </div>
                             <p className="text-sm text-gray-600 leading-relaxed">
-                                {t('auth.concurrentCloneDesc', 'Multiple devices are actively signing transactions for this wallet with the same credentials. To protect your funds against double-spend penalties, all operations have been halted. Please recover your wallet with your recovery seed to establish a clean state.')}
+                                {t('auth.concurrentCloneDesc')}
                             </p>
                         </div>
 

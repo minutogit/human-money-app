@@ -76,24 +76,16 @@
     "source_text": "Back to Login"
   },
   "auth.concurrentCloneDesc": {
-    "source_text": "Multiple devices are actively signing transactions for this wallet with the same credentials. To protect your funds against double-spend penalties, all operations have been halted. Please recover your wallet with your recovery seed to establish a clean state.",
-    "status": {
-      "de": "human-verified",
-      "fr": "human-verified",
-      "es": "human-verified",
-      "it": "human-verified",
-      "en": "ai-translated"
-    }
+    "enHash": "d27e19f8588a3a3cb4c4dccdc6596e053384f3c4b41f5cb224c1095da9aaf99f",
+    "deHash": "89258e8c95891ae1ede5d144e35807b4d3ee85d4651a9480c3d1a5165b1cd7c4",
+    "enText": "More than one device signed changes for this profile at the same time. To protect your vouchers, spending is paused here. Restore a clean state with your recovery words, and use Device Handover or a separate Subaccount next time.",
+    "deText": "Mehrere Geräte haben gleichzeitig mit demselben Profil gearbeitet. Zum Schutz deiner Gutscheine sind Zahlungen hier vorübergehend pausiert. Stelle einen sauberen Stand mit deinen Wiederherstellungswörtern her und nutze künftig die Geräte-Übergabe oder ein eigenes Unterkonto."
   },
   "auth.concurrentCloneTitle": {
-    "source_text": "Security Alert: Concurrent Clone Detected",
-    "status": {
-      "de": "human-verified",
-      "fr": "human-verified",
-      "es": "human-verified",
-      "it": "human-verified",
-      "en": "ai-translated"
-    }
+    "enHash": "7ae6cca1b13905fd5c29110b079b2e9441075b55401de07db7ec427c4090c25c",
+    "deHash": "f9c9fe1fcd9ba68b339b2c29235f25a115bed39740d50133c1279351812af3e9",
+    "enText": "Multi-Device Conflict Detected",
+    "deText": "Mehrgeräte-Konflikt erkannt"
   },
   "auth.confirmPassword": {
     "ai_hint": "Label for the confirm password input field in wallet recovery.",
@@ -214,27 +206,29 @@
     },
     "source_text": "Forgot password?"
   },
+  "auth.forkConflictTitle": {
+    "enHash": "b679fdc10d053f52a637c25647c9a4ca1194dff3dba4ca56f9a5fb2d85026753",
+    "deHash": "2a76af6113db007551b1bb3551127e148b572048828d0d0d7c2447ea263edeaa",
+    "enText": "Device Synchronization Conflict Detected",
+    "deText": "Abweichung zwischen Geräten erkannt"
+  },
   "auth.forkDetected": {
-    "ai_hint": "Main description text in ForkLockOverlay explaining what a fork is.",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    },
-    "source_text": "A fork has been detected in your transaction history! This usually happens if you restore an old backup or use this wallet on multiple devices simultaneously without proper synchronization."
+    "enHash": "c6890797300bfb72feccf4715bb9e0810a39e12cad7c2df40362f1ab629cd4a5",
+    "deHash": "63cedfa320fecc519a82c10f14192b38313d9fc09159ec959d1053947a608af6",
+    "enText": "Your profile history diverged across devices or after restoring an older backup. Transactions are paused to prevent unintended duplicate spends. Next time, use Device Handover when switching devices or assign each device a separate Subaccount.",
+    "deText": "Zwischen zwei Geräten oder einem älteren Backup sind unterschiedliche Stände entstanden. Zahlungen sind deshalb vorübergehend pausiert. Nutze beim Gerätewechsel am besten die Geräte-Übergabe oder richte für ein zweites Gerät ein eigenes Unterkonto ein."
+  },
+  "auth.forkNextStepTitle": {
+    "enHash": "390cfb95a952aa68798da6f312f426b95b304dc4a8468be92e7923c09b7e18d7",
+    "deHash": "0c52b9a456e5cbae663bc9eff18e98d2bd317c3358c6135beff71e6df2f74888",
+    "enText": "Recommended Next Step",
+    "deText": "Empfohlener nächster Schritt"
   },
   "auth.forkRecoveryRequired": {
-    "ai_hint": "Detail text in ForkLockOverlay explaining that wallet recovery is required.",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    },
-    "source_text": "To ensure your identity and reputation are protected, you must perform a full wallet recovery using your seed phrase."
+    "enHash": "5256bdd040f0ace732b0b1a25baf4a61057666744ee074b1d31e496e4d82cace",
+    "deHash": "f31e246157e9b7f86119c507bb6cd5a6baeb96ff66b5e05422ae89f9335b108b",
+    "enText": "Restore your profile cleanly using your recovery words to resume normal use on this device.",
+    "deText": "Stelle dein Profil mit deinen Wiederherstellungswörtern sauber wieder her, um es auf diesem Gerät normal weiterzunutzen."
   },
   "auth.functionsSuspended": {
     "ai_hint": "Footer note in ForkLockOverlay stating wallet functions are suspended during recovery.",
@@ -257,15 +251,11 @@
       "en": "ai-translated"
     }
   },
-  "auth.handoverDesc": {
-    "source_text": "This wallet was transferred to another device (Epoch {{targetEpoch}}). On this device, transactions are deactivated to prevent conflicting spends.",
-    "status": {
-      "de": "human-verified",
-      "fr": "human-verified",
-      "es": "human-verified",
-      "it": "human-verified",
-      "en": "ai-translated"
-    }
+  "auth.handoverEpochDetail": {
+    "enHash": "2ba3520841442f617ed86e62763a8fe4c6276735addbd52e0234ce951061ef78",
+    "deHash": "3f0ec508cd06be54f517b3c2f4d662d50569a3ba600825950583903b8396bc35",
+    "enText": "Epoch {{targetEpoch}} (technical lock state)",
+    "deText": "Epoche {{targetEpoch}} (technischer Sperrstand)"
   },
   "auth.handoverLogoutBtn": {
     "source_text": "Switch Profile / Log Out",
@@ -306,6 +296,12 @@
       "it": "human-verified",
       "en": "ai-translated"
     }
+  },
+  "auth.handoverSimpleDesc": {
+    "enHash": "f775f565b495a7d448ab25f70366842ab66406f01a3b671cd8e2dbc8c184afc1",
+    "deHash": "91550f743dcc0312d851ea9e8920a4270a41360e4b9b94f41f04e84eea4d7656",
+    "enText": "This profile is currently active on another device. Payments on this device are paused so nothing can be spent twice.",
+    "deText": "Dieses Profil ist gerade auf einem anderen Gerät aktiv. Auf diesem Gerät sind Zahlungen pausiert, damit nichts doppelt ausgegeben wird."
   },
   "auth.handoverTitle": {
     "source_text": "Wallet Active on Another Device",
@@ -461,6 +457,12 @@
       "en": "ai-translated"
     },
     "source_text": "Logout"
+  },
+  "auth.multiDeviceHelpLink": {
+    "enHash": "3b17af5a558973d92dd426843c5e8ee38187d99b08f7b422299476409e5f7930",
+    "deHash": "8e5b088b32fb7def65bd54f1e557d987634dec17f1c8898cdbdeb69f2b50cbc2",
+    "enText": "How using multiple devices works",
+    "deText": "Mehr zu Profilen auf mehreren Geräten"
   },
   "auth.newWalletPassword": {
     "ai_hint": "Label for the new password input field in wallet recovery.",
@@ -645,17 +647,6 @@
       "it": "ai-translated",
       "en": "ai-translated"
     }
-  },
-  "auth.securityLockdown": {
-    "ai_hint": "Title heading in ForkLockOverlay when a fork is detected.",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    },
-    "source_text": "Security Lockdown"
   },
   "auth.seedPhrase": {
     "ai_hint": "Label for the seed phrase input section in RecreateProfile.",
@@ -1643,16 +1634,6 @@
     },
     "ai_hint": "Title header for double-spend conflict resolution view."
   },
-  "conflict.ephemeralUnverifiedHint": {
-    "source_text": "Ephemeral Key / Unverified Local Hint",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
   "conflict.errorPrefix": {
     "source_text": "Error: {{error}}",
     "status": {
@@ -1740,6 +1721,24 @@
       "en": "ai-translated"
     },
     "ai_hint": "Label or status text in double-spend conflict resolver. Contains variables: {{index}}."
+  },
+  "conflict.expert.ephemeralUnverifiedHint": {
+    "enHash": "7c240fec1cce9323200e72545e980bd048b702e1f5225a5b76d4f7fca3c38653",
+    "deHash": "4d279262b84bb2f40a35500e2d8032f96212c45c3e15906780236fde65434f7b",
+    "enText": "Ephemeral Key / Unverified Local Hint",
+    "deText": "Flüchtiger Schlüssel / Unbestätigter lokaler Hinweis"
+  },
+  "conflict.expert.sstProvenIdentity": {
+    "enHash": "eab42b8681e2fc2116e706a63404a0aef1d8008a5019511a7297293f49368937",
+    "deHash": "0e7719f42c677e9b11da1eb62a289416a840bc359c92acb050d8a56893e2f76b",
+    "enText": "SST V4 Cryptographically Proven Identity",
+    "deText": "Kryptografisch bewiesene Identität (SST V4)"
+  },
+  "conflict.expert.unverifiedHintWarning": {
+    "enHash": "45f7f4aa666224b05a924c7bbb71faf8ab3b59bbb866ce499a9baf8d25c1bd02",
+    "deHash": "d261191f3cf0c5961d36b857ffaeedc48978ad909906091bb04d76c56591de03",
+    "enText": "This identity is an unverified local hint from transaction metadata, not mathematically proven by an SST trap.",
+    "deText": "Diese Identität ist ein unbestätigter lokaler Hinweis aus Transaktions-Metadaten und nicht mathematisch durch eine SST-Falle bewiesen."
   },
   "conflict.exportProofBtn": {
     "source_text": "Save Fraud Proof (.hmcproof)",
@@ -1868,6 +1867,18 @@
       "en": "ai-translated"
     },
     "ai_hint": "Label or status text in double-spend conflict resolver."
+  },
+  "conflict.listVictimSummary": {
+    "enHash": "485eb1a6572a633acccef8491e76b5db16deb0ffd4670cb269c6ce423ec4bd66",
+    "deHash": "d7d362de7adc3338ffb7bdc0a79222e6302f42ae918bc2a34134ef173314b948",
+    "enText": "A received voucher was spent more than once. Open details to see what to do.",
+    "deText": "Ein empfangener Gutschein wurde mehrfach ausgegeben. Öffne die Details für die nächsten Schritte."
+  },
+  "conflict.listWitnessSummary": {
+    "enHash": "b3dc1cb2baf1f35e7600a68872bdb7b7ea0b9df52731ae7c45dfa58e03bb29a7",
+    "deHash": "8f36f0f8f0d553dface8e4a42309e4dc70486d2a98c03c3fd4660d0609a0f377",
+    "enText": "Network notice about another person’s voucher — your own balance is unaffected.",
+    "deText": "Hinweis aus dem Netzwerk über einen fremden Gutschein – dein eigenes Guthaben ist nicht betroffen."
   },
   "conflict.loadErrorTitle": {
     "source_text": "Conflict Load Failure",
@@ -2108,6 +2119,60 @@
     },
     "ai_hint": "Title header for double-spend conflict resolution view."
   },
+  "conflict.qVoucherValidTitle": {
+    "enHash": "840775561158d2ac0c914c84eca32b1cc5c22266c78e03d4deb4e3be69ca937b",
+    "deHash": "1d066720ea7c9b73fe741e6cd4ab031294cb249162be37c45b7a3471d6337cf4",
+    "enText": "Is my voucher still valid?",
+    "deText": "Ist mein Gutschein noch gültig?"
+  },
+  "conflict.qVoucherValidVictim": {
+    "enHash": "c8f78138cb0e93886ac72580767553dfb9c1e4041234e01356843974f7e6d79e",
+    "deHash": "f989b05885c9925e0b26a56a5ce2633dcbaff0099b1b20f962d6b11b00f1b285",
+    "enText": "This voucher stays paused for your protection while the conflict is open, so it cannot be passed on yet.",
+    "deText": "Dieser Gutschein bleibt zu deinem Schutz pausiert, solange der Konflikt offen ist, und kann vorerst nicht weitergegeben werden."
+  },
+  "conflict.qVoucherValidWitness": {
+    "enHash": "c712ac54bebd118404828df0fa70f4ddab488b8bd93a570df681dd6f7a8f511a",
+    "deHash": "00078cde30923fad1d7f9c1f4b4264e733a7bf3b09750a8e11cb7d71c6fd1d9a",
+    "enText": "Yes, your own vouchers are completely unaffected.",
+    "deText": "Ja, deine eigenen Gutscheine bleiben davon vollständig unberührt."
+  },
+  "conflict.qWhatHappenedTitle": {
+    "enHash": "c4dc542b511fd74f401665a02dd5a20cf41cebd16daa6a7f78ddfbcce88239fe",
+    "deHash": "7f42100ae531f04855cd191511a58aa2545e119b723f834c358891f8300759a7",
+    "enText": "What happened?",
+    "deText": "Was ist passiert?"
+  },
+  "conflict.qWhatHappenedVictim": {
+    "enHash": "09e628ea275f5b4c603629398e93e8a5f225d785ff7f925b60600946f13816b2",
+    "deHash": "94cb5f01e44aaa6ad885cb4a782ed284b455b2c6cd36f20af0dfd6d492b83c5b",
+    "enText": "The spender passed the same voucher to two different people.",
+    "deText": "Die zahlende Person hat denselben Gutschein an zwei verschiedene Empfänger weitergegeben."
+  },
+  "conflict.qWhatHappenedWitness": {
+    "enHash": "61fd65c16ab6d11b40b2e474630cf15aab946fb82f5bde91a0436ec63d2bab82",
+    "deHash": "e4efe659bff22b520c81bdbae71de6479811c256821384c2958c7a686aca01d6",
+    "enText": "Contacts in your network recorded a conflicting spend of a third party’s voucher. You were not part of it.",
+    "deText": "Kontakte im Netzwerk haben eine doppelte Ausgabe eines fremden Gutscheins gemeldet. Dein Profil war daran nicht beteiligt."
+  },
+  "conflict.qWhatToDoTitle": {
+    "enHash": "00eeea79a031c9a27a035249640921458205679b2fc049169dbe946541fa317c",
+    "deHash": "e1cbbf0cba1e08d34f13915da50947f0d36c8f106e2a17f962e6dfe7a233fdf2",
+    "enText": "What should I do?",
+    "deText": "Was soll ich tun?"
+  },
+  "conflict.qWhatToDoVictim": {
+    "enHash": "0730f30ab5685e3fa39e8afb44f5225c1d17ae35adef6dcf6da7a781d201a005",
+    "deHash": "0daea155701e51a44c5a3579e8b2750e94b3a6844d4f1ec417ca303542289bc8",
+    "enText": "Clarify the issue directly with the person who sent it, remove your trust if appropriate, and export a proof if needed.",
+    "deText": "Sprich die Person direkt auf die Klärung an, entziehe bei Bedarf dein Vertrauen im Adressbuch und exportiere bei Wunsch einen Konfliktnachweis."
+  },
+  "conflict.qWhatToDoWitness": {
+    "enHash": "54a784ae6a31349f4b20c76894ca5c30b0e21c8327cda7fce53f00b1c5b75a1c",
+    "deHash": "c7ccb595167a308246c44e21d8b50815b711e49764e7305c73a9a2789aafa796",
+    "enText": "You do not need to do anything. This report simply helps evaluate future contacts reliably.",
+    "deText": "Du musst nichts tun. Der Hinweis hilft lediglich dabei, Kontakte im Netzwerk verlässlicher einzuschätzen."
+  },
   "conflict.reportDateLabel": {
     "source_text": "Report Date:",
     "status": {
@@ -2269,16 +2334,6 @@
     },
     "ai_hint": "Label or status text in double-spend conflict resolver."
   },
-  "conflict.sstProvenIdentity": {
-    "source_text": "SST V4 Cryptographically Proven Identity",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
   "conflict.statusLocallySettled": {
     "source_text": "Resolved (Local Override)",
     "status": {
@@ -2356,16 +2411,6 @@
     },
     "ai_hint": "Label or status text in double-spend conflict resolver."
   },
-  "conflict.unverifiedHintWarning": {
-    "source_text": "This identity is an unverified local hint from transaction metadata, not mathematically proven by an SST trap.",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
   "conflict.verifySecurityDescription": {
     "source_text": "Please enter your wallet password to authorize this local conflict override.",
     "status": {
@@ -2399,16 +2444,11 @@
     },
     "ai_hint": "Title header for double-spend conflict resolution view."
   },
-  "conflict.victimConfirmedSolution": {
-    "source_text": "Victim {{victim}} confirmed compensation was received.",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    },
-    "ai_hint": "Label or status text in double-spend conflict resolver. Contains variables: {{victim}}."
+  "conflict.victimConfirmedByLabel": {
+    "enHash": "6f9225de97b7a9951d5b8a59a06cb628f47afd0e4adc825c4b7fff67bbeaf519",
+    "deHash": "33841e80f6881ed5c43e85efa7830491f01b27bc6d5387157b4de6c5a693291b",
+    "enText": "Compensation confirmed by:",
+    "deText": "Kompensation bestätigt von:"
   },
   "conflict.victimConflictsHeader": {
     "source_text": "Your Wallet Affected ({{count}})",
@@ -5077,6 +5117,192 @@
       "en": "ai-translated"
     }
   },
+  "help.benutzerId.deepDive": {
+    "enHash": "c30fe6a020a8a5c4891bed658a44a9669434ff9cd287ca41f133812afd7cca57",
+    "deHash": "1b3912143c4f2e2b2f1e012197910208c608aaf6151d0c7a950594a7b9b48e8b",
+    "enText": "Decentralized Key Format (`did:key`):\n\n• Technically derived from an Ed25519 asymmetric public key encoded as a `did:key` multicodec identifier.\n• Cryptographic signatures prove authorship locally on any device without contacting an identity server.",
+    "deText": "Dezentrales Schlüsselformat (`did:key`):\n\n• Deine Benutzer-ID basiert technisch auf einem öffentlichen Ed25519-Schlüssel im `did:key`-Multicodec-Format.\n• Signaturen lassen sich auf jedem Gerät offline prüfen, ohne einen Identitätsserver zu fragen."
+  },
+  "help.benutzerId.long": {
+    "enHash": "4a6141994cbdfe68d4e69fb64043ce000c8fbd59d5cb16dc1a9650a6de05988d",
+    "deHash": "0b3036c2c9aee2ca5f45fcc7e11c43ff5f51d521576c494a3edfc292ebae533e",
+    "enText": "**What is this?**\nYour User ID is your unique identity key in Human Money.\n\n**Why does it matter?**\nContacts can verify reliably that a voucher or signature truly comes from you, letting you build real reputation over time.\n\n**No central account needed:**\nYour ID works without registering with any company or server.",
+    "deText": "**Was ist das?**\nDeine Benutzer-ID ist deine persönliche, fälschungssichere Kennung in Human Money.\n\n**Warum ist sie wichtig?**\nAnhand deiner Benutzer-ID erkennen Kontakte zweifelsfrei, dass ein Gutschein oder eine Unterschrift wirklich von dir stammt. So baust du dir über die Zeit verlässliches Vertrauen auf.\n\n**Ohne zentrales Konto:**\nDeine Kennung funktioniert komplett ohne Registrierung bei einer Firma oder Bank."
+  },
+  "help.conflicts.deepDive": {
+    "enHash": "c6af541086800c1f02f6d0679aaf4b57c67f6d0e556a250344c6a899051eeee2",
+    "deHash": "fd21b7ee731d1072fc82948e2bdb0c8a90071aa106b19b0cb3df6923ac755ffc",
+    "enText": "Conflict Proofs (`.hmcproof`) & SST V4 Evidence:\n\n• Contains both conflicting transaction records, deterministic fork point hash (`fork_point_prev_hash`), and optional cryptographic SST V4 identity attribution.\n• Supports importing/exporting `.hmcproof` files and recording an audited local settlement override.",
+    "deText": "Konfliktnachweise (`.hmcproof`) & SST-V4-Belege:\n\n• Enthält beide widersprüchlichen Transaktionen, den gemeinsamen Verzweigungspunkt (`fork_point_prev_hash`) und gegebenenfalls den kryptografischen SST-V4-Identitätsbeweis.\n• Ermöglicht im Expertenbereich den Export von Beweisdateien sowie die lokale Streit-Überschreibung."
+  },
+  "help.conflicts.long": {
+    "enHash": "2c4cd83367226ff1cc71f558f53c655ed02e36738fcc56910c2ae76bbceb782a",
+    "deHash": "58694e95e323d020dee79cdbca6068252ab38080198f57416a14c2d305173ee3",
+    "enText": "**What happened?**\nA conflict appears when two conflicting transfers exist for the same voucher.\n\n**Is my voucher still valid?**\nIf your own voucher was affected, it stays safely paused until settled; otherwise your vouchers stay unaffected.\n\n**What should I do?**\nOpen the report to review who was involved, remove trust from unreliable contacts, or record a private settlement once clarified directly.",
+    "deText": "**Was ist passiert?**\nEin Konflikt entsteht, wenn zu demselben Gutschein zwei sich widersprechende Zahlungen auftauchen.\n\n**Ist mein Gutschein noch gültig?**\nIst einer deiner eigenen Gutscheine betroffen, bleibt er vorerst pausiert. Bei reinen Netzwerkhinweisen bleiben alle deine Gutscheine unberührt.\n\n**Was soll ich tun?**\nÖffne den Eintrag in Ruhe, entziehe bei Bedarf einer unzuverlässigen Person dein Vertrauen oder sprich eine direkte Klärung mit der Gegenpartei ab."
+  },
+  "help.connection.deepDive": {
+    "enHash": "9402d4dd7ecab40636659202e644a33c9feb4145b739eca209f308686081b489",
+    "deHash": "51376cd85ec178adb414c7800751de9b12a15d6b262973f4497427d91a7d1d4a",
+    "enText": "Zero-Knowledge Encrypted Drop Architecture:\n\n• Communication uses bucket-padded XChaCha20-Poly1305 encrypted blobs stored under opaque slots.\n• Polls leverage HTTP ETag / `If-None-Match` conditional checks and staggered class cooldowns to minimize bandwidth and hide metadata.",
+    "deText": "Zero-Knowledge-Sync-Architektur:\n\n• Pakete werden nach fester Größenpolsterung (Bucket Padding) mit XChaCha20-Poly1305 verschlüsselt und in blinden Postfach-Slots abgelegt.\n• Abrufe nutzen ETag-Prüfungen (`If-None-Match`) und gestaffelte Intervalle für minimalen Datenverkehr."
+  },
+  "help.connection.long": {
+    "enHash": "2cf9ef5cb8ac19361edcff289d02877857e7bdedce4da04e70a3da2ce9775905",
+    "deHash": "848e0a01579b4c4dcf371ae94c08be51a8ad9b6bac5f2c499c53ddc32a83a5ab",
+    "enText": "**What is a sync helper?**\nWhen you and a friend aren’t online at the same moment, your app places encrypted packages in an exchange box so your friend can pick them up later.\n\n**Total privacy:**\nThe server operator sees neither who is talking to whom nor what vouchers or messages are inside — everything stays locked end-to-end.",
+    "deText": "**Was ist das?**\nEin Sync-Helfer ist ein verschlüsselter Vermittlungspunkt, wenn du und deine Kontakte nicht gleichzeitig online seid. Deine App hinterlegt dort geschützte Pakete, die dein Gegenüber später abholt.\n\n**Strenge Privatsphäre:**\nDer Betreiber des Servers sieht weder Inhalte noch Beträge oder Empfänger – für ihn sind alle Pakete komplett unlesbar."
+  },
+  "help.deviceBinding.deepDive": {
+    "enHash": "8264e349eb9457c0293520007140f76d6c491585d099fae6e601600165a46a03",
+    "deHash": "8841aae4a0937e090c636bb2aa5826e9ce640998f196440837dbc51643a34381",
+    "enText": "Hardware Keystore & Enclave Wrapping:\n\n• Derives a hardware-bound wrapping key from platform keystore / TPM / enclave attributes.\n• Always keep an up-to-date backup or recovery words, because motherboard failure invalidates hardware-bound secrets.",
+    "deText": "Hardware-Keystore & Schlüsselverpackung:\n\n• Verbindet die lokale Profilverschlüsselung mit Hardwaresicherheitsfunktionen (TPM / OS-Keystore).\n• Bewahre immer eine aktuelle Sicherungsdatei oder deine Notfallwörter auf, da ein Hardware-Defekt die lokale Entschlüsselung verhindert."
+  },
+  "help.deviceBinding.long": {
+    "enHash": "7a95e872e37026f0bf356fb87897f752057b559f46ecbb58aedad741bf8ef566",
+    "deHash": "ee10c62e7bda89b9710c288cc0cf83f90aeee44bc5f387aa0558d32cfc2d64e7",
+    "enText": "**What is this?**\nDevice binding locks your local profile file to this exact computer or phone so a copied file cannot be opened elsewhere.",
+    "deText": "**Was ist das?**\nDie Geräte-Bindung verknüpft dein lokales Profil mit genau diesem Gerät – eine gestohlene Kopie der Datei lässt sich anderswo nicht entschlüsseln."
+  },
+  "help.deviceLoss.long": {
+    "enHash": "447a08e31789f39ff906a9ce4b10562a2855ccabcf3158da9c8bc877e7af140a",
+    "deHash": "e2cd5354f213027636614c5ca9101a2c577e05ad9a3c204c3713e79f030f2473",
+    "enText": "**Step by step:**\n1. Choose **Restore** on the welcome screen of your new device.\n2. Load your latest backup file or enter your 12 recovery words (or assemble shares from your recovery friends).\n3. Confirm your password and review your vouchers and contacts.\n\nIf you had enabled automatic sync sealing earlier, the newest state syncs automatically.",
+    "deText": "**Schritt für Schritt:**\n1. Wähle auf dem neuen Gerät im Startbildschirm **Wiederherstellen**.\n2. Öffne deine letzte Sicherungsdatei oder gib deine 12 Notfallwörter ein (alternativ über die Freundeshilfe).\n3. Lege ein neues Geräte-Passwort fest.\n\n**Tipp:** Sobald deine alten Gutscheine geladen sind, solltest du veraltete Kopien auf Altgeräten nicht weiter benutzen."
+  },
+  "help.deviceLoss.short": {
+    "enHash": "4d208df4673bec926693a1ffe472a8098e78e27463ad31f18e53561682f1f294",
+    "deHash": "2bdaf0d17409b97f27eee7ca72eae9c4ef99fd84cb70f1c5a7c796e4dab92951",
+    "enText": "Install the app on your new device and restore your profile using your backup or recovery method.",
+    "deText": "Installiere die App auf dem neuen Gerät und stelle dein Profil mit Sicherungsdatei, Notfallzettel oder Freundeshilfe wieder her."
+  },
+  "help.deviceLoss.title": {
+    "enHash": "07c06b48160f3f528a7be76f4b7e2a0eaa27489aee61827dcfb87b52ffd83b11",
+    "deHash": "98f0af2daa30968c2e9311e72dd8045e3d64ecdbc272db783a7b3a99e8d66e32",
+    "enText": "Lost or Broken Device — What Now?",
+    "deText": "Gerät verloren oder defekt – was tun?"
+  },
+  "help.emergencySheet.long": {
+    "enHash": "4a6396a9f92533ad20ac1bff3c03ba3f9e45b3e50cf6dc82e4b9c85304b54f70",
+    "deHash": "db336c7968ed42c481c9a1fa10c8ca34f15c7fd09f9015782fd506a8f5b819ea",
+    "enText": "**How to do it right:**\n• Use pen and sturdy paper — never take a photo or screenshot.\n• Check spelling and numbering from 1 to 12 carefully.\n• Store it somewhere safe from fire, water, and curious eyes.\n\nAnyone who finds those words can take over your identity — treat the sheet like spare keys and a deed combined.",
+    "deText": "**So bleibt der Notfallzettel zuverlässig:**\n• Mit Stift auf Papier schreiben – **niemals** abfotografieren oder in ungesicherten Notiz-Apps speichern.\n• Reihenfolge von 1 bis 12 sowie exakte Schreibweise zweimal kontrollieren.\n• Trocken, sicher und vor neugierigen Blicken geschützt aufbewahren.\n\n**Wichtig:** Wer diese 12 Wörter kennt, hat vollen Zugang zu deiner Identität."
+  },
+  "help.emergencySheet.short": {
+    "enHash": "f556bf1bab11b4c997a48cb8b919934177bd4051b178da3e49ed0c9dae1880d8",
+    "deHash": "953e7c9ee7f936297465ba698f071ce5b99627804400ecceaec74bc4eff84c97",
+    "enText": "Write your 12 recovery words on paper in exact order and keep them offline in a safe spot.",
+    "deText": "Schreibe deine 12 Notfallwörter in exakter Reihenfolge auf Papier auf und bewahre den Zettel offline sicher auf."
+  },
+  "help.emergencySheet.title": {
+    "enHash": "12adcdf3d24d042a896ea8e193cb3c1d0cbd4b97ea3f90cc17f852e1cf3ca81a",
+    "deHash": "d881f8b6751a6a03640eec141327064ef34109ec8b4eb3fb476b93a4e09d0026",
+    "enText": "Storing Your Emergency Sheet Safely",
+    "deText": "Notfallzettel richtig aufbewahren"
+  },
+  "help.faqCanIBeCheated.long": {
+    "enHash": "534a427ea0a01dc97719de5ca9bfb4d7e0066bfdf0e10e61c80a6822e8d06133",
+    "deHash": "2ed7e025f8dc6c577a96793f3a425d5b4f63deec74272ce721c607a120fd7bb8",
+    "enText": "**Double-layer protection:**\n1. **Before accepting:** Look at the trust indicator and any voucher guarantors — avoid strangers offline when high amounts are involved.\n2. **Online check & automatic proof:** Online payments block duplicate spends at checkout; offline double spends reveal the offender’s identity and strip their network reputation upon sync.",
+    "deText": "**Doppelter Schutz:**\n1. **Vor dem Annehmen:** Schau auf die Vertrauensanzeige und eventuelle Bürgen auf dem Gutschein.\n2. **Technischer Schutz:** Bei Online-Zahlungen werden Doppelausgaben sofort blockiert. Bei Offline-Zahlungen liefert ein Betrugsversuch später automatisch einen mathematischen Beweis gegen den Verursacher."
+  },
+  "help.faqCanIBeCheated.short": {
+    "enHash": "fdd0507556b0ed42f90e9b9a0a7d7fc4180a4cafe276a92c5794c94d30b5fc0b",
+    "deHash": "4d189350bff25b66d7710bf36f73ea07a0d51112c5b33146078dc6301e5e3ea4",
+    "enText": "Digital copies cannot be hidden for long, and community trust helps you spot reliable people early.",
+    "deText": "Doppelte digitale Ausgaben fliegen mathematisch auf, und dein Vertrauensnetz hilft dir vorher beim Einschätzen."
+  },
+  "help.faqCanIBeCheated.title": {
+    "enHash": "9b1747c0f1062ef440965d9dc185f781bfc141a969b6930ad1decf6e0da02957",
+    "deHash": "a2e4565edb745f566ef55d90350b05c5b1c9df0085d606992c3d5809ff7424b7",
+    "enText": "Can Someone Cheat Me?",
+    "deText": "Kann mich jemand betrügen?"
+  },
+  "help.faqIsItCrypto.long": {
+    "enHash": "cd4d1da0ac1f47cd7e21bda8887cdda3102a5c97ad850fb8def16dd49a6abbe7",
+    "deHash": "22ebb4a32003ddc74bd0b6c81751442ee74a7785a494376b5b033e3bbfe0708a",
+    "enText": "**Human promises instead of coins:**\nHuman Money uses cryptography only like a tamper-proof digital signature — similar to signing a paper voucher.\n\n• No speculative tokens or energy-wasting mining.\n• Every voucher is backed directly by a real person’s promise of time, skills, or goods.\n• Your payments stay strictly private between the people involved.",
+    "deText": "**Menschliche Versprechen statt Spekulations-Coins:**\nHuman Money nutzt Kryptografie nur wie eine fälschungssichere digitale Unterschrift – nicht als Spekulationsanlage.\n\n• Keine Blockchain und kein Energie fressendes Schürfen.\n• Hinter jedem Gutschein steht ein echtes Versprechen über Zeit, Arbeit oder Waren.\n• Deine Zahlungen bleiben privat zwischen dir und deinem Gegenüber."
+  },
+  "help.faqIsItCrypto.short": {
+    "enHash": "80b1685c2be52a454080e9d2a546d368b11a8fc481eac9c46de6608054a73018",
+    "deHash": "3d77a14c6450b93206fb5c6228a8a6200bd9bd874b9bd57ecad17e232153bb20",
+    "enText": "No. There is no blockchain, no mining, no speculation, and no global ledger.",
+    "deText": "Nein. Es gibt keine Blockchain, kein Schürfen, keine Spekulationskurse und kein öffentliches Kontobuch."
+  },
+  "help.faqIsItCrypto.title": {
+    "enHash": "87da26bd07a671a3c44ed23ab12e55f5f30270f15b61b79272b0303c941aee10",
+    "deHash": "12d9f6cfdeb5e5dfb433b80e2ea912634556a9021db5d1d9cbc7a728550bda05",
+    "enText": "Is This Bitcoin or Cryptocurrency?",
+    "deText": "Ist das Bitcoin oder Krypto?"
+  },
+  "help.faqSyncDown.long": {
+    "enHash": "e644ce539426a3d6568568ef60045d62afc2248ede82a58ea2f7798d07ccff18",
+    "deHash": "da16a71d6b5f2394fdee1dd757b2720b35015e07f20f2063052870560a119bbc",
+    "enText": "**Nothing is lost:**\nA sync helper only forwards encrypted envelopes when people aren’t online together. Your actual vouchers live exclusively on your own device.\n\nEven if a sync server shuts down completely, you keep 100% of your vouchers and can pay face-to-face or pick another server anytime.",
+    "deText": "**Du verlierst nichts:**\nEin Sync-Helfer ist nur ein verschlüsselter Briefkasten für den Austausch aus der Ferne. Deine Gutscheine liegen ausschließlich lokal auf deinem Gerät.\n\nFällt ein Dienst aus, bezahlst du einfach direkt vor Ort per QR-Code oder Datei – oder wechselst in den Einstellungen auf einen anderen Sync-Dienst."
+  },
+  "help.faqSyncDown.short": {
+    "enHash": "80f7dbec748072c1b2c33722b133164165aeffb05d25a8e26fe46841995f57ff",
+    "deHash": "9798ad5bc877bcf71362d452d34c2b56e81cb43ea8fc27c828b50f7c1207bad9",
+    "enText": "Your vouchers remain safe on your device and you can always send or receive directly via QR or file.",
+    "deText": "Deine Gutscheine bleiben sicher auf deinem Gerät und du kannst jederzeit per QR-Code oder Datei zahlen."
+  },
+  "help.faqSyncDown.title": {
+    "enHash": "b888d29313d8260c5ede75d894d99fa3db2764df01fda18cc738f64fdffd738f",
+    "deHash": "2a3a074e1ac97cbf7158e33d5c8629dd27019c216211239cb5e721e0182d9e97",
+    "enText": "What If My Sync Helper Is Offline?",
+    "deText": "Was passiert, wenn mein Sync-Helfer offline ist?"
+  },
+  "help.faqWhatDoesItCost.long": {
+    "enHash": "537c9c1e93da1c5e8e86a5af5eac28892ceabd5f138d94f933d042a2af0192fd",
+    "deHash": "a9574f1562765703dbe9d247323669e1215022700e697fcd5fbe6a8e67876187",
+    "enText": "**Zero network fees:**\nSending, receiving, and creating vouchers costs nothing inside the app.\n\n**Optional sync service:**\nIf you use an external sync helper to exchange vouchers when friends are offline, its operator sets whether that server is free, community-run, or paid.",
+    "deText": "**Keine Gebühren pro Zahlung:**\nDas Ausstellen, Senden und Empfangen von Gutscheinen kostet in der App nichts – es gibt keine Transaktionsgebühren.\n\n**Optionaler Sync-Helfer:**\nWenn du für den Austausch über Entfernungen einen eigenen oder fremden Sync-Dienst nutzt, hängt ein möglicher Kostenbeitrag allein vom jeweiligen Betreiber oder deiner Gemeinschaft ab."
+  },
+  "help.faqWhatDoesItCost.short": {
+    "enHash": "f36b9898ce5e05b1021428ec6d8a2fbd35f47f99abf3e2177e47c6eb93dbe8bc",
+    "deHash": "4f334b36e74a74ab587483b2c20a85ce397878cc5397d64c858372020bc934cb",
+    "enText": "The app is free open-source software with zero transaction fees.",
+    "deText": "Die App ist kostenlose Open-Source-Software ohne Überweisungs- oder Grundgebühren."
+  },
+  "help.faqWhatDoesItCost.title": {
+    "enHash": "df89b79600d9ee8b848d9d2dc7d63b0614b582017325770a6a8ff6aa04784744",
+    "deHash": "022a8a3ca400b0b95f633700f6efc2fc05269a87c98984d7f2101ae5595d1ada",
+    "enText": "What Does Human Money Cost?",
+    "deText": "Was kostet Human Money?"
+  },
+  "help.guarantorVsRecommendation.long": {
+    "enHash": "98be9a37bd2d8af36f4af30b430c0ba5104255220265bafb079fd36b377c86e6",
+    "deHash": "6c9c85a67ac7786b665b04ebb1f149e111a701055483fc1edbf2b2237d180cd1",
+    "enText": "**Two completely different roles:**\n• **Voucher Guarantor:** Signs directly on a specific voucher to stand behind its value if the issuer falls short.\n• **Address-Book Trust Rating:** Reflects how well you personally know a contact. There is never any financial liability for other people’s vouchers just because you marked a friend as trusted.",
+    "deText": "**Zwei klar getrennte Dinge:**\n• **Bürge auf einem Gutschein:** Unterschreibt verbindlich auf genau diesem Gutschein und steht dafür ein, falls der Aussteller ausfällt.\n• **Vertrauensstufe im Adressbuch:** Ist eine rein persönliche Empfehlung („Ich kenne und schätze diese Person“). Durch deine Kontaktstufe übernimmst du niemals automatisch Zahlungspflichten für fremde Gutscheine."
+  },
+  "help.guarantorVsRecommendation.short": {
+    "enHash": "af5cf2deddadfe185c34afd3b287b45e887f34590bbabcd8b1da7d78256515b1",
+    "deHash": "e2a81e44b5f6e7a6ddb92f33f9a04d0a2ea477adc027529387c76ea3e871d303",
+    "enText": "Only voucher guarantors back a voucher’s value; address-book trust levels only share reputation hints.",
+    "deText": "Nur Bürgen direkt auf einem Gutschein stehen für dessen Wert ein; Kontaktstufen geben lediglich Empfehlungen weiter."
+  },
+  "help.guarantorVsRecommendation.title": {
+    "enHash": "f221997ed91c235174a89fca7099d3bb19745d075f7aee342355a898356e3c30",
+    "deHash": "a58cb5f74727ba75699b644bf8001901e6609cf15d5511aebfa2b017e0b6e474",
+    "enText": "Guarantor vs. Contact Recommendation",
+    "deText": "Bürge vs. Kontakt-Empfehlung"
+  },
+  "help.handover.deepDive": {
+    "enHash": "f67f21cde755b703110dd2f7b49614be295cb9b900283c2acaf46fe7273af00c",
+    "deHash": "61d989e70a089faab5a1ff357f38f194411719464037a2b83b2612cbf8c3d748",
+    "enText": "Epoch Transfer & Active Lock Coordination:\n\n• Increments the profile’s active epoch counter (`targetEpoch`) when reclaimed or transferred.\n• Previous devices receiving the higher epoch enter read-only handover lock (`ForkLockOverlay`) until explicitly reclaimed.",
+    "deText": "Epochen-Übertragung & aktive Sperre:\n\n• Erhöht beim Wechsel den aktiven Epochen-Zähler (`targetEpoch`) im Profil-Siegel.\n• Abgelöste Geräte mit veralteter Epoche wechseln automatisch in den geschützten Lesemodus."
+  },
+  "help.handover.long": {
+    "enHash": "f40f5a19de0e3c6b38977da4ac680e44d8cb41ed33a5e1ad309373a23ecb9ee2",
+    "deHash": "6533a12b7e0aaa96b793f906929e6e81925a158c8cb6977a7715a6a3fb1256f5",
+    "enText": "**What is this?**\nWhen moving your profile between devices without subaccounts, handover pauses spending on the old device so you cannot spend the same voucher twice by accident.",
+    "deText": "**Was ist das?**\nWenn du zwischen zwei Geräten wechselst, legt die Übergabe das bisherige Gerät für Zahlungen schlafen – so entsteht keine versehentliche Doppelausgabe."
+  },
   "help.l2Protection.deepDive": {
     "source_text": "Collision Lock Registry Architecture:\n\n• Deterministic Sharding: Rendezvous-Hashing (HRW) maps voucher roots to 20 candidate nodes.\n• Quorum Consensus: 14 out of 20 nodes must confirm the atomic lock transition in under 800 ms.\n• Cryptographic Penalty: Attempting a double-spend produces mathematical collision proof that permanently bans the offending node or key from the network.\n• Privacy Preservation: Because locks are blind SHA-256/BLAKE3 digests, relay operators cannot reconstruct payment graphs or user balances.",
     "ai_hint": "Technical deep dive on Layer-2 collision lock registry architecture",
@@ -5121,16 +5347,263 @@
       "en": "ai-translated"
     }
   },
-  "help.wotSharing.deepDive": {
-    "source_text": "Selective Disclosure & Cryptographic Routing Details:\n\n• 128-Bit CSPRNG Salting: Each trust claim has a fresh 128-bit salt to prevent correlation across peer exchanges.\n• Distance Redaction: Ratings beyond your configured reach are cryptographically redacted before forwarding, preserving the issuer's Ed25519 signature.\n• Transport Neutrality: Trust packages sync seamlessly via QR, BLE, NFC, USB, payment piggybacking, or zero-knowledge relay servers.\n• Reciprocal Routing: Sync peers only receive updates proportional to their mutual trust and shared degrees.",
-    "ai_hint": "Technical deep dive on SD-JWT selective disclosure and reciprocal routing",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
+  "help.mnemonic.deepDive": {
+    "enHash": "1b0f154bf484de6f8ffdef5f66d15a0b8bae4b67936a321f80fd48c30e9e7fb5",
+    "deHash": "49e44db5611976fcc3a4e6996c051256c08756be82565f3b6adf13f5e3f89b45",
+    "enText": "BIP39 Seed Derivation:\n\n• The 12 (or 24) words encode checksummed entropy according to the standard BIP39 wordlist.\n• Deterministic derivation produces your master Ed25519 identity key and profile encryption root keys.",
+    "deText": "BIP39-Schlüsselableitung:\n\n• Die 12 (oder 24) Wörter kodieren eine geprüfte Entropie nach dem BIP39-Standard.\n• Daraus leitet dein Gerät deterministisch deine Ed25519-Identität und die Verschlüsselungsschlüssel für Sicherungen ab."
+  },
+  "help.multiDevice.long": {
+    "enHash": "f08e6b532bb39f4491fe00b0dffce931d120ba6a1d83b58a3e8b4647dc505aa3",
+    "deHash": "8ddc928dfbd8b2076d1c0670f6f3a5272850682e31df67f781f7b44785e8f46e",
+    "enText": "**Why coordination matters:**\nEvery payment creates a sequential signature chain. If two devices spend simultaneously without coordination, they conflict.\n\n**Your two safe options:**\n• **Switching back and forth (e.g., phone and laptop):** Use **Device Handover** so only one device holds the active spending right.\n• **Paying from both at the same time:** Give each device its own **Subaccount prefix** in Expert mode.",
+    "deText": "**Warum Abstimmung wichtig ist:**\nJede Zahlung knüpft eindeutig an die vorige an. Wenn zwei Geräte unkoordiniert gleichzeitig denselben Stand weiterschreiben, entsteht ein Konflikt.\n\n**Zwei sichere Wege:**\n• **Abwechselnd nutzen (z. B. Handy & Laptop):** Nutze die **Geräte-Übergabe**, damit immer nur ein Gerät aktiv zahlt.\n• **Gleichzeitig mit beiden Geräten zahlen:** Vergib jedem Gerät ein eigenes **Unterkonto** im Erweiterten Modus."
+  },
+  "help.multiDevice.short": {
+    "enHash": "7c05177420d26b6e6beef767ec9f7482e59a24257a5698054ca1397e402bb457",
+    "deHash": "9400156c275cb694c45ce2abcc2f5a486a6e47fa3b9d908b2bb4361aaa6a18c8",
+    "enText": "Use either Device Handover for alternating devices or Subaccounts for parallel spending.",
+    "deText": "Nutze entweder die Geräte-Übergabe für abwechselndes Arbeiten oder Unterkonten für paralleles Bezahlen."
+  },
+  "help.multiDevice.title": {
+    "enHash": "45e48329f2354fde6517fb704fae164cc1c62666b46195cc6f1ab4f2e5e52e47",
+    "deHash": "3b73d44d0338124191b50d789c0f441b818fa33da049dd58e2fd329f7eeebbb9",
+    "enText": "Using Your Profile on Multiple Devices",
+    "deText": "Profil auf mehreren Geräten nutzen"
+  },
+  "help.offlineProtection.deepDive": {
+    "enHash": "e2b7d0c58118de9c2626bfc69dd227df9a2f70707b296fc89a340e7700c9bd1a",
+    "deHash": "b04541246811383a7279cecff81b01497cea63d60c5ca116a42ff6daf745df29",
+    "enText": "Shared-Signature Traps (SST V4):\n\n• Offline spend signatures deterministically share algebraic structure bound to the same voucher step.\n• Two conflicting sibling spends solve the trap equation, exposing the offender’s `did:key` cryptographic identity link without requiring any central ledger.",
+    "deText": "Shared-Signature Traps (SST V4):\n\n• Jede Offline-Transaktion nutzt eine kryptografisch an diesen Schritt gebundene Teil-Signatur.\n• Zwei widersprüchliche Ausgaben desselben Schritts lösen mathematisch die Signatur-Falle und legen die echte `did:key`-Identität offen."
+  },
+  "help.offlineProtection.long": {
+    "enHash": "c56b979bc1a458ca42d03f3264be9c7924f8c213367038594e036e432661863c",
+    "deHash": "8447d15566e726361ac2dc9f8b359f1082592840edad802e1cba24fa43b2b24c",
+    "enText": "**What is this?**\nYou can pay and accept vouchers anytime without internet — there is no central server checking beforehand.\n\n**How honesty stays protected:**\nIf someone gives the exact same voucher to two different people offline, both receipts fit together like two halves of a puzzle when either person goes online next.\n\n**Clear consequence:**\nThe offender is identified automatically and loses trust across their contacts.",
+    "deText": "**Was ist das?**\nHuman Money funktioniert jederzeit auch ohne Internetverbindung. Kein zentraler Server muss erst um Erlaubnis gefragt werden.\n\n**Wie Betrug verhindert wird:**\nGibt jemand denselben Gutschein offline zweimal aus, passen die beiden Quittungen später beim nächsten Online-Abgleich wie zwei Puzzleteile zusammen.\n\n**Die Folge:**\nDie verantwortliche Identität wird automatisch offengelegt und verliert das Vertrauen im Netzwerk."
+  },
+  "help.offlineRisk.long": {
+    "enHash": "5dacd4e0603d29495a56885e9a491b876033d24a9c19b0e15917017c25a4cbd3",
+    "deHash": "63fa49d98f866d9fed802ad09329d06fe18b164d54faffdce05ff872e1e6327b",
+    "enText": "**When you are online:**\nPayments check a decentralized lock registry in a fraction of a second so a voucher cannot be spent twice.\n\n**When you are offline:**\nYou can still accept vouchers smoothly without signal. Only accept larger offline amounts from people you know or trust well, because mathematical fraud detection triggers when one of the parties next syncs.",
+    "deText": "**Wenn du online bist:**\nBeim Bezahlen prüft deine App in Sekundenbruchteilen anonyme Sperren im Netzwerk. Eine doppelte Ausgabe wird sofort abgewiesen.\n\n**Wenn du offline bist:**\nDu kannst auch ohne Empfang problemlos Gutscheine annehmen. Größere Beträge solltest du offline am besten nur von vertrauten Menschen annehmen – mögliche Doppelausgaben werden beim nächsten Netzabgleich zwar sicher enttarnt, bleiben bis dahin aber unbemerkt."
+  },
+  "help.offlineRisk.short": {
+    "enHash": "0bd94449d6def00159b86c6bc7427e4df3af31c2d48fcc7bce684e9f3c1d0166",
+    "deHash": "39c4c4d27eb8ae29ba2b58556779e46a42390088ed7fb87f368494203acda2f2",
+    "enText": "Online checks catch duplicate spends before completion; offline payments rely on trust and automatic self-exposure.",
+    "deText": "Mit Internet wird direkt vor Abschluss geprüft; offline schützt dein persönliches Vertrauen plus die automatische Enttarnung danach."
+  },
+  "help.offlineRisk.title": {
+    "enHash": "22b864a9993c382a920a32c78ae58d5fada23f401070f654cd9d3a62900e5ff2",
+    "deHash": "742f34308f571b15cd538bfbb415e8aa15c5d20c2ddf8d76e55a30b715b0d874",
+    "enText": "Offline Payments vs. Online Verification",
+    "deText": "Offline vs. Online prüfen – wie groß ist das Risiko?"
+  },
+  "help.privacy.deepDive": {
+    "enHash": "eceee06f1cb78aad60e428da6f32adbc953b72b2d4ea222b727d0fda65a2e54b",
+    "deHash": "cecea37de9c286fa190c603206c9b880d3706f194fe30428907fe98de4af7f91",
+    "enText": "Stealth Signatures & Selective Self-Exposure:\n\n• Stealth mode uses ephemeral transaction keys and unlinkable commitments so third-party recipients cannot track your identity across earlier hops.\n• If a voucher is spent twice, mathematical trap linking deterministically reveals the real `did:key` identity.",
+    "deText": "Getarnte Signaturen & selektive Enttarnung:\n\n• Im Modus „Getarnt“ entstehen einmalige Transaktionsschlüssel, sodass spätere Empfänger deinen Namen oder deine Benutzer-ID nicht nachverfolgen können.\n• Nur bei einer echten Doppelausgabe deckt die kryptografische Kette deine wahre `did:key`-Kennung automatisch auf."
+  },
+  "help.profileSeal.deepDive": {
+    "enHash": "9df80a0ba4671dbe832054d600784e63951a4d17386fffac2ed1415c89b28765",
+    "deHash": "5ba35ef5f24e3c517f12901498d71ff80b54f914e0c2ac2e98e072a49c87b8a4",
+    "enText": "Encrypted Seal Format & Active Epoch Lock:\n\n• Sealed with XChaCha20-Poly1305 using keys derived from your profile secret.\n• Coordinates active spending epoch metadata alongside sync slot versioning so superseded devices enter soft handover lock cleanly.",
+    "deText": "Verschlüsseltes Siegel-Format & Epochen-Sperre:\n\n• Verschlüsselung mittels XChaCha20-Poly1305 über vom Profilgeheimnis abgeleitete Schlüssel.\n• Koordiniert die aktive Ausgabepoche in den Slot-Metadaten, sodass abgelöste Geräte sauber in die Übergabe-Sperre wechseln."
+  },
+  "help.profileSeal.long": {
+    "enHash": "f21e524624dd7c9e46ebbfd2d4594d8e0eebbcc21299f950dd3d70dcece7085a",
+    "deHash": "a0a636d5567620a8953699473d321f768cfc3495f182b71e38d3f3a73785af95",
+    "enText": "**How it helps:**\nYour app periodically uploads an end-to-end encrypted snapshot of your profile so switching or restoring becomes nearly effortless.\n\nOnly devices holding your secret profile key can open it.",
+    "deText": "**Wofür das gut ist:**\nDeine App legt regelmäßig einen Ende-zu-Ende-verschlüsselten Sicherungsstand ab, damit der Wechsel oder die Wiederherstellung auf einem neuen Gerät nahtlos klappt.\n\nNur Geräte mit deinem geheimen Schlüssel können dieses Profil-Siegel lesen."
+  },
+  "help.profileSeal.short": {
+    "enHash": "4c8aca6a2fb74b42b17d21a46f58ec9bf52db05f1a2362bf7eb412add8d45b11",
+    "deHash": "660fd670c09235a1163b3f79c779c37cf073cb4e6b23056efc21472e713ab275",
+    "enText": "Keeps encrypted profile state synced smoothly to your configured sync space.",
+    "deText": "Hält den verschlüsselten Stand deines Profils über deinen eingerichteten Sync-Helfer aktuell."
+  },
+  "help.profileSeal.title": {
+    "enHash": "83cf8a16b87241fabed935a898aea708ee31092d91a1dc1853f3407697ff0103",
+    "deHash": "558b4093ad53d019165b3383b337e870f37e3e372fb6c09ff89c5707a8361ec1",
+    "enText": "Profile Seal & Automatic Sync",
+    "deText": "Profil-Siegel & automatischer Geräte-Abgleich"
+  },
+  "help.sendReceive.long": {
+    "enHash": "b643f52d88f117674a66226fec258782a1f5ccbc034cb74a4595bb206a3727a0",
+    "deHash": "9a124d6d161f5ad87d4f42a772ee2ba8b62102fc815f881f9f1b75608b937cbc",
+    "enText": "**Face-to-Face:**\nScan a QR code or use a direct nearby transfer when meeting in person.\n\n**Over Distance:**\nSend directly to a known contact when your sync helper is configured, or save a voucher transfer file to share via messenger or email.\n\n**Safety First:**\nEvery handover checks and updates the voucher automatically so amounts and signatures always match.",
+    "deText": "**Vor Ort von Gerät zu Gerät:**\nScanne einen QR-Code oder nutze die Direktübertragung, wenn ihr euch persönlich trefft.\n\n**Aus der Ferne:**\nMit eingerichtetem Sync-Helfer gehen Zahlungen direkt an bekannte Kontakte. Alternativ kannst du eine Übertragungsdatei speichern und per Messenger oder E-Mail senden.\n\n**Automatisch geprüft:**\nBeim Empfangen prüft deine App Betrag, Gültigkeit und Unterschriften sofort selbst."
+  },
+  "help.sendReceive.short": {
+    "enHash": "554c52c6c0db5964950a168e5703bd509d421ca80af3aecf7fca8e7f9a7dc78a",
+    "deHash": "009cc5cff166aeaf91473d88e611c8012378988a7ca66e0535a93adea17cde80",
+    "enText": "Pass vouchers directly face-to-face via QR code, nearby transfer, file, or via a sync helper.",
+    "deText": "Gib Gutscheine direkt von Person zu Person per QR-Code, in der Nähe, als Datei oder über deinen Sync-Helfer weiter."
+  },
+  "help.sendReceive.title": {
+    "enHash": "1b53eefc565379b852e5a6349f8d94bd57494e9dd5efda0609d68f0df166ddac",
+    "deHash": "354ddc251949c8cb360230770b6d0862b79a2ba264da633ae2fd67bce8f968e8",
+    "enText": "Sending & Receiving Vouchers",
+    "deText": "Gutscheine senden & empfangen"
+  },
+  "help.socialRecovery.deepDive": {
+    "enHash": "ce8ee058c6f5683cf3b4d0a390265ad4608fc519ad117d578577eecefc971c51",
+    "deHash": "b4715d278fb07bf58d0fe5cc3c84a050fcef614586b82570cc220dad7a89c337",
+    "enText": "Shamir Secret Sharing (Threshold Cryptography):\n\n• Your root entropy is split over GF(256) via Shamir Secret Sharing with an explicit k-of-n threshold (e.g., 2-of-3 or 3-of-5).\n• Fewer than k shards reveal zero mathematical information about the secret.\n• Each shard is bound to the guardian’s contact key or exported as a protected recovery share.",
+    "deText": "Shamir Secret Sharing (Schwellenwert-Kryptografie):\n\n• Deine Wurzel-Entropie wird über GF(256) mittels Shamir Secret Sharing auf eine feste k-aus-n-Schwelle aufgeteilt (z. B. 2 aus 3).\n• Weniger als k Teile geben mathematisch null Information über den geheimen Schlüssel preis.\n• Jeder Teil ist verschlüsselt an den jeweiligen Vertrauenskontakt gebunden."
+  },
+  "help.socialRecovery.long": {
+    "enHash": "01bfe3c00d51a60c34d8deacc39551cb4210549bd1054a922df345b760b368e2",
+    "deHash": "34ec32d42c363eda946b0ba03b3a3ea0da64b396725e5c527581586e2e3c412b",
+    "enText": "**Safe teamwork without single risk:**\nYour app splits recovery into encrypted shares for trusted contacts (for example, any 2 out of 3 friends).\n\n**Privacy guaranteed:**\nA single friend cannot read anything on their own or spend your vouchers. Only when enough friends return their shares to you on a new device does your key reassemble.",
+    "deText": "**Sicher ohne Einzelrisiko:**\nDeine App teilt den Notfallzugang auf mehrere vertraute Menschen auf – zum Beispiel müssen mindestens **2 von 3** oder **3 von 5** Freunden helfen.\n\n**Niemand kann allein zugreifen:**\nEin einzelner Kontakt sieht keinerlei Daten und kann nichts ausgeben. Erst wenn du im Notfall genug Teile wieder einsammelst, öffnet sich dein Profil."
+  },
+  "help.socialRecovery.short": {
+    "enHash": "e424c7d36831e4b96e17dcf937c54a9893a298c5b2cf30bc4575c53b362aeeec",
+    "deHash": "b11a27ad1e18baf486819251c2c194f2efc9a24099998dee70e88c947a629806",
+    "enText": "Split your recovery key across trusted contacts so a threshold of them can help you restore access.",
+    "deText": "Teile deinen Notschlüssel auf vertraute Kontakte auf, damit sie dir im Ernstfall gemeinsam beim Wiederherstellen helfen können."
+  },
+  "help.socialRecovery.title": {
+    "enHash": "8f83e7d12c1aff921df80f93ceb7b21f96d70e98912db32dcbf4d69cc1c497ee",
+    "deHash": "4c85e213f43a91b07c392d08caff9db9cad67f19418bd21fa0bef6ea0e65d771",
+    "enText": "Recovery With Trusted Friends",
+    "deText": "Wiederherstellung mit Freunden"
+  },
+  "help.subaccount.deepDive": {
+    "enHash": "26e933b354c008460cff2ecc766eeffe2edb2a8ff666b4e776ecd44481eb9d73",
+    "deHash": "edfa96e40521d92268714152ce065bbd41b95a7437664a1e3eca9bf53a10899f",
+    "enText": "Deterministic Prefix & Sequence Isolation:\n\n• Separates local transaction prefixes and counter namespaces while sharing the same identity reputation.\n• Prevents concurrent devices from colliding on identical SST trap commitments or sequence epochs.",
+    "deText": "Präfix- & Sequenz-Trennung:\n\n• Trennt Transaktionspräfixe und Zählerbereiche pro Gerät bei gemeinsamer Benutzer-ID-Reputation.\n• Verhindert Überschneidungen bei gleichzeitigen Zahlungen und schützt vor Epochen-Konflikten."
+  },
+  "help.subaccount.long": {
+    "enHash": "2618068e6248732ee2d48223898b12a15fc731658c63a2a9e7536097f3867e3b",
+    "deHash": "b746c8fd645bf8c6a12d48338760c07d697cb142f2cb4e092423995da0df88c3",
+    "enText": "**What is this?**\nA subaccount gives each of your devices (such as phone and laptop) its own separated transaction prefix so both can spend at the same time safely.",
+    "deText": "**Was ist das?**\nEin Unterkonto vergibt jedem deiner Geräte (z. B. Handy und Laptop) einen eigenen Bereich, sodass beide sicher gleichzeitig Gutscheine ausgeben können."
+  },
+  "help.uiModes.long": {
+    "enHash": "a05f6c1e42e3e90836841d460a3f6ca6eab26fe1c7e440b197ad1f27a4a0adcc",
+    "deHash": "fc7e58fcf54187d4f20a7e4f8e9e457e49ba67660e6d81b51f04060dbfa63ad4",
+    "enText": "**Simple Mode (Default):**\nShows clearly worded actions for sending, receiving, backups, contacts, and marketplace without technical jargon.\n\n**Expert Mode:**\nReveals technical IDs, custom backup options, merchant terminal tools, subaccounts, and diagnostic views.\n\n**Where to switch:**\nUse the toggle in the top header or in Settings whenever you need deeper control.",
+    "deText": "**Einfacher Modus (Standard):**\nZeigt dir alle wichtigen Alltagsfunktionen – Senden, Empfangen, Sicherung, Kontakte und Marktplatz – klar verständlich ohne Fachchinesisch.\n\n**Erweiterter Modus:**\nBlendet zusätzlich technische Kennungen, Kassenfunktionen, Unterkonten, Geräte-Übergaben und Detailprotokolle ein.\n\n**Jederzeit umschaltbar:**\nOben in der Kopfzeile oder in den Einstellungen kannst du jederzeit mit einem Klick wechseln."
+  },
+  "help.uiModes.short": {
+    "enHash": "b3df7221021993b412d883d972708be02a2f811e684c4ba97ec444ac3992a090",
+    "deHash": "d60bab41e1a6507473c5f7524e5c60b8f79be0904c461aacce0dd1f64d7f71c1",
+    "enText": "Switch cleanly between everyday essentials and full technical details at any time.",
+    "deText": "Wechsle jederzeit zwischen der übersichtlichen Alltagsoberfläche und allen technischen Expertenoptionen."
+  },
+  "help.uiModes.title": {
+    "enHash": "db66090b4acac73951426c1ca786f8720227ac0f02dba5e8835c4ab54fe14c6a",
+    "deHash": "5837c65e8c81dd1599decc488795c453d2680857c3634649323972a61eef9982",
+    "enText": "Simple & Expert Mode",
+    "deText": "Einfacher & Erweiterter Modus"
+  },
+  "help.visibilityReach.deepDive": {
+    "enHash": "73d9bd515a34b1b2ea6620172f065a417f38058fd9b439124d1fcdbdca207c21",
+    "deHash": "5fc0cb44b91df5a538c8de5091b6120aa439dfd8eb75a3e0b094b02c4d0ad972",
+    "enText": "Selective Disclosure & Hop-Bounded Cryptographic Routing:\n\n• **Reach levels:** Near = 1 Hop (direct contacts), Medium = 2 Hops, Far = 3 Hops.\n• **128-bit CSPRNG Salts:** Each trust entry uses a fresh 128-bit salt inside a signed SD-JWT trust list so hashes cannot be correlated across sync partners.\n• **Distance Redaction:** Entries exceeding your configured Hop bound are cryptographically redacted before forwarding while keeping your Ed25519 issuer signature intact.\n• **Reciprocal Routing:** Peers share trust classes symmetrically according to mutual trust and configured Hop reach across QR, BLE, NFC, file, payment piggybacking, or zero-knowledge sync slots.",
+    "deText": "Selektive Offenlegung & Hop-begrenztes kryptografisches Routing:\n\n• **Reichweitenstufen:** Nah = 1 Hop (direkte Kontakte), Mittel = 2 Hops, Weit = 3 Hops.\n• **128-Bit CSPRNG-Salze:** Jeder Eintrag in deiner signierten SD-JWT-Vertrauensliste nutzt ein frisches 128-Bit-Salz gegen Korrelation über verschiedene Sync-Partner.\n• **Distanz-Redigierung:** Einträge oberhalb deiner Hop-Grenze werden vor dem Weiterleiten kryptografisch entfernt, ohne die Ed25519-Signatur des Ausstellers zu brechen.\n• **Reziprokes Routing:** Vertrauenspakete werden symmetrisch über QR, BLE, NFC, Dateien, Zahlungen oder Zero-Knowledge-Sync-Dienste abgeglichen."
+  },
+  "help.visibilityReach.long": {
+    "enHash": "8bc1a847f6c131a8ee7a8158e62f8ea5dba656478a12bbdd50496a0270ed52d4",
+    "deHash": "b6189eb6058e0b9d0fc211f27c01c846a751d7e4f43234686ce9cf5d8edbc38d",
+    "enText": "**Three clear presets:**\n• **Near:** Direct contacts only.\n• **Medium (Recommended):** Direct contacts and friends of friends.\n• **Far:** Extended community network.\n\n**Fair exchange & privacy:**\nYou receive broader signals from others in step with what you choose to share. Contacts marked at level 0 (“Confirmed Human”) as well as names and private notes never leave your device.",
+    "deText": "**Drei klare Stufen:**\n• **Nah:** Nur deine direkten Kontakte.\n• **Mittel (Empfohlen):** Deine direkten Kontakte sowie deren Kontakte (Freunde von Freunden).\n• **Weit:** Dein erweitertes Gemeinschaftsumfeld.\n\n**Gegenseitigkeit & Datenschutz:**\nJe weiter du teilst, desto mehr Verknüpfungen können im Gegenzug auch zu dir gelangen. Kontakte auf Stufe 0 („Als Mensch bestätigt“), Klarnamen und private Notizen bleiben immer strikt privat auf deinem Gerät."
+  },
+  "help.visibilityReach.short": {
+    "enHash": "d16cf5fac482a4e30963eec83e99c8ae6f41556629de1d00b48f907071d8fcda",
+    "deHash": "77c965d8c41a38a51293bf0dcb65d381163836eb0efe5e6c8b130984a26740fb",
+    "enText": "Choose Near, Medium, or Far to control how widely your marketplace card and trust signals travel.",
+    "deText": "Mit Nah, Mittel oder Weit bestimmst du, wie weit deine Visitenkarte und Vertrauenseinschätzungen im Umfeld geteilt werden."
+  },
+  "help.visibilityReach.title": {
+    "enHash": "7df6cb955bdad940c038a51b210d5321645fe2a12e4cfe52333ca3eee296c63a",
+    "deHash": "ac52a122e7ddb256502d8c924dcb8b2364dde8e94a854505ef7ccc2cc90714f3",
+    "enText": "Visibility & Network Reach",
+    "deText": "Sichtbarkeit & Reichweite"
+  },
+  "help.voucherCreator.deepDive": {
+    "enHash": "666b25fe401ba3e6be8babb41bcd1b381565162b3c69e538974db1df466f581d",
+    "deHash": "516b419f51fe2a66c9e34dc058b72ca6d01b8118ecaba62ccfd3b7217be7e172",
+    "enText": "Cryptographic Voucher Chain:\n\n• Every voucher starts with a signed genesis record anchoring `creator_id` (`did:key`), unit, expiry (`valid_until`), and initial signatures inside an immutable `ProofChain`.\n• Subsequent transfers append chained signatures without altering the original issuer commitment.",
+    "deText": "Kryptografische Gutscheinkette:\n\n• Jeder Gutschein beginnt mit einem signierten Ursprungsdatensatz (`creator_id` als `did:key`, Einheit, Ablaufdatum) in einer eigenen `ProofChain`.\n• Jede Weitergabe hängt nahtlos an dieser Kette, ohne das ursprüngliche Versprechen zu verändern."
+  },
+  "help.voucherCreator.long": {
+    "enHash": "738a1b94d3feb44bbf8555214b11cffed8c925cb57b594f4ce405c14f91a08db",
+    "deHash": "bbf39683a777ad8beff33cc939ff9a63df66f43313b2e852fa005452162cb3a7",
+    "enText": "**What is this?**\nThe issuer is the person who originally created the voucher and promised the underlying service or goods.\n\n**Why does it matter?**\nEventually, the voucher can be redeemed with its issuer.\n\n**Checking reliability:**\nYour app uses your contacts and shared trust ratings to show how well connected you are to the issuer or their guarantors.",
+    "deText": "**Was ist das?**\nDer Aussteller ist die Person, die den Gutschein ursprünglich erstellt hat und für die versprochene Leistung einsteht.\n\n**Warum ist das wichtig?**\nAm Ende kann der Gutschein beim Aussteller gegen die zugesagte Leistung eingelöst werden.\n\n**Verlässlichkeit einschätzen:**\nDeine App zeigt dir anhand deiner Kontakte sofort, ob und über wen du mit Aussteller oder Bürgen verbunden bist."
+  },
+  "help.voucherExpiry.long": {
+    "enHash": "89a8fb6d0ff707828144d4adb059daaadeede1abab206298f551c47a78e1bb1b",
+    "deHash": "20f6bc1330f6527eb82201332d205ae0daf7b945748956d7fcb5b27974aece4d",
+    "enText": "**Why vouchers expire:**\nReal human promises belong to real life — nobody can keep an open-ended promise forever without losing clarity.\n\n**Circulation before expiry:**\nUse or redeem vouchers with the issuer well before the expiry date shown on the card.",
+    "deText": "**Warum Gutscheine ablaufen:**\nMenschliche Zusagen gehören in den echten Alltag – ein klares Enddatum sorgt dafür, dass niemand auf ewig unübersichtliche Verpflichtungen ansammelt.\n\n**Vor Ablauf einlösen oder weitergeben:**\nLöse Gutscheine rechtzeitig vor dem angezeigten Datum beim Aussteller ein oder reiche sie im Alltag weiter."
+  },
+  "help.voucherExpiry.short": {
+    "enHash": "17f181e7cbcb617d36c471fa8a79cae9becd94c2e211ccd7c71840e1365c5062",
+    "deHash": "2beec608f1d88d036d93459053bd4b506720e86336febe2012ea16fd45d19dd0",
+    "enText": "Every voucher carries a clear expiration date so promises stay active and manageable.",
+    "deText": "Jeder Gutschein hat ein klares Ablaufdatum, damit Versprechen verlässlich und überschaubar bleiben."
+  },
+  "help.voucherExpiry.title": {
+    "enHash": "a1cda806e74217ad810e6bb62bf8c6d20e46e389c1b946635f9fb1163f14d37e",
+    "deHash": "7421ee367caf0ca1858fce9dd0672a472b7d6a2efadee471875313d4622c9933",
+    "enText": "Expiry Date & Validity",
+    "deText": "Ablaufdatum & Gültigkeit"
+  },
+  "help.voucherStandards.long": {
+    "enHash": "a999defb45ec5d3a2ed74b3a1ab84ee44bf70c29ee08dd2762127b760ba2398d",
+    "deHash": "42a1573582cdadda283a9a61093c6cfd1d0aad225048b6852abd96455c3e0bdc",
+    "enText": "**What is a standard?**\nA voucher standard specifies common rules — for instance, measuring value in minutes of work, setting a maximum validity period, or requiring two guarantors.\n\n**Why use one?**\nShared rules make vouchers immediately recognizable and comparable across your neighborhood or region.",
+    "deText": "**Was ist ein Standard?**\nEin Gutschein-Standard legt gemeinsame Rahmenbedingungen fest – zum Beispiel ob der Wert in Arbeitsminuten angegeben wird, wie lange ein Gutschein höchstens läuft und wie viele Bürgen mitzeichnen müssen.\n\n**Warum ist das praktisch?**\nAlle Beteiligten wissen sofort, wofür der Gutschein steht und welche Regeln gelten."
+  },
+  "help.voucherStandards.short": {
+    "enHash": "2d5dd48f06aeae7a4a45f722e2017319a508c14e357375a42f43d1b59068e89f",
+    "deHash": "03eb8df4be9fff69ef68119ef637b6abcecfab7c29af694271768d5732c5908b",
+    "enText": "Communities define shared templates for units, expiry, and required guarantors.",
+    "deText": "Gemeinschaften nutzen gemeinsame Regeln für Einheit, Laufzeit und benötigte Bürgen."
+  },
+  "help.voucherStandards.title": {
+    "enHash": "d1fc270e98af9e53ea93163f6c434815aa000b1a71def4772807ca98e7be79f2",
+    "deHash": "7ded6743521aacda52ddd43696db3d4705fbb30987768331b32ed2f8fb64a41c",
+    "enText": "Voucher Standards (Minuto, etc.)",
+    "deText": "Gutschein-Standards (z. B. Minuto)"
+  },
+  "help.voucherTrust.deepDive": {
+    "enHash": "9539831cab48e59c8d2587682c61eb5988e7acb9a07fda6b1b4e62a9d3509b88",
+    "deHash": "b3dc4ece11520968a051f17bb8d9683e7e921895d4afef98aa21c729f7300ec8",
+    "enText": "Subjective Web of Trust & Shared-Edge Factoring:\n\n• Your local evaluator runs ego-centric path evaluation (Levels 1–3 weighted at 30% / 60% / 85%, Level 0 human-existence non-forwarding) plus voucher guarantor bridges (85%).\n• **Shared-Edge Factoring** enforces bottleneck resistance so overlapping paths through the same intermediary cannot inflate trust scores.\n• Any `KnownOffender` veto overrides all positive trust paths.",
+    "deText": "Subjektives Vertrauensnetz & Shared-Edge-Factoring:\n\n• Deine App bewertet Pfade ausschließlich lokal (Stufen 1–3 mit 30 % / 60 % / 85 %, Stufe 0 wird nie weitergeleitet) sowie direkte Gutschein-Bürgen (85 %).\n• **Shared-Edge-Factoring** schützt gegen künstliche Verstärkung durch gemeinsame Zwischenkontakte (Shannon-Engpass).\n• Ein bekannter Konflikt-Verursacher setzt alle Vertrauenswerte sofort auf null."
+  },
+  "help.voucherTrust.long": {
+    "enHash": "ab6f95a1fa949072514c777c44d6063904f63c7944edbf154ad45c30708e224a",
+    "deHash": "f2c2b99f3be73ac856e7e65e59f7e71d6a0e655297194276e4a06a2f2e4fc04a",
+    "enText": "**What is this?**\nThe trust display shows how strongly your personal contacts connect to the issuer or guarantors of a voucher.\n\n**Colors at a glance:**\n• **Green / Strong:** Well connected through people you trust.\n• **Neutral (Unknown):** Technically valid, but nobody you know links to it yet.\n• **Red:** Warning about a proven conflict or revoked trust.",
+    "deText": "**Was ist das?**\nDie Vertrauensanzeige zeigt dir auf einen Blick, wie gut du über deine persönlichen Kontakte mit dem Aussteller oder den Bürgen eines Gutscheins verbunden bist.\n\n**Farben leicht erklärt:**\n• **Grün / Stark:** Gute Verbindung über Menschen, denen du vertraust.\n• **Neutral (Unbekannt):** Technisch in Ordnung, aber noch ohne Verbindung zu deinem Adressbuch.\n• **Rot:** Warnung wegen eines Konflikts oder entzogenem Vertrauen."
+  },
+  "help.whichBackup.long": {
+    "enHash": "a3cc79f12296cb4f865c4dcbadd184c26c9b6aa532c127d8e8e3df3b055d9a4f",
+    "deHash": "f7e25dbaf7fc8d3502da90dca47926444790539f7a5db4a0032526f5f8768767",
+    "enText": "**Two parts work together:**\n• **Backup File (.hmcbackup):** Saves your current vouchers, contacts, and settings automatically.\n• **Emergency Recovery Sheet (12 Words) or Social Recovery:** Restores your identity key even if your computer or folder is completely lost.\n\nKeep both in separate safe places so neither theft nor hardware failure can lock you out.",
+    "deText": "**Zwei Teile ergänzen sich:**\n• **Sicherungsdatei (.hmcbackup):** Sichert laufend deine aktuellen Gutscheine, Kontakte und Einstellungen (ideal in einem Cloud-Ordner oder auf einem USB-Stick).\n• **Notfallzettel (12 Wörter) oder Freundeshilfe:** Stellt deinen persönlichen Hauptschlüssel auch dann wieder her, wenn das Gerät komplett ausfällt.\n\n**Merksatz:** Wenn die Sicherheits-Ampel grün zeigt, bist du für den Alltag gut geschützt."
+  },
+  "help.whichBackup.short": {
+    "enHash": "0941c1f6057cb020bb0649ea6500ce22fdb5fde32b7c070c2bd61da77ee57736",
+    "deHash": "8f9dbb2c199a351ecbfa49afed2488e6820bdc204825e2ddc7f3aabd1ac97fb1",
+    "enText": "Combine an automatic backup file for vouchers with an emergency recovery sheet or trusted friends.",
+    "deText": "Am sichersten ist die Kombination aus automatischer Sicherungsdatei und einem geschriebenen Notfallzettel oder Freundeshilfe."
+  },
+  "help.whichBackup.title": {
+    "enHash": "ddc40595b9b03631c1063a5ba35246f8dab308af533017a4fb8cffd475626e98",
+    "deHash": "f4107bb2d45f27e9f67ae2f029842f4c806690fe77a44e3e319851721262daff",
+    "enText": "Which Backup Do I Need?",
+    "deText": "Welches Backup brauche ich?"
   },
   "helpCenter.deepDiveTitle": {
     "source_text": "Learn more / Technical background",
@@ -5142,6 +5615,48 @@
       "it": "ai-translated",
       "en": "ai-translated"
     }
+  },
+  "helpCenter.groupContactsTrust": {
+    "enHash": "9578b0bb8f4fc6cd21e45f89efbfb93003c15e7401fd02c961cf729b1a8ac595",
+    "deHash": "69f5543bc541a62a081d8a036e0df2586a03876d49a4fe908c14cba448f7cc15",
+    "enText": "Contacts & Trust",
+    "deText": "Kontakte & Vertrauen"
+  },
+  "helpCenter.groupDailyVouchers": {
+    "enHash": "4d0053fb5f3b7dff3d31f40dd43f8c3e89f4fd3793ca9c6ee95a73d0c31ab72a",
+    "deHash": "c637989eee10d09d3f0d12d789e003ced49d6f2c15ca0ec0e6b9e3d2ad83d8d6",
+    "enText": "Everyday Vouchers",
+    "deText": "Gutscheine im Alltag"
+  },
+  "helpCenter.groupExpert": {
+    "enHash": "87919508880015e8e5d2219e24907b5903ba9846afe7ad8d943a39ddd0d1d172",
+    "deHash": "57741413e045d7c707c79041ecd87b9b7fa311fda1e114417ad8de7d165b3906",
+    "enText": "For Advanced Users",
+    "deText": "Für Fortgeschrittene"
+  },
+  "helpCenter.groupFaq": {
+    "enHash": "a3d458e1bd1eda066018d8db2dd5537c9e742f02f68401457c01553e77f57403",
+    "deHash": "bb8f48ee26d70001c931d41df5748ef11034259ba01658bf0ad9c251b9328693",
+    "enText": "Frequently Asked Questions",
+    "deText": "Häufige Fragen"
+  },
+  "helpCenter.groupFirstSteps": {
+    "enHash": "a07a7da3d0936e98ea4b1e486c4c99a332ae0eea58e3d2784da8153d308d856d",
+    "deHash": "232c9caabcc362e9aed69a156811652b2a3bb01652709d6f9b5071c649ce2006",
+    "enText": "First Steps",
+    "deText": "Erste Schritte"
+  },
+  "helpCenter.groupMarketplace": {
+    "enHash": "035d97a800604dcd99978ea876b33a347e90a0153e5a6d6b9cb0677629c1b8e6",
+    "deHash": "195b1880b83b97772f001327c618b7f74a8675812c091dc7b644aa9cb0a360b5",
+    "enText": "Marketplace & Offers",
+    "deText": "Marktplatz & Angebote"
+  },
+  "helpCenter.groupSecurityBackup": {
+    "enHash": "1366047fc7a7b0b6de23f251840aef30f6fe2546c38dc3912e4fa8d32e11f8aa",
+    "deHash": "4bb75689bbb0140ac39432b4f846ccf732555b896755e96e1ffc4a022b520228",
+    "enText": "Security & Backup",
+    "deText": "Sicherheit & Sicherung"
   },
   "history.activityLog": {
     "ai_hint": "Sidebar navigation item label for the Activity Log page.",

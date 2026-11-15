@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { ForkLockOverlay } from '../ForkLockOverlay';
 import { invoke } from '@tauri-apps/api/core';
+import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../../context/UiModeContext';
 
 const mockNavigate = vi.fn();
 vi.mock('../../context/NavigationContext', () => ({
@@ -26,6 +27,7 @@ vi.mock('../../context/SessionContext', () => ({
     notifyLogout: mockNotifyLogout,
     notifyLogin: mockNotifyLogin,
   }),
+  useOptionalSession: () => null,
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -37,6 +39,7 @@ describe('ForkLockOverlay Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.removeItem(UI_MODE_STORAGE_KEY);
     mockLockdownKind = 'handover';
     mockLockdownDetails = { targetEpoch: 5 };
 
@@ -59,14 +62,39 @@ describe('ForkLockOverlay Component', () => {
     });
   });
 
-  it('renders calm handover view when lockdownKind is handover', async () => {
-    render(<ForkLockOverlay onStartRecovery={mockOnStartRecovery} />);
+  it('renders calm handover view without epoch noise in simple mode and opens multiDevice help', async () => {
+    render(
+      <UiModeProvider>
+        <ForkLockOverlay onStartRecovery={mockOnStartRecovery} />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/(Profile|Wallet) Active on Another Device/i)).toBeInTheDocument();
-      expect(screen.getByText(/Epoch 5/i)).toBeInTheDocument();
+      expect(screen.getByText(/Payments on this device are paused/i)).toBeInTheDocument();
+      expect(screen.queryByTestId('forklock-epoch-detail')).not.toBeInTheDocument();
+      expect(screen.getByTestId('forklock-help-button')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Switch Profile \/ Log Out/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Remove Local Profile from This Device/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('forklock-help-button'));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(screen.getByText(/Using Your Profile on Multiple Devices/i)).toBeInTheDocument();
+    });
+  });
+
+  it('reveals epoch detail inside handover view in expert mode', async () => {
+    window.localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
+    render(
+      <UiModeProvider>
+        <ForkLockOverlay onStartRecovery={mockOnStartRecovery} />
+      </UiModeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('forklock-epoch-detail')).toHaveTextContent(/Epoch 5/i);
     });
   });
 
@@ -114,7 +142,8 @@ describe('ForkLockOverlay Component', () => {
     render(<ForkLockOverlay onStartRecovery={mockOnStartRecovery} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Security Alert: Concurrent Clone Detected/i)).toBeInTheDocument();
+      expect(screen.getByText(/Multi-Device Conflict Detected/i)).toBeInTheDocument();
+      expect(screen.getByTestId('forklock-help-button')).toBeInTheDocument();
     });
     const recoverBtn = screen.getByRole('button', { name: /Recover (Profile|Wallet) with (Seed Phrase|Recovery Words)/i });
     expect(recoverBtn).toBeInTheDocument();
@@ -130,8 +159,9 @@ describe('ForkLockOverlay Component', () => {
     render(<ForkLockOverlay onStartRecovery={mockOnStartRecovery} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Security Lockdown/i)).toBeInTheDocument();
-      expect(screen.getByText(/A fork has been detected in your transaction history/i)).toBeInTheDocument();
+      expect(screen.getByText(/Device Synchronization Conflict Detected/i)).toBeInTheDocument();
+      expect(screen.getByText(/Your profile history diverged across devices/i)).toBeInTheDocument();
+      expect(screen.getByTestId('forklock-help-button')).toBeInTheDocument();
     });
   });
 });
