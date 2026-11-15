@@ -11,6 +11,7 @@ import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { InfoHint } from './ui/InfoHint';
+import { AdvancedDisclosure } from './ui/AdvancedDisclosure';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { logger } from '../utils/log';
 import { dispatchBackupUpdated } from '../utils/autoBackup';
@@ -70,7 +71,13 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         if (settings?.backupFrequency) {
             setBackupFrequency(settings.backupFrequency);
         }
-    }, [settings?.backupFrequency]);
+        if (settings?.autoBackupEnabled !== undefined) {
+            setAutoBackupEnabled(settings.autoBackupEnabled);
+        }
+        if (settings?.syncBackupEnabled !== undefined) {
+            setSyncBackupEnabled(settings.syncBackupEnabled);
+        }
+    }, [settings?.backupFrequency, settings?.autoBackupEnabled, settings?.syncBackupEnabled]);
 
     const [isExporting, setIsExporting] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -415,6 +422,23 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                     {t('settings.backupCardSubtitle')}
                 </p>
 
+                <p className="text-xs text-theme-secondary/90 leading-relaxed" data-testid="backup-which-help-hint">
+                    {t('settings.backupWhichHelpHint')}
+                </p>
+
+                <AdvancedDisclosure
+                    title={t('common.moreOptions')}
+                    isCustom={
+                        protectionMode !== 'mnemonic_only' ||
+                        Boolean(syncFolder) ||
+                        !autoBackupEnabled ||
+                        !syncBackupEnabled ||
+                        backupFrequency !== 'after_mutation'
+                    }
+                    toggleTestId="backup-more-options-toggle"
+                    contentTestId="backup-more-options-content"
+                    contentClassName="p-4 border-t border-theme-subtle bg-white dark:bg-slate-900 space-y-6"
+                >
                 {/* Protection Mode Section */}
                 <div className="space-y-3 p-4 bg-slate-50/70 dark:bg-slate-800/40 rounded-2xl border border-theme-subtle/60">
                     <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
@@ -756,6 +780,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                         </Button>
                     </div>
                 </div>
+                </AdvancedDisclosure>
 
                 {/* Feedback Notification */}
                 {feedback && (

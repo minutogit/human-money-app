@@ -96,6 +96,7 @@ describe('BackupSettingsCard', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
+        localStorage.setItem('humoco_ui_mode', 'expert');
     });
 
     it('renders card title, subtitle, and protection mode', () => {
@@ -317,5 +318,21 @@ describe('BackupSettingsCard', () => {
         });
 
         window.removeEventListener('humoco:backup-updated', eventSpy);
+    });
+
+    it('hides Protection Mode behind more-options disclosure in simple mode while keeping backup button and hint visible', async () => {
+        localStorage.setItem('humoco_ui_mode', 'simple');
+        render(<BackupSettingsCard settings={defaultSettings} onSettingsUpdated={vi.fn()} />);
+
+        expect(screen.getByTestId('backup-now-button')).toBeInTheDocument();
+        expect(screen.getByTestId('backup-which-help-hint')).toBeInTheDocument();
+        expect(screen.queryByText(/Protection Mode/i)).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByTestId('backup-more-options-toggle'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('backup-more-options-content')).toBeInTheDocument();
+            expect(screen.getByText(/Protection Mode/i)).toBeInTheDocument();
+        });
     });
 });

@@ -322,7 +322,7 @@ export const TOUR_STEPS = [
         chapter: 4,
         title: 'Einstellungen: Erweitert',
         file: 'src/components/settings/AdvancedTab.tsx',
-        description: 'L2 Collision Lock Shards, Host-Modus für eigene Dienste, CEL-Gutschein-Standards und Entwickleroptionen.',
+        description: 'L2 Collision Lock Shards, CEL-Gutschein-Standards und Entwickleroptionen.',
         auth: true,
         appState: { view: 'settings', initialSection: 'advanced' },
         settingsTab: 'advanced'

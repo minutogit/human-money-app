@@ -74,6 +74,14 @@ vi.mock('../../services/settingsService', () => ({
     saveSettings: vi.fn(),
     benchmarkL2Servers: vi.fn().mockResolvedValue([]),
     refreshRegionalMeshViews: vi.fn().mockResolvedValue(true),
+    getReachPreset: vi.fn().mockResolvedValue('medium'),
+    applyReachPreset: vi.fn().mockResolvedValue({}),
+  },
+}));
+
+vi.mock('../../services/recoveryService', () => ({
+  recoveryService: {
+    getRecoveryProtectionStatus: vi.fn().mockResolvedValue(null),
   },
 }));
 
@@ -157,6 +165,7 @@ describe('SettingsView Component', () => {
     mockNavigate.mockClear();
     mockAppState = { view: 'settings' };
     localStorage.clear();
+    localStorage.setItem('humoco_ui_mode', 'expert');
     
     if (!navigator.clipboard) {
       Object.defineProperty(navigator, 'clipboard', {
@@ -216,17 +225,19 @@ describe('SettingsView Component', () => {
     expect(screen.getByText('Privacy Settings')).toBeInTheDocument();
     expect(screen.getByText('Danger Zone')).toBeInTheDocument();
 
-    // 2. Sync Service tab
+    // 2. Sync Service / Connection tab
     const syncTab = screen.getByText('Sync Service');
     await user.click(syncTab);
     expect(document.getElementById('settings-sync-section')).toBeInTheDocument();
     expect(screen.getByText('Add Sync Service')).toBeInTheDocument();
+    expect(screen.getByText(/Host Own Service/i)).toBeInTheDocument();
 
-    // 3. Advanced tab
+    // 3. Advanced tab (no host section duplicate anymore)
     const advancedTab = screen.getByText('Advanced');
     await user.click(advancedTab);
     expect(document.getElementById('settings-network-section')).toBeInTheDocument();
     expect(document.getElementById('settings-standards-section')).toBeInTheDocument();
+    expect(document.getElementById('settings-host-section')).not.toBeInTheDocument();
     expect(screen.getByText('Network & L2 Protection')).toBeInTheDocument();
   });
 
@@ -258,7 +269,7 @@ describe('SettingsView Component', () => {
     expect(writeTextSpy).toHaveBeenCalledWith('test-device-id-1234');
   });
 
-  it('allows editing settings and calls saveSettings on form submit in Security & Backup tab', async () => {
+  it('auto-saves privacy and session timeout changes immediately without a save button', async () => {
     const user = userEvent.setup();
     render(<SettingsView onBack={mockOnBack} />);
 
@@ -266,18 +277,25 @@ describe('SettingsView Component', () => {
     const securityTab = screen.getByText('Security & Backup');
     await user.click(securityTab);
 
-    // Select "Stealth" option
+    expect(screen.queryByRole('button', { name: /Save System Changes/i })).not.toBeInTheDocument();
+
+    // Select "Stealth" option triggers immediate auto-save
     const stealthRadio = screen.getByLabelText(/Stealth/i);
     await user.click(stealthRadio);
 
-    // Edit session timeout field
+    await waitFor(() => {
+      expect(settingsService.saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          privacyDefault: 'stealth',
+        }),
+        'test-password'
+      );
+    });
+
+    // Edit session timeout field triggers immediate auto-save preserving stealth
     const inputs = screen.getAllByRole('spinbutton');
     expect(inputs.length).toBeGreaterThanOrEqual(1);
     fireEvent.change(inputs[0], { target: { value: '15' } });
-
-    // Submit form
-    const saveButton = screen.getByRole('button', { name: /Save System Changes/i });
-    await user.click(saveButton);
 
     await waitFor(() => {
       expect(settingsService.saveSettings).toHaveBeenCalledWith(
@@ -288,11 +306,9 @@ describe('SettingsView Component', () => {
         'test-password'
       );
     });
-
-    expect(screen.getByText(/Configuration synchronized!/i)).toBeInTheDocument();
   });
 
-  it('displays error message on failed save', async () => {
+  it('displays error message on failed auto-save', async () => {
     const user = userEvent.setup();
     (settingsService.saveSettings as Mock).mockRejectedValue(new Error('Save failed'));
     render(<SettingsView onBack={mockOnBack} />);
@@ -301,8 +317,8 @@ describe('SettingsView Component', () => {
     const securityTab = screen.getByText('Security & Backup');
     await user.click(securityTab);
 
-    const saveButton = screen.getByRole('button', { name: /Save System Changes/i });
-    await user.click(saveButton);
+    const stealthRadio = screen.getByLabelText(/Stealth/i);
+    await user.click(stealthRadio);
 
     expect(await screen.findByText(/Failed to save settings: Save failed/i)).toBeInTheDocument();
   });
@@ -407,5 +423,63 @@ describe('SettingsView Component', () => {
 
     // Should be on Advanced tab
     expect(document.getElementById('settings-network-section')).toBeInTheDocument();
+  });
+
+  it('renders unified 6-block layout without 4-tab bar or save button in simple mode', async () => {
+    localStorage.setItem('humoco_ui_mode', 'simple');
+    render(<SettingsView onBack={mockOnBack} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Configuring Environment\.\.\./i)).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('simple-blocks-layout')).toBeInTheDocument();
+    expect(screen.queryByTestId('expert-tabs-layout')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save System Changes/i })).not.toBeInTheDocument();
+
+    expect(document.getElementById('settings-profile-section')).toBeInTheDocument();
+    expect(document.getElementById('settings-security-section')).toBeInTheDocument();
+    expect(document.getElementById('settings-reach-section')).toBeInTheDocument();
+    expect(document.getElementById('settings-sync-section')).toBeInTheDocument();
+    expect(document.getElementById('settings-view-section')).toBeInTheDocument();
+    expect(document.getElementById('settings-danger-section')).toBeInTheDocument();
+    expect(screen.getByTestId('auto-sync-master-toggle')).toBeInTheDocument();
+  });
+
+  it('toggles all 4 sync channels via auto-sync-master-toggle in simple mode', async () => {
+    localStorage.setItem('humoco_ui_mode', 'simple');
+    const user = userEvent.setup();
+    render(<SettingsView onBack={mockOnBack} />);
+
+    const masterToggle = await screen.findByTestId('auto-sync-master-toggle');
+    expect(masterToggle).toBeChecked();
+
+    await user.click(masterToggle);
+
+    await waitFor(() => {
+      expect(settingsService.saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          postAcceptFromContacts: false,
+          marketSyncEnabled: false,
+          wotShareViaSync: false,
+          syncBackupEnabled: false,
+        }),
+        'test-password'
+      );
+    });
+
+    await user.click(screen.getByTestId('auto-sync-master-toggle'));
+
+    await waitFor(() => {
+      expect(settingsService.saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          postAcceptFromContacts: true,
+          marketSyncEnabled: true,
+          wotShareViaSync: true,
+          syncBackupEnabled: true,
+        }),
+        'test-password'
+      );
+    });
   });
 });

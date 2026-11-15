@@ -10,12 +10,14 @@ import { ProfileCardEditor } from '../components/marketplace/ProfileCardEditor';
 import { AdEditorModal } from '../components/marketplace/AdEditorModal';
 import { SendView } from '../components/SendView';
 import { ReceiveView } from '../components/ReceiveView';
+import { SettingsView } from '../components/SettingsView';
 import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../context/UiModeContext';
 import { UiModeToggle } from '../components/ui/UiModeToggle';
 import { Advanced } from '../components/ui/Advanced';
 import { TechId } from '../components/ui/TechId';
 import { backupService } from '../services/backupService';
 import { contactService } from '../services/contactService';
+import { settingsService } from '../services/settingsService';
 import { FrontendMyMarketProfile, AppSettings, Contact } from '../types';
 
 const mockNavigate = vi.fn();
@@ -71,6 +73,7 @@ vi.mock('../services/marketService', () => ({
         getMarketView: vi.fn(),
         previewContactTrustChange: vi.fn().mockResolvedValue(null),
         probePublicSync: vi.fn(),
+        discoverAvailableSyncs: vi.fn().mockResolvedValue([]),
         getSyncOverviewStatus: vi.fn().mockResolvedValue({
             configuredCount: 1,
             activeCount: 1,
@@ -93,7 +96,9 @@ vi.mock('../services/settingsService', () => ({
             backupTargetFolder: '/fake/backup/path',
             backupFrequency: 'always',
         }),
-        saveSettings: vi.fn(),
+        saveSettings: vi.fn().mockResolvedValue(undefined),
+        getReachPreset: vi.fn().mockResolvedValue('medium'),
+        applyReachPreset: vi.fn().mockResolvedValue({}),
     },
 }));
 
@@ -537,5 +542,59 @@ describe('Beginner User Tasks (Integration Flows)', () => {
 
         expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
         expect(receiveRender.container.textContent).not.toContain('did:key:');
+    });
+
+    /**
+     * Task 6: Simple-mode settings show 6 clear blocks without expert tabs or Save button,
+     * hide technical DIDs, and auto-save all 4 sync channels via the master toggle.
+     */
+    it('Task 6: beginner uses simple 6-block settings with auto-save master sync toggle', async () => {
+        vi.mocked(backupService.getBackupStatus).mockResolvedValue({
+            status: 'ok',
+            lastBackupAt: '2026-11-15T12:00:00Z',
+            backupDirty: false,
+            syncFolder: '/fake/backup/path',
+            changedBlobs: 0,
+            syncBackupEnabled: true,
+            lastSyncBackupAt: null,
+            hasAuthorizedSyncBackupTarget: true,
+        } as Awaited<ReturnType<typeof backupService.getBackupStatus>>);
+        vi.mocked(settingsService.saveSettings).mockResolvedValue(undefined as never);
+
+        const settingsRender = render(
+            <UiModeProvider>
+                <SettingsView onBack={vi.fn()} />
+            </UiModeProvider>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('simple-blocks-layout')).toBeInTheDocument();
+        });
+
+        expect(screen.queryByTestId('expert-tabs-layout')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Save System Changes|Einstellungen speichern/i })).not.toBeInTheDocument();
+        expect(settingsRender.container.textContent).not.toContain('did:key:');
+
+        expect(settingsRender.container.querySelector('#settings-profile-section')).toBeInTheDocument();
+        expect(settingsRender.container.querySelector('#settings-security-section')).toBeInTheDocument();
+        expect(settingsRender.container.querySelector('#settings-reach-section')).toBeInTheDocument();
+        expect(settingsRender.container.querySelector('#settings-sync-section')).toBeInTheDocument();
+        expect(settingsRender.container.querySelector('#settings-view-section')).toBeInTheDocument();
+        expect(settingsRender.container.querySelector('#settings-danger-section')).toBeInTheDocument();
+
+        const masterToggle = screen.getByTestId('auto-sync-master-toggle');
+        fireEvent.click(masterToggle);
+
+        await waitFor(() => {
+            expect(settingsService.saveSettings).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    postAcceptFromContacts: false,
+                    marketSyncEnabled: false,
+                    wotShareViaSync: false,
+                    syncBackupEnabled: false,
+                }),
+                undefined
+            );
+        });
     });
 });

@@ -1,30 +1,17 @@
 // src/components/settings/AdvancedTab.tsx
-import React, { useState, FormEvent } from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-    ShieldCheck,
-    Clock,
-    Save,
-    Copy,
-    CheckCircle2
-} from 'lucide-react';
+import { ShieldCheck, Copy, CheckCircle2 } from 'lucide-react';
 import { AppSettings } from '../../types';
 import { NetworkProtectionCard } from './NetworkProtectionCard';
-import { SyncServiceSettingsCard } from './SyncServiceSettingsCard';
 import { StandardsManager } from '../StandardsManager';
-import { Button } from '../ui/Button';
 import { HelpIcon } from '../ui/HelpIcon';
-import { AlertBanner } from '../ui/AlertBanner';
 import { Disclosure } from '../ui/Disclosure';
 import { copyToClipboard } from '../../utils/clipboard';
 
 export interface AdvancedTabProps {
     settings: AppSettings | null;
     onSettingsUpdated: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
-    onSave: (event: FormEvent) => void;
-    isSaving: boolean;
-    saveError: string;
-    saveSuccess: string;
     localInstanceId: string;
     appVersion: string;
     isDevUnlocked: boolean;
@@ -36,10 +23,6 @@ export interface AdvancedTabProps {
 export const AdvancedTab: React.FC<AdvancedTabProps> = ({
     settings,
     onSettingsUpdated,
-    onSave,
-    isSaving,
-    saveError,
-    saveSuccess,
     localInstanceId,
     appVersion,
     isDevUnlocked,
@@ -51,7 +34,7 @@ export const AdvancedTab: React.FC<AdvancedTabProps> = ({
     const [copiedDeviceId, setCopiedDeviceId] = useState(false);
 
     return (
-        <form onSubmit={onSave} className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {/* Network & L2 Protection */}
             <NetworkProtectionCard
                 settings={settings}
@@ -83,71 +66,75 @@ export const AdvancedTab: React.FC<AdvancedTabProps> = ({
                 </Disclosure>
             </div>
 
-            {/* Eigenen Dienst betreiben (Host / Admin Mode) */}
-            <div id="settings-host-section">
-                <SyncServiceSettingsCard
-                    settings={settings}
-                    onSettingsUpdated={(updated) => onSettingsUpdated(updated)}
-                    mode="host"
-                />
-            </div>
-
-            {/* Save Button */}
-            <div className="pt-2 flex flex-col items-center gap-4">
-                <Button type="submit" disabled={isSaving} className="min-w-[240px] gap-2 rounded-2xl py-4 shadow-lg shadow-theme-primary/20">
-                    {isSaving ? <Clock className="animate-spin" size={18} /> : <Save size={18} />}
-                    {isSaving ? t('settings.saving') : t('settings.saveButton')}
-                </Button>
-                {saveError && <AlertBanner variant="error" className="w-full max-w-md">{saveError}</AlertBanner>}
-                {saveSuccess && <AlertBanner variant="success" className="w-full max-w-md">{saveSuccess}</AlertBanner>}
-
-                {/* Diagnostics & Dev Options Footer */}
-                <div className="pt-4 border-t border-theme-subtle/40 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-[11px] text-theme-light/70">
-                    <span
-                        onClick={onDevClick}
-                        className="font-mono text-[10px] text-theme-light/60 select-none cursor-pointer hover:text-theme-light/90 transition-colors"
-                        title={isDevUnlocked ? t('settings.devModeActive', 'Entwicklermodus aktiv') : t('settings.devModeClicksRemaining', { count: Math.max(0, 7 - devClickCount), defaultValue: `Klick ${Math.max(0, 7 - devClickCount)} bis Entwicklermodus` })}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onDevClick(); }}}
-                    >
-                        v{appVersion} • {isDevUnlocked ? t('settings.devModeUnlockedBadge', 'DEV freigeschaltet') : `${devClickCount}/7`}
-                    </span>
-                    <span>•</span>
-                    <div className="inline-flex items-center gap-1.5">
-                        <span>{t('settings.deviceIdFooterLabel')}:</span>
-                        <code className="font-mono text-[10px] text-theme-light/80 select-all" title={localInstanceId}>
-                            {localInstanceId ? (localInstanceId.length > 16 ? `${localInstanceId.slice(0, 8)}…${localInstanceId.slice(-4)}` : localInstanceId) : t('settings.retrievingId')}
-                        </code>
-                        <button
-                            type="button"
-                            onClick={async () => {
-                                if (localInstanceId) {
-                                    const ok = await copyToClipboard(localInstanceId);
-                                    try {
-                                        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-                                            await navigator.clipboard.writeText(localInstanceId);
-                                        }
-                                    } catch {
-                                        // Ignore clipboard write failure
+            {/* Diagnostics & Dev Options Footer */}
+            <div className="pt-4 border-t border-theme-subtle/40 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-[11px] text-theme-light/70">
+                <span
+                    onClick={onDevClick}
+                    className="font-mono text-[10px] text-theme-light/60 select-none cursor-pointer hover:text-theme-light/90 transition-colors"
+                    title={
+                        isDevUnlocked
+                            ? t('settings.devModeActive', 'Entwicklermodus aktiv')
+                            : t('settings.devModeClicksRemaining', {
+                                  count: Math.max(0, 7 - devClickCount),
+                                  defaultValue: `Klick ${Math.max(0, 7 - devClickCount)} bis Entwicklermodus`,
+                              })
+                    }
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            onDevClick();
+                        }
+                    }}
+                >
+                    v{appVersion} •{' '}
+                    {isDevUnlocked
+                        ? t('settings.devModeUnlockedBadge', 'DEV freigeschaltet')
+                        : `${devClickCount}/7`}
+                </span>
+                <span>•</span>
+                <div className="inline-flex items-center gap-1.5">
+                    <span>{t('settings.deviceIdFooterLabel')}:</span>
+                    <code className="font-mono text-[10px] text-theme-light/80 select-all" title={localInstanceId}>
+                        {localInstanceId
+                            ? localInstanceId.length > 16
+                                ? `${localInstanceId.slice(0, 8)}…${localInstanceId.slice(-4)}`
+                                : localInstanceId
+                            : t('settings.retrievingId')}
+                    </code>
+                    <button
+                        type="button"
+                        onClick={async () => {
+                            if (localInstanceId) {
+                                const ok = await copyToClipboard(localInstanceId);
+                                try {
+                                    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                                        await navigator.clipboard.writeText(localInstanceId);
                                     }
-                                    if (ok) {
-                                        setCopiedDeviceId(true);
-                                        setTimeout(() => setCopiedDeviceId(false), 2000);
-                                    }
+                                } catch {
+                                    // Ignore clipboard write failure
                                 }
-                            }}
-                            className="p-1 text-theme-light/70 hover:text-theme-primary transition-colors rounded inline-flex items-center justify-center"
-                            aria-label={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
-                            title={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
-                        >
-                            {copiedDeviceId ? <CheckCircle2 size={12} className="text-emerald-500" /> : <Copy size={12} />}
-                        </button>
-                        <HelpIcon topic="deviceBinding" size={12} />
-                    </div>
+                                if (ok) {
+                                    setCopiedDeviceId(true);
+                                    setTimeout(() => setCopiedDeviceId(false), 2000);
+                                }
+                            }
+                        }}
+                        className="p-1 text-theme-light/70 hover:text-theme-primary transition-colors rounded inline-flex items-center justify-center"
+                        aria-label={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
+                        title={copiedDeviceId ? t('common.copied') : t('settings.copyButton')}
+                    >
+                        {copiedDeviceId ? (
+                            <CheckCircle2 size={12} className="text-emerald-500" />
+                        ) : (
+                            <Copy size={12} />
+                        )}
+                    </button>
+                    <HelpIcon topic="deviceBinding" size={12} />
                 </div>
             </div>
-        </form>
+        </div>
     );
 };
 

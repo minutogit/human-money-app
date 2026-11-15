@@ -339,7 +339,6 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
     const [postAcceptFromContacts, setPostAcceptFromContacts] = useState<boolean>(settings?.postAcceptFromContacts ?? true);
     const [marketSyncEnabled, setMarketSyncEnabled] = useState<boolean>(settings?.marketSyncEnabled ?? true);
     const [wotShareViaSync, setWotShareViaDrop] = useState<boolean>(settings?.wotShareViaSync ?? true);
-    const [syncBackupEnabled, setDropBackupEnabled] = useState<boolean>(settings?.syncBackupEnabled ?? true);
     const [shareMinLevel, setShareMinLevel] = useState<number>(settings?.shareMinLevel ?? 1);
     const [marketPollWifiOnly, setMarketPollWifiOnly] = useState<boolean>(settings?.marketPollWifiOnly ?? false);
 
@@ -382,7 +381,6 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             setPostAcceptFromContacts(settings.postAcceptFromContacts ?? true);
             setMarketSyncEnabled(settings.marketSyncEnabled ?? true);
             setWotShareViaDrop(settings.wotShareViaSync ?? true);
-            setDropBackupEnabled(settings.syncBackupEnabled ?? true);
             setShareMinLevel(settings.shareMinLevel ?? 1);
             setMarketPollWifiOnly(settings.marketPollWifiOnly ?? false);
             if (Array.isArray(settings.publicSyncs)) {
@@ -928,7 +926,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                     {isHostOnly ? t('settings.ownSyncServiceDesc') : t('settings.syncServiceCardSubtitle')}
                 </p>
 
-                {isConsumerOnly && (
+                {activeTab === 'connected' && (
                     <InfoHint topic="connection" />
                 )}
 
@@ -1097,26 +1095,6 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         </span>
                                         <p className="text-[11px] text-theme-light mt-0.5">
                                             {t('settings.syncChannelWotDesc')}
-                                        </p>
-                                    </div>
-                                </label>
-
-                                <label className="flex items-start gap-3 cursor-pointer group pt-1 border-t border-theme-subtle/50">
-                                    <input
-                                        type="checkbox"
-                                        checked={syncBackupEnabled}
-                                        onChange={(e) => {
-                                            setDropBackupEnabled(e.target.checked);
-                                            updateFeatureToggle('syncBackupEnabled', e.target.checked);
-                                        }}
-                                        className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
-                                    />
-                                    <div>
-                                        <span className="text-xs font-bold text-theme-primary group-hover:text-theme-accent">
-                                            {t('settings.syncChannelBackupLabel')}
-                                        </span>
-                                        <p className="text-[11px] text-theme-light mt-0.5">
-                                            {t('settings.syncChannelBackupDesc')}
                                         </p>
                                     </div>
                                 </label>

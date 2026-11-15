@@ -120,11 +120,11 @@ describe('SyncServiceSettingsCard Component', () => {
         expect(screen.getByText(/Verbundene Dienste|Connected Services/i)).toBeInTheDocument();
         expect(screen.getByText(/Eigenen Dienst bereitstellen|Host Own Service/i)).toBeInTheDocument();
 
-        // Check channel labels
+        // Check channel labels (Allow Backups duplicate removed in APP-UX-09 P6)
         expect(screen.getByText(/Postfach aktivieren|mailbox/i)).toBeInTheDocument();
         expect(screen.getByText(/Marktplatz.*synchronisieren|marketplace/i)).toBeInTheDocument();
         expect(screen.getAllByText(/Vertrauens(liste|einstufungen).*teilen|web of trust|trust ratings/i).length).toBeGreaterThan(0);
-        expect(screen.getByText(/Backups erlauben|Cloud-Sicherung nutzen|Allow Backups|Use Cloud Backup/i)).toBeInTheDocument();
+        expect(screen.queryByText(/Backups erlauben|Cloud-Sicherung nutzen|Allow Backups|Use Cloud Backup/i)).not.toBeInTheDocument();
     });
 
     it('toggles channel switch and calls settingsService.saveSettings', async () => {
