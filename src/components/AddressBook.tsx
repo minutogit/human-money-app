@@ -3,6 +3,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageLayout } from './ui/PageLayout';
 import { Button } from './ui/Button';
+import { Advanced } from './ui/Advanced';
+import { TechId } from './ui/TechId';
 import { contactService } from '../services/contactService';
 import { wotService } from '../services/wotService';
 import { postService, POST_INBOX_UPDATED_EVENT } from '../services/postService';
@@ -44,7 +46,6 @@ import {
     Trash2, 
     Edit3, 
     Tag, 
-    Shield, 
     Building2, 
     Users,
     X,
@@ -782,9 +783,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                                     <p className="font-extrabold text-sm text-theme-primary">
                                                         {t('contacts.handshakeProposalPhrase', '{{name}} möchte euch gegenseitig als vertraut eintragen.', { name })}
                                                     </p>
-                                                    <p className="text-[11px] font-mono text-theme-light truncate" title={h.senderDid}>
-                                                        {h.senderDid}
-                                                    </p>
+                                                    <TechId value={h.senderDid} kind="did" />
                                                 </div>
                                             </div>
 
@@ -902,12 +901,11 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                             {provider.name}
                                         </h3>
 
-                                        <div className="flex items-center gap-1.5 mt-2 mb-3">
-                                            <Shield size={12} className="text-theme-light/60" />
-                                            <p className="text-[10px] font-mono font-bold text-theme-light/60 truncate" title={provider.issuerDid}>
-                                                {truncateUserId(provider.issuerDid)}
-                                            </p>
-                                        </div>
+                                        <Advanced>
+                                            <div className="flex items-center gap-1.5 mt-2 mb-3">
+                                                <TechId value={provider.issuerDid} kind="did" />
+                                            </div>
+                                        </Advanced>
 
                                         <div className="flex items-center gap-1.5 flex-wrap mb-4">
                                             <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200">
@@ -1114,12 +1112,11 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                                         : contact.profile.organization || t('contacts.unnamedIdentity')}
                                                 </h3>
 
-                                                <div className="flex items-center gap-1.5 mt-2 mb-4">
-                                                    <Shield size={12} className="text-theme-light/60" />
-                                                    <p className="text-[10px] font-mono font-bold text-theme-light/60 truncate" title={contact.did}>
-                                                        {truncateUserId(contact.did)}
-                                                    </p>
-                                                </div>
+                                                <Advanced>
+                                                    <div className="flex items-center gap-1.5 mt-2 mb-4">
+                                                        <TechId value={contact.did} kind="did" />
+                                                    </div>
+                                                </Advanced>
 
                                                 {(contact.profile.organization || contact.profile.community) && (
                                                     <div className="flex items-center gap-2 mb-4 p-2.5 bg-theme-subtle/10 rounded-2xl border border-theme-subtle/20">

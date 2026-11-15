@@ -4,6 +4,7 @@ import { ReceiveSuccessPayload, TrustStatus, L2QuorumInfo, VoucherTrustDto } fro
 import { Button } from "./ui/Button";
 import { L2QuorumBadge } from "./ui/L2QuorumBadge";
 import { TrustBadge } from "./ui/TrustBadge";
+import { TechId } from "./ui/TechId";
 import { logger } from '../utils/log';
 import { stringifyError } from '../utils/errorHelper';
 import { profileService } from "../services/profileService";
@@ -324,9 +325,15 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                                 <p className="text-sm font-black text-theme-primary truncate">
                                     {payload.senderProfileName || t('transfer.receiveSuccess.unknownSender')}
                                 </p>
-                                <p className="text-[10px] font-mono font-bold text-theme-light truncate mt-1">
-                                    {payload.senderId || t('transfer.receiveSuccess.noDidDisclosed')}
-                                </p>
+                                {payload.senderId ? (
+                                    <div className="mt-1.5">
+                                        <TechId value={payload.senderId} kind="did" />
+                                    </div>
+                                ) : (
+                                    <p className="text-[10px] font-bold text-theme-light mt-1">
+                                        {t('transfer.receiveSuccess.noDidDisclosed')}
+                                    </p>
+                                )}
                             </div>
                             
                             {(payload.wotImportedLists ?? 0) > 0 && (

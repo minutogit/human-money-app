@@ -2,6 +2,7 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TransactionHistoryView } from '../TransactionHistoryView';
+import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../../context/UiModeContext';
 import { transferService } from '../../services/transferService';
 import { contactService } from '../../services/contactService';
 import { TransactionRecord, Contact } from '../../types';
@@ -101,33 +102,53 @@ const mockContacts: Contact[] = [
 describe('TransactionHistoryView', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        localStorage.clear();
         vi.mocked(transferService.getHistory).mockResolvedValue([...mockRecords]);
         vi.mocked(contactService.getContacts).mockResolvedValue([...mockContacts]);
         vi.mocked(contactService.saveContact).mockResolvedValue();
     });
 
-    it('renders transaction records with resolved counterparty names and amounts', async () => {
-        render(<TransactionHistoryView />);
+    const renderWithMode = (mode: 'simple' | 'expert') => {
+        localStorage.setItem(UI_MODE_STORAGE_KEY, mode);
+        return render(
+            <UiModeProvider>
+                <TransactionHistoryView />
+            </UiModeProvider>
+        );
+    };
+
+    it('renders transaction records cleanly in simple mode without raw receipt hashes or open secondary filters', async () => {
+        renderWithMode('simple');
 
         await waitFor(() => {
-            // Bob Baumeister resolved via contactService
             expect(screen.getByText('Bob Baumeister')).toBeInTheDocument();
         });
 
-        // Alice Wonder resolved via senderProfileName
         expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
-
-        // Notes visible
         expect(screen.getByText('"Honig und Apfelsaft"')).toBeInTheDocument();
         expect(screen.getByText('"Werkstattmiete Juni"')).toBeInTheDocument();
 
-        // Short receipt numbers visible
-        expect(screen.getByText('#bundle-a')).toBeInTheDocument();
-        expect(screen.getByText('#bundle-b')).toBeInTheDocument();
+        // Receipt numbers & secondary filters hidden in simple mode by default
+        expect(screen.queryByText('#bundle-a')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('history-filters-content')).not.toBeInTheDocument();
+        expect(screen.getByTestId('history-filters-toggle')).toBeInTheDocument();
+        expect(screen.getByTestId('page-header-more-actions')).toBeInTheDocument();
     });
 
-    it('toggles transaction details open and closed on row click', async () => {
-        render(<TransactionHistoryView />);
+    it('renders short receipt numbers and open secondary filters in expert mode', async () => {
+        renderWithMode('expert');
+
+        await waitFor(() => {
+            expect(screen.getByText('Bob Baumeister')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('#bundle-a')).toBeInTheDocument();
+        expect(screen.getByText('#bundle-b')).toBeInTheDocument();
+        expect(screen.getByTestId('history-filters-content')).toBeInTheDocument();
+    });
+
+    it('toggles transaction details open and closed on row click with full IDs in expert mode', async () => {
+        renderWithMode('expert');
 
         await waitFor(() => {
             expect(screen.getByText('Bob Baumeister')).toBeInTheDocument();
@@ -154,8 +175,8 @@ describe('TransactionHistoryView', () => {
         });
     });
 
-    it('copies transaction ID and DID to clipboard when clicking copy buttons', async () => {
-        render(<TransactionHistoryView />);
+    it('shows compact TechId fingerprints and copies full transaction ID and DID to clipboard in simple mode', async () => {
+        renderWithMode('simple');
 
         await waitFor(() => {
             expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
@@ -166,20 +187,23 @@ describe('TransactionHistoryView', () => {
         fireEvent.click(aliceRow!);
 
         await waitFor(() => {
-            expect(screen.getByText('history.copyTxId')).toBeInTheDocument();
+            expect(screen.getAllByTestId('tech-id-copy')).toHaveLength(2);
         });
 
-        // Click copy txId
-        fireEvent.click(screen.getByText('history.copyTxId'));
+        // Raw DID is not exposed directly in simple mode
+        expect(screen.queryByText('did:key:z6MkhaXG')).not.toBeInTheDocument();
+        expect(screen.getByText('…MkhaXG')).toBeInTheDocument();
+
+        const [copyTxBtn, copyDidBtn] = screen.getAllByTestId('tech-id-copy');
+        fireEvent.click(copyTxBtn);
         expect(writeText).toHaveBeenCalledWith('bundle-alice-1111');
 
-        // Click copy DID
-        fireEvent.click(screen.getByText('history.copyDid'));
+        fireEvent.click(copyDidBtn);
         expect(writeText).toHaveBeenCalledWith('did:key:z6MkhaXG');
     });
 
     it('filters transactions by direction (all, inbound, outbound)', async () => {
-        render(<TransactionHistoryView />);
+        renderWithMode('simple');
 
         await waitFor(() => {
             expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
@@ -209,7 +233,7 @@ describe('TransactionHistoryView', () => {
     });
 
     it('filters transactions by search query matching contact name or notes', async () => {
-        render(<TransactionHistoryView />);
+        renderWithMode('simple');
 
         await waitFor(() => {
             expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
@@ -234,7 +258,7 @@ describe('TransactionHistoryView', () => {
     });
 
     it('shows "+ Als Kontakt speichern" only for unknown counterparties and opens dialog', async () => {
-        render(<TransactionHistoryView />);
+        renderWithMode('simple');
 
         await waitFor(() => {
             expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
@@ -245,7 +269,7 @@ describe('TransactionHistoryView', () => {
         fireEvent.click(bobRow!);
 
         await waitFor(() => {
-            expect(screen.getByText('bundle-bob-2222')).toBeInTheDocument();
+            expect(screen.getByText('…b-2222')).toBeInTheDocument();
         });
         // Bob is known -> no save contact button
         expect(screen.queryByText('history.saveAsContact')).not.toBeInTheDocument();
@@ -269,13 +293,14 @@ describe('TransactionHistoryView', () => {
         });
     });
 
-    it('navigates to activities view when clicking the event log button', async () => {
-        render(<TransactionHistoryView />);
+    it('navigates to activities view when clicking the event log button via more menu in simple mode', async () => {
+        renderWithMode('simple');
 
         await waitFor(() => {
-            expect(screen.getByText('history.eventLogButton')).toBeInTheDocument();
+            expect(screen.getByTestId('page-header-more-actions')).toBeInTheDocument();
         });
 
+        fireEvent.click(screen.getByTestId('page-header-more-actions'));
         fireEvent.click(screen.getByText('history.eventLogButton'));
         expect(mockNavigate).toHaveBeenCalledWith({
             view: 'activities',
@@ -283,11 +308,11 @@ describe('TransactionHistoryView', () => {
         });
     });
 
-    it('triggers CSV export via save dialog and writes file', async () => {
+    it('triggers CSV export directly from header actions in expert mode', async () => {
         vi.mocked(save).mockResolvedValue('/path/to/kontoauszug.csv');
         vi.mocked(writeFile).mockResolvedValue();
 
-        render(<TransactionHistoryView />);
+        renderWithMode('expert');
 
         await waitFor(() => {
             expect(screen.getByText('history.exportCsv')).toBeInTheDocument();

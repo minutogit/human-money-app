@@ -7,11 +7,13 @@ import { logger } from '../utils/log';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
-import { copyToClipboard } from '../utils/clipboard';
 import { Button } from './ui/Button';
 import { TransactionRecord, Contact } from '../types';
 import { PageLayout } from './ui/PageLayout';
 import { AlertBanner } from './ui/AlertBanner';
+import { Advanced } from './ui/Advanced';
+import { AdvancedDisclosure } from './ui/AdvancedDisclosure';
+import { TechId } from './ui/TechId';
 import { formatDateTime, formatSummary, formatAmount } from '../utils/format';
 import { buildStatementCsv } from '../utils/csvExport';
 import ContactDialog from './ContactDialog';
@@ -30,8 +32,6 @@ import {
     CheckCircle2, 
     ClipboardList, 
     FileSpreadsheet, 
-    Copy, 
-    Check, 
     UserPlus, 
     Filter,
     RefreshCw,
@@ -56,7 +56,6 @@ export function TransactionHistoryView() {
     const [bundleFeedback, setBundleFeedback] = useState<{ [key: string]: string }>({});
     const [isSavingBundle, setIsSavingBundle] = useState<string | null>(null);
     const [expandedId, setExpandedId] = useState<string | null>(null);
-    const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
     // Dual-Delivery post sync status
     const [unacknowledgedPayments, setUnacknowledgedPayments] = useState<string[]>([]);
@@ -218,21 +217,6 @@ export function TransactionHistoryView() {
         return { totalBookings, inboundSums, outboundSums };
     }, [filteredHistory]);
 
-    async function handleCopy(text: string, key: string) {
-        try {
-            const success = await copyToClipboard(text);
-            if (success) {
-                setCopiedKey(key);
-                setTimeout(() => setCopiedKey(null), 2000);
-            } else {
-                setError(t('common.copyFailed', 'Fehler beim Kopieren'));
-            }
-        } catch (e) {
-            logger.error(`Failed to copy: ${stringifyError(e)}`);
-            setError(translateError(e, t));
-        }
-    }
-
     async function handleSaveBundle(record: TransactionRecord) {
         if (!record.bundleData || record.bundleData.length === 0) {
             setBundleFeedback(f => ({ ...f, [record.id]: t('history.noBundleData') }));
@@ -312,28 +296,28 @@ export function TransactionHistoryView() {
             title={t('history.transactionHistory')} 
             description={t('history.auditDescription')} 
             onBack={goBack}
-            actions={
+            advancedActions={
                 <>
                     <Button 
                         variant="secondary"
                         size="sm"
                         onClick={() => navigate({ view: 'activities', previousView: { view: 'transaction_history' } })}
-                        className="gap-1.5 text-xs"
+                        className="gap-1.5 text-xs justify-start"
                         title={t('history.eventLogButton')}
                     >
                         <ClipboardList size={14} />
-                        <span className="hidden sm:inline">{t('history.eventLogButton')}</span>
+                        <span>{t('history.eventLogButton')}</span>
                     </Button>
                     <Button
                         variant="secondary"
                         size="sm"
                         onClick={handleExportCsv}
-                        className="gap-1.5 text-xs"
+                        className="gap-1.5 text-xs justify-start"
                         title={t('history.exportCsv')}
                         disabled={filteredHistory.length === 0}
                     >
                         <FileSpreadsheet size={14} />
-                        <span className="hidden sm:inline">{t('history.exportCsv')}</span>
+                        <span>{t('history.exportCsv')}</span>
                     </Button>
                 </>
             }
@@ -348,7 +332,7 @@ export function TransactionHistoryView() {
                 )}
 
                 {/* Filter and Search Section */}
-                <div className="bg-white/70 backdrop-blur-md border border-theme-subtle rounded-2xl p-4 shadow-sm space-y-4">
+                <div className="bg-white/70 backdrop-blur-md border border-theme-subtle rounded-2xl p-4 shadow-sm space-y-3">
                     {/* Search Bar */}
                     <div className="relative group">
                         <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none text-theme-light group-focus-within:text-theme-primary transition-colors">
@@ -401,41 +385,47 @@ export function TransactionHistoryView() {
                                 {t('history.filterOutbound')}
                             </button>
                         </div>
+                    </div>
 
-                        {/* Right: Currency & Period Selectors */}
-                        <div className="flex items-center gap-2">
-                            {/* Currency Filter Dropdown */}
-                            {availableCurrencies.length > 1 && (
-                                <div className="flex items-center gap-1.5 bg-bg-app px-2 py-1 rounded-xl border border-theme-subtle/60">
-                                    <Filter size={12} className="text-theme-light" />
-                                    <select
-                                        value={currencyFilter}
-                                        onChange={(e) => setCurrencyFilter(e.target.value)}
-                                        className="bg-transparent font-bold text-theme-secondary focus:outline-none cursor-pointer pr-1"
-                                    >
-                                        <option value="all">{t('history.filterAllCurrencies')}</option>
-                                        {availableCurrencies.map(c => (
-                                            <option key={c} value={c}>{c}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            )}
-
-                            {/* Period Filter Dropdown */}
+                    {/* Currency & Period Filters (Expert open by default, Simple collapsed behind disclosure) */}
+                    <AdvancedDisclosure
+                        title={t('common.moreOptions')}
+                        isCustom={currencyFilter !== 'all' || periodFilter !== 'all'}
+                        toggleTestId="history-filters-toggle"
+                        contentTestId="history-filters-content"
+                        className="border-t border-theme-subtle/50 pt-2"
+                        buttonClassName="w-full flex items-center justify-between gap-2 py-1 px-1.5 rounded-lg text-xs font-bold text-theme-secondary hover:bg-bg-app/60 transition-colors text-left cursor-pointer"
+                        contentClassName="pt-2 flex flex-wrap items-center gap-2 text-xs"
+                    >
+                        {availableCurrencies.length > 1 && (
                             <div className="flex items-center gap-1.5 bg-bg-app px-2 py-1 rounded-xl border border-theme-subtle/60">
-                                <Calendar size={12} className="text-theme-light" />
+                                <Filter size={12} className="text-theme-light" />
                                 <select
-                                    value={periodFilter}
-                                    onChange={(e) => setPeriodFilter(e.target.value as 'all' | 'last30Days' | 'thisYear')}
+                                    value={currencyFilter}
+                                    onChange={(e) => setCurrencyFilter(e.target.value)}
                                     className="bg-transparent font-bold text-theme-secondary focus:outline-none cursor-pointer pr-1"
                                 >
-                                    <option value="all">{t('history.periodAll')}</option>
-                                    <option value="last30Days">{t('history.periodLast30Days')}</option>
-                                    <option value="thisYear">{t('history.periodThisYear')}</option>
+                                    <option value="all">{t('history.filterAllCurrencies')}</option>
+                                    {availableCurrencies.map(c => (
+                                        <option key={c} value={c}>{c}</option>
+                                    ))}
                                 </select>
                             </div>
+                        )}
+
+                        <div className="flex items-center gap-1.5 bg-bg-app px-2 py-1 rounded-xl border border-theme-subtle/60">
+                            <Calendar size={12} className="text-theme-light" />
+                            <select
+                                value={periodFilter}
+                                onChange={(e) => setPeriodFilter(e.target.value as 'all' | 'last30Days' | 'thisYear')}
+                                className="bg-transparent font-bold text-theme-secondary focus:outline-none cursor-pointer pr-1"
+                            >
+                                <option value="all">{t('history.periodAll')}</option>
+                                <option value="last30Days">{t('history.periodLast30Days')}</option>
+                                <option value="thisYear">{t('history.periodThisYear')}</option>
+                            </select>
                         </div>
-                    </div>
+                    </AdvancedDisclosure>
                 </div>
 
                 {/* Subtle Statement Summary Bar */}
@@ -546,9 +536,11 @@ export function TransactionHistoryView() {
                                                         <Calendar size={11} className="opacity-70" />
                                                         {formatDateTime(record.timestamp)}
                                                     </span>
-                                                    <span className="font-mono text-[10px] bg-theme-subtle/30 text-theme-light px-1.5 py-0.2 rounded font-bold">
-                                                        #{shortReceiptNo}
-                                                    </span>
+                                                    <Advanced>
+                                                        <span className="font-mono text-[10px] bg-theme-subtle/30 text-theme-light px-1.5 py-0.2 rounded font-bold">
+                                                            #{shortReceiptNo}
+                                                        </span>
+                                                    </Advanced>
                                                     {isSent && record.bundleId && unacknowledgedPayments.includes(record.bundleId) && (
                                                         <span data-testid="unacknowledged-payment-badge" className="font-semibold text-[9px] bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.2 rounded flex items-center gap-1">
                                                             <span>📦</span>
@@ -618,90 +610,40 @@ export function TransactionHistoryView() {
 
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                                 {/* Left Column: Identifiers & Copy Buttons */}
-                                                <div className="space-y-3">
+                                                <div className="space-y-3" onClick={(e) => e.stopPropagation()}>
                                                     {/* Transaction ID */}
-                                                    <div className="p-3 bg-white border border-theme-subtle rounded-xl">
-                                                        <div className="flex items-center justify-between gap-2 mb-1">
-                                                            <p className="text-[10px] font-bold text-theme-light uppercase tracking-wider flex items-center gap-1">
-                                                                <Hash size={12} /> {t('history.txId')}
-                                                            </p>
-                                                            <button
-                                                                type="button"
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    handleCopy(fullTxId, `${record.id}-tx`);
-                                                                }}
-                                                                className="text-xs font-bold text-theme-primary hover:text-theme-accent transition-colors flex items-center gap-1"
-                                                                title={t('history.copyTxId')}
-                                                            >
-                                                                {copiedKey === `${record.id}-tx` ? (
-                                                                    <>
-                                                                        <Check size={12} className="text-emerald-500" />
-                                                                        <span className="text-[10px] text-emerald-600 font-bold">{t('common.copied')}</span>
-                                                                    </>
-                                                                ) : (
-                                                                    <>
-                                                                        <Copy size={12} />
-                                                                        <span className="text-[10px]">{t('history.copyTxId')}</span>
-                                                                    </>
-                                                                )}
-                                                            </button>
-                                                        </div>
-                                                        <p className="text-xs font-mono text-theme-secondary break-all">
-                                                            {fullTxId}
+                                                    <div className="p-3 bg-white border border-theme-subtle rounded-xl space-y-1.5">
+                                                        <p className="text-[10px] font-bold text-theme-light uppercase tracking-wider flex items-center gap-1">
+                                                            <Hash size={12} /> {t('history.txId')}
                                                         </p>
+                                                        <TechId value={fullTxId} kind="bundle" />
                                                     </div>
 
                                                     {/* Counterparty DID */}
                                                     {counterpartyDid && (
-                                                        <div className="p-3 bg-white border border-theme-subtle rounded-xl">
-                                                            <div className="flex items-center justify-between gap-2 mb-1">
+                                                        <div className="p-3 bg-white border border-theme-subtle rounded-xl space-y-1.5">
+                                                            <div className="flex items-center justify-between gap-2">
                                                                 <p className="text-[10px] font-bold text-theme-light uppercase tracking-wider flex items-center gap-1">
                                                                     <User size={12} /> {isSent ? t('history.recipientDid') : t('history.senderDid')}
                                                                 </p>
-                                                                <div className="flex items-center gap-3">
-                                                                    {canSaveAsContact && (
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={(e) => {
-                                                                                e.stopPropagation();
-                                                                                setContactModalData({
-                                                                                    did: counterpartyDid,
-                                                                                    name: isSent ? undefined : record.senderProfileName
-                                                                                });
-                                                                            }}
-                                                                            className="text-xs font-bold text-theme-primary hover:text-theme-accent transition-colors flex items-center gap-1"
-                                                                        >
-                                                                            <UserPlus size={12} />
-                                                                            <span className="text-[10px]">{t('history.saveAsContact')}</span>
-                                                                        </button>
-                                                                    )}
+                                                                {canSaveAsContact && (
                                                                     <button
                                                                         type="button"
                                                                         onClick={(e) => {
                                                                             e.stopPropagation();
-                                                                            handleCopy(counterpartyDid, `${record.id}-did`);
+                                                                            setContactModalData({
+                                                                                did: counterpartyDid,
+                                                                                name: isSent ? undefined : record.senderProfileName
+                                                                            });
                                                                         }}
                                                                         className="text-xs font-bold text-theme-primary hover:text-theme-accent transition-colors flex items-center gap-1"
-                                                                        title={t('history.copyDid')}
                                                                     >
-                                                                        {copiedKey === `${record.id}-did` ? (
-                                                                            <>
-                                                                                <Check size={12} className="text-emerald-500" />
-                                                                                <span className="text-[10px] text-emerald-600 font-bold">{t('common.copied')}</span>
-                                                                            </>
-                                                                        ) : (
-                                                                            <>
-                                                                                <Copy size={12} />
-                                                                                <span className="text-[10px]">{t('history.copyDid')}</span>
-                                                                            </>
-                                                                        )}
+                                                                        <UserPlus size={12} />
+                                                                        <span className="text-[10px]">{t('history.saveAsContact')}</span>
                                                                     </button>
-                                                                </div>
+                                                                )}
                                                             </div>
-                                                            <p className="text-xs font-mono text-theme-secondary break-all">
-                                                                {counterpartyDid}
-                                                            </p>
+                                                            <TechId value={counterpartyDid} kind="did" />
                                                         </div>
                                                     )}
                                                 </div>
@@ -802,7 +744,9 @@ export function TransactionHistoryView() {
                                                                 <tr>
                                                                     <th className="px-3.5 py-2 font-bold text-theme-light uppercase text-[10px] tracking-wider">{t('history.assetStandard')}</th>
                                                                     <th className="px-3.5 py-2 font-bold text-theme-light uppercase text-[10px] tracking-wider text-right">{t('history.value')}</th>
-                                                                    <th className="px-3.5 py-2 font-bold text-theme-light uppercase text-[10px] tracking-wider">{t('history.localId')}</th>
+                                                                    <Advanced>
+                                                                        <th className="px-3.5 py-2 font-bold text-theme-light uppercase text-[10px] tracking-wider">{t('history.localId')}</th>
+                                                                    </Advanced>
                                                                 </tr>
                                                             </thead>
                                                             <tbody className="divide-y divide-theme-subtle/50">
@@ -810,7 +754,9 @@ export function TransactionHistoryView() {
                                                                     <tr key={idx} className="hover:bg-bg-app/40 transition-colors">
                                                                         <td className="px-3.5 py-2 font-bold text-theme-secondary">{detail.standardName}</td>
                                                                         <td className="px-3.5 py-2 font-mono font-bold text-theme-primary text-right">{detail.amount} {detail.displayCurrency}</td>
-                                                                        <td className="px-3.5 py-2 font-mono text-theme-light opacity-60 text-[11px]" title={detail.localInstanceId}>{detail.localInstanceId.slice(0, 10)}...</td>
+                                                                        <Advanced>
+                                                                            <td className="px-3.5 py-2 font-mono text-theme-light opacity-60 text-[11px]" title={detail.localInstanceId}>{detail.localInstanceId.slice(0, 10)}...</td>
+                                                                        </Advanced>
                                                                     </tr>
                                                                 ))}
                                                             </tbody>

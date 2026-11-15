@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Dashboard } from '../Dashboard';
+import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../../context/UiModeContext';
 import { profileService } from '../../services/profileService';
 import { voucherService } from '../../services/voucherService';
 import { settingsService } from '../../services/settingsService';
@@ -40,6 +41,7 @@ vi.mock('../../context/SessionContext', () => ({
         protectAction: vi.fn((fn: (pwd: string | null) => unknown) => fn('pwd')),
         lockSession: vi.fn(),
     }),
+    useOptionalSession: () => null,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -128,8 +130,13 @@ describe('Dashboard Component', () => {
         vi.mocked(contactService.getContacts).mockResolvedValue([]);
     });
 
-    it('renders spendable balance by default and toggles to net balance mode', async () => {
-        render(<Dashboard />);
+    it('renders spendable balance by default and toggles to net balance mode in expert mode', async () => {
+        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
+        render(
+            <UiModeProvider>
+                <Dashboard />
+            </UiModeProvider>
+        );
 
         await waitFor(() => {
             // Spendable mode shows totalAmount = 700.00 (or 700,00 depending on environment locale)
@@ -149,6 +156,22 @@ describe('Dashboard Component', () => {
 
         // Local storage should remember choice
         expect(localStorage.getItem('hmc_balance_view_mode')).toBe('net');
+    });
+
+    it('hides net balance toggle and user ID pill in simple mode', async () => {
+        localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
+        render(
+            <UiModeProvider>
+                <Dashboard />
+            </UiModeProvider>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText(/700[.,]00/)).toBeInTheDocument();
+        });
+
+        expect(screen.queryByText('dashboard.modeNet')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('tech-id')).not.toBeInTheDocument();
     });
 
     it('shows balance breakdown popover when clicking the info button', async () => {
@@ -189,11 +212,16 @@ describe('Dashboard Component', () => {
         }
     });
 
-    it('provides copy user ID button with title attribute', async () => {
-        render(<Dashboard />);
+    it('provides copyable TechId in expert mode', async () => {
+        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
+        render(
+            <UiModeProvider>
+                <Dashboard />
+            </UiModeProvider>
+        );
         await waitFor(() => {
-            const copyBtn = screen.getByTitle(/dashboard\.copyUserIdHint/i);
-            expect(copyBtn).toBeInTheDocument();
+            expect(screen.getByTestId('tech-id-value')).toHaveTextContent('did:key:own');
+            expect(screen.getByTestId('tech-id-copy')).toBeInTheDocument();
         });
     });
 

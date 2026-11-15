@@ -23,6 +23,8 @@ import { PageLayout } from "./ui/PageLayout";
 import { PageLoadingState, PageErrorState } from "./ui/PageState";
 import { AlertBanner } from "./ui/AlertBanner";
 import { InfoRow } from "./ui/InfoRow";
+import { Advanced } from "./ui/Advanced";
+import { TechId } from "./ui/TechId";
 import { 
     Shield, 
     History, 
@@ -387,30 +389,34 @@ export function VoucherDetailsView() {
                         </Button>
                     )}
                     {statusInfo?.id === 'active' && (
-                        <Button 
-                            variant="outline" 
-                            size="sm" 
-                            onClick={handleCheckL2Status} 
-                            disabled={isCheckingL2} 
-                            className="gap-1.5 text-xs font-bold"
-                        >
-                            {isCheckingL2 ? <Clock className="animate-spin" size={14} /> : <Shield size={14} />}
-                            {isCheckingL2 ? t('voucher.checkingL2Status') : t('voucher.checkL2Status')}
-                        </Button>
+                        <Advanced>
+                            <Button 
+                                variant="outline" 
+                                size="sm" 
+                                onClick={handleCheckL2Status} 
+                                disabled={isCheckingL2} 
+                                className="gap-1.5 text-xs font-bold"
+                            >
+                                {isCheckingL2 ? <Clock className="animate-spin" size={14} /> : <Shield size={14} />}
+                                {isCheckingL2 ? t('voucher.checkingL2Status') : t('voucher.checkL2Status')}
+                            </Button>
+                        </Advanced>
                     )}
                     {statusInfo?.id === 'incomplete' && (
                         <Button variant="primary" size="sm" onClick={() => setShowExportModal(true)} className="gap-2">
                             <FileSignature size={16} /> {t('voucher.signButton')}
                         </Button>
                     )}
-                    <button 
-                        onClick={() => setShowJson(!showJson)}
-                        className={`p-2 rounded-xl transition-all ${showJson ? 'bg-theme-secondary text-white' : 'bg-white text-theme-light hover:bg-white/80 border border-theme-subtle/50 shadow-sm'}`}
-                        title={t('voucher.toggleJson')}
-                        aria-label={t('voucher.toggleJson')}
-                    >
-                        <Json size={18} />
-                    </button>
+                    <Advanced>
+                        <button 
+                            onClick={() => setShowJson(!showJson)}
+                            className={`p-2 rounded-xl transition-all ${showJson ? 'bg-theme-secondary text-white' : 'bg-white text-theme-light hover:bg-white/80 border border-theme-subtle/50 shadow-sm'}`}
+                            title={t('voucher.toggleJson')}
+                            aria-label={t('voucher.toggleJson')}
+                        >
+                            <Json size={18} />
+                        </button>
+                    </Advanced>
                 </>
             }
         >
@@ -472,20 +478,22 @@ export function VoucherDetailsView() {
                                     {details.isTestVoucher && <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-500 text-white shadow-lg shadow-rose-200">{t('voucher.testVoucher')}</span>}
                                     <TrustBadge trust={details.trust} size="md" />
                                     {l2Status && (
-                                        <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
-                                            l2Status.status === 'unspent'
-                                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                                : l2Status.status === 'spent'
-                                                ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                                                : l2Status.status === 'offline'
-                                                ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                                                : 'bg-slate-100 text-slate-800 border border-slate-200'
-                                        }`}>
-                                            {l2Status.status === 'unspent' && t('voucher.l2StatusUnspent')}
-                                            {l2Status.status === 'spent' && t('voucher.l2StatusSpent')}
-                                            {l2Status.status === 'offline' && t('voucher.l2StatusOffline')}
-                                            {l2Status.status === 'no_servers' && t('voucher.l2StatusNoServers')}
-                                        </span>
+                                        <Advanced>
+                                            <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                                                l2Status.status === 'unspent'
+                                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                                    : l2Status.status === 'spent'
+                                                    ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                                    : l2Status.status === 'offline'
+                                                    ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                                    : 'bg-slate-100 text-slate-800 border border-slate-200'
+                                            }`}>
+                                                {l2Status.status === 'unspent' && t('voucher.l2StatusUnspent')}
+                                                {l2Status.status === 'spent' && t('voucher.l2StatusSpent')}
+                                                {l2Status.status === 'offline' && t('voucher.l2StatusOffline')}
+                                                {l2Status.status === 'no_servers' && t('voucher.l2StatusNoServers')}
+                                            </span>
+                                        </Advanced>
                                     )}
                                 </div>
                             </div>
@@ -493,7 +501,9 @@ export function VoucherDetailsView() {
                         
                         <div className="flex flex-col gap-3 w-full md:w-auto">
                             {l2Error && (
-                                <p className="text-[10px] font-bold text-rose-500 max-w-[200px] truncate">{l2Error}</p>
+                                <Advanced>
+                                    <p className="text-[10px] font-bold text-rose-500 max-w-[200px] truncate">{l2Error}</p>
+                                </Advanced>
                             )}
                             {isQuarantined && (
                                 <Button variant="secondary" size="sm" className="bg-white/20 text-white hover:bg-white/30 border-white/30 backdrop-blur-md" onClick={() => proofId && navigate({ view: 'conflict_details', proofId, previousView: appState })} disabled={!proofId}>
@@ -526,102 +536,108 @@ export function VoucherDetailsView() {
                     />
                 )}
 
-                {showJson ? (
-                    <Card variant="glass" className="bg-slate-900 border-none shadow-2xl p-0 overflow-hidden">
-                        <pre className="text-[11px] leading-relaxed text-indigo-300 font-mono p-6 overflow-x-auto selection:bg-indigo-500 selection:text-white max-h-[600px]">
-                            {JSON.stringify(details.voucher, null, 2)}
-                        </pre>
-                    </Card>
-                ) : (
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        <div className="lg:col-span-2 space-y-6">
-                            <CreatorSection 
-                                creator={voucher.creator}
-                                trustStatus={trustStatus}
-                                isContact={contacts.some(c => c.did === voucher.creator.id)}
-                                onManageContact={() => {
-                                    setPendingContactDID(voucher.creator.id);
-                                    setExistingContact(contacts.find(c => c.did === voucher.creator.id) || null);
-                                    setShowContactDialog(true);
-                                }}
-                            />
-
-                            <PolicySection 
-                                description={standardDescription}
-                                footnote={standardFootnote}
-                            />
-
-                            <TimelineSection 
-                                signatures={voucher.signatures}
-                                transactions={voucher.transactions}
-                                displayCurrency={details.displayCurrency}
-                                onRemoveSignature={setShowRemoveSignatureModal}
-                                voucherStatus={details.status}
-                            />
-                        </div>
-
-                        <div className="space-y-6">
-                            <Card className="border-none shadow-premium" header={
-                                <div className="flex items-center justify-between w-full">
-                                    <div className="flex items-center gap-2">
-                                        <Shield size={16} className="text-theme-primary" />
-                                        <span className="font-black text-xs uppercase tracking-widest">{t('voucher.trustCardTitle')}</span>
-                                    </div>
-                                    <HelpIcon topic="voucherTrust" size={13} />
-                                </div>
-                            }>
-                                <div className="space-y-4">
-                                    <div>
-                                        <TrustBadge trust={details.trust} size="md" />
-                                    </div>
-                                    {!details.trust?.isOwnVoucher && !details.trust?.blockedByOffender && (
-                                        <div className="pt-3 border-t border-theme-subtle/30 text-xs">
-                                            {details.trust && details.trust.shortestHops != null && details.trust.trustPercent > 0 ? (
-                                                <div>
-                                                    <p className="text-[10px] font-black uppercase text-theme-light mb-1.5">{t('voucher.trustPathLabel')}</p>
-                                                    <p className="font-medium text-theme-secondary flex items-center flex-wrap gap-1 leading-relaxed">
-                                                        {[
-                                                            t('voucher.trustPathYou'),
-                                                            ...(details.trust.bestPathNames || []),
-                                                            `${voucher.creator.firstName || ''} ${voucher.creator.lastName || ''}`.trim() || t('voucher.trustPathIssuer')
-                                                        ].join(' → ')}
-                                                    </p>
-                                                </div>
-                                            ) : (
-                                                <p className="text-theme-light italic text-xs leading-relaxed">
-                                                    {t('voucher.trustNoPathHint')}
-                                                </p>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                            </Card>
-
-                            <Card className="border-none shadow-premium" header={
-                                <div className="flex items-center gap-2">
-                                    <Info size={16} className="text-theme-primary" />
-                                    <span className="font-black text-xs uppercase tracking-widest">{t('voucher.detailsHeader')}</span>
-                                </div>
-                            }>
-                                <div className="space-y-6">
-                                    <InfoRow label={t('voucher.idLabel')} isMono icon={Shield}>{voucher.voucherId}</InfoRow>
-                                    <InfoRow label={t('voucher.issueDateLabel')} icon={Clock}>{formatDateTime(voucher.creationDate)}</InfoRow>
-                                    <InfoRow label={t('voucher.validUntilLabel')} icon={AlertCircle}>{formatDateTime(voucher.validUntil || undefined)}</InfoRow>
-                                    <div className="pt-4 border-t border-theme-subtle/30 grid grid-cols-2 gap-4">
-                                        <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
-                                            <p className="text-[9px] font-black uppercase text-theme-light mb-1">{t('voucher.divisibleLabel')}</p>
-                                            <p className="text-xs font-bold">{allowPartialTransfers ? t('voucher.divisibleYes') : t('voucher.divisibleNo')}</p>
-                                        </div>
-                                        <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
-                                            <p className="text-[9px] font-black uppercase text-theme-light mb-1">{t('voucher.collateralLabel')}</p>
-                                            <p className="text-xs font-bold">{voucher.collateral?.amount ? `${voucher.collateral.amount} ${voucher.collateral.abbreviation || voucher.collateral.unit}` : t('voucher.noCollateral')}</p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </Card>
-                        </div>
-                    </div>
+                {showJson && (
+                    <Advanced>
+                        <Card variant="glass" className="bg-slate-900 border-none shadow-2xl p-0 overflow-hidden">
+                            <pre className="text-[11px] leading-relaxed text-indigo-300 font-mono p-6 overflow-x-auto selection:bg-indigo-500 selection:text-white max-h-[600px]">
+                                {JSON.stringify(details.voucher, null, 2)}
+                            </pre>
+                        </Card>
+                    </Advanced>
                 )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2 space-y-6">
+                        <CreatorSection 
+                            creator={voucher.creator}
+                            trustStatus={trustStatus}
+                            isContact={contacts.some(c => c.did === voucher.creator.id)}
+                            onManageContact={() => {
+                                setPendingContactDID(voucher.creator.id);
+                                setExistingContact(contacts.find(c => c.did === voucher.creator.id) || null);
+                                setShowContactDialog(true);
+                            }}
+                        />
+
+                        <PolicySection 
+                            description={standardDescription}
+                            footnote={standardFootnote}
+                        />
+
+                        <TimelineSection 
+                            signatures={voucher.signatures}
+                            transactions={voucher.transactions}
+                            displayCurrency={details.displayCurrency}
+                            onRemoveSignature={setShowRemoveSignatureModal}
+                            voucherStatus={details.status}
+                        />
+                    </div>
+
+                    <div className="space-y-6">
+                        <Card className="border-none shadow-premium" header={
+                            <div className="flex items-center justify-between w-full">
+                                <div className="flex items-center gap-2">
+                                    <Shield size={16} className="text-theme-primary" />
+                                    <span className="font-black text-xs uppercase tracking-widest">{t('voucher.trustCardTitle')}</span>
+                                </div>
+                                <HelpIcon topic="voucherTrust" size={13} />
+                            </div>
+                        }>
+                            <div className="space-y-4">
+                                <div>
+                                    <TrustBadge trust={details.trust} size="md" />
+                                </div>
+                                {!details.trust?.isOwnVoucher && !details.trust?.blockedByOffender && (
+                                    <div className="pt-3 border-t border-theme-subtle/30 text-xs">
+                                        {details.trust && details.trust.shortestHops != null && details.trust.trustPercent > 0 ? (
+                                            <div>
+                                                <p className="text-[10px] font-black uppercase text-theme-light mb-1.5">{t('voucher.trustPathLabel')}</p>
+                                                <p className="font-medium text-theme-secondary flex items-center flex-wrap gap-1 leading-relaxed">
+                                                    {[
+                                                        t('voucher.trustPathYou'),
+                                                        ...(details.trust.bestPathNames || []),
+                                                        `${voucher.creator.firstName || ''} ${voucher.creator.lastName || ''}`.trim() || t('voucher.trustPathIssuer')
+                                                    ].join(' → ')}
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <p className="text-theme-light italic text-xs leading-relaxed">
+                                                {t('voucher.trustNoPathHint')}
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </Card>
+
+                        <Card className="border-none shadow-premium" header={
+                            <div className="flex items-center gap-2">
+                                <Info size={16} className="text-theme-primary" />
+                                <span className="font-black text-xs uppercase tracking-widest">{t('voucher.detailsHeader')}</span>
+                            </div>
+                        }>
+                            <div className="space-y-6">
+                                <Advanced>
+                                    <InfoRow label={t('voucher.idLabel')} icon={Shield}>
+                                        <TechId value={voucher.voucherId} kind="voucher" />
+                                    </InfoRow>
+                                </Advanced>
+                                <InfoRow label={t('voucher.issueDateLabel')} icon={Clock}>{formatDateTime(voucher.creationDate)}</InfoRow>
+                                <InfoRow label={t('voucher.validUntilLabel')} icon={AlertCircle}>{formatDateTime(voucher.validUntil || undefined)}</InfoRow>
+                                <div className="pt-4 border-t border-theme-subtle/30 grid grid-cols-2 gap-4">
+                                    <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
+                                        <p className="text-[9px] font-black uppercase text-theme-light mb-1">{t('voucher.divisibleLabel')}</p>
+                                        <p className="text-xs font-bold">{allowPartialTransfers ? t('voucher.divisibleYes') : t('voucher.divisibleNo')}</p>
+                                    </div>
+                                    <div className="text-center p-3 bg-theme-subtle/10 rounded-2xl">
+                                        <p className="text-[9px] font-black uppercase text-theme-light mb-1">{t('voucher.collateralLabel')}</p>
+                                        <p className="text-xs font-bold">{voucher.collateral?.amount ? `${voucher.collateral.amount} ${voucher.collateral.abbreviation || voucher.collateral.unit}` : t('voucher.noCollateral')}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </Card>
+                    </div>
+                </div>
             </div>
 
             <ExportSigningRequestModal 

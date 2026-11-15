@@ -9,7 +9,6 @@ import { contactService } from "../services/contactService";
 import { settingsService } from "../services/settingsService";
 import { marketService } from "../services/marketService";
 import { recoveryService } from "../services/recoveryService";
-import { copyToClipboard } from "../utils/clipboard";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
@@ -20,13 +19,14 @@ import { IntegrityReportModal } from "./IntegrityReportModal";
 import { FirstStepsChecklist } from "./FirstStepsChecklist";
 import { InfoHint } from "./ui/InfoHint";
 import { PageLayout } from "./ui/PageLayout";
+import { Advanced } from "./ui/Advanced";
+import { TechId } from "./ui/TechId";
 import { 
     Plus, 
     ArrowUpRight, 
     ArrowDownLeft, 
     ShieldAlert, 
     UserCircle,
-    Copy,
     CheckCircle2,
     Clock,
     AlertCircle,
@@ -53,7 +53,6 @@ export function Dashboard() {
     const [balances, setBalances] = useState<AggregatedBalance[]>([]);
     const [recentEvents, setRecentEvents] = useState<WalletEvent[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState("");
-    const [copied, setCopied] = useState(false);
     const [activeVouchersCount, setActiveVouchersCount] = useState(0);
     const [incompleteCount, setIncompleteCount] = useState(0);
     const [quarantinedCount, setQuarantinedCount] = useState(0);
@@ -260,23 +259,6 @@ export function Dashboard() {
         }
     }
 
-    async function handleCopyUserId() {
-        if (!userId) return;
-        try {
-            const ok = await copyToClipboard(userId);
-            if (ok) {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-            } else {
-                setFeedbackMsg(t('common.copyFailed', 'Fehler beim Kopieren'));
-            }
-        } catch (e) {
-            const msg = `Failed to copy User ID: ${stringifyError(e)}`;
-            console.error(msg);
-            setFeedbackMsg(translateError(e, t));
-        }
-    }
-
     function calculatePopoverPosition(rect: DOMRect, popoverEl?: HTMLElement | null): { top: number; left: number } {
         const popoverWidth = popoverEl?.offsetWidth || 256;
         const popoverHeight = popoverEl?.offsetHeight || 180;
@@ -391,7 +373,6 @@ export function Dashboard() {
         }
         return { label: t('dashboard.eventUnknown'), icon: AlertCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
     }
-    const truncatedUserId = userId ? truncateUserId(userId) : t('common.loading');
 
     return (
         <PageLayout 
@@ -409,20 +390,11 @@ export function Dashboard() {
                             </div>
                         </div>
                         
-                        <div className="flex items-center gap-2 shrink-0">
-                            <button 
-                                onClick={handleCopyUserId}
-                                title={t('dashboard.copyUserIdHint', { id: userId })}
-                                className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-all duration-300 border ${
-                                    copied 
-                                    ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
-                                    : 'bg-white/50 text-theme-secondary border-theme-subtle/50 hover:border-theme-primary hover:bg-white hover:shadow-sm'
-                                }`}
-                            >
-                                <span className="font-mono text-[10px]">{copied ? t('common.copied') : truncatedUserId}</span>
-                                {copied ? <CheckCircle2 size={12} /> : <Copy size={12} className="opacity-50" />}
-                            </button>
-                        </div>
+                        <Advanced>
+                            <div className="flex items-center gap-2 shrink-0">
+                                <TechId value={userId} kind="did" />
+                            </div>
+                        </Advanced>
                     </div>
                 </header>
             }
@@ -701,30 +673,32 @@ export function Dashboard() {
                 <section>
                     <div className="flex items-center justify-between mb-4 px-2">
                         <h2 className="text-xs font-black text-theme-light uppercase tracking-[0.2em]">{t('dashboard.yourBalances')}</h2>
-                        <div className="flex items-center bg-white/40 p-0.5 rounded-xl border border-theme-subtle/50 text-xs shadow-inner-soft">
-                            <button
-                                type="button"
-                                onClick={() => handleViewModeChange('spendable')}
-                                className={`px-3 py-1 rounded-lg font-bold transition-all text-[11px] ${
-                                    balanceViewMode === 'spendable'
-                                        ? 'bg-white text-theme-primary shadow-sm'
-                                        : 'text-theme-light hover:text-theme-secondary'
-                                }`}
-                            >
-                                {t('dashboard.modeSpendable')}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => handleViewModeChange('net')}
-                                className={`px-3 py-1 rounded-lg font-bold transition-all text-[11px] ${
-                                    balanceViewMode === 'net'
-                                        ? 'bg-white text-theme-primary shadow-sm'
-                                        : 'text-theme-light hover:text-theme-secondary'
-                                }`}
-                            >
-                                {t('dashboard.modeNet')}
-                            </button>
-                        </div>
+                        <Advanced>
+                            <div className="flex items-center bg-white/40 p-0.5 rounded-xl border border-theme-subtle/50 text-xs shadow-inner-soft">
+                                <button
+                                    type="button"
+                                    onClick={() => handleViewModeChange('spendable')}
+                                    className={`px-3 py-1 rounded-lg font-bold transition-all text-[11px] ${
+                                        balanceViewMode === 'spendable'
+                                            ? 'bg-white text-theme-primary shadow-sm'
+                                            : 'text-theme-light hover:text-theme-secondary'
+                                    }`}
+                                >
+                                    {t('dashboard.modeSpendable')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleViewModeChange('net')}
+                                    className={`px-3 py-1 rounded-lg font-bold transition-all text-[11px] ${
+                                        balanceViewMode === 'net'
+                                            ? 'bg-white text-theme-primary shadow-sm'
+                                            : 'text-theme-light hover:text-theme-secondary'
+                                    }`}
+                                >
+                                    {t('dashboard.modeNet')}
+                                </button>
+                            </div>
+                        </Advanced>
                     </div>
                     
                     {isLoading ? (

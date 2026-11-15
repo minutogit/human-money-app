@@ -1,6 +1,8 @@
 import { FileSignature, History, CheckCircle2, Trash2 } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { HelpIcon } from '../ui/HelpIcon';
+import { Advanced } from '../ui/Advanced';
+import { TechId } from '../ui/TechId';
 import { useTranslation } from 'react-i18next';
 import { VoucherDetails, VoucherStatus } from '../../types';
 
@@ -42,8 +44,8 @@ export function TimelineSection({
                 </div>
                 
                 <div className="bg-white/40 border border-theme-subtle/30 rounded-2xl p-4 flex items-center justify-between group hover:border-theme-primary/30 transition-all shadow-sm">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
                       <span className="text-[10px] font-black uppercase tracking-widest text-theme-light">
                         {t(`voucher.role.${sig.role}`, { defaultValue: sig.role })}
                       </span>
@@ -51,7 +53,7 @@ export function TimelineSection({
                         {sig.details?.firstName} {sig.details?.lastName}
                       </span>
                     </div>
-                    <p className="text-[10px] font-mono text-theme-light opacity-50 truncate max-w-[200px]">{sig.signerId}</p>
+                    {sig.signerId && <TechId value={sig.signerId} kind="did" />}
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-[10px] font-bold text-theme-light opacity-60">{formatDateTime(sig.signatureTime)}</span>
@@ -72,33 +74,38 @@ export function TimelineSection({
         </div>
       </Card>
 
-      <Card className="border-none shadow-premium" header={
-        <div className="flex items-center gap-2">
-          <History size={18} className="text-theme-primary" />
-          <span className="font-black text-xs uppercase tracking-widest">{t('voucher.transactionHistoryHeader')}</span>
-        </div>
-      }>
-        <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-          {transactions.slice().reverse().map((tItem) => (
-            <div key={tItem.tId} className="p-3 bg-white/40 border border-theme-subtle/30 rounded-xl relative">
-              <div className="flex justify-between items-start mb-2">
-                <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${tItem.tType === 'init' ? 'bg-emerald-500 text-white' : 'bg-theme-secondary text-white'}`}>
-                  {t(`voucher.txType.${tItem.tType}`, { defaultValue: tItem.tType })}
-                </span>
-                <span className="text-xs font-black text-theme-primary">
-                  {tItem.amount} {displayCurrency}
-                </span>
+      <Advanced>
+        <Card className="border-none shadow-premium" header={
+          <div className="flex items-center gap-2">
+            <History size={18} className="text-theme-primary" />
+            <span className="font-black text-xs uppercase tracking-widest">{t('voucher.transactionHistoryHeader')}</span>
+          </div>
+        }>
+          <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+            {transactions.slice().reverse().map((tItem) => (
+              <div key={tItem.tId} className="p-3 bg-white/40 border border-theme-subtle/30 rounded-xl relative">
+                <div className="flex justify-between items-start mb-2">
+                  <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${tItem.tType === 'init' ? 'bg-emerald-500 text-white' : 'bg-theme-secondary text-white'}`}>
+                    {t(`voucher.txType.${tItem.tType}`, { defaultValue: tItem.tType })}
+                  </span>
+                  <span className="text-xs font-black text-theme-primary">
+                    {tItem.amount} {displayCurrency}
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-[9px] text-theme-light flex items-center justify-between gap-2 flex-wrap">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span>{t('transfer.from')}:</span>
+                      {tItem.senderId ? <TechId value={tItem.senderId} kind="did" /> : <span>SYSTEM</span>}
+                    </span>
+                    <span>{formatDateTime(tItem.tTime).split(',')[0]}</span>
+                  </div>
+                </div>
               </div>
-              <div className="space-y-1">
-                <p className="text-[9px] text-theme-light flex items-center justify-between">
-                  <span>{tItem.senderId ? `${t('transfer.from')}: ${tItem.senderId.slice(0, 12)}...` : `${t('transfer.from')}: SYSTEM`}</span>
-                  <span>{formatDateTime(tItem.tTime).split(',')[0]}</span>
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
+            ))}
+          </div>
+        </Card>
+      </Advanced>
     </div>
   );
 }

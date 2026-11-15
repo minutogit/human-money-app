@@ -3,6 +3,8 @@ import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { InfoRow } from '../ui/InfoRow';
 import { HelpIcon } from '../ui/HelpIcon';
+import { Advanced } from '../ui/Advanced';
+import { TechId } from '../ui/TechId';
 import { useTranslation } from 'react-i18next';
 import { PublicProfile, TrustStatus } from '../../types';
 
@@ -43,13 +45,19 @@ export function CreatorSection({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 p-2">
           <div className="space-y-6">
             <InfoRow label={t('voucher.legalNameLabel')} icon={User}>{creator.firstName} {creator.lastName}</InfoRow>
-            <InfoRow label={t('voucher.accountIdLabel')} icon={Shield} isMono>{creator.id}</InfoRow>
+            {creator.id && (
+              <InfoRow label={t('voucher.accountIdLabel')} icon={Shield}>
+                <TechId value={creator.id} kind="did" />
+              </InfoRow>
+            )}
             <InfoRow label={t('voucher.postalAddressLabel')} icon={MapPin}>
               {creator.address?.street} {creator.address?.houseNumber}<br/>
               {creator.address?.zipCode} {creator.address?.city}
               {creator.address?.country && <><br/>{creator.address.country}</>}
             </InfoRow>
-            <InfoRow label={t('voucher.coordinatesLabel')} icon={MapPin}>{creator.coordinates}</InfoRow>
+            <Advanced>
+              <InfoRow label={t('voucher.coordinatesLabel')} icon={MapPin}>{creator.coordinates}</InfoRow>
+            </Advanced>
           </div>
           <div className="space-y-6">
             <InfoRow label={t('voucher.orgCommunityLabel')} icon={Building2}>{creator.organization || creator.community || t('voucher.independent')}</InfoRow>
