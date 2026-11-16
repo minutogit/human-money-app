@@ -13,6 +13,20 @@ pub struct PortableBackupContainer {
     pub custom_standards: HashMap<String, String>, // standard_id -> standard.toml content
 }
 
+/// Differential delta container for sync-server backup (`<pfx>-delta` slot).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BackupDeltaContainer {
+    pub container_format: String, // "humoco-app-backup-delta-v1"
+    pub created_at: String,       // RFC3339
+    pub base_manifest_sha256: String,
+    pub manifest_hex: String,
+    pub put_blobs_hex: HashMap<String, String>,
+    #[serde(default)]
+    pub delete_blobs: Vec<String>,
+    #[serde(default)]
+    pub custom_standards: HashMap<String, String>,
+}
+
 /// Information returned when probing an encrypted backup source without credentials.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]

@@ -1,13 +1,14 @@
 // src-tauri/src/commands/backup.rs
 use crate::{
     models::{
-        FrontendAutoBackupStatusDto, FrontendBackupInspectionDto, FrontendBackupProbeDto,
-        FrontendBackupSummaryDto, FrontendBackupFetchDto, FrontendBackupSyncResult,
-        FrontendError, FrontendRestoreOutcomeDto, FrontendRestoreReconcileResultDto,
-        MnemonicLanguage, PortableBackupContainer,
+        BackupDeltaContainer, FrontendAutoBackupStatusDto, FrontendBackupFetchDto,
+        FrontendBackupInspectionDto, FrontendBackupProbeDto, FrontendBackupSummaryDto,
+        FrontendBackupSyncResult, FrontendError, FrontendRestoreOutcomeDto,
+        FrontendRestoreReconcileResultDto, MnemonicLanguage, PortableBackupContainer,
     },
     AppState,
 };
+use sha2::{Digest, Sha256};
 use chrono::Utc;
 use human_money_core::{
     app_service::AppService,
@@ -939,10 +940,170 @@ pub(crate) fn cleanup_stale_tmp_restore_files(tmp_dir: &Path) {
     }
 }
 
+const BACKUP_BASE_TTL_SECS: u64 = 7 * 24 * 3600; // 7 days
+
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    human_money_core::hex::encode(hasher.finalize())
+}
+
+struct BackupSigner<'a> {
+    is_public: bool,
+    master_seed: &'a [u8; 32],
+    my_ed_sk: &'a ed25519_dalek::SigningKey,
+    drop_desc: &'a humoco_market::DropDescriptor,
+}
+
+fn sign_backup_channel_request(
+    signer: &BackupSigner<'_>,
+    method: &str,
+    prefix: Option<&str>,
+    now_secs: u64,
+    nonce: &str,
+    body: &[u8],
+) -> Result<humoco_market::SignedDropHeaders, String> {
+    if signer.is_public {
+        let (r_sk, _, _) =
+            humoco_market::derive_public_drop_keypair(signer.master_seed, &signer.drop_desc.write_url)
+                .map_err(|e| e.to_string())?;
+        Ok(humoco_market::sign_member_request_direct(
+            &r_sk,
+            method,
+            "backup",
+            prefix,
+            now_secs,
+            nonce,
+            body,
+        ))
+    } else {
+        humoco_market::sign_member_request_stealth(
+            signer.my_ed_sk,
+            &signer.drop_desc.drop_pub,
+            method,
+            "backup",
+            prefix,
+            now_secs,
+            nonce,
+            body,
+        )
+        .map_err(|e| e.to_string())
+    }
+}
+
+pub(crate) fn merge_backup_delta_into_base(
+    base: &mut PortableBackupContainer,
+    delta: &BackupDeltaContainer,
+) -> Result<(), String> {
+    let base_manifest_bytes = human_money_core::hex::decode(&base.manifest_hex)
+        .map_err(|e| format!("Invalid base manifest hex: {}", e))?;
+    let actual_sha256 = sha256_hex(&base_manifest_bytes);
+    if actual_sha256 != delta.base_manifest_sha256 {
+        return Err(format!(
+            "Backup delta base mismatch (expected {}, got {})",
+            delta.base_manifest_sha256, actual_sha256
+        ));
+    }
+
+    base.manifest_hex = delta.manifest_hex.clone();
+    base.created_at = delta.created_at.clone();
+    for del_name in &delta.delete_blobs {
+        base.blobs_hex.remove(del_name);
+    }
+    for (name, hex_data) in &delta.put_blobs_hex {
+        base.blobs_hex.insert(name.clone(), hex_data.clone());
+    }
+    base.custom_standards = delta.custom_standards.clone();
+    Ok(())
+}
+
+pub(crate) async fn fetch_and_merge_backup_slot(
+    client: &reqwest::Client,
+    read_url: &str,
+    pubkey_hex: &str,
+    base_prefix: Option<&str>,
+) -> Option<Vec<u8>> {
+    let delta_prefix = humoco_market::derive_delta_prefix(base_prefix);
+    let (base_res, delta_res) = tokio::join!(
+        crate::sync_client::get_slot(client, read_url, pubkey_hex, base_prefix, "backup", None),
+        crate::sync_client::get_slot(client, read_url, pubkey_hex, Some(delta_prefix.as_str()), "backup", None),
+    );
+
+    let base_slot_bytes = match base_res {
+        Ok(crate::sync_client::SlotFetchResult::Modified { bytes, .. }) => bytes,
+        _ => return None,
+    };
+
+    let unpadded_base = humoco_market::unpad_backup_slot_bytes(&base_slot_bytes).ok()?;
+    let mut base_container: PortableBackupContainer = serde_json::from_slice(&unpadded_base).ok()?;
+
+    if let Ok(crate::sync_client::SlotFetchResult::Modified { bytes: delta_slot_bytes, .. }) = delta_res {
+        if let Ok(unpadded_delta) = humoco_market::unpad_backup_slot_bytes(&delta_slot_bytes) {
+            if let Ok(delta_container) = serde_json::from_slice::<BackupDeltaContainer>(&unpadded_delta) {
+                if let Err(e) = merge_backup_delta_into_base(&mut base_container, &delta_container) {
+                    log::warn!("Ignoring stale/mismatched backup delta from {}: {}", read_url, e);
+                }
+            }
+        }
+    }
+
+    serde_json::to_vec(&base_container).ok()
+}
+
+struct AuthorizedBackupTarget {
+    desc: humoco_market::DropDescriptor,
+    is_public: bool,
+    base_prefix: Option<String>,
+    remote_base_etag: Option<String>,
+    effective_max_bytes: usize,
+}
+
+fn target_can_use_delta(
+    target: &AuthorizedBackupTarget,
+    state: &crate::state::StoredBackupSyncState,
+    delta_len: usize,
+    now_secs: u64,
+) -> bool {
+    let Some(cur_sha) = state.base_manifest_sha256.as_deref() else {
+        return false;
+    };
+    let Some(m) = state.mirrors_by_write_url.get(&target.desc.write_url) else {
+        return false;
+    };
+    if m.base_manifest_sha256 != cur_sha {
+        return false;
+    }
+    if target.remote_base_etag.is_none() {
+        return false;
+    }
+    if m.base_slot_etag
+        .as_ref()
+        .is_some_and(|exp| target.remote_base_etag.as_deref() != Some(exp.as_str()))
+    {
+        return false;
+    }
+    if now_secs.saturating_sub(m.base_uploaded_at) >= BACKUP_BASE_TTL_SECS {
+        return false;
+    }
+    if delta_len > m.base_padded_bytes / 2 {
+        return false;
+    }
+    m.base_padded_bytes.saturating_add(delta_len) <= target.effective_max_bytes
+}
+
 pub async fn sync_backup_impl(
     password: Option<String>,
     state: &AppState,
     app: &tauri::AppHandle,
+) -> Result<FrontendBackupSyncResult, FrontendError> {
+    let custom_standards = collect_custom_standards(app);
+    sync_backup_with_standards_impl(password, custom_standards, state).await
+}
+
+pub(crate) async fn sync_backup_with_standards_impl(
+    password: Option<String>,
+    custom_standards: HashMap<String, String>,
+    state: &AppState,
 ) -> Result<FrontendBackupSyncResult, FrontendError> {
     let settings = state.get_cached_settings().map_err(FrontendError::from)?;
     if !settings.sync_backup_enabled {
@@ -1055,7 +1216,16 @@ pub async fn sync_backup_impl(
         .await
         {
             Ok(cap) if cap.authorized => {
-                authorized_targets.push((sync_desc, cap_pubkey, is_public));
+                authorized_targets.push(AuthorizedBackupTarget {
+                    desc: sync_desc,
+                    is_public,
+                    base_prefix: cap_prefix,
+                    remote_base_etag: cap.slot_etag,
+                    effective_max_bytes: cap
+                        .max_bytes
+                        .filter(|&v| v > 0)
+                        .unwrap_or(humoco_market::DROP_BACKUP_MAX_BYTES),
+                });
             }
             _ => {}
         }
@@ -1073,107 +1243,257 @@ pub async fn sync_backup_impl(
         });
     }
 
-    // Generate in-memory PortableBackupContainer
-    let custom_standards = collect_custom_standards(app);
-    let container_bytes = {
+    let max_target_bytes = authorized_targets
+        .iter()
+        .map(|t| t.effective_max_bytes)
+        .max()
+        .unwrap_or(humoco_market::DROP_BACKUP_MAX_BYTES);
+    let now_secs = crate::sync_client::current_unix_timestamp();
+
+    let (
+        mut backup_sync_state,
+        base_manifest_bytes,
+        base_manifest_sha256,
+        base_padded_bytes,
+        delta_padded_opt,
+    ) = {
         let mut service = state
             .service
             .lock()
             .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        let diff = service
-            .create_differential_backup(None, BackupProtection::MnemonicOnly, password.as_deref())
-            .map_err(FrontendError::from)?;
 
-        let mut blobs_hex = HashMap::with_capacity(diff.put_blobs.len());
-        for (name, data) in diff.put_blobs {
-            blobs_hex.insert(name, human_money_core::hex::encode(&data));
-        }
+        let stored_state: crate::state::StoredBackupSyncState = service
+            .load_encrypted_data(crate::state::BACKUP_SYNC_STATE_KEY, password.as_deref())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
 
-        let timestamp = Utc::now().to_rfc3339();
-        let container = PortableBackupContainer {
-            container_format: "humoco-app-backup-v1".to_string(),
-            created_at: timestamp,
-            manifest_hex: human_money_core::hex::encode(&diff.encrypted_manifest_bytes),
-            blobs_hex,
-            custom_standards,
-        };
-
-        serde_json::to_vec_pretty(&container)
-            .map_err(|e| FrontendError::from(format!("Failed to serialize backup container: {}", e)))?
-    };
-
-    // Pad backup slot bytes
-    let padded_bytes = humoco_market::pad_backup_slot_bytes(
-        &container_bytes,
-        humoco_market::DROP_BACKUP_MAX_BYTES,
-    )
-    .map_err(|e| FrontendError::from(e.to_string()))?;
-
-    let client = crate::sync_client::create_sync_http_client();
-    let now_secs = crate::sync_client::current_unix_timestamp();
-    let mut uploaded_to = 0;
-    let mut errors = Vec::new();
-    let mut settings_updated = false;
-    let mut current_settings = settings;
-
-    for (sync_desc, _cap_pubkey, is_public) in authorized_targets {
-        let nonce = crate::sync_client::generate_sync_nonce();
-        let signed_res = if is_public {
-            match humoco_market::derive_public_drop_keypair(&master_seed, &sync_desc.write_url) {
-                Ok((r_sk, _, _)) => Ok(humoco_market::sign_member_request_direct(
-                    &r_sk,
-                    "PUT",
-                    "backup",
-                    my_prefix.as_deref(),
-                    now_secs,
-                    &nonce,
-                    &padded_bytes,
-                )),
-                Err(e) => Err(e.to_string()),
+        // Try building a delta against the stored Base manifest (if one exists)
+        let delta_attempt = if let (Some(prev_manifest), Some(prev_sha256)) = (
+            stored_state.base_manifest_bytes.as_deref(),
+            stored_state.base_manifest_sha256.as_deref(),
+        ) {
+            match service.create_differential_backup(
+                Some(prev_manifest),
+                BackupProtection::MnemonicOnly,
+                password.as_deref(),
+            ) {
+                Ok(diff) => {
+                    let mut put_blobs_hex = HashMap::with_capacity(diff.put_blobs.len());
+                    for (name, data) in diff.put_blobs {
+                        put_blobs_hex.insert(name, human_money_core::hex::encode(&data));
+                    }
+                    let delta_container = BackupDeltaContainer {
+                        container_format: "humoco-app-backup-delta-v1".to_string(),
+                        created_at: Utc::now().to_rfc3339(),
+                        base_manifest_sha256: prev_sha256.to_string(),
+                        manifest_hex: human_money_core::hex::encode(&diff.encrypted_manifest_bytes),
+                        put_blobs_hex,
+                        delete_blobs: diff.delete_blobs,
+                        custom_standards: custom_standards.clone(),
+                    };
+                    serde_json::to_vec(&delta_container)
+                        .ok()
+                        .and_then(|bytes| {
+                            humoco_market::pad_backup_slot_bytes(&bytes, max_target_bytes).ok()
+                        })
+                }
+                Err(_) => None,
             }
         } else {
-            humoco_market::sign_member_request_stealth(
-                &my_ed_sk,
-                &sync_desc.drop_pub,
-                "PUT",
-                "backup",
-                my_prefix.as_deref(),
-                now_secs,
-                &nonce,
-                &padded_bytes,
-            )
-            .map_err(|e| e.to_string())
+            None
         };
+
+        // Determine if any mirror needs a fresh Base (or if Delta grew too large)
+        let any_mirror_needs_base = authorized_targets.iter().any(|target| {
+            !delta_attempt
+                .as_ref()
+                .is_some_and(|d| target_can_use_delta(target, &stored_state, d.len(), now_secs))
+        });
+
+        let (base_m_bytes, base_m_sha, base_padded) = if any_mirror_needs_base {
+            let diff = service
+                .create_differential_backup(None, BackupProtection::MnemonicOnly, password.as_deref())
+                .map_err(FrontendError::from)?;
+            let mut blobs_hex = HashMap::with_capacity(diff.put_blobs.len());
+            for (name, data) in diff.put_blobs {
+                blobs_hex.insert(name, human_money_core::hex::encode(&data));
+            }
+            let container = PortableBackupContainer {
+                container_format: "humoco-app-backup-v1".to_string(),
+                created_at: Utc::now().to_rfc3339(),
+                manifest_hex: human_money_core::hex::encode(&diff.encrypted_manifest_bytes),
+                blobs_hex,
+                custom_standards,
+            };
+            let container_bytes = serde_json::to_vec(&container).map_err(|e| {
+                FrontendError::from(format!("Failed to serialize backup container: {}", e))
+            })?;
+            let padded = humoco_market::pad_backup_slot_bytes(&container_bytes, max_target_bytes)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
+            let sha = sha256_hex(&diff.encrypted_manifest_bytes);
+            (Some(diff.encrypted_manifest_bytes), Some(sha), Some(padded))
+        } else {
+            (None, None, None)
+        };
+
+        (stored_state, base_m_bytes, base_m_sha, base_padded, delta_attempt)
+    };
+
+    let client = crate::sync_client::create_sync_http_client();
+    let mut uploaded_to = 0;
+    let mut last_uploaded_bytes = 0usize;
+    let mut errors = Vec::new();
+    let mut current_settings = settings;
+    let mut state_dirty = false;
+    let mut base_uploaded_any = false;
+
+    for target in authorized_targets {
+        let target_delta_prefix = humoco_market::derive_delta_prefix(target.base_prefix.as_deref());
+        let can_use_delta = delta_padded_opt
+            .as_ref()
+            .is_some_and(|d| target_can_use_delta(&target, &backup_sync_state, d.len(), now_secs));
+
+        let (upload_prefix, upload_bytes, is_delta_upload) = if can_use_delta {
+            (
+                Some(target_delta_prefix.as_str()),
+                delta_padded_opt.as_ref().expect("checked above"),
+                true,
+            )
+        } else if let Some(ref base_bytes) = base_padded_bytes {
+            (target.base_prefix.as_deref(), base_bytes, false)
+        } else {
+            continue;
+        };
+
+        if upload_bytes.len() > target.effective_max_bytes {
+            errors.push(format!(
+                "Upload to {} skipped: backup size {} exceeds channel limit {}",
+                target.desc.write_url, upload_bytes.len(), target.effective_max_bytes
+            ));
+            continue;
+        }
+
+        let signer = BackupSigner {
+            is_public: target.is_public,
+            master_seed: &master_seed,
+            my_ed_sk: &my_ed_sk,
+            drop_desc: &target.desc,
+        };
+        let nonce = crate::sync_client::generate_sync_nonce();
+        let signed_res = sign_backup_channel_request(
+            &signer,
+            "PUT",
+            upload_prefix,
+            now_secs,
+            &nonce,
+            upload_bytes,
+        );
 
         match signed_res {
             Ok(signed) => {
                 match crate::sync_client::put_slot(
                     &client,
-                    &sync_desc.write_url,
+                    &target.desc.write_url,
                     &signed,
                     "backup",
-                    &padded_bytes,
+                    upload_bytes,
                     None,
                 )
                 .await
                 {
-                    Ok(crate::sync_client::PutSlotOutcome::Saved { .. }) => {
+                    Ok(crate::sync_client::PutSlotOutcome::Saved { etag }) => {
                         uploaded_to += 1;
+                        last_uploaded_bytes = last_uploaded_bytes.max(upload_bytes.len());
+                        state_dirty = true;
+                        if is_delta_upload {
+                            if let Some(m) = backup_sync_state
+                                .mirrors_by_write_url
+                                .get_mut(&target.desc.write_url)
+                            {
+                                m.delta_active = true;
+                            }
+                        } else {
+                            base_uploaded_any = true;
+                            let had_delta = backup_sync_state
+                                .mirrors_by_write_url
+                                .get(&target.desc.write_url)
+                                .map(|m| m.delta_active)
+                                .unwrap_or(false);
+                            let mut delta_cleared = !had_delta;
+                            if had_delta {
+                                let del_nonce = crate::sync_client::generate_sync_nonce();
+                                if let Ok(del_signed) = sign_backup_channel_request(
+                                    &signer,
+                                    "DELETE",
+                                    Some(target_delta_prefix.as_str()),
+                                    now_secs,
+                                    &del_nonce,
+                                    b"",
+                                ) {
+                                    delta_cleared = crate::sync_client::delete_slot(
+                                        &client,
+                                        &target.desc.write_url,
+                                        &del_signed,
+                                        "backup",
+                                    )
+                                    .await
+                                    .is_ok();
+                                }
+                            }
+                            if let Some(ref new_sha) = base_manifest_sha256 {
+                                let normalized_etag = etag
+                                    .map(|e| e.trim().trim_matches('"').to_string())
+                                    .filter(|s| !s.is_empty());
+                                backup_sync_state.mirrors_by_write_url.insert(
+                                    target.desc.write_url.clone(),
+                                    crate::state::BackupMirrorState {
+                                        base_manifest_sha256: new_sha.clone(),
+                                        base_slot_etag: normalized_etag,
+                                        base_uploaded_at: now_secs,
+                                        base_padded_bytes: upload_bytes.len(),
+                                        delta_active: !delta_cleared,
+                                    },
+                                );
+                            }
+                        }
                     }
                     Ok(crate::sync_client::PutSlotOutcome::PreconditionFailed { .. }) => {
-                        errors.push(format!("Upload to {} failed: precondition failed", sync_desc.write_url));
+                        errors.push(format!(
+                            "Upload to {} failed: precondition failed",
+                            target.desc.write_url
+                        ));
                     }
                     Err(e) => {
-                        errors.push(format!("Upload to {} failed: {}", sync_desc.write_url, e));
+                        errors.push(format!("Upload to {} failed: {}", target.desc.write_url, e));
                     }
                 }
             }
             Err(e) => {
-                errors.push(format!("Signing failed for {}: {}", sync_desc.write_url, e));
+                errors.push(format!("Signing failed for {}: {}", target.desc.write_url, e));
             }
         }
     }
 
+    if state_dirty {
+        if base_uploaded_any {
+            if let (Some(new_bytes), Some(new_sha)) = (base_manifest_bytes, base_manifest_sha256) {
+                backup_sync_state.base_manifest_bytes = Some(new_bytes);
+                backup_sync_state.base_manifest_sha256 = Some(new_sha);
+            }
+        }
+        if let Ok(encoded_state) = serde_json::to_vec(&backup_sync_state) {
+            if let Ok(mut service) = state.service.lock() {
+                let _ = service.save_encrypted_data(
+                    crate::state::BACKUP_SYNC_STATE_KEY,
+                    &encoded_state,
+                    password.as_deref(),
+                );
+            }
+        }
+    }
+
+    let settings_updated;
     let timestamp_str = if uploaded_to > 0 {
         let ts = Utc::now().to_rfc3339();
         current_settings.last_sync_backup_at = Some(ts.clone());
@@ -1181,6 +1501,7 @@ pub async fn sync_backup_impl(
         settings_updated = true;
         Some(ts)
     } else {
+        settings_updated = false;
         None
     };
 
@@ -1202,7 +1523,7 @@ pub async fn sync_backup_impl(
     Ok(FrontendBackupSyncResult {
         uploaded_to,
         authorized_targets: authorized_count,
-        padded_bytes: padded_bytes.len(),
+        padded_bytes: last_uploaded_bytes,
         timestamp: timestamp_str,
         errors,
         retry_after_secs,
@@ -1311,25 +1632,25 @@ pub async fn fetch_and_inspect_backup(
     let normalized_prefix = user_prefix.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_lowercase);
 
     for (read_url, pubkey_hex, kind) in candidates {
-        match crate::sync_client::get_slot(&fetch_client, &read_url, &pubkey_hex, normalized_prefix.as_deref(), "backup", None).await {
-            Ok(crate::sync_client::SlotFetchResult::Modified { bytes, .. }) => {
-                downloaded_bytes = Some((bytes, kind, read_url));
-                break;
-            }
-            _ => continue,
+        if let Some(merged_container_bytes) = fetch_and_merge_backup_slot(
+            &fetch_client,
+            &read_url,
+            &pubkey_hex,
+            normalized_prefix.as_deref(),
+        )
+        .await
+        {
+            downloaded_bytes = Some((merged_container_bytes, kind, read_url));
+            break;
         }
     }
 
-    let (slot_bytes, matched_key_kind, source_url) = downloaded_bytes.ok_or_else(|| {
+    let (unpadded, matched_key_kind, source_url) = downloaded_bytes.ok_or_else(|| {
         FrontendError::from(
             "Keine Sicherungsdatei in der angegebenen Ablage gefunden. Bitte prüfe die Eingabe oder den Schlüssel."
                 .to_string(),
         )
     })?;
-
-    // Unpad 64-KB slot bytes
-    let unpadded = humoco_market::unpad_backup_slot_bytes(&slot_bytes)
-        .map_err(|e| FrontendError::from(format!("Ungültiges Sicherungs-Slot-Format: {}", e)))?;
 
     // Write to <app_data_dir>/tmp_restore/sync_restore_<uuid>.hmcbackup
     let app_data_dir = app.path().app_data_dir().map_err(|e| FrontendError::from(e.to_string()))?;
@@ -1896,5 +2217,231 @@ mod tests {
         settings.sync_backup_enabled = false;
         let dto = super::compute_backup_status_dto(&settings, false);
         assert_eq!(dto.status, "disconnected");
+    }
+
+    #[test]
+    fn test_merge_backup_delta_into_base_and_mismatch() {
+        let base_manifest = b"base-manifest-v1";
+        let base_sha = super::sha256_hex(base_manifest);
+
+        let mut base = crate::models::PortableBackupContainer {
+            container_format: "humoco-app-backup-v1".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            manifest_hex: human_money_core::hex::encode(base_manifest),
+            blobs_hex: [
+                ("keep.bin".to_string(), "aa".to_string()),
+                ("remove.bin".to_string(), "bb".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            custom_standards: HashMap::new(),
+        };
+
+        let delta = crate::models::BackupDeltaContainer {
+            container_format: "humoco-app-backup-delta-v1".to_string(),
+            created_at: "2026-01-02T00:00:00Z".to_string(),
+            base_manifest_sha256: base_sha,
+            manifest_hex: human_money_core::hex::encode(b"manifest-v2"),
+            put_blobs_hex: [("added.bin".to_string(), "cc".to_string())]
+                .into_iter()
+                .collect(),
+            delete_blobs: vec!["remove.bin".to_string()],
+            custom_standards: [("std1".to_string(), "toml".to_string())]
+                .into_iter()
+                .collect(),
+        };
+
+        super::merge_backup_delta_into_base(&mut base, &delta).expect("matching base must merge");
+        assert_eq!(base.created_at, "2026-01-02T00:00:00Z");
+        assert_eq!(base.manifest_hex, human_money_core::hex::encode(b"manifest-v2"));
+        assert!(!base.blobs_hex.contains_key("remove.bin"));
+        assert_eq!(base.blobs_hex.get("keep.bin").map(String::as_str), Some("aa"));
+        assert_eq!(base.blobs_hex.get("added.bin").map(String::as_str), Some("cc"));
+        assert_eq!(base.custom_standards.get("std1").map(String::as_str), Some("toml"));
+
+        // Mismatching base_manifest_sha256 must be rejected
+        let mut bad_delta = delta;
+        bad_delta.base_manifest_sha256 = "0000".to_string();
+        assert!(super::merge_backup_delta_into_base(&mut base, &bad_delta).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sync_backup_base_delta_lifecycle_and_remote_wipe_recovery() {
+        use crate::commands::sync::tests::{
+            create_test_state, setup_test_app as setup_sync_test_app, MockSyncServer, ALICE_PHRASE,
+        };
+        use rand::{rngs::OsRng, RngCore};
+
+        let base_dir = temp_test_dir("sync_backup_base_delta_e2e");
+        let password = "TestPassword123!";
+        let service = setup_sync_test_app(&base_dir.join("wallet"), "Alice", ALICE_PHRASE, password);
+        let state = create_test_state(service);
+
+        let (_admin_sk, admin_vk, _) = humoco_market::derive_drop_admin_keypair(&[0x42u8; 32], 0);
+        let drop_pub = hex::encode(admin_vk.to_bytes());
+        let server = MockSyncServer::start("alice_bkp".to_string(), drop_pub.clone()).await;
+
+        let stealth_pk = {
+            let s = state.service.lock().unwrap();
+            let my_ed_sk = s
+                .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+                .unwrap();
+            humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &drop_pub).unwrap()
+        };
+        server.members.lock().unwrap().push(stealth_pk.clone());
+
+        let write_url = format!("{}/sync.php", server.base_url);
+        let read_url = format!("{}/alice_bkp", server.base_url);
+        let base_slot_key = format!("{}_pc.backup", stealth_pk);
+        let delta_slot_key = format!("{}_pc-delta.backup", stealth_pk);
+
+        {
+            let mut s = state.service.lock().unwrap();
+            let mut settings = state.get_cached_settings().unwrap_or_default();
+            settings.sync_backup_enabled = true;
+            settings.market_selected_syncs = vec![crate::models::FrontendSyncDescriptor {
+                write_url: write_url.clone(),
+                read_url: read_url.clone(),
+                drop_pub: drop_pub.clone(),
+                ..Default::default()
+            }];
+            state.save_settings(&mut s, settings, Some(password)).unwrap();
+        }
+
+        // 1. Small wallet (< 64 KiB compressed): repeated mutations overwrite Base, never create Delta
+        let res1 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res1.uploaded_to, 1, "errors: {:?}", res1.errors);
+        assert_eq!(res1.padded_bytes, 65_536);
+        assert!(server.slots.lock().unwrap().contains_key(&base_slot_key));
+        assert!(!server.slots.lock().unwrap().contains_key(&delta_slot_key));
+
+        {
+            let mut s = state.service.lock().unwrap();
+            s.save_encrypted_data("small_key", b"small-v2", Some(password))
+                .unwrap();
+        }
+        let res2 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res2.uploaded_to, 1, "errors: {:?}", res2.errors);
+        assert_eq!(res2.padded_bytes, 65_536);
+        assert!(server.slots.lock().unwrap().contains_key(&base_slot_key));
+        assert!(!server.slots.lock().unwrap().contains_key(&delta_slot_key));
+
+        // 2. Large wallet (>= 128 KiB padded Base): triggers fresh Base rollover
+        let mut big_random = vec![0u8; 150 * 1024];
+        OsRng.fill_bytes(&mut big_random);
+        {
+            let mut s = state.service.lock().unwrap();
+            s.save_encrypted_data("big_blob", &big_random, Some(password))
+                .unwrap();
+        }
+        let res3 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res3.uploaded_to, 1, "errors: {:?}", res3.errors);
+        assert!(res3.padded_bytes >= 131_072);
+        assert!(server.slots.lock().unwrap().contains_key(&base_slot_key));
+        assert!(!server.slots.lock().unwrap().contains_key(&delta_slot_key));
+
+        // 3. Small mutation after large Base -> uploads Delta slot & restores full merged state
+        {
+            let mut s = state.service.lock().unwrap();
+            s.save_encrypted_data("small_after_base", b"delta-payload", Some(password))
+                .unwrap();
+        }
+        let res4 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res4.uploaded_to, 1, "errors: {:?}", res4.errors);
+        assert_eq!(res4.padded_bytes, 65_536);
+        assert!(server.slots.lock().unwrap().contains_key(&base_slot_key));
+        assert!(server.slots.lock().unwrap().contains_key(&delta_slot_key));
+
+        let fetch_client = crate::sync_client::create_sync_http_client();
+        let merged_bytes = super::fetch_and_merge_backup_slot(
+            &fetch_client,
+            &read_url,
+            &stealth_pk,
+            Some("pc"),
+        )
+        .await
+        .expect("merged backup container must be fetched");
+        let staged_file = base_dir.join("merged_sync_restore.hmcbackup");
+        super::write_file_atomic(&staged_file, &merged_bytes).unwrap();
+
+        let restored_wallet_dir = base_dir.join("restored_wallet");
+        let mut restored_service = AppService::new(&restored_wallet_dir).unwrap();
+        let restore_creds = BackupRestoreCredentials::Mnemonic {
+            phrase: ALICE_PHRASE,
+            passphrase: None,
+            prefix: Some("pc"),
+            language: human_money_core::MnemonicLanguage::English,
+        };
+        let (outcome, profile_name, _) = super::restore_backup_impl(
+            &staged_file,
+            restore_creds,
+            password,
+            "device-restored".to_string(),
+            &mut restored_service,
+        )
+        .unwrap();
+        assert_eq!(profile_name, "Alice");
+        let mut verify_service = AppService::new(&restored_wallet_dir).unwrap();
+        verify_service
+            .login(&outcome.folder_name, password, false, "device-restored".to_string())
+            .unwrap();
+        assert_eq!(
+            verify_service
+                .load_encrypted_data("big_blob", Some(password))
+                .unwrap(),
+            big_random
+        );
+        assert_eq!(
+            verify_service
+                .load_encrypted_data("small_after_base", Some(password))
+                .unwrap(),
+            b"delta-payload"
+        );
+
+        // 4. Remote Base wipe auto-recovery & orphaned Delta cleanup
+        server.slots.lock().unwrap().remove(&base_slot_key);
+        server.etags.lock().unwrap().remove(&base_slot_key);
+        assert!(server.slots.lock().unwrap().contains_key(&delta_slot_key));
+
+        let res5 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res5.uploaded_to, 1, "errors: {:?}", res5.errors);
+        assert!(res5.padded_bytes >= 131_072);
+        assert!(server.slots.lock().unwrap().contains_key(&base_slot_key));
+        assert!(
+            !server.slots.lock().unwrap().contains_key(&delta_slot_key),
+            "orphaned delta slot must be deleted after Base re-upload"
+        );
+
+        let _ = fs::remove_dir_all(base_dir);
     }
 }

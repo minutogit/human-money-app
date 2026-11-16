@@ -456,39 +456,38 @@ proptest! {
 
 #[test]
 fn test_backup_slot_padding_exact_multiples_across_sizes() {
-    let check_size = |size: usize, expected_padded_len: usize| {
-        let payload = vec![0x42u8; size];
-        let padded = pad_backup_slot_bytes(&payload, DROP_BACKUP_MAX_BYTES).unwrap();
-        assert_eq!(padded.len(), expected_padded_len);
-        assert_eq!(padded.len() % BACKUP_PAD_BLOCK_BYTES, 0);
-        assert_eq!(&padded[0..8], BACKUP_SLOT_MAGIC);
-        let unpadded = unpad_backup_slot_bytes(&padded).unwrap();
-        assert_eq!(unpadded, payload);
-    };
+    use rand::{rngs::OsRng, RngCore};
 
-    // 1 Byte -> 12 + 1 = 13 bytes -> rounded up to 65,536 bytes
-    check_size(1, 65_536);
+    // Highly compressible 200 KB payload -> shrinks well below 64 KB after Deflate
+    let compressible = vec![0x42u8; 200 * 1024];
+    let padded_comp = pad_backup_slot_bytes(&compressible, DROP_BACKUP_MAX_BYTES).unwrap();
+    assert_eq!(padded_comp.len(), BACKUP_PAD_BLOCK_BYTES);
+    assert_eq!(&padded_comp[0..8], BACKUP_SLOT_MAGIC);
+    assert_eq!(unpad_backup_slot_bytes(&padded_comp).unwrap(), compressible);
 
-    // 65,524 Bytes -> 12 + 65,524 = 65,536 bytes -> exactly 65,536 bytes
-    check_size(65_524, 65_536);
-
-    // 65,525 Bytes -> 12 + 65,525 = 65,537 bytes -> rounded up to 131,072 bytes
-    check_size(65_525, 131_072);
-
-    // 200 KB = 204,800 bytes -> 12 + 204,800 = 204,812 bytes -> 4 * 65,536 = 262,144 bytes
-    check_size(200 * 1024, 262_144);
+    // Incompressible 70 KB payload -> stays > 65,536 bytes -> rounds up to 2 * 64 KB
+    let mut random_payload = vec![0u8; 70 * 1024];
+    OsRng.fill_bytes(&mut random_payload);
+    let padded_rand = pad_backup_slot_bytes(&random_payload, DROP_BACKUP_MAX_BYTES).unwrap();
+    assert_eq!(padded_rand.len(), 2 * BACKUP_PAD_BLOCK_BYTES);
+    assert_eq!(padded_rand.len() % BACKUP_PAD_BLOCK_BYTES, 0);
+    assert_eq!(&padded_rand[0..8], BACKUP_SLOT_MAGIC);
+    assert_eq!(unpad_backup_slot_bytes(&padded_rand).unwrap(), random_payload);
 }
 
 #[test]
 fn test_backup_slot_padding_rejections_and_limits() {
+    use rand::{rngs::OsRng, RngCore};
+
     // Empty payload rejected
     assert!(matches!(
         pad_backup_slot_bytes(&[], DROP_BACKUP_MAX_BYTES),
         Err(MarketError::Validation(_))
     ));
 
-    // Exceeds max_bytes
-    let payload = vec![0x55u8; 65_525]; // needs 131,072 bytes
+    // Exceeds max_bytes (incompressible 70 KB cannot fit in 64 KB)
+    let mut payload = vec![0u8; 70 * 1024];
+    OsRng.fill_bytes(&mut payload);
     let err_too_large = pad_backup_slot_bytes(&payload, 65_536);
     assert!(matches!(err_too_large, Err(MarketError::PayloadTooLarge(_))));
 

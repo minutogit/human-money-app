@@ -13,6 +13,7 @@ pub const MARKET_CARD_STORE_KEY: &str = "market_card_store";
 pub const MARKET_OWN_PROFILE_KEY: &str = "market_own_profile";
 pub const MARKET_SYNC_ADMIN_KEY: &str = "market_sync_admin";
 pub const MARKET_SYNC_KEY: &str = "market_sync_state";
+pub const BACKUP_SYNC_STATE_KEY: &str = "backup_sync_state";
 pub const MARKET_POST_STATE_KEY: &str = "market_post_state";
 pub const RECOVERY_OWNER_STATE_KEY: &str = "recovery_owner_state";
 pub const RECOVERY_GUARDIAN_VAULT_KEY: &str = "recovery_guardian_vault";
@@ -115,6 +116,26 @@ pub struct StoredSyncState {
     pub sync_sources_by_did: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub uploaded_media_blobs: std::collections::HashSet<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct BackupMirrorState {
+    pub base_manifest_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_slot_etag: Option<String>,
+    pub base_uploaded_at: u64,
+    pub base_padded_bytes: usize,
+    pub delta_active: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct StoredBackupSyncState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_manifest_bytes: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_manifest_sha256: Option<String>,
+    #[serde(default)]
+    pub mirrors_by_write_url: std::collections::BTreeMap<String, BackupMirrorState>,
 }
 
 pub struct AppState {

@@ -450,15 +450,18 @@ pub(crate) async fn discover_best_backup_from_mirrors(
             let cl = client.clone();
             let p = pfx_opt.clone();
             set.spawn(async move {
-                let res = tokio::time::timeout(
+                tokio::time::timeout(
                     std::time::Duration::from_millis(4000),
-                    crate::sync_client::get_slot(&cl, &r_url, &pubkey_hex, p.as_deref(), "backup", None),
+                    crate::commands::backup::fetch_and_merge_backup_slot(
+                        &cl,
+                        &r_url,
+                        &pubkey_hex,
+                        p.as_deref(),
+                    ),
                 )
-                .await;
-                match res {
-                    Ok(Ok(crate::sync_client::SlotFetchResult::Modified { bytes, .. })) => Some(bytes),
-                    _ => None,
-                }
+                .await
+                .ok()
+                .flatten()
             });
         }
     }
@@ -472,17 +475,15 @@ pub(crate) async fn discover_best_backup_from_mirrors(
 
     let mut inspected_candidates = Vec::new();
 
-    for slot_bytes in downloaded_slots {
-        if let Ok(unpadded) = humoco_market::unpad_backup_slot_bytes(&slot_bytes) {
-            let staged_name = format!("sync_restore_{}.hmcbackup", uuid::Uuid::new_v4());
-            let staged_path = tmp_restore_dir.join(staged_name);
-            if write_file_atomic(&staged_path, &unpadded).is_ok() {
-                let service = state.service.lock().unwrap();
-                if let Ok(inspection) = inspect_backup_impl(&staged_path, &credentials, &service) {
-                    inspected_candidates.push((staged_path, inspection));
-                } else {
-                    let _ = std::fs::remove_file(&staged_path);
-                }
+    for unpadded in downloaded_slots {
+        let staged_name = format!("sync_restore_{}.hmcbackup", uuid::Uuid::new_v4());
+        let staged_path = tmp_restore_dir.join(staged_name);
+        if write_file_atomic(&staged_path, &unpadded).is_ok() {
+            let service = state.service.lock().unwrap();
+            if let Ok(inspection) = inspect_backup_impl(&staged_path, &credentials, &service) {
+                inspected_candidates.push((staged_path, inspection));
+            } else {
+                let _ = std::fs::remove_file(&staged_path);
             }
         }
     }

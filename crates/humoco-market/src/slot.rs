@@ -23,10 +23,11 @@ use crate::sd_card::{decoded_items, CardItem};
 
 pub const SLOT_MAGIC: &[u8; 8] = b"HMSLOT02";
 pub const SLOT_MULTI_MAGIC: &[u8; 8] = b"HMSLOTM2";
-pub const BACKUP_SLOT_MAGIC: &[u8; 8] = b"HMBKP001";
+pub const BACKUP_SLOT_MAGIC: &[u8; 8] = b"HMBKP002";
 pub const BACKUP_PAD_BLOCK_BYTES: usize = 65_536; // 64 KB
 pub const DROP_BACKUP_MAX_BYTES: usize = 5 * 1024 * 1024; // 5 MB, §2
 pub const MAX_DECOMPRESSED_SLOT_BYTES: usize = 8 * 1024 * 1024; // 8 MiB zip-bomb cap
+pub const MAX_DECOMPRESSED_BACKUP_BYTES: usize = 16 * 1024 * 1024; // 16 MiB zip-bomb cap
 const RECIPIENT_ENTRY_SIZE: usize = 92; // 32 (eph_pk) + 12 (nonce) + 48 (ct)
 const MAX_RECIPIENT_OVERHEAD: usize = 8 + 2 + 256 * RECIPIENT_ENTRY_SIZE + 24 + 16; // 23602 bytes
 
@@ -51,17 +52,17 @@ fn deflate_compress(data: &[u8]) -> Result<Vec<u8>, MarketError> {
         .map_err(|e| MarketError::Serialization(format!("Deflate finish failed: {}", e)))
 }
 
-fn deflate_decompress_bounded(compressed: &[u8]) -> Result<Vec<u8>, MarketError> {
+fn deflate_decompress_bounded(compressed: &[u8], max_bytes: usize) -> Result<Vec<u8>, MarketError> {
     let decoder = DeflateDecoder::new(compressed);
-    let mut limited = decoder.take((MAX_DECOMPRESSED_SLOT_BYTES + 1) as u64);
+    let mut limited = decoder.take((max_bytes + 1) as u64);
     let mut out = Vec::new();
     limited
         .read_to_end(&mut out)
         .map_err(|e| MarketError::Slot(format!("Invalid compressed slot payload: {}", e)))?;
-    if out.len() > MAX_DECOMPRESSED_SLOT_BYTES {
+    if out.len() > max_bytes {
         return Err(MarketError::PayloadTooLarge(format!(
             "Decompressed slot payload exceeds {} bytes safety limit",
-            MAX_DECOMPRESSED_SLOT_BYTES
+            max_bytes
         )));
     }
     Ok(out)
@@ -409,7 +410,7 @@ pub fn open_slot_payload(
                     Err(_) => continue,
                 };
                 if let Ok(compressed_bytes) = payload_cipher.decrypt(payload_nonce, payload_ciphertext) {
-                    let decompressed = deflate_decompress_bounded(&compressed_bytes)?;
+                    let decompressed = deflate_decompress_bounded(&compressed_bytes, MAX_DECOMPRESSED_SLOT_BYTES)?;
                     return Ok(Some(decompressed));
                 }
             }
@@ -540,9 +541,9 @@ pub fn open_multi_class_slot_blob(
     Ok(None)
 }
 
-/// Pads encrypted `.hmcbackup` bytes into a fixed-block multiple (64 KB) backup slot blob (§5).
+/// Deflate-compresses and pads encrypted backup container bytes into a fixed-block multiple (64 KB) backup slot blob.
 ///
-/// Output format: `[b"HMBKP001" (8B) || (inner_len as u32_be) (4B) || inner_bytes || CSPRNG padding]`
+/// Output format: `[b"HMBKP002" (8B) || (compressed_len as u32_be) (4B) || deflate_raw(inner_bytes) || CSPRNG padding]`
 /// rounded UP to an exact multiple of 65,536 bytes (minimum 65,536 bytes).
 pub fn pad_backup_slot_bytes(
     hmcbackup_bytes: &[u8],
@@ -553,10 +554,18 @@ pub fn pad_backup_slot_bytes(
             "Backup payload cannot be empty".to_string(),
         ));
     }
-    let inner_len = hmcbackup_bytes.len();
+    if hmcbackup_bytes.len() > MAX_DECOMPRESSED_BACKUP_BYTES {
+        return Err(MarketError::PayloadTooLarge(format!(
+            "Backup payload length {} exceeds {} bytes limit",
+            hmcbackup_bytes.len(),
+            MAX_DECOMPRESSED_BACKUP_BYTES
+        )));
+    }
+    let compressed = deflate_compress(hmcbackup_bytes)?;
+    let inner_len = compressed.len();
     if inner_len > u32::MAX as usize {
         return Err(MarketError::PayloadTooLarge(format!(
-            "Backup payload length {} exceeds 32-bit limit",
+            "Compressed backup payload length {} exceeds 32-bit limit",
             inner_len
         )));
     }
@@ -579,7 +588,7 @@ pub fn pad_backup_slot_bytes(
     let mut out = Vec::with_capacity(padded_len);
     out.extend_from_slice(BACKUP_SLOT_MAGIC);
     out.extend_from_slice(&(inner_len as u32).to_be_bytes());
-    out.extend_from_slice(hmcbackup_bytes);
+    out.extend_from_slice(&compressed);
 
     let pad_len = padded_len - out.len();
     if pad_len > 0 {
@@ -591,7 +600,7 @@ pub fn pad_backup_slot_bytes(
     Ok(out)
 }
 
-/// Unpads a 64-KB-multiple backup slot blob, returning the original `.hmcbackup` bytes.
+/// Unpads and decompresses a 64-KB-multiple `HMBKP002` backup slot blob, returning the original container bytes.
 pub fn unpad_backup_slot_bytes(slot_bytes: &[u8]) -> Result<Vec<u8>, MarketError> {
     if slot_bytes.len() < BACKUP_PAD_BLOCK_BYTES
         || !slot_bytes.len().is_multiple_of(BACKUP_PAD_BLOCK_BYTES)
@@ -624,6 +633,6 @@ pub fn unpad_backup_slot_bytes(slot_bytes: &[u8]) -> Result<Vec<u8>, MarketError
         )));
     }
 
-    Ok(slot_bytes[12..12 + inner_len].to_vec())
+    deflate_decompress_bounded(&slot_bytes[12..12 + inner_len], MAX_DECOMPRESSED_BACKUP_BYTES)
 }
 

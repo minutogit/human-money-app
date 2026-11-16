@@ -3570,6 +3570,7 @@ pub async fn delete_own_sync_slots_impl(
             ("card", Some(delta_prefix.as_str())),
             ("wot", None),
             ("backup", my_prefix.as_deref()),
+            ("backup", Some(delta_prefix.as_str())),
             ("post", my_prefix.as_deref()),
         ] {
             if let Ok(signed) = sign_drop_channel_request(
@@ -3641,6 +3642,14 @@ pub async fn delete_own_sync_slots_impl(
             if let Ok(bytes) = serde_json::to_vec(&post_state) {
                 let _ = service.save_encrypted_data(crate::state::MARKET_POST_STATE_KEY, &bytes, password.as_deref());
             }
+        }
+
+        if let Ok(bytes) = serde_json::to_vec(&crate::state::StoredBackupSyncState::default()) {
+            let _ = service.save_encrypted_data(
+                crate::state::BACKUP_SYNC_STATE_KEY,
+                &bytes,
+                password.as_deref(),
+            );
         }
     }
 
@@ -3976,8 +3985,15 @@ pub async fn remove_public_sync_impl(
                 .await
                 .is_err()
             {
-                for ch in ["card", "wot", "backup", "post"] {
-                    let ch_prefix = if ch == "wot" { None } else { my_prefix.as_deref() };
+                let delta_prefix = humoco_market::derive_delta_prefix(my_prefix.as_deref());
+                for (ch, ch_prefix) in [
+                    ("card", my_prefix.as_deref()),
+                    ("card", Some(delta_prefix.as_str())),
+                    ("wot", None),
+                    ("backup", my_prefix.as_deref()),
+                    ("backup", Some(delta_prefix.as_str())),
+                    ("post", my_prefix.as_deref()),
+                ] {
                     let nonce = sync_client::generate_sync_nonce();
                     let signed = humoco_market::sign_member_request_direct(&r_sk, "DELETE", ch, ch_prefix, now, &nonce, b"");
                     let _ = sync_client::delete_slot(&client, &canonical_url, &signed, ch).await;
@@ -4025,6 +4041,22 @@ pub async fn remove_public_sync_impl(
             post_state.slot_etags_by_write_url.remove(&write_url);
             if let Ok(bytes) = serde_json::to_vec(&post_state) {
                 let _ = service.save_encrypted_data(crate::state::MARKET_POST_STATE_KEY, &bytes, password.as_deref());
+            }
+        }
+
+        if let Ok(bytes) = service.load_encrypted_data(crate::state::BACKUP_SYNC_STATE_KEY, password.as_deref()) {
+            if let Ok(mut backup_state) = serde_json::from_slice::<crate::state::StoredBackupSyncState>(&bytes) {
+                let removed = backup_state.mirrors_by_write_url.remove(&canonical_url).is_some()
+                    || backup_state.mirrors_by_write_url.remove(&write_url).is_some();
+                if removed {
+                    if let Ok(encoded) = serde_json::to_vec(&backup_state) {
+                        let _ = service.save_encrypted_data(
+                            crate::state::BACKUP_SYNC_STATE_KEY,
+                            &encoded,
+                            password.as_deref(),
+                        );
+                    }
+                }
             }
         }
     }
