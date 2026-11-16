@@ -602,5 +602,23 @@ amount_decimal_places = 4`,
       );
     });
   });
+
+  it('warns instead of applying target amount when requested standard UUID is missing locally', async () => {
+    render(<SendView />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/did:key:z/i)).toBeInTheDocument());
+
+    const recipientInput = screen.getByPlaceholderText(/did:key:z/i);
+    const payUri =
+      'humoco://pay?to=did:key:z999&amount=42.50&std=11111111-1111-1111-1111-111111111111&stdName=SonnenTaler';
+    fireEvent.change(recipientInput, { target: { value: payUri } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/SonnenTaler/i)).toBeInTheDocument();
+    });
+
+    expect(recipientInput).toHaveValue('did:key:z999');
+    const targetAmountInput = document.getElementById('target-amount') as HTMLInputElement;
+    expect(targetAmountInput.value).toBe('');
+  });
 });
 

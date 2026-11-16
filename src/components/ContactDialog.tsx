@@ -321,6 +321,11 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                             applyContactCard(rawVal);
                                             return;
                                         }
+                                        const parsedDid = parseContactCard(rawVal);
+                                        if (parsedDid?.did && /\s/.test(rawVal.trim())) {
+                                            setDid(parsedDid.did);
+                                            return;
+                                        }
                                         const val = rawVal.replace(/\s+/g, '');
                                         setDid(val);
                                     }}
@@ -607,12 +612,12 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                         trustImpact.canSendMePostAfter ? (
                                             <div data-testid="trust-preview-gain-post" className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
                                                 <CheckCircle2 size={13} className="shrink-0" />
-                                                <span>{t('contacts.trustPreviewGainPost', 'Kann mir über Ablagen senden')}</span>
+                                                <span>{t('contacts.trustPreviewGainPost')}</span>
                                             </div>
                                         ) : (
                                             <div data-testid="trust-preview-lose-post" className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
                                                 <AlertCircle size={13} className="shrink-0" />
-                                                <span>{t('contacts.trustPreviewLosePost', 'Kann mir keine Nachrichten über Ablagen mehr senden')}</span>
+                                                <span>{t('contacts.trustPreviewLosePost')}</span>
                                             </div>
                                         )
                                     )}

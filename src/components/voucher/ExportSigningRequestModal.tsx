@@ -148,14 +148,14 @@ export function ExportSigningRequestModal({
                 return await postService.sendSigningRequestViaPost(recipientId.trim(), bundleBytes, pwd || undefined);
             });
             if (res && res.depositedTo > 0) {
-                setPostSuccessMsg(t('voucher.signRequest.sentViaPostSuccess', '📦 Bürgschaftsanfrage in der Ablage hinterlegt (wartet auf Abholung)'));
+                setPostSuccessMsg(t('voucher.signRequest.sentViaPostSuccess', { count: res.depositedTo }));
                 setTimeout(() => {
                     resetAndClose();
                 }, 1600);
             } else if (res && res.errors && res.errors.length > 0) {
                 setExportError(res.errors.join('; '));
             } else {
-                setExportError(t('voucher.signRequest.sentViaPostZeroSyncs', 'Keine Ablage für diesen Kontakt erreichbar. Bitte nutze den .ask Datei-Export.'));
+                setExportError(t('voucher.signRequest.sentViaPostZeroSyncs'));
             }
         } catch (e) {
             setExportError(translateError(e, t));
@@ -240,7 +240,7 @@ export function ExportSigningRequestModal({
                                     className="w-full gap-2 text-xs font-bold py-3 rounded-xl shadow-sm"
                                 >
                                     {isSendingViaPost ? <RefreshCw size={14} className="animate-spin" /> : <UploadCloud size={14} />}
-                                    {isSendingViaPost ? t('voucher.signRequest.sendingViaPost', 'Sende über Ablage...') : t('voucher.signRequest.sendViaPostButton', 'Über Ablage anfragen')}
+                                    {isSendingViaPost ? t('voucher.signRequest.sendingViaPost') : t('voucher.signRequest.sendViaPostButton')}
                                 </Button>
                             </div>
                         </div>

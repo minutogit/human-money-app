@@ -1381,7 +1381,12 @@ pub fn import_contact_card_impl(
     let mut service = state.service.lock().unwrap();
 
     let json_str = if let Some((_, query_part)) = payload.trim().split_once("?env=") {
-        let b64 = query_part.split('&').next().unwrap_or(query_part);
+        let b64 = query_part
+            .split(|c: char| {
+                c == '&' || c.is_whitespace() || matches!(c, '"' | '\'' | '>' | '<')
+            })
+            .next()
+            .unwrap_or(query_part);
         let bytes = human_money_core::crypto::decode_base64(b64)
             .map_err(|e| FrontendError::from(format!("Failed to decode card share URI base64: {}", e)))?;
         String::from_utf8(bytes)
@@ -2284,5 +2289,32 @@ mod tests {
         let saved_contacts = save_my_market_profile_impl(save_contacts_coords, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(saved_contacts.profile.coordinates.as_deref(), Some("48.1351, 11.5820"));
         assert!(saved_contacts.ads[0].allow_inquiries);
+    }
+
+    #[test]
+    fn test_import_contact_card_uri_with_surrounding_chat_text() {
+        let base_dir = temp_test_dir("card_uri_chat_text");
+        let password = "TestPassword123!";
+        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_state = create_test_state(alice_service);
+
+        let env_json = serde_json::to_string(&humoco_market::CardEnvelope {
+            card_wire: "not-a-real-jws".to_string(),
+            hops: 1,
+        })
+        .unwrap();
+        let b64 = human_money_core::crypto::encode_base64(env_json.as_bytes());
+        let chat_msg = format!(
+            "Hallo Alice,\nhier ist meine Visitenkarte:\n\"humoco://card?env={}\"\nViele Grüße, Bob!",
+            b64
+        );
+
+        let res = import_contact_card_impl(chat_msg, Some(password.to_string()), &alice_state)
+            .expect("URI extraction and CardEnvelope JSON parsing should succeed");
+        assert!(
+            res.status.starts_with("invalid:"),
+            "expected JWS validation error status after successful URI/JSON parse, got: {}",
+            res.status
+        );
     }
 }

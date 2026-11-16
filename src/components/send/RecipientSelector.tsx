@@ -73,8 +73,12 @@ export function RecipientSelector({
 
   const startCamera = useCallback(async () => {
     setCameraError(null);
+    if (typeof window !== 'undefined' && !('BarcodeDetector' in window)) {
+      setCameraError(t('common.qrScanUnsupported'));
+      return;
+    }
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setCameraError(t('contacts.cameraNotSupported', 'Kamera auf diesem Gerät nicht verfügbar.'));
+      setCameraError(t('contacts.cameraNotSupported'));
       return;
     }
 
@@ -89,7 +93,7 @@ export function RecipientSelector({
       }
     } catch (err) {
       logger.info(`Camera access not available or denied: ${stringifyError(err)}`);
-      setCameraError(t('contacts.cameraAccessDenied', 'Kamera konnte nicht gestartet werden. Bitte erlaube den Kamerazugriff oder nutze eine andere Methode.'));
+      setCameraError(t('contacts.cameraAccessDenied'));
     }
   }, [t]);
 
@@ -106,16 +110,20 @@ export function RecipientSelector({
 
   useEffect(() => {
     if (!scannerOpen) return;
+    if (typeof window === 'undefined' || !('BarcodeDetector' in window)) {
+      return;
+    }
     let isScanning = true;
     let detector: BarcodeDetectorInstance | null = null;
 
-    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
-      try {
-        const DetectorCtor = (window as unknown as { BarcodeDetector: BarcodeDetectorConstructor }).BarcodeDetector;
-        detector = new DetectorCtor({ formats: ['qr_code'] });
-      } catch (err) {
-        logger.info(`BarcodeDetector creation failed: ${stringifyError(err)}`);
-      }
+    try {
+      const DetectorCtor = (window as unknown as { BarcodeDetector: BarcodeDetectorConstructor }).BarcodeDetector;
+      detector = new DetectorCtor({ formats: ['qr_code'] });
+    } catch (err) {
+      logger.info(`BarcodeDetector creation failed: ${stringifyError(err)}`);
+      setCameraError(t('common.qrScanUnsupported'));
+      stopCamera();
+      return;
     }
 
     const scanLoop = async () => {
@@ -148,7 +156,7 @@ export function RecipientSelector({
         scanTimerRef.current = null;
       }
     };
-  }, [scannerOpen, stopCamera, onApplyRawCode]);
+  }, [scannerOpen, stopCamera, onApplyRawCode, t]);
 
   const suggestions = React.useMemo(() => {
     if (!recipientId || recipientId.length < 2) return [];
@@ -183,6 +191,7 @@ export function RecipientSelector({
       onApplyRawCode &&
       (trimmed.includes('humoco://pay') ||
         trimmed.includes('humoco://contact') ||
+        trimmed.includes('did:key:') ||
         trimmed.startsWith('did:') ||
         trimmed.includes('@did:'))
     ) {

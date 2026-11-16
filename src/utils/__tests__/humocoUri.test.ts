@@ -87,6 +87,14 @@ describe('humocoUri Utilities', () => {
       expect(result).toEqual({ did: sampleSai });
     });
 
+    it('extracts embedded did:key or SAI did from chat message with surrounding text', () => {
+      const chatText = `Hi! Here is my ID:\n"${sampleDid}"\nSee you tomorrow!`;
+      expect(parseContactCard(chatText)).toEqual({ did: sampleDid });
+
+      const saiChatText = `My work account is ${sampleSai} thanks!`;
+      expect(parseContactCard(saiChatText)).toEqual({ did: sampleSai });
+    });
+
     it('returns null for arbitrary text or invalid did', () => {
       expect(parseContactCard('')).toBeNull();
       expect(parseContactCard('random chatter without any did')).toBeNull();

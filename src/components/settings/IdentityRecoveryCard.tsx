@@ -288,6 +288,8 @@ export const IdentityRecoveryCard: React.FC = () => {
 
             <GuardianSetupModal
                 isOpen={isGuardianSetupOpen}
+                initialGuardianDids={protectionStatus?.guardians?.map((g) => g.userId)}
+                initialThresholdM={protectionStatus?.requiredThreshold}
                 onClose={() => {
                     setIsGuardianSetupOpen(false);
                     loadProtectionStatus();

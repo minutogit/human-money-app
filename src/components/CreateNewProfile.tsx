@@ -4,9 +4,11 @@ import { useTranslation } from "react-i18next";
 import logo from "../assets/logo.png";
 import { profileService } from "../services/profileService";
 import { authService } from "../services/authService";
+import { recoveryService } from "../services/recoveryService";
 import { AuthLayout } from "./AuthLayout";
 import { logger } from "../utils/log";
-import { MnemonicLanguage } from "../types";
+import { ActiveRecoverySessionDto, MnemonicLanguage } from "../types";
+import { AlertBanner } from "./ui/AlertBanner";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
@@ -41,7 +43,7 @@ interface ConfirmationWord {
 interface CreateNewProfileProps {
     onProfileCreated: () => void;
     onSwitchToLogin?: () => void;
-    onSwitchToRestore?: () => void;
+    onSwitchToRestore?: (method?: 'social' | 'words_or_sheet' | 'file_or_folder') => void;
     defaultExpertMode?: boolean;
 }
 
@@ -55,6 +57,7 @@ export function CreateNewProfile({
     const [isExpertMode, setIsExpertMode] = useState<boolean>(defaultExpertMode ?? false);
     const [retainMnemonic, setRetainMnemonic] = useState<boolean>(true);
     const [profilesCount, setProfilesCount] = useState<number | null>(null);
+    const [activeSocialSession, setActiveSocialSession] = useState<ActiveRecoverySessionDto | null>(null);
 
     const [wizardStep, setWizardStep] = useState<WizardStep>("display_seed");
     const [generatedSeed, setGeneratedSeed] = useState<string[]>([]);
@@ -84,6 +87,10 @@ export function CreateNewProfile({
         authService.listProfiles()
             .then((list) => setProfilesCount(list.length))
             .catch(() => setProfilesCount(null));
+        recoveryService
+            .getActiveRecoverySession?.()
+            ?.then((session) => setActiveSocialSession(session || null))
+            ?.catch(() => setActiveSocialSession(null));
 
         const systemLang = navigator.language || "en";
         let detectedLanguage: MnemonicLanguage = "english";
@@ -238,7 +245,7 @@ export function CreateNewProfile({
                             </div>
                             <button
                                 type="button"
-                                onClick={onSwitchToRestore}
+                                onClick={() => onSwitchToRestore()}
                                 className="p-4 rounded-2xl bg-bg-surface hover:bg-theme-subtle/30 border-2 border-theme-subtle hover:border-theme-primary/50 text-theme-secondary font-bold text-xs text-left transition-all flex items-center justify-between cursor-pointer"
                             >
                                 <span>{t('auth.restoreExistingProfileOption')}</span>
@@ -355,7 +362,7 @@ export function CreateNewProfile({
                                 </div>
                                 <button
                                     type="button"
-                                    onClick={onSwitchToRestore}
+                                    onClick={() => onSwitchToRestore()}
                                     className="p-4 rounded-2xl bg-bg-surface hover:bg-theme-subtle/30 border-2 border-theme-subtle hover:border-theme-primary/50 text-theme-secondary font-bold text-xs text-left transition-all flex items-center justify-between cursor-pointer"
                                 >
                                     <span>{t('auth.restoreExistingProfileOption')}</span>
@@ -704,6 +711,30 @@ export function CreateNewProfile({
                     <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">{t('profile.createNewProfile')}</p>
                 </div>
             </div>
+
+            {activeSocialSession && onSwitchToRestore && (
+                <AlertBanner
+                    variant="info"
+                    data-testid="create-profile-resume-social-banner"
+                    action={
+                        <Button
+                            type="button"
+                            variant="primary"
+                            size="xs"
+                            data-testid="create-profile-resume-social-btn"
+                            onClick={() => onSwitchToRestore('social')}
+                        >
+                            {t('backup.resumeSessionBtn')}
+                        </Button>
+                    }
+                >
+                    {t('backup.resumeSessionDesc', {
+                        code: activeSocialSession.sasCode,
+                        collected: activeSocialSession.collectedCount,
+                        required: activeSocialSession.thresholdM ?? '?',
+                    })}
+                </AlertBanner>
+            )}
 
             {renderContent()}
 

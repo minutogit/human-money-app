@@ -38,6 +38,7 @@ import { AlertBanner } from './ui/AlertBanner';
 import { ModalShell } from './ui/ModalShell';
 import { PageLoadingState, PageEmptyState } from './ui/PageState';
 import { truncateUserId } from '../utils/userIdHelper';
+import { parseContactCard } from '../utils/humocoUri';
 import { SegmentedTabs } from './ui/SegmentedTabs';
 import { 
     UserPlus, 
@@ -70,9 +71,15 @@ interface AddressBookProps {
     onBack?: () => void;
     initialSearchQuery?: string;
     initialOpenAddModal?: boolean;
+    initialContactPayload?: string;
 }
 
-const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, initialOpenAddModal }) => {
+const AddressBook: React.FC<AddressBookProps> = ({
+    onBack,
+    initialSearchQuery,
+    initialOpenAddModal,
+    initialContactPayload,
+}) => {
     const { t } = useTranslation();
     const { protectAction } = useSession();
     const navigation = useOptionalNavigation();
@@ -203,6 +210,32 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
             setIsAddContactModalOpen(true);
         }
     }, [initialOpenAddModal]);
+
+    useEffect(() => {
+        if (!initialContactPayload) return;
+        const parsed = parseContactCard(initialContactPayload);
+        if (parsed && parsed.did) {
+            let initialProfile: Partial<PublicProfile> | undefined;
+            if (parsed.name) {
+                const parts = parsed.name.trim().split(/\s+/);
+                if (parts.length > 1) {
+                    initialProfile = {
+                        firstName: parts.slice(0, -1).join(' '),
+                        lastName: parts[parts.length - 1],
+                    };
+                } else if (parts.length === 1 && parts[0]) {
+                    initialProfile = { firstName: parts[0] };
+                }
+            }
+            setEditingContact(null);
+            setInitialAddDid(parsed.did);
+            setInitialAddProfile(initialProfile);
+            setInitialAddSyncUrls(parsed.syncUrls);
+            setIsDialogOpen(true);
+        } else {
+            setIsAddContactModalOpen(true);
+        }
+    }, [initialContactPayload]);
 
     const handleSaveContact = async (contact: Contact) => {
         try {
@@ -1071,7 +1104,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                                         <div className="bg-emerald-500 w-3 h-3 rounded-full border-2 border-white"></div>
                                                     </div>
                                                 </div>
-                                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <div className="flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity">
                                                     <Advanced>
                                                         <button
                                                             onClick={() => handleShareContactWot(contact)}
@@ -1565,6 +1598,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
             {/* Guardian Setup Modal */}
             <GuardianSetupModal
                 isOpen={isGuardianSetupOpen}
+                initialGuardianDids={Array.from(guardianDids)}
                 onClose={() => {
                     setIsGuardianSetupOpen(false);
                     loadContacts();

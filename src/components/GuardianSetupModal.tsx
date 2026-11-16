@@ -1,5 +1,5 @@
 // src/components/GuardianSetupModal.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ModalShell } from './ui/ModalShell';
 import { Button } from './ui/Button';
@@ -15,6 +15,9 @@ interface GuardianSetupModalProps {
     isOpen: boolean;
     onClose: () => void;
     onSuccess?: () => void;
+    initialGuardianDids?: string[];
+    initialThresholdM?: number;
+    initialQuestionIds?: number[];
 }
 
 const QUESTION_CATALOG: Array<{ id: number; key: string }> = [
@@ -30,6 +33,9 @@ export const GuardianSetupModal: React.FC<GuardianSetupModalProps> = ({
     isOpen,
     onClose,
     onSuccess,
+    initialGuardianDids,
+    initialThresholdM,
+    initialQuestionIds,
 }) => {
     const { t } = useTranslation();
     const [contacts, setContacts] = useState<Contact[]>([]);
@@ -50,14 +56,24 @@ export const GuardianSetupModal: React.FC<GuardianSetupModalProps> = ({
     const [isLoadingContacts, setIsLoadingContacts] = useState<boolean>(false);
     const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
     const [errorMsg, setErrorMsg] = useState<string>('');
+    const initialPropsRef = useRef({ initialGuardianDids, initialThresholdM, initialQuestionIds });
+    initialPropsRef.current = { initialGuardianDids, initialThresholdM, initialQuestionIds };
 
     // Reset transient state when opened or closed
     useEffect(() => {
         if (!isOpen) {
+            setSelectedDids([]);
             setPassword('');
             setErrorMsg('');
             setIsSubmitting(false);
             return;
+        }
+
+        const { initialQuestionIds: initQs } = initialPropsRef.current;
+        if (initQs && initQs.length === 3 && new Set(initQs).size === 3) {
+            setQ1(initQs[0]);
+            setQ2(initQs[1]);
+            setQ3(initQs[2]);
         }
 
         setErrorMsg('');
@@ -75,10 +91,24 @@ export const GuardianSetupModal: React.FC<GuardianSetupModalProps> = ({
                     (c) => (c.trustLevel ?? 0) >= 1
                 );
                 setContacts(eligible);
+                const { initialGuardianDids: initDids, initialThresholdM: initM } = initialPropsRef.current;
                 setSelectedDids((prev) => {
-                    if (eligible.length >= 3 && prev.length === 0) {
+                    if (prev.length > 0) return prev;
+                    const preselected = (initDids || []).filter((did) =>
+                        eligible.some((c) => c.did === did)
+                    );
+                    if (preselected.length > 0) {
+                        if (initM && initM >= 2 && initM <= preselected.length) {
+                            setThresholdM(initM);
+                        } else {
+                            const recommended = preselected.length <= 2 ? 2 : preselected.length === 3 ? 2 : 3;
+                            setThresholdM(Math.min(preselected.length, Math.max(2, recommended)));
+                        }
+                        return preselected;
+                    }
+                    if (eligible.length === 3) {
                         setThresholdM(2);
-                        return eligible.slice(0, 3).map((c) => c.did);
+                        return eligible.map((c) => c.did);
                     }
                     return prev;
                 });
@@ -205,41 +235,51 @@ export const GuardianSetupModal: React.FC<GuardianSetupModalProps> = ({
                             {t('common.loading')}
                         </div>
                     ) : contacts.length === 0 ? (
-                        <div className="p-4 bg-bg-app rounded-xl border border-theme-subtle text-xs text-theme-light text-center">
-                            {t('contacts.noContactsFound')}
+                        <div
+                            data-testid="guardian-min-contacts-hint"
+                            className="p-4 bg-bg-app rounded-xl border border-theme-subtle text-xs text-theme-light text-center"
+                        >
+                            {t('backup.minGuardiansRequiredHint', { count: 0 })}
                         </div>
                     ) : (
-                        <div className="max-h-48 overflow-y-auto space-y-1.5 p-1 border border-theme-subtle rounded-xl">
-                            {contacts.map((contact) => {
-                                const isSelected = selectedDids.includes(contact.did);
-                                const displayName = (contact.profile?.firstName || contact.profile?.lastName)
-                                    ? `${contact.profile?.firstName || ''} ${contact.profile?.lastName || ''}`.trim()
-                                    : contact.profile?.organization || contact.did;
-                                return (
-                                    <button
-                                        type="button"
-                                        key={contact.did}
-                                        onClick={() => handleToggleContact(contact.did)}
-                                        data-testid={`select-contact-${contact.did}`}
-                                        className={`w-full p-2.5 rounded-lg flex items-center justify-between text-left text-xs transition-colors ${
-                                            isSelected
-                                                ? 'bg-theme-primary/10 border border-theme-primary/30 text-theme-primary font-bold'
-                                                : 'hover:bg-theme-subtle/40 text-theme-secondary'
-                                        }`}
-                                    >
-                                        <div className="min-w-0 pr-2">
-                                            <p className="truncate font-semibold">{displayName}</p>
-                                            <p className="text-[10px] text-theme-light truncate opacity-70">
-                                                {contact.did}
-                                            </p>
-                                        </div>
-                                        {isSelected && (
-                                            <CheckCircle2 size={16} className="text-theme-primary shrink-0" />
-                                        )}
-                                    </button>
-                                );
-                            })}
-                        </div>
+                        <>
+                            {contacts.length < 3 && (
+                                <AlertBanner variant="warning" data-testid="guardian-min-contacts-hint">
+                                    {t('backup.minGuardiansRequiredHint', { count: contacts.length })}
+                                </AlertBanner>
+                            )}
+                            <div className="max-h-48 overflow-y-auto space-y-1.5 p-1 border border-theme-subtle rounded-xl">
+                                {contacts.map((contact) => {
+                                    const isSelected = selectedDids.includes(contact.did);
+                                    const displayName = (contact.profile?.firstName || contact.profile?.lastName)
+                                        ? `${contact.profile?.firstName || ''} ${contact.profile?.lastName || ''}`.trim()
+                                        : contact.profile?.organization || contact.did;
+                                    return (
+                                        <button
+                                            type="button"
+                                            key={contact.did}
+                                            onClick={() => handleToggleContact(contact.did)}
+                                            data-testid={`select-contact-${contact.did}`}
+                                            className={`w-full p-2.5 rounded-lg flex items-center justify-between text-left text-xs transition-colors ${
+                                                isSelected
+                                                    ? 'bg-theme-primary/10 border border-theme-primary/30 text-theme-primary font-bold'
+                                                    : 'hover:bg-theme-subtle/40 text-theme-secondary'
+                                            }`}
+                                        >
+                                            <div className="min-w-0 pr-2">
+                                                <p className="truncate font-semibold">{displayName}</p>
+                                                <p className="text-[10px] text-theme-light truncate opacity-70">
+                                                    {contact.did}
+                                                </p>
+                                            </div>
+                                            {isSelected && (
+                                                <CheckCircle2 size={16} className="text-theme-primary shrink-0" />
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </>
                     )}
                 </div>
 

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import "./App.css";
 import { ForkLockOverlay } from './components/ForkLockOverlay';
 import { Button } from './components/ui/Button';
+import { AlertBanner } from './components/ui/AlertBanner';
 import { logger } from "./utils/log";
 
 // Contexts
@@ -57,6 +58,20 @@ function AppContent() {
         if (uri.includes('humoco://card') || uri.includes('?env=')) {
             if (isLoggedIn) {
                 handleUriImport(uri);
+            } else {
+                setPendingDeepLink(uri);
+            }
+        } else if (uri.includes('humoco://pay')) {
+            if (isLoggedIn) {
+                navigate({ view: 'send_vouchers', initialPaymentUri: uri });
+            } else {
+                setPendingDeepLink(uri);
+            }
+        } else if (uri.includes('humoco://contact')) {
+            if (isLoggedIn) {
+                navigate({ view: 'address_book', initialContactPayload: uri });
+            } else {
+                setPendingDeepLink(uri);
             }
         } else if (uri.includes('humoco://recovery-reply')) {
             recoveryService
@@ -89,13 +104,11 @@ function AppContent() {
 
     useEffect(() => {
         if (isLoggedIn && pendingDeepLink) {
-            if (pendingDeepLink.includes('humoco://recovery-req')) {
-                setReleaseRequestUri(pendingDeepLink);
-                setReleaseModalOpen(true);
-                setPendingDeepLink(null);
-            }
+            const linkToRun = pendingDeepLink;
+            setPendingDeepLink(null);
+            handleDeepLink(linkToRun);
         }
-    }, [isLoggedIn, pendingDeepLink]);
+    }, [isLoggedIn, pendingDeepLink, handleDeepLink]);
 
     useEffect(() => {
         if (typeof window !== 'undefined') {
@@ -159,6 +172,13 @@ function AppContent() {
                     <div className="flex flex-1 flex-col min-w-0 h-full overflow-hidden">
                         <Header />
                         <main className="w-full flex-1 min-h-0 overflow-y-auto px-3 sm:px-5 lg:px-8 pb-6">
+                            {!isLoggedIn && pendingDeepLink && (
+                                <div className="max-w-xl mx-auto mt-3 mb-2" data-testid="pending-deeplink-banner">
+                                    <AlertBanner variant="info" onDismiss={() => setPendingDeepLink(null)}>
+                                        {t('auth.pendingLinkNotice')}
+                                    </AlertBanner>
+                                </div>
+                            )}
                             <AppRouter />
                         </main>
                     </div>

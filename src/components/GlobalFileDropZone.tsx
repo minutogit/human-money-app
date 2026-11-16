@@ -92,7 +92,16 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
 
     // Check plain text drops first (e.g. dragged links)
     const rawText = e.dataTransfer?.getData('text/plain');
-    if (rawText && (rawText.includes('humoco://recovery-reply') || rawText.includes('humoco://kit') || rawText.includes('humoco://recovery-req'))) {
+    if (
+      rawText &&
+      (rawText.includes('humoco://recovery-reply') ||
+        rawText.includes('humoco://kit') ||
+        rawText.includes('humoco://recovery-req') ||
+        rawText.includes('humoco://card') ||
+        rawText.includes('humoco://pay') ||
+        rawText.includes('humoco://contact') ||
+        rawText.includes('?env='))
+    ) {
       window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: rawText.trim() }));
       return;
     }
@@ -101,12 +110,19 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
     if (files && files.length > 0) {
       const file = files[0];
 
-      // Check if dropped text file contains a recovery link
+      // Check if dropped text file contains a humoco:// deep link
       if (file.name.endsWith('.txt') || file.name.endsWith('.html') || file.name.endsWith('.json')) {
         try {
           const text = await file.text();
-          if (text.includes('humoco://recovery-reply') || text.includes('humoco://kit') || text.includes('humoco://recovery-req')) {
-            const match = text.match(/humoco:\/\/(recovery-reply|kit|recovery-req)[^\s"'>]+/);
+          if (
+            text.includes('humoco://recovery-reply') ||
+            text.includes('humoco://kit') ||
+            text.includes('humoco://recovery-req') ||
+            text.includes('humoco://card') ||
+            text.includes('humoco://pay') ||
+            text.includes('humoco://contact')
+          ) {
+            const match = text.match(/humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'>]+/);
             if (match) {
               window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: match[0] }));
               return;
@@ -137,7 +153,13 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
         return;
       }
 
-      if (!isLoggedIn) return;
+      if (!isLoggedIn) {
+        setDropFeedback({
+          status: 'error',
+          message: t('auth.loginRequiredForImport'),
+        });
+        return;
+      }
 
       // Handle .hmcard files specifically
       if (file.name.endsWith('.hmcard')) {
@@ -195,25 +217,6 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
           });
         } catch (err) {
           logger.error("Failed to read dropped file globally: " + stringifyError(err));
-          setDropFeedback({ status: 'error', message: translateError(err, t) });
-        }
-      }
-    } else {
-      // Check for dropped plain text links (humoco://card?env=...)
-      const rawText = e.dataTransfer?.getData('text/plain');
-      if (rawText && (rawText.includes('humoco://card') || rawText.includes('?env='))) {
-        try {
-          const res = await protectAction(async (pwd) => {
-            return await marketService.importContactCard(rawText, pwd || undefined);
-          });
-          if (res) {
-            navigate({
-              view: 'marketplace',
-              selectedDid: res.did ?? undefined,
-            });
-          }
-        } catch (err) {
-          logger.error("Failed to import card from text drop: " + stringifyError(err));
           setDropFeedback({ status: 'error', message: translateError(err, t) });
         }
       }

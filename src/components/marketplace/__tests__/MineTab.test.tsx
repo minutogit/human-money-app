@@ -219,4 +219,48 @@ describe('MineTab Component', () => {
     expect(screen.getByText('Hallo, ich hätte Interesse an einer Beratung.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Antworten|Reply/i })).toBeInTheDocument();
   });
+
+  it('shows pay button on confirmed sent inquiry even without paymentUri and passes counterpartyDid', () => {
+    const onPayInquiry = vi.fn();
+    const inboxWithConfirmedSent: FrontendPostInboxSummary = {
+      ...mockInbox,
+      buyerInquiries: [
+        {
+          inquiryId: 'inq-sent-1',
+          counterpartyDid: 'did:key:z6MkuSeller',
+          counterpartyName: 'Bäcker Bernd',
+          target: { kind: 'ad', ad_id: 'ad-2', ad_title: 'Sauerteigbrot' },
+          message: 'Noch 2 Brote da?',
+          createdAt: nowSecs - 1200,
+          replySyncs: [],
+          reply: {
+            inquiryId: 'inq-sent-1',
+            decision: 'confirm',
+            note: 'Gerne ab 16 Uhr',
+            repliedAt: nowSecs - 600,
+          },
+        },
+      ],
+    };
+
+    render(
+      <MineTab
+        myProfile={mockMyProfile}
+        inbox={inboxWithConfirmedSent}
+        onOpenProfileEditor={vi.fn()}
+        onOpenShareCard={vi.fn()}
+        onTogglePublished={vi.fn()}
+        onCreateAd={vi.fn()}
+        onEditAd={vi.fn()}
+        onRenewAd={vi.fn()}
+        onDeleteAd={vi.fn()}
+        onPayInquiry={onPayInquiry}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Gesendet|Sent/i }));
+    const payBtn = screen.getByTestId('inquiry-pay-btn-inq-sent-1');
+    fireEvent.click(payBtn);
+    expect(onPayInquiry).toHaveBeenCalledWith('did:key:z6MkuSeller', undefined);
+  });
 });

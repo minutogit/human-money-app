@@ -1,12 +1,11 @@
 // src/components/TransferSuccessView.tsx
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
-import { ModalShell } from './ui/ModalShell';
 import { Advanced } from './ui/Advanced';
 import { AdvancedDisclosure } from './ui/AdvancedDisclosure';
 import { TechId, formatShortFingerprint } from './ui/TechId';
@@ -15,9 +14,7 @@ import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { useSession } from '../context/SessionContext';
 import { settingsService } from '../services/settingsService';
 import { postService } from '../services/postService';
-import { profileService } from '../services/profileService';
 import { useContactResolver } from '../hooks/useContactResolver';
-import { copyToClipboard } from '../utils/clipboard';
 import { 
     Download, 
     Share2, 
@@ -25,13 +22,10 @@ import {
     User,
     ArrowUpRight,
     FolderOpen,
-    QrCode,
     CheckCircle2,
     AlertTriangle,
     RefreshCw,
-    UploadCloud,
-    Copy,
-    Check
+    UploadCloud
 } from 'lucide-react';
 import { suggestFilename } from '../utils/userIdHelper';
 import { stringifyError, translateError } from '../utils/errorHelper';
@@ -68,45 +62,12 @@ export function TransferSuccessView({
     const [depositedTo, setDepositedTo] = useState<number>(initialDepositedTo);
     const [isRedepositing, setIsRedepositing] = useState(false);
     const [redepositError, setRedepositError] = useState<string | null>(depositError || null);
-    const [showQrModal, setShowQrModal] = useState(false);
-    const [copiedData, setCopiedData] = useState(false);
-    const [bundleQrSvg, setBundleQrSvg] = useState<string | null>(null);
 
     const { resolveIdentity, isKnownContact } = useContactResolver();
     const recipientIsKnown = isKnownContact(recipientId);
     const safeRecipientDisplayName = recipientIsKnown
         ? resolveIdentity(recipientId)
         : formatShortFingerprint(recipientId);
-
-    const bundleBase64 = useMemo(() => {
-        if (!bundleData || bundleData.length === 0) return '';
-        let binary = '';
-        for (let i = 0; i < bundleData.length; i += 1) {
-            binary += String.fromCharCode(bundleData[i]);
-        }
-        return window.btoa(binary);
-    }, [bundleData]);
-
-    const isQrSizeSupported = bundleBase64.length > 0 && bundleBase64.length <= 2200;
-
-    useEffect(() => {
-        if (!showQrModal || !isQrSizeSupported) {
-            setBundleQrSvg(null);
-            return;
-        }
-        let active = true;
-        profileService
-            .encodeTextQrSvg(bundleBase64)
-            .then((svg) => {
-                if (active) setBundleQrSvg(svg);
-            })
-            .catch(() => {
-                if (active) setBundleQrSvg(null);
-            });
-        return () => {
-            active = false;
-        };
-    }, [showQrModal, isQrSizeSupported, bundleBase64]);
 
     useEffect(() => {
         let active = true;
@@ -135,7 +96,7 @@ export function TransferSuccessView({
             if (res) {
                 setDepositedTo(res.depositedTo);
                 if (res.depositedTo > 0) {
-                    setFeedback(t('transfer.depositedInPostSuccess', '📦 Zahlung im Sync-Dienst hinterlegt (wartet auf Abholung)'));
+                    setFeedback(t('transfer.depositedInPostSuccess'));
                 } else if (res.errors && res.errors.length > 0) {
                     setRedepositError(res.errors.join('; '));
                 }
@@ -188,21 +149,6 @@ export function TransferSuccessView({
         }
     }
 
-    const handleCopyBase64 = async () => {
-        try {
-            const ok = await copyToClipboard(bundleBase64);
-            if (ok) {
-                setCopiedData(true);
-                setTimeout(() => setCopiedData(false), 2000);
-            } else {
-                setFeedback(t('common.copyFailed', 'Fehler beim Kopieren'));
-            }
-        } catch (e) {
-            console.error("Failed to copy bundle data", e);
-            setFeedback(translateError(e, t));
-        }
-    };
-
     const handoverContent = (
         <div className="space-y-4 w-full flex flex-col items-center">
             <div className="w-full p-5 bg-blue-50/50 border border-blue-100 rounded-3xl flex items-start gap-4 text-left">
@@ -226,17 +172,6 @@ export function TransferSuccessView({
             >
                 {isSaving ? <Download className="animate-bounce" size={20} /> : <Download size={20} />}
                 {isSaving ? t('transfer.success.savingFile') : t('transfer.success.saveFile')}
-            </Button>
-
-            <Button
-                variant="outline"
-                size="md"
-                onClick={() => setShowQrModal(true)}
-                data-testid="show-qr-button"
-                className="w-full max-w-sm py-3 rounded-2xl text-xs font-bold gap-2 border-theme-subtle"
-            >
-                <QrCode size={16} />
-                {t('transfer.showQrCodeButton', 'QR-Code & Direktübergabe anzeigen')}
             </Button>
 
             {savedFilePath && (
@@ -317,20 +252,20 @@ export function TransferSuccessView({
                             <div data-testid="post-deposit-success-card" className="p-5 bg-emerald-50/80 border border-emerald-200 rounded-3xl space-y-2">
                                 <div className="flex items-center gap-2 text-emerald-800 font-bold text-sm">
                                     <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
-                                    <span>{t('transfer.depositedInPostSuccess', '📦 Zahlung im Sync-Dienst hinterlegt (wartet auf Abholung)')}</span>
+                                    <span>{t('transfer.depositedInPostSuccess')}</span>
                                 </div>
                                 <p className="text-xs text-emerald-700 font-medium leading-relaxed">
-                                    {t('transfer.depositedInPostDesc', 'Die Zahlung wurde in {{count}} Sync-Ablage(n) hinterlegt und wird vom Empfänger automatisch beim nächsten App-Start abgerufen.', { count: depositedTo })}
+                                    {t('transfer.depositedInPostDesc', { count: depositedTo })}
                                 </p>
                             </div>
                         ) : bundleId ? (
                             <div data-testid="post-deposit-retry-card" className="p-5 bg-amber-50/80 border border-amber-200 rounded-3xl space-y-3">
                                 <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
                                     <AlertTriangle size={18} className="text-amber-600 shrink-0" />
-                                    <span>{t('transfer.depositPendingTitle', 'Nicht im Sync-Dienst hinterlegt (offline oder kein gemeinsamer Sync-Dienst)')}</span>
+                                    <span>{t('transfer.depositPendingTitle')}</span>
                                 </div>
                                 <p className="text-xs text-amber-800/80 font-medium leading-relaxed">
-                                    {redepositError || t('transfer.depositPendingDesc', 'Die Zahlung konnte nicht automatisch in einem Sync-Dienst hinterlegt werden. Du kannst es erneut versuchen oder die Zahlung direkt als Datei oder QR-Code übergeben.')}
+                                    {redepositError || t('transfer.depositPendingDesc')}
                                 </p>
                                 <Button
                                     variant="outline"
@@ -341,7 +276,7 @@ export function TransferSuccessView({
                                     className="w-full text-xs font-bold gap-2 border-amber-300 text-amber-900 hover:bg-amber-100/50"
                                 >
                                     {isRedepositing ? <RefreshCw size={14} className="animate-spin" /> : <UploadCloud size={14} />}
-                                    {isRedepositing ? t('transfer.depositing', 'Hinterlege im Sync-Dienst...') : t('transfer.retryDepositButton', 'Erneut im Sync-Dienst hinterlegen')}
+                                    {isRedepositing ? t('transfer.depositing') : t('transfer.retryDepositButton')}
                                 </Button>
                             </div>
                         ) : null}
@@ -448,63 +383,6 @@ export function TransferSuccessView({
                     )}
                 </div>
             </div>
-
-            {/* Offline QR Code Modal */}
-            {showQrModal && (
-                <ModalShell
-                    isOpen={showQrModal}
-                    onClose={() => setShowQrModal(false)}
-                    title={t('transfer.qrModalTitle', 'Direktübergabe & Offline-Zahlung')}
-                >
-                    <div className="space-y-4 p-2 text-center">
-                        <div className="p-4 bg-bg-app rounded-2xl border border-theme-subtle text-left space-y-2">
-                            <h4 className="text-xs font-bold text-theme-primary uppercase tracking-wider">
-                                {t('transfer.qrModalDirectHeader', 'Direkte Offline-Zahlung')}
-                            </h4>
-                            <p className="text-xs text-theme-secondary leading-relaxed">
-                                {t('transfer.qrModalDirectDesc', 'Transfer-Dateien (.transfer) können direkt per USB, Bluetooth, Datei-Freigabe oder Chat an den Empfänger übergeben werden. Der Empfänger importiert die Datei in seiner Human Money App unter "Gutscheine empfangen".')}
-                            </p>
-                        </div>
-
-                        {bundleQrSvg ? (
-                            <div
-                                data-testid="transfer-qr-svg"
-                                className="mx-auto w-56 h-56 p-3 bg-white rounded-2xl border border-theme-subtle shadow-sm flex items-center justify-center [&>svg]:w-full [&>svg]:h-full"
-                                dangerouslySetInnerHTML={{ __html: bundleQrSvg }}
-                            />
-                        ) : !isQrSizeSupported ? (
-                            <p className="text-xs text-amber-700 bg-amber-50 p-3 rounded-xl border border-amber-200 text-left">
-                                {t('transfer.qrTooLargeHint')}
-                            </p>
-                        ) : null}
-
-                        <Advanced>
-                            <div className="p-3 bg-white border border-theme-subtle rounded-xl flex items-center justify-between gap-2">
-                                <span className="text-xs font-mono text-theme-light truncate">
-                                    {suggestFilename(recipientId)}.transfer ({bundleData.length} Bytes)
-                                </span>
-                                <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={handleCopyBase64}
-                                    className="gap-1 text-xs shrink-0"
-                                >
-                                    {copiedData ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
-                                    {copiedData ? t('common.copied', 'Kopiert!') : t('transfer.copyBundleData', 'Daten kopieren')}
-                                </Button>
-                            </div>
-                        </Advanced>
-
-                        <Button
-                            variant="primary"
-                            onClick={() => setShowQrModal(false)}
-                            className="w-full text-xs font-bold py-2.5 rounded-xl"
-                        >
-                            {t('common.close', 'Schließen')}
-                        </Button>
-                    </div>
-                </ModalShell>
-            )}
         </div>
     );
 }

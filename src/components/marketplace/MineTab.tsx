@@ -46,7 +46,7 @@ export interface MineTabProps {
         note?: string,
         paymentUri?: string
     ) => Promise<void>;
-    onPayInquiry?: (paymentUri: string) => void;
+    onPayInquiry?: (counterpartyDid: string, paymentUri?: string | null) => void;
 }
 
 export const MineTab: React.FC<MineTabProps> = ({
@@ -547,7 +547,7 @@ interface InquiryItemCardProps {
         note?: string,
         paymentUri?: string
     ) => Promise<void>;
-    onPay?: (paymentUri: string) => void;
+    onPay?: (counterpartyDid: string, paymentUri?: string | null) => void;
 }
 
 const InquiryItemCard: React.FC<InquiryItemCardProps> = ({
@@ -621,12 +621,13 @@ const InquiryItemCard: React.FC<InquiryItemCardProps> = ({
                                 : t('marketplace.inquiryDeclined', 'Abgelehnt')}
                         </div>
                         {item.reply.note && <p className="mt-0.5 text-[11px]">{item.reply.note}</p>}
-                        {!isSeller && item.reply.paymentUri && onPay && (
+                        {!isSeller && item.reply.decision === 'confirm' && onPay && (
                             <div className="pt-2">
                                 <Button
                                     size="xs"
                                     variant="primary"
-                                    onClick={() => onPay(item.reply!.paymentUri!)}
+                                    onClick={() => onPay(item.counterpartyDid, item.reply!.paymentUri)}
+                                    data-testid={`inquiry-pay-btn-${item.inquiryId}`}
                                     className="flex items-center gap-1"
                                 >
                                     <span>{t('marketplace.payNowBtn', 'Jetzt bezahlen')}</span>

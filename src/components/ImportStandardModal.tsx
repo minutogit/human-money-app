@@ -133,31 +133,45 @@ export function ImportStandardModal({
                             {/* Details Grid */}
                             <div className="grid grid-cols-2 gap-3 text-xs">
                                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60">
-                                    <span className="text-[10px] font-black uppercase text-theme-light block mb-1">Issuer / Org</span>
-                                    <span className="font-bold text-theme-primary">{definition.mutable.metadata.issuerName || 'De-centralized'}</span>
-                                </div>
-                                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60">
-                                    <span className="text-[10px] font-black uppercase text-theme-light block mb-1">Privacy Default</span>
-                                    <span className="font-bold text-theme-primary capitalize">{definition.immutable.features.privacyMode}</span>
-                                </div>
-                                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60">
-                                    <span className="text-[10px] font-black uppercase text-theme-light block mb-1">Max Validity</span>
+                                    <span className="text-[10px] font-black uppercase text-theme-light block mb-1">
+                                        {t('standards.issuerLabel')}
+                                    </span>
                                     <span className="font-bold text-theme-primary">
-                                        {definition.immutable.issuance.validityDurationRange.length > 0 
-                                            ? definition.immutable.issuance.validityDurationRange.join(', ') 
-                                            : 'Unlimited'}
+                                        {definition.mutable.metadata.issuerName || t('standards.decentralizedIssuer')}
                                     </span>
                                 </div>
                                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60">
-                                    <span className="text-[10px] font-black uppercase text-theme-light block mb-1">Divisible</span>
-                                    <span className="font-bold text-theme-primary">{definition.immutable.features.allowPartialTransfers ? 'Yes' : 'No'}</span>
+                                    <span className="text-[10px] font-black uppercase text-theme-light block mb-1">
+                                        {t('standards.privacyModeLabel')}
+                                    </span>
+                                    <span className="font-bold text-theme-primary capitalize">{definition.immutable.features.privacyMode}</span>
+                                </div>
+                                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60">
+                                    <span className="text-[10px] font-black uppercase text-theme-light block mb-1">
+                                        {t('standards.validityRangeLabel')}
+                                    </span>
+                                    <span className="font-bold text-theme-primary">
+                                        {definition.immutable.issuance.validityDurationRange.length > 0 
+                                            ? definition.immutable.issuance.validityDurationRange.join(', ') 
+                                            : t('standards.unlimitedValidity')}
+                                    </span>
+                                </div>
+                                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60">
+                                    <span className="text-[10px] font-black uppercase text-theme-light block mb-1">
+                                        {t('standards.divisibleLabel')}
+                                    </span>
+                                    <span className="font-bold text-theme-primary">
+                                        {definition.immutable.features.allowPartialTransfers ? t('common.yes') : t('common.no')}
+                                    </span>
                                 </div>
                             </div>
 
                             {/* Roles */}
                             {definition.immutable.issuance.allowedSignatureRoles.length > 0 && (
                                 <div>
-                                    <span className="text-[10px] font-black uppercase text-theme-light tracking-widest block mb-2">Allowed Co-Signer Roles</span>
+                                    <span className="text-[10px] font-black uppercase text-theme-light tracking-widest block mb-2">
+                                        {t('standards.allowedRolesLabel')}
+                                    </span>
                                     <div className="flex flex-wrap gap-2">
                                         {definition.immutable.issuance.allowedSignatureRoles.map((role: string, idx: number) => (
                                             <span key={idx} className="text-xs font-bold bg-theme-primary/10 text-theme-primary px-3 py-1 rounded-lg border border-theme-primary/20">
@@ -172,7 +186,7 @@ export function ImportStandardModal({
                             {rulesCount > 0 && (
                                 <div className="p-3 bg-blue-50 rounded-xl border border-blue-200 text-xs text-blue-900 font-medium flex items-center gap-2">
                                     <CheckCircle2 size={16} className="text-blue-600 shrink-0" />
-                                    <span>Contains <span className="font-bold">{rulesCount}</span> compliance rule(s)</span>
+                                    <span>{t('standards.customRulesCount', { count: rulesCount })}</span>
                                 </div>
                             )}
                         </div>

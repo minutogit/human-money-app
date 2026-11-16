@@ -55,6 +55,8 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
     const [session, setSession] = useState<ActiveRecoverySessionDto | null>(
         existingSession ?? null
     );
+    const [conflictingSession, setConflictingSession] =
+        useState<ActiveRecoverySessionDto | null>(null);
     const [replyInput, setReplyInput] = useState<string>('');
     const [answers, setAnswers] = useState<[string, string, string]>(['', '', '']);
     const [bip39Passphrase, setBip39Passphrase] = useState<string>('');
@@ -99,9 +101,12 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                 if (!active) return;
                 if (found && (!found.sessionMode || found.sessionMode === mode)) {
                     setSession(found);
+                    setConflictingSession(null);
                     if (found.ownerDisplayName) {
                         setProfileName((prev) => prev || found.ownerDisplayName || '');
                     }
+                } else if (found && found.sessionMode && found.sessionMode !== mode) {
+                    setConflictingSession(found);
                 }
             })
             .catch(() => {
@@ -178,6 +183,7 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                 targetFolderName
             );
             setSession(newSession);
+            setConflictingSession(null);
             setConfirmCancel(false);
         } catch (err) {
             setErrorMsg(translateError(err, t));
@@ -350,6 +356,11 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
             {/* Start Session */}
             {!session && (
                 <div className="space-y-4">
+                    {conflictingSession && (
+                        <AlertBanner variant="warning" data-testid="social-conflicting-session-warning">
+                            {t('backup.conflictingSessionWarning')}
+                        </AlertBanner>
+                    )}
                     <p className="text-xs text-theme-light leading-relaxed">
                         {t('backup.socialRecoveryDesc')}
                     </p>

@@ -81,7 +81,7 @@ export function WalletRecovery({
     }, [initialPayload]);
 
     useEffect(() => {
-        if (method !== 'choose') return;
+        if (method !== 'choose' && method !== 'social') return;
         let active = true;
         recoveryService
             .getActiveRecoverySession?.()
@@ -89,6 +89,9 @@ export function WalletRecovery({
                 if (!active) return;
                 if (session && session.sessionMode === 'reset_local_password') {
                     setActiveSocialSession(session);
+                    if (session.targetFolderName) {
+                        setSelectedProfile(session.targetFolderName);
+                    }
                 } else {
                     setActiveSocialSession(null);
                 }
@@ -214,8 +217,9 @@ export function WalletRecovery({
                         id="profile-select"
                         value={selectedProfile}
                         onChange={(e) => setSelectedProfile(e.target.value)}
+                        disabled={Boolean(activeSocialSession?.targetFolderName && method === 'social')}
                         data-testid="profile-select"
-                        className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3.5 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
+                        className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3.5 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all disabled:opacity-70"
                     >
                         {profiles.map((profile) => (
                             <option key={profile.folderName} value={profile.folderName}>
@@ -323,6 +327,13 @@ export function WalletRecovery({
                     <SocialRecoveryFlow
                         mode="reset_local_password"
                         targetFolderName={selectedProfile}
+                        existingSession={
+                            activeSocialSession &&
+                            (!activeSocialSession.targetFolderName ||
+                                activeSocialSession.targetFolderName === selectedProfile)
+                                ? activeSocialSession
+                                : null
+                        }
                         initialPayload={initialPayload}
                         onBack={() => setMethod('choose')}
                         onSuccess={() => onRecoverySuccess()}

@@ -215,4 +215,42 @@ describe('WalletRecovery Component', () => {
             expect(screen.getByTestId('start-social-recovery-btn')).toBeInTheDocument();
         });
     });
+
+    it('restores targetFolderName from active reset_local_password session instead of defaulting to first profile', async () => {
+        const baseImpl = (invoke as Mock).getMockImplementation();
+        (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+            if (cmd === 'get_active_recovery_session') {
+                return Promise.resolve({
+                    sessionId: 'sess-p2',
+                    sessionMode: 'reset_local_password',
+                    targetFolderName: 'profile2',
+                    sasCode: '123456',
+                    thresholdM: 2,
+                    collectedCount: 1,
+                    questionIds: [1, 2, 3],
+                    createdAtSecs: 1000,
+                });
+            }
+            return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+        });
+
+        render(
+            <WalletRecovery
+                onRecoverySuccess={mockOnRecoverySuccess}
+                onSwitchToLogin={mockOnSwitchToLogin}
+            />
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('profile-select')).toHaveValue('profile2');
+            expect(screen.getByTestId('wallet-recovery-resume-banner')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTestId('wallet-recovery-resume-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('profile-select')).toBeDisabled();
+            expect(screen.getByTestId('profile-select')).toHaveValue('profile2');
+        });
+    });
 });

@@ -10,6 +10,7 @@ import {
     SlidersHorizontal,
     ChevronUp,
     ChevronDown,
+    RefreshCw,
 } from 'lucide-react';
 import {
     FrontendMarketSnapshot,
@@ -68,6 +69,7 @@ export function MarketplaceView({
     const [myProfile, setMyProfile] = useState<FrontendMyMarketProfile | null>(null);
     const [inboxSummary, setInboxSummary] = useState<FrontendPostInboxSummary | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(true);
+    const [isSyncing, setIsSyncing] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
 
     // Selected person DID for detail view
@@ -321,8 +323,30 @@ export function MarketplaceView({
         }
     };
 
-    const handlePayInquiry = (_paymentUri: string) => {
-        navigate({ view: 'send_vouchers' });
+    const handlePayInquiry = (counterpartyDid: string, paymentUri?: string | null) => {
+        navigate({
+            view: 'send_vouchers',
+            initialRecipientId: counterpartyDid,
+            ...(paymentUri ? { initialPaymentUri: paymentUri } : {}),
+        });
+    };
+
+    const handleManualSync = async () => {
+        if (isSyncing) return;
+        setIsSyncing(true);
+        setError(null);
+        try {
+            await Promise.allSettled([
+                marketService.syncMarketChannels(),
+                postService.syncPostChannels(),
+            ]);
+            await refreshData(false);
+        } catch (err) {
+            logger.error('Failed to sync marketplace manually: ' + stringifyError(err));
+            setError(translateError(err, t));
+        } finally {
+            setIsSyncing(false);
+        }
     };
 
     const handleBoardInquire = (ad: Ad, ownerDid: string, _ownerName: string) => {
@@ -422,6 +446,18 @@ export function MarketplaceView({
             }
             actions={
                 <div className="flex items-center gap-2">
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleManualSync}
+                        disabled={isSyncing}
+                        data-testid="refresh-marketplace-button"
+                        title={t('marketplace.refresh')}
+                        aria-label={t('marketplace.refresh')}
+                        className="flex items-center gap-1.5"
+                    >
+                        <RefreshCw size={15} className={isSyncing ? 'animate-spin' : ''} />
+                    </Button>
                     <Button
                         size="sm"
                         variant={isOptionsOpen ? 'primary' : 'outline'}

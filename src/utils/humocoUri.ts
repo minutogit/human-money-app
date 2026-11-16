@@ -130,6 +130,14 @@ export function parseContactCard(input: string): ParsedContactCard | null {
     return { did: trimmed };
   }
 
+  // Fallback: extract embedded did:key:... (optionally with prefix:tag@) from chat/email text
+  const embeddedDidMatch = trimmed.match(
+    /(?:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+@)?did:key:[1-9A-HJ-NP-Za-km-z]+/
+  );
+  if (embeddedDidMatch) {
+    return { did: embeddedDidMatch[0] };
+  }
+
   return null;
 }
 

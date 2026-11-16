@@ -351,6 +351,8 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     const handleCreateBackupNow = async () => {
         if (syncFolder) {
             await handleSyncFolder();
+        } else if (syncBackupEnabled && backupStatus?.hasAuthorizedSyncBackupTarget) {
+            await handleManualSyncBackup();
         } else {
             await handleExportFile();
         }

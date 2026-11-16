@@ -44,7 +44,12 @@ export const AppRouter: React.FC = () => {
                     navigate({ view: "logged_in" });
                 }}
                 onSwitchToLogin={() => navigate({ view: "needs_login" })}
-                onSwitchToRestore={() => navigate({ view: "restore_backup" })}
+                onSwitchToRestore={(method) =>
+                    navigate({
+                        view: "restore_backup",
+                        ...(method ? { initialMethod: method } : {}),
+                    })
+                }
             />;
         case "needs_login":
             return <Login
@@ -109,12 +114,14 @@ export const AppRouter: React.FC = () => {
                 onBack={goBack} 
                 initialSearchQuery={appState.initialSearchQuery}
                 initialOpenAddModal={appState.initialOpenAddModal}
+                initialContactPayload={appState.initialContactPayload}
             />;
         case "send_vouchers":
             return <SendView
                 initialRecipientId={appState.initialRecipientId}
                 initialVoucherId={appState.initialVoucherId}
                 initialNote={appState.initialNote}
+                initialPaymentUri={appState.initialPaymentUri}
             />;
         case "receive_bundle":
             return <ReceiveView

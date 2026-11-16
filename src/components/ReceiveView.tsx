@@ -305,7 +305,7 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             const file = files[0];
-            const validExtensions = ['.transfer', '.ask', '.sig', '.standard', '.toml', '.humocoreq', '.humocosig', '.wot', '.hmcproof'];
+            const validExtensions = ['.transfer', '.ask', '.sig', '.standard', '.toml', '.humocoreq', '.humocosig', '.wot', '.hmcproof', '.hmcard'];
             if (validExtensions.some(ext => file.name.endsWith(ext))) {
                 try {
                     const fileBuffer = await file.arrayBuffer();
@@ -319,12 +319,13 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                     if (file.name.endsWith('.standard') || file.name.endsWith('.toml')) {
                         await processStandardFile(bundleData);
                     } else {
-                        let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | null = null;
+                        let detectedType: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | 'card' | null = null;
                         if (file.name.endsWith('.transfer')) detectedType = 'transfer';
                         else if (file.name.endsWith('.ask') || file.name.endsWith('.humocoreq')) detectedType = 'ask';
                         else if (file.name.endsWith('.sig') || file.name.endsWith('.humocosig')) detectedType = 'sig';
                         else if (file.name.endsWith('.wot')) detectedType = 'wot';
                         else if (file.name.endsWith('.hmcproof')) detectedType = 'proof';
+                        else if (file.name.endsWith('.hmcard')) detectedType = 'card';
 
                         if (detectedType) {
                             executeReceiveDirectly(bundleData, detectedType, file.name);

@@ -74,7 +74,11 @@ export const FirstStepsChecklist: React.FC<FirstStepsChecklistProps> = ({
             desc: t("dashboard.stepBackupDesc"),
             done: isBackupComplete,
             icon: HardDrive,
-            onClick: () => navigate({ view: "settings", initialSection: "backup" }),
+            onClick: () =>
+                navigate({
+                    view: "settings",
+                    initialSection: hasIdentityRecovery === false && hasBackup ? "security" : "backup",
+                }),
         },
         {
             id: "contact",

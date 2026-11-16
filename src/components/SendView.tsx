@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, FormEvent, useReducer, useRef } from "react";
+import { useState, useEffect, useMemo, FormEvent, useReducer, useRef, useCallback } from "react";
 import { useTranslation } from 'react-i18next';
 import { voucherService } from "../services/voucherService";
 import { transferService, CreateBundleResult } from "../services/transferService";
@@ -136,16 +136,19 @@ export interface SendViewProps {
     initialRecipientId?: string;
     initialVoucherId?: string;
     initialNote?: string;
+    initialPaymentUri?: string;
 }
 
-export function SendView({ initialRecipientId, initialVoucherId, initialNote }: SendViewProps = {}) {
+export function SendView({ initialRecipientId, initialVoucherId, initialNote, initialPaymentUri }: SendViewProps = {}) {
     const { t } = useTranslation();
     const { protectAction, profileName } = useSession();
     const { navigate, goBack } = useNavigation();
     const [state, dispatch] = useReducer(reducer, initialState);
     const [paymentRequestSuccessMsg, setPaymentRequestSuccessMsg] = useState<string | null>(null);
-    
+    const [isDataLoaded, setIsDataLoaded] = useState(false);
+
     const navigationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const appliedInitialUriRef = useRef<string | null>(null);
 
     useEffect(() => {
         if (initialRecipientId) {
@@ -294,6 +297,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     const stdId = [...newIdMap.entries()].find(([, uuid]) => uuid === firstClass.standardUuid)?.[0] || firstClass.standardUuid;
                     dispatch({ type: 'SET_STANDARD', id: stdId, isTest: firstClass.isTestVoucher, preserveAmount: true });
                 }
+                setIsDataLoaded(true);
             } catch (e) {
                 if (!active) return;
                 logger.error(`Failed to fetch data for SendView: ${stringifyError(e)}`);
@@ -403,7 +407,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
         }
     };
 
-    const applyPaymentRequest = (rawText: string): boolean => {
+    const applyPaymentRequest = useCallback((rawText: string): boolean => {
         const parsed = parsePaymentRequest(rawText);
         if (!parsed) return false;
 
@@ -415,6 +419,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
         }
 
         let matchedStandardId: string | null = null;
+        const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         if (parsed.standardUuid) {
             for (const [id, uuid] of standardIdToUuidMap.entries()) {
                 if (uuid === parsed.standardUuid || id === parsed.standardUuid) {
@@ -422,13 +427,33 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                     break;
                 }
             }
+            if (!matchedStandardId) {
+                const isStrictUuid = uuidPattern.test(parsed.standardUuid);
+                const foundByIdOrName = voucherStandards.find(
+                    s =>
+                        s.id === parsed.standardUuid ||
+                        (!isStrictUuid &&
+                            s.displayName?.toLowerCase() === parsed.standardUuid?.toLowerCase())
+                );
+                if (foundByIdOrName) matchedStandardId = foundByIdOrName.id;
+            }
         } else if (parsed.standardName) {
             const found = voucherStandards.find(s => s.displayName?.toLowerCase() === parsed.standardName?.toLowerCase());
             if (found) matchedStandardId = found.id;
         }
 
+        const requestedStandard = Boolean(parsed.standardUuid || parsed.standardName);
         if (matchedStandardId) {
             dispatch({ type: 'SET_STANDARD', id: matchedStandardId, isTest: parsed.isTest ?? false });
+        } else if (requestedStandard) {
+            setPaymentRequestSuccessMsg(null);
+            dispatch({
+                type: 'SET_FEEDBACK',
+                msg: t('transfer.paymentRequestStandardMissing', {
+                    name: parsed.standardName || parsed.standardUuid,
+                }),
+            });
+            return true;
         } else if (parsed.isTest !== undefined && state.selectedStandardId) {
             dispatch({ type: 'SET_STANDARD', id: state.selectedStandardId, isTest: parsed.isTest });
         }
@@ -440,7 +465,14 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
         setPaymentRequestSuccessMsg(t('transfer.paymentRequestApplied'));
         setTimeout(() => setPaymentRequestSuccessMsg(null), 3500);
         return true;
-    };
+    }, [standardIdToUuidMap, voucherStandards, state.selectedStandardId, t]);
+
+    useEffect(() => {
+        if (!isDataLoaded || !initialPaymentUri) return;
+        if (appliedInitialUriRef.current === initialPaymentUri) return;
+        appliedInitialUriRef.current = initialPaymentUri;
+        applyPaymentRequest(initialPaymentUri);
+    }, [isDataLoaded, initialPaymentUri, applyPaymentRequest]);
 
     const handlePastePaymentRequest = async () => {
         try {
@@ -511,6 +543,12 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
         if (selectedMap.size === 0) { 
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.assetSelectionRequired') }); 
             return; 
+        }
+        if (detectedPrivacy === 'incompatible') {
+            dispatch({ type: 'SET_PRIVACY_ERROR', value: true });
+            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.privacyConflict') });
+            document.getElementById('privacyMode')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
         }
         if (detectedPrivacy === 'flexible' && state.privacyMode === null) {
             dispatch({ type: 'SET_PRIVACY_ERROR', value: true });
@@ -801,7 +839,10 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote }: 
                                 <PrivacyToggle
                                     privacyMode={state.privacyMode}
                                     onPrivacyChange={(mode) => dispatch({ type: 'SET_PRIVACY', mode })}
-                                    privacyRules={{ mode: detectedPrivacy, forced: detectedPrivacy !== 'flexible' }}
+                                    privacyRules={{
+                                        mode: detectedPrivacy,
+                                        forced: detectedPrivacy === 'stealth' || detectedPrivacy === 'public',
+                                    }}
                                     privacyError={state.privacyError}
                                 />
 

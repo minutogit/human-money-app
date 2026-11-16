@@ -22,10 +22,6 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
   revealItemInDir: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../utils/clipboard', () => ({
-  copyToClipboard: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock('../../services/settingsService', () => ({
   settingsService: {
     getSettings: vi.fn().mockResolvedValue({
@@ -58,7 +54,6 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
     localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === 'get_contacts') return [];
-      if (cmd === 'encode_text_qr_svg') return '<svg data-testid="mock-svg"></svg>';
       return undefined;
     });
   });
@@ -80,7 +75,6 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
     expect(screen.getByText(/transfer bundle was securely deposited into 2 (Post sync|sync service)/i)).toBeInTheDocument();
 
     // Direct sharing options remain fully accessible (100% offline sovereignty)
-    expect(screen.getByText(/Show QR Code/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument();
   });
 
@@ -141,31 +135,6 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
       expect(screen.getByTestId('post-deposit-success-card')).toBeInTheDocument();
       expect(screen.getAllByText(/Payment deposited in Post/i).length).toBeGreaterThanOrEqual(1);
     });
-  });
-
-  it('opens QR modal and permits copying raw bundle data for direct offline transfer', async () => {
-    render(
-      <TransferSuccessView
-        bundleData={dummyBundleData}
-        recipientId={recipientId}
-        summary="10.00 Minuto"
-        bundleId={bundleId}
-        initialDepositedTo={1}
-        onDone={vi.fn()}
-      />
-    );
-
-    const qrBtn = screen.getByRole('button', { name: /Show QR Code/i });
-    fireEvent.click(qrBtn);
-
-    expect(screen.getByText(/Transfer QR Code & Data/i)).toBeInTheDocument();
-    expect(screen.getByText(/Direct Transfer \(Offline\)/i)).toBeInTheDocument();
-
-    const copyDataBtn = screen.getByRole('button', { name: /Copy Bundle Data/i });
-    fireEvent.click(copyDataBtn);
-
-    const { copyToClipboard } = await import('../../utils/clipboard');
-    expect(copyToClipboard).toHaveBeenCalled();
   });
 
   it('APP-UX-09 P3 Simple Mode: shows clear delivered-to heading without raw did:key and collapses direct handover buttons', async () => {

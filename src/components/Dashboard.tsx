@@ -491,10 +491,10 @@ export function Dashboard() {
                                     </div>
                                     <div className="min-w-0">
                                         <p className="font-bold text-sm text-theme-secondary truncate">
-                                            {t('dashboard.pendingSignRequestTitle', 'Offene Bürgschaftsanfrage von {{name}}', { name: senderName })}
+                                            {t('dashboard.pendingSignRequestTitle', { name: senderName })}
                                         </p>
                                         <p className="text-xs text-theme-light truncate">
-                                            {t('dashboard.pendingSignRequestDesc', 'Über Ablage empfangen. Bitte prüfe den Gutschein und signiere bei Einverständnis.')}
+                                            {t('dashboard.pendingSignRequestDesc')}
                                         </p>
                                     </div>
                                 </div>
@@ -541,10 +541,10 @@ export function Dashboard() {
                                 </div>
                                 <div>
                                     <p className="font-bold text-sm text-theme-secondary">
-                                        {t('dashboard.pendingWotHandshakesCount', '{{count}} offene Vertrauensbestätigung(en) über Ablagen', { count: pendingWotHandshakes.length })}
+                                        {t('dashboard.pendingWotHandshakesCount', { count: pendingWotHandshakes.length })}
                                     </p>
                                     <p className="text-xs opacity-70">
-                                        {t('dashboard.pendingWotHandshakesHint', 'Tippe hier, um die Bestätigungen im Adressbuch zu prüfen.')}
+                                        {t('dashboard.pendingWotHandshakesHint')}
                                     </p>
                                 </div>
                             </div>

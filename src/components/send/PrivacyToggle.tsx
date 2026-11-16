@@ -34,7 +34,9 @@ export function PrivacyToggle({
             <HelpIcon topic="privacy" size={14} />
           </div>
           <p className="text-[11px] text-theme-light font-medium mt-0.5">
-            {privacyRules.forced ? (
+            {privacyRules.mode === 'incompatible' ? (
+              <span className="text-rose-600 font-semibold">{t('transfer.privacyConflict')}</span>
+            ) : privacyRules.forced ? (
               t('transfer.mandatoryStandard')
             ) : privacyMode === 'stealth' ? (
               t('transfer.privacyStealthSummary')
@@ -51,14 +53,15 @@ export function PrivacyToggle({
         <div className="shrink-0">
           {privacyRules.forced ? (
             <div
+              data-testid="privacy-forced-badge"
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold ${
-                privacyRules.mode === 'Stealth'
+                privacyRules.mode === 'stealth'
                   ? 'bg-purple-100 text-purple-700 border border-purple-200/60'
                   : 'bg-blue-100 text-blue-700 border border-blue-200/60'
               }`}
             >
-              {privacyRules.mode === 'Stealth' ? <Lock size={14} /> : <Eye size={14} />}
-              <span>{privacyRules.mode === 'Stealth' ? t('transfer.stealth') : t('transfer.public')}</span>
+              {privacyRules.mode === 'stealth' ? <Lock size={14} /> : <Eye size={14} />}
+              <span>{privacyRules.mode === 'stealth' ? t('transfer.stealth') : t('transfer.public')}</span>
             </div>
           ) : (
             <div className="inline-flex p-1 bg-slate-100 rounded-xl border border-slate-200/70 gap-1">
@@ -91,7 +94,7 @@ export function PrivacyToggle({
         </div>
       </div>
 
-      {privacyRules.mode === 'Incompatible' && (
+      {privacyRules.mode === 'incompatible' && (
         <div className="mt-3 p-2.5 bg-rose-50 border border-rose-100 rounded-xl flex items-center gap-2">
           <AlertTriangle size={16} className="text-rose-500 shrink-0" />
           <p className="text-xs font-bold text-rose-800">{t('transfer.privacyConflict')}</p>

@@ -320,6 +320,14 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                                 <p className="text-xs font-semibold text-theme-light uppercase tracking-wider mb-1">{t('conflict.offenderIdLabel')}</p>
                                 <TechId value={proof.offenderId} kind="did" />
                             </div>
+                            {!proof.isCryptographicallyAttributed && proof.suspectedIdentity && (
+                                <div className="min-w-0" data-testid="conflict-suspected-identity">
+                                    <p className="text-xs font-semibold text-theme-light uppercase tracking-wider mb-1">
+                                        {t('conflict.suspectedIdentityLabel')}
+                                    </p>
+                                    <TechId value={proof.suspectedIdentity} kind="did" />
+                                </div>
+                            )}
                             <Advanced>
                                 {proof.isCryptographicallyAttributed ? (
                                     proof.hasVictimWitness && (

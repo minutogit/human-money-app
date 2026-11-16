@@ -2344,7 +2344,7 @@ pub(crate) async fn probe_sync_backup_impl(
         .collect();
     if non_empty_inputs.is_empty() {
         return Err(FrontendError::from(
-            "Ablage-Adresse darf nicht leer sein".to_string(),
+            "Sync-Dienst-Adresse darf nicht leer sein".to_string(),
         ));
     }
 

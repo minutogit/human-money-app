@@ -292,8 +292,8 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
     if (postSentSuccess) {
         return (
             <PageLayout 
-                title={t('voucher.signRequest.postSentTitle', 'Unterschrift über Ablage gesendet')} 
-                description={t('voucher.signRequest.postSentDesc', 'Deine Unterschrift wurde verschlüsselt in der Ablage hinterlegt und wird automatisch vom Aussteller abgeholt.')} 
+                title={t('voucher.signRequest.postSentTitle')} 
+                description={t('voucher.signRequest.postSentDesc')} 
                 onBack={onBack}
             >
                 <div className="max-w-xl mx-auto space-y-6 py-12 text-center animate-in fade-in">
@@ -302,15 +302,15 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                     </div>
                     <div className="space-y-2">
                         <h2 className="text-2xl font-black text-theme-primary">
-                            {t('voucher.signRequest.postSentTitle', 'Unterschrift über Ablage gesendet')}
+                            {t('voucher.signRequest.postSentTitle')}
                         </h2>
                         <p className="text-sm font-medium text-theme-secondary max-w-md mx-auto leading-relaxed">
-                            {t('voucher.signRequest.postSentDesc', 'Deine Unterschrift wurde verschlüsselt in der Ablage hinterlegt und wird automatisch vom Aussteller abgeholt.')}
+                            {t('voucher.signRequest.postSentDesc')}
                         </p>
                     </div>
                     <div className="pt-4">
                         <Button onClick={onBack} className="flex items-center justify-center gap-2 mx-auto">
-                            {t('common.done', 'Fertig')}
+                            {t('common.done')}
                         </Button>
                     </div>
                 </div>

@@ -92,8 +92,12 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
 
     const startCamera = useCallback(async () => {
         setCameraError(null);
+        if (typeof window !== 'undefined' && !('BarcodeDetector' in window)) {
+            setCameraError(t('common.qrScanUnsupported'));
+            return;
+        }
         if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-            setCameraError(t('contacts.cameraNotSupported', 'Kamera auf diesem Gerät nicht verfügbar.'));
+            setCameraError(t('contacts.cameraNotSupported'));
             return;
         }
 
@@ -108,7 +112,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
             }
         } catch (err) {
             logger.info(`Camera access not available or denied: ${stringifyError(err)}`);
-            setCameraError(t('contacts.cameraAccessDenied', 'Kamera konnte nicht gestartet werden. Bitte erlaube den Kamerazugriff oder nutze eine andere Methode.'));
+            setCameraError(t('contacts.cameraAccessDenied'));
         }
     }, [t]);
 
@@ -220,15 +224,21 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
 
     // QR Camera decoding loop
     useEffect(() => {
+        if (view !== 'qr_scanner') return;
+        if (typeof window === 'undefined' || !('BarcodeDetector' in window)) {
+            return;
+        }
+
         let isScanning = true;
         let detector: any = null;
 
-        if (view === 'qr_scanner' && typeof window !== 'undefined' && 'BarcodeDetector' in window) {
-            try {
-                detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
-            } catch (err) {
-                logger.info(`BarcodeDetector creation failed: ${stringifyError(err)}`);
-            }
+        try {
+            detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+        } catch (err) {
+            logger.info(`BarcodeDetector creation failed: ${stringifyError(err)}`);
+            setCameraError(t('common.qrScanUnsupported'));
+            stopCamera();
+            return;
         }
 
         const scanLoop = async () => {
@@ -252,9 +262,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
             }
         };
 
-        if (view === 'qr_scanner') {
-            scanTimerRef.current = window.setTimeout(scanLoop, 400);
-        }
+        scanTimerRef.current = window.setTimeout(scanLoop, 400);
 
         return () => {
             isScanning = false;
@@ -263,7 +271,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
                 scanTimerRef.current = null;
             }
         };
-    }, [view, stopCamera, handleImportPayload]);
+    }, [view, stopCamera, handleImportPayload, t]);
 
     // Tile 2: Clipboard
     const handleTileClipboard = async () => {
