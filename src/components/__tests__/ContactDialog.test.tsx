@@ -2,6 +2,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import ContactDialog from '../ContactDialog';
 import { marketService } from '../../services/marketService';
+import { profileService } from '../../services/profileService';
 import { Contact } from '../../types';
 
 vi.mock('../../services/marketService', () => ({
@@ -9,6 +10,12 @@ vi.mock('../../services/marketService', () => ({
     previewContactTrustChange: vi.fn().mockResolvedValue(null),
     probePublicSync: vi.fn(),
     probeContactSyncs: vi.fn().mockResolvedValue([]),
+  },
+}));
+
+vi.mock('../../services/profileService', () => ({
+  profileService: {
+    getUserId: vi.fn().mockResolvedValue('did:key:zOwnRootIdentity999999'),
   },
 }));
 
@@ -288,5 +295,46 @@ describe('ContactDialog Component', () => {
     // Input field should not be present; limit message shown
     expect(screen.getByText(/contacts\.syncMaxReached|Maximal 2 Sync-Ablagen erlaubt|Maximum 2 sync services allowed/i)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/https:\/\/sync-server\./i)).not.toBeInTheDocument();
+  });
+
+  it('blocks saving exact own active profile and hides trust rating for own subaccount', async () => {
+    vi.mocked(profileService.getUserId).mockResolvedValue('did:key:zOwnRootIdentity999999');
+
+    render(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+      />
+    );
+
+    const didInput = screen.getByTestId('contact-did-input');
+    const saveBtn = screen.getByRole('button', { name: /contacts\.saveContact|Kontakt speichern|Save Contact/i });
+
+    // 1. Exact own active profile -> warning shown, save disabled
+    fireEvent.change(didInput, { target: { value: 'did:key:zOwnRootIdentity999999' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('self-active-profile-warning')).toBeInTheDocument();
+    });
+    expect(saveBtn).toBeDisabled();
+
+    // 2. Own subaccount (different prefix, same root) -> trust rating hidden, save allowed with trustLevel: null
+    fireEvent.change(didInput, { target: { value: 'laden:abc@did:key:zOwnRootIdentity999999' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('own-subaccount-trust-notice')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('self-active-profile-warning')).not.toBeInTheDocument();
+    expect(marketService.previewContactTrustChange).not.toHaveBeenCalled();
+    expect(saveBtn).not.toBeDisabled();
+
+    fireEvent.click(saveBtn);
+    await waitFor(() => {
+      expect(mockOnSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          did: 'laden:abc@did:key:zOwnRootIdentity999999',
+          trustLevel: null,
+        })
+      );
+    });
   });
 });

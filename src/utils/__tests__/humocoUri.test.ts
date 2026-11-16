@@ -14,27 +14,21 @@ describe('humocoUri Utilities', () => {
   const sampleSai = 'alice:work@did:key:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v';
 
   describe('buildContactCardText', () => {
-    it('builds a compact contact card with name, did, and syncUrls in 2 lines', () => {
+    it('outputs only the compact humoco://contact URI with name, did, and syncUrls', () => {
       const text = buildContactCardText({
         did: sampleDid,
         name: 'Alice Müller',
         syncUrls: ['https://sync1.example.org/sync.php', 'https://sync2.example.org/sync.php'],
       });
-      expect(text).toContain('Human Money Kontakt: Alice Müller');
-      expect(text).not.toContain(`DID: ${sampleDid}`);
-      const lines = text.split('\n');
-      expect(lines).toHaveLength(2);
-      expect(lines[1]).toContain(`humoco://contact?did=${encodeURIComponent(sampleDid)}&name=${encodeURIComponent('Alice Müller')}&sync=${encodeURIComponent('https://sync1.example.org/sync.php')}&sync=${encodeURIComponent('https://sync2.example.org/sync.php')}`);
+      expect(text).not.toContain('Human Money Kontakt:');
+      expect(text).not.toContain('\n');
+      expect(text).toBe(`humoco://contact?did=${encodeURIComponent(sampleDid)}&name=${encodeURIComponent('Alice Müller')}&sync=sync1.example.org&sync=sync2.example.org`);
     });
 
-    it('builds a compact contact card without name in 2 lines', () => {
+    it('outputs only the humoco://contact URI without name', () => {
       const text = buildContactCardText({ did: sampleDid });
-      expect(text).toContain('Human Money Kontakt:');
-      expect(text).not.toContain('Name:');
-      expect(text).not.toContain(`DID: ${sampleDid}`);
-      const lines = text.split('\n');
-      expect(lines).toHaveLength(2);
-      expect(lines[1]).toContain(`humoco://contact?did=${encodeURIComponent(sampleDid)}`);
+      expect(text).not.toContain('Human Money Kontakt:');
+      expect(text).toBe(`humoco://contact?did=${encodeURIComponent(sampleDid)}`);
     });
   });
 
@@ -67,11 +61,11 @@ describe('humocoUri Utilities', () => {
     });
 
     it('limits parsed sync URLs to maximum 2 and filters non-http(s)', () => {
-      const raw = `humoco://contact?did=${encodeURIComponent(sampleDid)}&sync=ftp://bad.com&sync=https://sync1.org/sync&sync=https://sync2.org/sync&sync=https://sync3.org/sync`;
+      const raw = `humoco://contact?did=${encodeURIComponent(sampleDid)}&sync=ftp://bad.com&sync=sync1.org&sync=http://127.0.0.1:8080&sync=sync3.org`;
       const result = parseContactCard(raw);
       expect(result?.syncUrls).toEqual([
-        'https://sync1.org/sync',
-        'https://sync2.org/sync',
+        'https://sync1.org/sync.php',
+        'http://127.0.0.1:8080/sync.php',
       ]);
     });
 

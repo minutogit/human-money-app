@@ -7,6 +7,23 @@ pub fn get_my_quick_contact(state: tauri::State<AppState>) -> Result<FrontendQui
     get_my_quick_contact_impl(&state)
 }
 
+fn compact_sync_url_for_contact_uri(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let without_https = if let Some(rest) = trimmed.strip_prefix("https://") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("HTTPS://") {
+        rest
+    } else {
+        trimmed
+    };
+    let no_trailing = without_https.trim_end_matches('/');
+    no_trailing
+        .strip_suffix("/sync.php")
+        .unwrap_or(no_trailing)
+        .trim_end_matches('/')
+        .to_string()
+}
+
 pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContact, FrontendError> {
     let service = state.service.lock().unwrap();
     let (raw_did, full_name) = service
@@ -38,31 +55,42 @@ pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContac
         })
         .map_err(FrontendError::from)?;
 
-    let own_did = crate::state::canonicalize_did(&raw_did).unwrap_or(raw_did);
+    let can_did = crate::state::canonicalize_did(&raw_did)
+        .map_err(|e| FrontendError::from(format!("Invalid own user ID: {}", e)))?;
+    let trimmed_raw = raw_did.trim();
+    let own_did = if let Some((prefix_part, _)) = trimmed_raw.rsplit_once('@') {
+        format!("{}@{}", prefix_part, can_did)
+    } else {
+        can_did
+    };
 
     let settings = state.get_cached_settings().unwrap_or_default();
     let mut sync_urls = Vec::new();
     for s in settings.market_selected_syncs {
-        if !s.read_url.is_empty()
-            && (s.read_url.starts_with("https://") || s.read_url.starts_with("http://"))
-            && !sync_urls.contains(&s.read_url)
+        if !s.write_url.is_empty()
+            && (s.write_url.starts_with("https://") || s.write_url.starts_with("http://"))
         {
-            sync_urls.push(s.read_url);
-            if sync_urls.len() >= 2 {
-                break;
+            let compact = compact_sync_url_for_contact_uri(&s.write_url);
+            if !compact.is_empty() && !sync_urls.contains(&compact) {
+                sync_urls.push(compact);
+                if sync_urls.len() >= 2 {
+                    break;
+                }
             }
         }
     }
     if sync_urls.len() < 2 {
         for ps in settings.public_syncs {
             if ps.enabled
-                && !ps.read_url.is_empty()
-                && (ps.read_url.starts_with("https://") || ps.read_url.starts_with("http://"))
-                && !sync_urls.contains(&ps.read_url)
+                && !ps.write_url.is_empty()
+                && (ps.write_url.starts_with("https://") || ps.write_url.starts_with("http://"))
             {
-                sync_urls.push(ps.read_url);
-                if sync_urls.len() >= 2 {
-                    break;
+                let compact = compact_sync_url_for_contact_uri(&ps.write_url);
+                if !compact.is_empty() && !sync_urls.contains(&compact) {
+                    sync_urls.push(compact);
+                    if sync_urls.len() >= 2 {
+                        break;
+                    }
                 }
             }
         }
@@ -135,13 +163,20 @@ mod tests {
 
         let state = crate::commands::sync::tests::create_test_state(alice_service);
 
-        // Add a public sync to cached settings
+        // Add both a selected friend/own sync and a public sync with distinct read_url vs write_url
         {
             let mut s = state.settings.lock().unwrap();
             *s = Some(crate::settings::AppSettings {
+                market_selected_syncs: vec![crate::models::FrontendSyncDescriptor {
+                    write_url: "https://own.example.com/sync.php".to_string(),
+                    read_url: "https://own.example.com/d-own12345".to_string(),
+                    drop_pub: "11".repeat(32),
+                    status: "active".to_string(),
+                    ..Default::default()
+                }],
                 public_syncs: vec![crate::settings::StoredPublicSync {
                     write_url: "https://sync.example.com/sync.php".to_string(),
-                    read_url: "https://sync.example.com/sync.php".to_string(),
+                    read_url: "https://sync.example.com/d-pub67890".to_string(),
                     access_pubkey: "abc".to_string(),
                     drop_pub: "def".to_string(),
                     enabled: true,
@@ -155,13 +190,27 @@ mod tests {
 
         let quick = get_my_quick_contact_impl(&state).expect("get_my_quick_contact should succeed");
 
-        assert!(quick.did.starts_with("did:key:"));
+        assert!(
+            quick.did.starts_with("pc:") && quick.did.contains("@did:key:"),
+            "Expected subaccount prefix from setup_test_app in quick.did, got {}",
+            quick.did
+        );
         assert_eq!(quick.name, "Alice Schnell");
-        assert_eq!(quick.sync_urls, vec!["https://sync.example.com/sync.php".to_string()]);
+        assert_eq!(
+            quick.sync_urls,
+            vec![
+                "own.example.com".to_string(),
+                "sync.example.com".to_string(),
+            ],
+            "QuickContact must export compact write_url without https:// and /sync.php"
+        );
         assert!(quick.uri.starts_with("humoco://contact?"));
-        assert!(quick.uri.contains("did=did%3Akey%3A"));
+        assert!(quick.uri.contains("did=pc%3A") && quick.uri.contains("%40did%3Akey%3A"));
         assert!(quick.uri.contains("name=Alice+Schnell"));
-        assert!(quick.uri.contains("sync=https%3A%2F%2Fsync.example.com%2Fsync.php"));
+        assert!(quick.uri.contains("sync=own.example.com"));
+        assert!(quick.uri.contains("sync=sync.example.com"));
+        assert!(!quick.uri.contains("d-own12345"));
+        assert!(!quick.uri.contains("d-pub67890"));
         assert!(quick.qr_svg.is_some());
         let svg = quick.qr_svg.unwrap();
         assert!(svg.contains("<svg"));
@@ -179,5 +228,53 @@ mod tests {
         let oversized = "x".repeat(humoco_market::MAX_QR_SHARE_BYTES + 1);
         let size_err = encode_text_qr_svg(oversized).unwrap_err();
         assert!(size_err.message.contains("capacity"));
+    }
+
+    #[test]
+    fn test_get_my_quick_contact_preserves_subaccount_prefix() {
+        let temp_dir = std::env::temp_dir().join(format!("humoco_quick_sub_test_{}", uuid::Uuid::new_v4()));
+        let password = "test-password-123";
+        let mut service = human_money_core::app_service::AppService::new(&temp_dir).unwrap();
+        service
+            .create_profile(
+                "Alice Laden",
+                crate::commands::sync::tests::ALICE_PHRASE,
+                None,
+                Some("laden"),
+                password,
+                human_money_core::MnemonicLanguage::English,
+                "inst-sub-1".to_string(),
+                true,
+            )
+            .unwrap();
+        service.unlock_session(password, 3600).unwrap();
+
+        let state = crate::commands::sync::tests::create_test_state(service);
+        let quick = get_my_quick_contact_impl(&state).expect("subaccount quick contact should succeed");
+        assert!(quick.did.starts_with("laden:"), "Expected subaccount prefix in quick.did, got {}", quick.did);
+        assert!(quick.did.contains("@did:key:"));
+        assert!(quick.uri.contains("did=laden%3A"), "Expected URL-encoded prefix in URI, got {}", quick.uri);
+        let _ = std::fs::remove_dir_all(temp_dir);
+
+        // Also explicitly verify a pure root profile (prefix = None) exports bare did:key:...
+        let root_dir = std::env::temp_dir().join(format!("humoco_quick_root_test_{}", uuid::Uuid::new_v4()));
+        let mut root_service = human_money_core::app_service::AppService::new(&root_dir).unwrap();
+        root_service
+            .create_profile(
+                "Alice Pure Root",
+                crate::commands::sync::tests::ALICE_PHRASE,
+                None,
+                None,
+                password,
+                human_money_core::MnemonicLanguage::English,
+                "inst-root-1".to_string(),
+                true,
+            )
+            .unwrap();
+        root_service.unlock_session(password, 3600).unwrap();
+        let root_state = crate::commands::sync::tests::create_test_state(root_service);
+        let root_quick = get_my_quick_contact_impl(&root_state).expect("root quick contact should succeed");
+        assert!(root_quick.did.starts_with("did:key:"), "Root profile must export bare did:key, got {}", root_quick.did);
+        let _ = std::fs::remove_dir_all(root_dir);
     }
 }

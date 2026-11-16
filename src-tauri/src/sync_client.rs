@@ -330,7 +330,7 @@ pub fn create_sync_http_client() -> reqwest::Client {
 
 pub fn create_sync_probe_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(6))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }

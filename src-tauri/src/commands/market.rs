@@ -1468,42 +1468,75 @@ pub fn import_contact_card_impl(
                     stored.card.payload.drops.iter().cloned().map(Into::into).collect();
 
                 let can_card_did = crate::state::canonicalize_did(&did).unwrap_or_else(|_| did.clone());
-                let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password.as_deref()) {
-                    Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data).unwrap_or_default(),
-                    Err(_) => crate::models::FrontendAddressBook::default(),
-                };
+                let own_ids: Option<(String, String)> = service
+                    .with_wallet(|w| {
+                        let uid = w.get_user_id().trim().to_string();
+                        let can = crate::state::canonicalize_did(&uid).unwrap_or_else(|_| uid.clone());
+                        (uid, can)
+                    })
+                    .ok();
+                let is_exact_own_profile = own_ids
+                    .as_ref()
+                    .is_some_and(|(own_uid, _)| own_uid == did.trim());
 
-                let exists = address_book.contacts.iter().any(|(k, _)| {
-                    k == &did || crate::state::canonicalize_did(k).ok().as_deref() == Some(&can_card_did)
-                });
-
-                if exists {
-                    state.update_contact_syncs_from_card(
-                        &mut service,
-                        &did,
-                        &card_syncs,
-                        password.as_deref(),
-                    );
-                } else {
-                    let pub_profile = humoco_market::extract_public_profile(&stored.card);
-                    let profile = crate::models::FrontendUserProfile::from(pub_profile);
-                    let contact = crate::models::FrontendContact {
-                        did: did.clone(),
-                        profile,
-                        tags: vec![],
-                        added_at: chrono::Utc::now().to_rfc3339(),
-                        notes: None,
-                        trust_level: None,
-                        desired_hops: None,
-                        has_peer_list: false,
-                        peer_list_updated_at: None,
-                        syncs: crate::state::merge_contact_syncs(&[], &card_syncs),
+                if !is_exact_own_profile {
+                    let is_own_root = own_ids
+                        .as_ref()
+                        .is_some_and(|(_, own_can)| *own_can == can_card_did);
+                    let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password.as_deref()) {
+                        Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data).unwrap_or_default(),
+                        Err(_) => crate::models::FrontendAddressBook::default(),
                     };
-                    address_book.contacts.insert(did.clone(), contact);
-                    if let Ok(bytes) = serde_json::to_vec(&address_book) {
-                        let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password.as_deref());
+
+                    let exists = if is_own_root {
+                        address_book.contacts.keys().any(|k| k.trim() == did.trim())
+                    } else {
+                        address_book.contacts.iter().any(|(k, _)| {
+                            k == &did || crate::state::canonicalize_did(k).ok().as_deref() == Some(&can_card_did)
+                        })
+                    };
+
+                    if exists {
+                        if is_own_root {
+                            if let Some(existing_contact) = address_book.contacts.values_mut().find(|c| c.did.trim() == did.trim()) {
+                                let merged = crate::state::merge_contact_syncs(&existing_contact.syncs, &card_syncs);
+                                if existing_contact.syncs != merged {
+                                    existing_contact.syncs = merged;
+                                    if let Ok(bytes) = serde_json::to_vec(&address_book) {
+                                        let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password.as_deref());
+                                    }
+                                    *state.contacts.lock().unwrap() = Some(address_book);
+                                }
+                            }
+                        } else {
+                            state.update_contact_syncs_from_card(
+                                &mut service,
+                                &did,
+                                &card_syncs,
+                                password.as_deref(),
+                            );
+                        }
+                    } else {
+                        let pub_profile = humoco_market::extract_public_profile(&stored.card);
+                        let profile = crate::models::FrontendUserProfile::from(pub_profile);
+                        let contact = crate::models::FrontendContact {
+                            did: did.clone(),
+                            profile,
+                            tags: vec![],
+                            added_at: chrono::Utc::now().to_rfc3339(),
+                            notes: None,
+                            trust_level: None,
+                            desired_hops: None,
+                            has_peer_list: false,
+                            peer_list_updated_at: None,
+                            syncs: crate::state::merge_contact_syncs(&[], &card_syncs),
+                        };
+                        address_book.contacts.insert(did.clone(), contact);
+                        if let Ok(bytes) = serde_json::to_vec(&address_book) {
+                            let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password.as_deref());
+                        }
+                        *state.contacts.lock().unwrap() = Some(address_book);
                     }
-                    *state.contacts.lock().unwrap() = Some(address_book);
                 }
             }
             Ok(FrontendImportCardResult {

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { extractDisplayName, truncateUserId, suggestFilename } from '../userIdHelper';
+import {
+    extractDisplayName,
+    truncateUserId,
+    suggestFilename,
+    extractCanonicalDid,
+    isExactSameUserId,
+    isSameRootIdentity,
+} from '../userIdHelper';
 
 describe('userIdHelper', () => {
     const saiId = 'alice:abc123@did:key:z6MkpTHR8VNsBxYqzFoHqi1oMrY';
@@ -42,6 +49,31 @@ describe('userIdHelper', () => {
 
         it('returns fallback for empty ID', () => {
             expect(suggestFilename('')).toBe('transfer');
+        });
+    });
+
+    describe('identity comparison helpers', () => {
+        const ladenId = 'laden:xyz789@did:key:z6MkpTHR8VNsBxYqzFoHqi1oMrY';
+        const bobId = 'did:key:z6MkOtherPerson123456789';
+
+        it('extractCanonicalDid strips subaccount prefix', () => {
+            expect(extractCanonicalDid(saiId)).toBe(rootId);
+            expect(extractCanonicalDid(rootId)).toBe(rootId);
+            expect(extractCanonicalDid('')).toBe('');
+        });
+
+        it('isExactSameUserId matches exact trimmed IDs including prefix', () => {
+            expect(isExactSameUserId(saiId, ` ${saiId} `)).toBe(true);
+            expect(isExactSameUserId(saiId, ladenId)).toBe(false);
+            expect(isExactSameUserId(saiId, rootId)).toBe(false);
+            expect(isExactSameUserId('', '')).toBe(false);
+        });
+
+        it('isSameRootIdentity detects own root and sibling subaccounts', () => {
+            expect(isSameRootIdentity(saiId, rootId)).toBe(true);
+            expect(isSameRootIdentity(saiId, ladenId)).toBe(true);
+            expect(isSameRootIdentity(saiId, bobId)).toBe(false);
+            expect(isSameRootIdentity('not-a-did', 'not-a-did')).toBe(false);
         });
     });
 });

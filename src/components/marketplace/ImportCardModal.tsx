@@ -8,12 +8,13 @@ import { Button } from '../ui/Button';
 import { Textarea } from '../ui/Textarea';
 import { marketService } from '../../services/marketService';
 import { contactService } from '../../services/contactService';
+import { profileService } from '../../services/profileService';
 import { useSession } from '../../context/SessionContext';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../../utils/log';
 import { translateError, stringifyError } from '../../utils/errorHelper';
-import { truncateUserId } from '../../utils/userIdHelper';
+import { isExactSameUserId, truncateUserId } from '../../utils/userIdHelper';
 import { parseContactCard } from '../../utils/humocoUri';
 import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { Contact, FrontendMyMarketProfile } from '../../types';
@@ -143,6 +144,15 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 } else {
                     const parsedContact = parseContactCard(trimmed);
                     if (parsedContact && parsedContact.did) {
+                        const ownUid = (await Promise.resolve(profileService.getUserId?.()).catch(() => '')) || '';
+                        if (isExactSameUserId(parsedContact.did, ownUid)) {
+                            setResultFeedback({
+                                type: 'error',
+                                title: t('marketplace.importInvalidTitle'),
+                                message: t('contacts.selfActiveProfileHint'),
+                            });
+                            return;
+                        }
                         const existingContacts = await contactService.getContacts().catch(() => []);
                         const existing = existingContacts.find(c => c.did === parsedContact.did);
                         let firstName = existing?.profile.firstName;
@@ -157,7 +167,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                             }
                         }
                         const mappedSyncs = (parsedContact.syncUrls || []).map((url) => ({
-                            readUrl: url,
+                            readUrl: '',
                             writeUrl: url,
                             dropPub: '',
                             status: 'unverified',

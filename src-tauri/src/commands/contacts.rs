@@ -19,21 +19,32 @@ pub async fn save_contact(
     let contact_did = contact.did.clone();
     let trust_level = contact.trust_level;
     info!("Saving contact for DID: {}", contact_did);
+    let is_own_root = {
+        let service = state.service.lock().unwrap();
+        let own_can = service
+            .with_wallet(|w| crate::state::canonicalize_did(w.get_user_id()).ok())
+            .ok()
+            .flatten();
+        let contact_can = crate::state::canonicalize_did(&contact.did).ok();
+        own_can.is_some() && own_can == contact_can
+    };
     {
         let mut service = state.service.lock().unwrap();
         state.save_contact(&mut service, contact, password.as_deref()).map_err(FrontendError::from)?;
     }
 
-    // Automatically send / sync WoT trust package in the background if trust level >= 1
-    if let Some(lvl) = trust_level {
-        if lvl >= 1 {
-            let _ = crate::commands::post::send_wot_handshake_via_post_impl(
-                contact_did,
-                lvl.min(1),
-                true,
-                password,
-                &state,
-            ).await;
+    // Automatically send / sync WoT trust package in the background if trust level >= 1 (never to own root)
+    if !is_own_root {
+        if let Some(lvl) = trust_level {
+            if lvl >= 1 {
+                let _ = crate::commands::post::send_wot_handshake_via_post_impl(
+                    contact_did,
+                    lvl.min(1),
+                    true,
+                    password,
+                    &state,
+                ).await;
+            }
         }
     }
 

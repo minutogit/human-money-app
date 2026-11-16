@@ -54,8 +54,14 @@ export interface ParsedCardUri {
   envelopeJson?: string;
 }
 
+function compactSyncUrlForUri(raw: string): string {
+  const trimmed = raw.trim();
+  const withoutHttps = trimmed.replace(/^https:\/\//i, '');
+  return withoutHttps.replace(/\/+$/, '').replace(/\/sync\.php$/i, '').replace(/\/+$/, '');
+}
+
 /**
- * Builds a canonical humoco://contact URI with optional name and up to 2 sync URLs.
+ * Builds a canonical humoco://contact URI with optional name and up to 2 compact sync URLs.
  */
 export function buildContactUri({ did, name, syncUrls }: ContactCardParams): string {
   const cleanDid = did.trim();
@@ -69,7 +75,9 @@ export function buildContactUri({ did, name, syncUrls }: ContactCardParams): str
   if (syncUrls && syncUrls.length > 0) {
     const valid = syncUrls
       .map(s => s.trim())
-      .filter(s => s.startsWith('https://') || s.startsWith('http://'))
+      .filter(s => !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) || /^https?:\/\//i.test(s))
+      .map(compactSyncUrlForUri)
+      .filter(Boolean)
       .slice(0, 2);
     for (const url of valid) {
       params.append('sync', url);
@@ -80,18 +88,10 @@ export function buildContactUri({ did, name, syncUrls }: ContactCardParams): str
 }
 
 /**
- * Builds a compact, friendly contact card text block (2 lines) containing a humoco://contact URI.
- * Redundant plaintext DID line is removed.
+ * Returns the compact humoco://contact URI directly for sharing/copying.
  */
 export function buildContactCardText(params: ContactCardParams): string {
-  const cleanName = params.name?.trim();
-  const uri = buildContactUri(params);
-
-  const header = cleanName
-    ? `Human Money Kontakt: ${cleanName}`
-    : 'Human Money Kontakt:';
-
-  return `${header}\n${uri}`;
+  return buildContactUri(params);
 }
 
 /**
@@ -113,7 +113,9 @@ export function parseContactCard(input: string): ParsedContactCard | null {
       const rawSync = searchParams.getAll('sync');
       const syncUrls = rawSync
         .map(s => s.trim())
-        .filter(s => s.startsWith('https://') || s.startsWith('http://'))
+        .filter(s => s.length > 0 && (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) || /^https?:\/\//i.test(s)))
+        .map(s => normalizeSyncUrlInput(s))
+        .filter(Boolean)
         .slice(0, 2);
 
       if (did && (did.startsWith('did:') || did.includes('@did:'))) {

@@ -82,3 +82,33 @@ export function suggestFilename(userId: string): string {
 
     return "transfer";
 }
+
+/**
+ * Extracts the canonical root `did:key:...` part from either a plain DID
+ * or an SAI/subaccount User ID (`prefix:checksum@did:key:...`).
+ */
+export function extractCanonicalDid(userId: string): string {
+    const trimmed = (userId || "").trim();
+    if (!trimmed) return "";
+    const atIdx = trimmed.lastIndexOf('@');
+    return atIdx !== -1 ? trimmed.slice(atIdx + 1).trim() : trimmed;
+}
+
+/**
+ * Returns true when two User IDs refer to the exact same profile (including prefix).
+ */
+export function isExactSameUserId(a: string, b: string): boolean {
+    const ta = (a || "").trim();
+    const tb = (b || "").trim();
+    return Boolean(ta && tb && ta === tb);
+}
+
+/**
+ * Returns true when two User IDs share the same underlying root `did:key:...` identity
+ * (either identical profile or sibling subaccount/root).
+ */
+export function isSameRootIdentity(a: string, b: string): boolean {
+    const ca = extractCanonicalDid(a);
+    const cb = extractCanonicalDid(b);
+    return Boolean(ca && cb && ca.startsWith(DID_KEY_PREFIX) && ca === cb);
+}

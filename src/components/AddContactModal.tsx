@@ -17,7 +17,9 @@ import { ExpertTabsLayout } from './ui/ExpertTabsLayout';
 import { Disclosure } from './ui/Disclosure';
 import { readFromClipboard } from '../utils/clipboard';
 import { marketService } from '../services/marketService';
+import { profileService } from '../services/profileService';
 import { parseContactCard } from '../utils/humocoUri';
+import { isExactSameUserId } from '../utils/userIdHelper';
 import { notifySyncStatusUpdated } from '../utils/syncEvents';
 import { useSession } from '../context/SessionContext';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -109,6 +111,13 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
         // 1. Check if it's a contact card or DID via canonical parseContactCard
         const parsedContact = parseContactCard(trimmed);
         if (parsedContact && parsedContact.did) {
+            const ownUid = (await Promise.resolve(profileService.getUserId?.()).catch(() => '')) || '';
+            if (isExactSameUserId(parsedContact.did, ownUid)) {
+                const msg = t('contacts.selfActiveProfileHint');
+                setSmartError(msg);
+                onError(msg);
+                return;
+            }
             let initialProfile: { firstName?: string; lastName?: string } | undefined;
             if (parsedContact.name) {
                 const parts = parsedContact.name.trim().split(/\s+/);

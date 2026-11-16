@@ -1249,8 +1249,8 @@ const AddressBook: React.FC<AddressBookProps> = ({
                                                                             return syncEp.writeUrl || syncEp.readUrl;
                                                                         }
                                                                     })();
-                                                                    const isFailing = syncEp.status === 'unreachable' || (syncEp.failCount ?? 0) > 0;
                                                                     const isPendingAuth = syncEp.status === 'pending_auth';
+                                                                    const isFailing = syncEp.status === 'unreachable' || (!isPendingAuth && (syncEp.failCount ?? 0) > 0);
                                                                     const isActive = syncEp.status === 'active';
 
                                                                     let badgeColor = 'bg-slate-50 text-slate-600 border-slate-200';
@@ -1269,7 +1269,7 @@ const AddressBook: React.FC<AddressBookProps> = ({
                                                                     } else if (isPendingAuth) {
                                                                         badgeColor = 'bg-amber-50 text-amber-700 border-amber-200';
                                                                         dotColor = 'bg-amber-500';
-                                                                        statusLabel = t('contacts.syncPendingAuth', 'Wartet auf Freigabe');
+                                                                        statusLabel = t('contacts.syncPendingAuth', 'Erreichbar, nicht freigeschaltet');
                                                                         tooltip = `${host} - ${statusLabel}`;
                                                                     } else if (isActive) {
                                                                         badgeColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Contact, PublicProfile, FrontendTrustChangeImpact } from '../types';
 import { FrontendSyncDescriptor } from '../types/market';
 import { marketService } from '../services/marketService';
+import { profileService } from '../services/profileService';
 import Avatar from 'boring-avatars';
 import { translateError } from '../utils/errorHelper';
 import { HelpIcon } from './ui/HelpIcon';
@@ -11,6 +12,7 @@ import { TechId } from './ui/TechId';
 import { TrustLevelRadioCards } from './TrustLevelRadioCards';
 import { readFromClipboard } from '../utils/clipboard';
 import { parseContactCard, normalizeSyncUrlInput } from '../utils/humocoUri';
+import { isExactSameUserId, isSameRootIdentity } from '../utils/userIdHelper';
 import { notifySyncStatusUpdated } from '../utils/syncEvents';
 import { Clipboard, CheckCircle2, AlertCircle, Server, Trash2 } from 'lucide-react';
 
@@ -50,11 +52,41 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [ownUserId, setOwnUserId] = useState<string>('');
+    const [ownUserIdLoaded, setOwnUserIdLoaded] = useState<boolean>(false);
+
+    useEffect(() => {
+        if (!isOpen) {
+            setOwnUserIdLoaded(false);
+            return;
+        }
+        let cancelled = false;
+        setOwnUserIdLoaded(false);
+        Promise.resolve(profileService.getUserId?.())
+            .then((uid) => {
+                if (!cancelled && typeof uid === 'string' && uid.trim()) {
+                    setOwnUserId(uid.trim());
+                }
+            })
+            .catch(() => {})
+            .finally(() => {
+                if (!cancelled) setOwnUserIdLoaded(true);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen]);
+
+    const isExactSelf = isExactSameUserId(did, ownUserId);
+    const isOwnSubaccount = !isExactSelf && isSameRootIdentity(did, ownUserId);
 
     useEffect(() => {
         let cancelled = false;
-        if (!did || !did.trim()) {
+        if (!did || !did.trim() || !ownUserIdLoaded || isExactSelf || isOwnSubaccount) {
             setTrustImpact(null);
+            if ((isExactSelf || isOwnSubaccount) && trustLevel !== null) {
+                setTrustLevel(null);
+            }
             return;
         }
         const targetLvl = trustLevel ?? 0;
@@ -70,7 +102,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         return () => {
             cancelled = true;
         };
-    }, [did, trustLevel]);
+    }, [did, trustLevel, ownUserIdLoaded, isExactSelf, isOwnSubaccount]);
 
     const predefinedTags = ["Friends", "Business", "Favorites"];
     const availableTags = Array.from(new Set([...predefinedTags, ...tags]));
@@ -227,10 +259,15 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
 
     const handleSave = async () => {
         if (!did.trim()) return;
-        
+        if (isExactSelf) {
+            setError(t('contacts.selfActiveProfileHint'));
+            return;
+        }
+
         setIsSaving(true);
         setError(null);
         try {
+            const effectiveTrustLevel = isOwnSubaccount ? null : trustLevel;
             const contact: Contact = {
                 did: did.trim(),
                 profile: {
@@ -242,8 +279,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 tags,
                 notes: notes.trim() || undefined,
                 addedAt: existingContact?.addedAt || new Date().toISOString(),
-                trustLevel: trustLevel,
-                desiredHops: trustLevel === 0 ? 0 : null,
+                trustLevel: effectiveTrustLevel,
+                desiredHops: effectiveTrustLevel === 0 ? 0 : null,
                 hasPeerList: existingContact?.hasPeerList,
                 peerListUpdatedAt: existingContact?.peerListUpdatedAt,
                 syncs: syncs.length > 0 ? syncs : [],
@@ -337,6 +374,15 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                     placeholder={t('contacts.didPlaceholder')}
                                     className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 disabled:opacity-50 font-mono text-sm shadow-sm"
                                 />
+                                {isExactSelf && (
+                                    <div
+                                        data-testid="self-active-profile-warning"
+                                        className="mt-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs font-semibold text-amber-800 flex items-start gap-2"
+                                    >
+                                        <AlertCircle size={15} className="shrink-0 mt-0.5 text-amber-600" />
+                                        <span>{t('contacts.selfActiveProfileHint')}</span>
+                                    </div>
+                                )}
                             </div>
                         );
                         return existingContact ? <Advanced>{didField}</Advanced> : didField;
@@ -406,20 +452,21 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                     const syncKey = d.writeUrl || d.readUrl;
                                     const isRevoked = d.status === 'revoked';
                                     const isDeprecating = d.status === 'deprecating';
-                                    const isUnreachable = d.status === 'unreachable' || (d.failCount ?? 0) > 0;
-                                    const isActive = d.status === 'active';
                                     const isPendingAuth = d.status === 'pending_auth';
+                                    const isUnreachable = d.status === 'unreachable' || (!isPendingAuth && (d.failCount ?? 0) > 0);
+                                    const isHardUnreachable = d.status === 'unreachable' || ((d.failCount ?? 0) >= 3);
+                                    const isActive = d.status === 'active';
 
                                     const dotColor = isRevoked
                                         ? 'bg-rose-600'
                                         : isDeprecating
                                         ? 'bg-amber-500'
                                         : isUnreachable
-                                        ? (d.failCount && d.failCount >= 3 ? 'bg-rose-500' : 'bg-amber-500')
+                                        ? (isHardUnreachable ? 'bg-rose-500' : 'bg-amber-500')
                                         : isActive
                                         ? 'bg-emerald-500'
                                         : isPendingAuth
-                                        ? 'bg-sky-500'
+                                        ? 'bg-amber-500'
                                         : 'bg-slate-400';
                                     const statusLabel = isRevoked
                                         ? t('settings.syncStatusRevoked', 'Geschlossen')
@@ -431,7 +478,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                               })
                                             : t('settings.syncStatusDeprecating', 'Wird bald geschlossen'))
                                         : isUnreachable
-                                        ? (d.failCount && d.failCount >= 3 ? t('contacts.syncUnreachable') : t('contacts.syncWarning'))
+                                        ? (isHardUnreachable ? t('contacts.syncUnreachable') : t('contacts.syncWarning'))
                                         : isActive
                                         ? t('contacts.syncReachable')
                                         : isPendingAuth
@@ -551,11 +598,21 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                             {t('contacts.trustNetworkHint')}
                         </p>
                         <div className="pt-1">
-                            <TrustLevelRadioCards
-                                value={trustLevel}
-                                onChange={(lvl) => setTrustLevel(lvl)}
-                                allowUnrated={true}
-                            />
+                            {isOwnSubaccount ? (
+                                <div
+                                    data-testid="own-subaccount-trust-notice"
+                                    className="p-3 rounded-xl bg-sky-50 border border-sky-200 text-xs font-medium text-sky-900 flex items-start gap-2"
+                                >
+                                    <AlertCircle size={15} className="shrink-0 mt-0.5 text-sky-600" />
+                                    <span>{t('contacts.ownSubaccountTrustHint')}</span>
+                                </div>
+                            ) : (
+                                <TrustLevelRadioCards
+                                    value={trustLevel}
+                                    onChange={(lvl) => setTrustLevel(lvl)}
+                                    allowUnrated={true}
+                                />
+                            )}
                         </div>
 
                         {/* Permission Change Preview */}
@@ -699,7 +756,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                     </button>
                     <button
                         onClick={handleSave}
-                        disabled={isSaving || !did.trim()}
+                        disabled={isSaving || !did.trim() || isExactSelf}
                         className="flex-[2] py-3 px-4 rounded-xl bg-theme-primary text-white font-bold hover:bg-theme-accent disabled:opacity-50 disabled:hover:bg-theme-primary transition-all shadow-lg shadow-theme-primary/20 active:scale-[0.98]"
                     >
                         {isSaving ? t('contacts.saving') : (existingContact ? t('contacts.updateContact') : t('contacts.saveContact'))}

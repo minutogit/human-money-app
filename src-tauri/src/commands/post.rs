@@ -178,12 +178,25 @@ pub(crate) fn open_wallet_archive(
 pub(crate) fn get_contact_name(state: &AppState, did: &str, password: Option<&str>) -> Option<String> {
     let mut service = state.service.lock().unwrap();
     if let Ok(contacts) = state.load_contacts(&mut service, password) {
-        if let Some(c) = contacts.into_iter().find(|c| are_dids_equal(&c.did, did)) {
-            let first = c.profile.first_name.unwrap_or_default();
-            let last = c.profile.last_name.unwrap_or_default();
+        let trimmed = did.trim();
+        let format_name = |c: &crate::models::FrontendContact| -> Option<String> {
+            let first = c.profile.first_name.as_deref().unwrap_or("").trim();
+            let last = c.profile.last_name.as_deref().unwrap_or("").trim();
             let full = format!("{} {}", first, last).trim().to_string();
             if !full.is_empty() {
-                return Some(full);
+                Some(full)
+            } else {
+                None
+            }
+        };
+        if let Some(exact) = contacts.iter().find(|c| c.did.trim() == trimmed) {
+            if let Some(name) = format_name(exact) {
+                return Some(name);
+            }
+        }
+        if let Some(c) = contacts.iter().find(|c| are_dids_equal(&c.did, did)) {
+            if let Some(name) = format_name(c) {
+                return Some(name);
             }
         }
     }
@@ -1493,12 +1506,25 @@ pub async fn sync_post_channels_impl(
         }
 
         // Contacts drops
+        let own_can_did = crate::state::canonicalize_did(&my_identity.user_id).ok();
         if let Ok(contacts) = state.load_contacts(&mut service, password.as_deref()) {
             for c in contacts {
+                let c_prefix = human_money_core::crypto::get_prefix_from_user_id(&c.did)
+                    .map(|s| s.to_string());
+                if own_can_did.is_some()
+                    && crate::state::canonicalize_did(&c.did).ok() == own_can_did
+                {
+                    // Also poll sibling own-subaccount compartments on configured O(1) public syncs
+                    for pd in &settings.public_syncs {
+                        if pd.enabled && !pd.read_url.is_empty() {
+                            direct.push((pd.read_url.clone(), pd.access_pubkey.clone(), c_prefix.clone()));
+                        }
+                    }
+                }
                 for d in c.syncs {
                     if !d.read_url.is_empty() {
                         if let Some(ref sid) = d.slot_id {
-                            direct.push((d.read_url, sid.clone(), None));
+                            direct.push((d.read_url, sid.clone(), c_prefix.clone()));
                         } else {
                             index_urls.push(d.read_url);
                         }
@@ -1754,7 +1780,10 @@ pub async fn sync_post_channels_impl(
             let decrypted_bytes = match container.open(&my_identity, None) {
                 Ok(b) => b,
                 Err(e) => {
-                    let alt_attempt = if my_identity.user_id.contains('@') {
+                    let allow_canonical_fallback = my_identity.user_id.contains('@')
+                        && !matches!(container.c, PayloadType::TransactionBundle)
+                        && container.c != PayloadType::Generic(PAYLOAD_POST_RECEIPT_V1.to_string());
+                    let alt_attempt = if allow_canonical_fallback {
                         if let Ok(can) = crate::state::canonicalize_did(&my_identity.user_id) {
                             let mut alt = my_identity.clone();
                             alt.user_id = can;
@@ -1768,6 +1797,11 @@ pub async fn sync_post_channels_impl(
                     match alt_attempt {
                         Some(b) => b,
                         None => {
+                            if matches!(e, human_money_core::VoucherCoreError::NotAnIntendedRecipient) {
+                                // Outer PostBox shared our X25519 key (sibling subaccount/root profile),
+                                // but inner SecureContainer is addressed to a different user_id/prefix.
+                                continue;
+                            }
                             errors.push(format!("Failed to open container payload: {}", e));
                             continue;
                         }
@@ -1874,8 +1908,15 @@ pub async fn sync_post_channels_impl(
                             Some(result.header.bundle_id)
                         }
                         Err(e) => {
+                            let is_sibling_subaccount = matches!(
+                                &e,
+                                human_money_core::VoucherCoreError::BundleRecipientMismatch { expected, found }
+                                    if crate::state::canonicalize_did(expected)
+                                        .ok()
+                                        .is_some_and(|ce| crate::state::canonicalize_did(found).ok().as_ref() == Some(&ce))
+                            );
                             let err_str = e.to_string();
-                            if err_str.to_ascii_lowercase().contains("already processed") {
+                            if is_sibling_subaccount || err_str.to_ascii_lowercase().contains("already processed") {
                                 None
                             } else {
                                 errors.push(format!("Receive payment bundle failed: {}", e));
@@ -3610,5 +3651,190 @@ mod tests {
         .unwrap();
         let alice_post_3 = load_post_state(&alice_state, Some(password)).unwrap();
         assert!(alice_post_3.buyer_inquiries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_own_subaccount_post_compartment_and_sibling_isolation() {
+        let base_dir = temp_test_dir("subaccount_post_isolation");
+        let password = "TestPassword123!";
+
+        let create_sub = |dir: &std::path::Path, name: &str, prefix: Option<&str>| {
+            let mut svc = human_money_core::app_service::AppService::new(dir).unwrap();
+            svc.create_profile(
+                name,
+                ALICE_PHRASE,
+                None,
+                prefix,
+                password,
+                human_money_core::MnemonicLanguage::English,
+                format!("inst-{}", name),
+                true,
+            )
+            .unwrap();
+            svc.unlock_session(password, 3600).unwrap();
+            create_test_state(svc)
+        };
+
+        let root_state = create_sub(&base_dir.join("root"), "Alice Root", None);
+        let laden_state = create_sub(&base_dir.join("laden"), "Alice Laden", Some("laden"));
+        let privat_state = create_sub(&base_dir.join("privat"), "Alice Privat", Some("privat"));
+
+        let root_did = root_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let laden_did = laden_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let privat_did = privat_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let server = MockSyncServer::start("d-shared".to_string(), ADMIN_A.to_string()).await;
+        let (_url_r, _drop_r) = setup_test_sync(&server, DROP_PUB_A, password, &root_state).await;
+        let (server_url, laden_drop) = setup_test_sync(&server, DROP_PUB_A, password, &laden_state).await;
+        let (_url_p, _drop_p) = setup_test_sync(&server, DROP_PUB_A, password, &privat_state).await;
+
+        // Root saves laden subaccount as contact (no trust level), and laden + privat save Root so post_accept_from_contacts accepts Root
+        let make_contact = |did: String, name: &str| FrontendContact {
+            did,
+            profile: FrontendUserProfile {
+                first_name: Some(name.to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: None,
+            desired_hops: None,
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![FrontendSyncDescriptor {
+                write_url: server_url.clone(),
+                read_url: format!("{}/{}", server.base_url, server.data_dir),
+                slot_id: None,
+                drop_pub: DROP_PUB_A.to_string(),
+                status: "active".to_string(),
+                ..Default::default()
+            }],
+        };
+        {
+            let mut s = root_state.service.lock().unwrap();
+            root_state.save_contact(&mut s, make_contact(laden_did.clone(), "Laden"), Some(password)).unwrap();
+        }
+        {
+            let mut s = laden_state.service.lock().unwrap();
+            laden_state.save_contact(&mut s, make_contact(root_did.clone(), "Root"), Some(password)).unwrap();
+        }
+        {
+            let mut s = privat_state.service.lock().unwrap();
+            privat_state.save_contact(&mut s, make_contact(root_did.clone(), "Root"), Some(password)).unwrap();
+        }
+
+        // Root creates voucher and sends to Laden subaccount
+        let standard_toml = test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let mut std_map = HashMap::new();
+        std_map.insert("a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(), standard_toml.clone());
+
+        {
+            let mut s = root_state.service.lock().unwrap();
+            s.create_new_voucher(
+                &standard_toml,
+                human_money_core::NewVoucherData {
+                    creator_profile: human_money_core::models::profile::PublicProfile {
+                        id: Some(root_did.clone()),
+                        first_name: Some("Root".to_string()),
+                        ..Default::default()
+                    },
+                    nominal_value: human_money_core::models::voucher::ValueDefinition {
+                        amount: "50".to_string(),
+                        unit: "Taler".to_string(),
+                        ..Default::default()
+                    },
+                    validity_duration: Some("P1Y".to_string()),
+                    non_redeemable_test_voucher: false,
+                    collateral: None,
+                },
+                Some(password),
+            )
+            .unwrap();
+        }
+        let local_id = {
+            let s = root_state.service.lock().unwrap();
+            s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None)).unwrap()[0]
+                .local_instance_id
+                .clone()
+        };
+        let bundle_res = {
+            let mut s = root_state.service.lock().unwrap();
+            s.create_transfer_bundle_with_l2_intents(
+                human_money_core::wallet::types::MultiTransferRequest {
+                    recipient_id: laden_did.clone(),
+                    sources: vec![human_money_core::wallet::types::SourceTransfer {
+                        local_instance_id: local_id.clone(),
+                        amount_to_send: "15".to_string(),
+                    }],
+                    notes: Some("To shop subaccount".to_string()),
+                    sender_profile_name: Some("Root".to_string()),
+                    use_privacy_mode: Some(true),
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &std_map,
+                None,
+                Some(password),
+                0,
+            )
+            .unwrap()
+        };
+        {
+            let mut s = root_state.service.lock().unwrap();
+            root_state
+                .append_to_history(
+                    &mut s,
+                    TransactionRecord {
+                        id: bundle_res.bundle_id.clone(),
+                        direction: "sent".to_string(),
+                        recipient_id: laden_did.clone(),
+                        sender_id: root_did.clone(),
+                        timestamp: Utc::now().to_rfc3339(),
+                        summable_amounts: HashMap::new(),
+                        countable_items: HashMap::new(),
+                        involved_vouchers: vec![local_id],
+                        involved_sources_details: None,
+                        bundle_data: bundle_res.bundle_bytes,
+                        bundle_id: bundle_res.bundle_id.clone(),
+                        notes: None,
+                        sender_profile_name: Some("Root".to_string()),
+                    },
+                    Some(password),
+                )
+                .unwrap();
+        }
+
+        let dep = deposit_transfer_to_post_impl(bundle_res.bundle_id.clone(), Some(password.to_string()), &root_state)
+            .await
+            .unwrap();
+        assert_eq!(dep.deposited_to, 1);
+
+        // 1. Sibling subaccount ("privat") polls: must NOT fail with NotAnIntendedRecipient or import Laden's payment
+        let privat_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &privat_state)
+            .await
+            .unwrap();
+        assert_eq!(privat_sync.imported_payments, 0);
+        assert!(privat_sync.errors.is_empty(), "Sibling subaccount poll must stay error-free, got {:?}", privat_sync.errors);
+
+        // 2. Target subaccount ("laden") polls: receives payment cleanly and writes receipt to its own prefixed compartment
+        let laden_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &laden_state)
+            .await
+            .unwrap();
+        assert_eq!(laden_sync.imported_payments, 1);
+        assert!(laden_sync.errors.is_empty(), "Target subaccount poll must succeed without errors, got {:?}", laden_sync.errors);
+
+        // Flush laden's receipt and verify its prefixed compartment key exists on server
+        let _ = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &laden_state)
+            .await
+            .unwrap();
+        let expected_laden_slot = format!("{}_laden.post", laden_drop.access_pubkey);
+        assert!(
+            server.slots.lock().unwrap().contains_key(&expected_laden_slot),
+            "Subaccount must store its Post slot in dedicated prefixed compartment '{}'",
+            expected_laden_slot
+        );
+        let _ = privat_did;
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 }

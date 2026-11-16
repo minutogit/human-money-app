@@ -265,6 +265,7 @@ impl AppState {
     }
 
     pub fn save_contact(&self, service: &mut AppService, mut contact: FrontendContact, password: Option<&str>) -> Result<(), AppFacadeError> {
+        contact.did = contact.did.trim().to_string();
         let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
             Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data).unwrap_or_default(),
             Err(e) => {
@@ -278,11 +279,38 @@ impl AppState {
         let can_did = canonicalize_did(&contact.did)
             .map_err(|e| AppFacadeError::Generic(format!("Invalid contact DID: {}", e)))?;
 
-        // Deduplicate address_book.contacts by canonical DID
+        let own_ids: Option<(String, String)> = service
+            .with_wallet(|w| {
+                let uid = w.get_user_id().trim().to_string();
+                let can = canonicalize_did(&uid).unwrap_or_else(|_| uid.clone());
+                (uid, can)
+            })
+            .ok();
+
+        if own_ids.as_ref().is_some_and(|(own_uid, _)| contact.did == *own_uid) {
+            return Err(AppFacadeError::Generic(
+                "Cannot add your own active profile as a contact".to_string(),
+            ));
+        }
+
+        let is_own_root = own_ids
+            .as_ref()
+            .is_some_and(|(_, own_can)| *own_can == can_did);
+
+        if is_own_root && contact.trust_level.is_some() {
+            return Err(AppFacadeError::Generic(
+                "Self trust forbidden: cannot assign a trust level to your own subaccount".to_string(),
+            ));
+        }
+
+        // Deduplicate address_book.contacts: for own subaccounts keep distinct prefixes separate;
+        // for external contacts deduplicate by canonical DID.
         let keys_to_remove: Vec<String> = address_book.contacts.keys()
             .filter(|k| {
                 if *k == &contact.did {
                     false
+                } else if is_own_root {
+                    k.trim() == contact.did
                 } else if let Ok(k_can) = canonicalize_did(k) {
                     k_can == can_did
                 } else {
@@ -343,8 +371,11 @@ impl AppState {
             contact.syncs.truncate(2);
         }
 
-        // Synchronize TrustRegister if wallet is unlocked
-        if service.with_wallet(|_| ()).is_ok() {
+        // Synchronize TrustRegister if wallet is unlocked (skip for own subaccounts: self-trust is forbidden)
+        if is_own_root {
+            contact.trust_level = None;
+            contact.desired_hops = None;
+        } else if service.with_wallet(|_| ()).is_ok() {
             let mut reg = self.get_or_load_wot_register(service, password)?;
             let now_secs = Utc::now().timestamp() as u64;
 
@@ -401,6 +432,7 @@ impl AppState {
     }
 
     pub fn delete_contact(&self, service: &mut AppService, did: &str, password: Option<&str>) -> Result<(), AppFacadeError> {
+        let did = did.trim();
         let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
             Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data).unwrap_or_default(),
             Err(e) => {
@@ -412,8 +444,20 @@ impl AppState {
         };
 
         let can_target = canonicalize_did(did).ok();
+        let own_can_did = service
+            .with_wallet(|w| canonicalize_did(w.get_user_id()).ok())
+            .ok()
+            .flatten();
+        let is_own_root = can_target.is_some() && own_can_did == can_target;
+
         let keys_to_remove: Vec<String> = address_book.contacts.keys()
-            .filter(|k| *k == did || (can_target.is_some() && canonicalize_did(k).ok() == can_target))
+            .filter(|k| {
+                if is_own_root {
+                    k.trim() == did
+                } else {
+                    *k == did || (can_target.is_some() && canonicalize_did(k).ok() == can_target)
+                }
+            })
             .cloned()
             .collect();
 
@@ -437,7 +481,7 @@ impl AppState {
             self.prune_orphaned_market_selected_syncs(service, &address_book, &removed_endpoints, password);
         }
 
-        if service.with_wallet(|_| ()).is_ok() {
+        if !is_own_root && service.with_wallet(|_| ()).is_ok() {
             if let Ok(mut reg) = self.get_or_load_wot_register(service, password) {
                 let target_key = can_target.as_deref().unwrap_or(did);
                 if let Ok(removed) = reg.remove_contact_trust(target_key) {
@@ -1054,7 +1098,9 @@ impl AppState {
                         } else {
                             sync_ep.last_error_at = Some(now_secs);
                             sync_ep.fail_count = sync_ep.fail_count.saturating_add(1);
-                            if !is_revocation_state {
+                            if !is_revocation_state
+                                && (sync_ep.status != "pending_auth" || sync_ep.fail_count >= 3)
+                            {
                                 sync_ep.status = "unreachable".to_string();
                             }
                         }
@@ -1250,6 +1296,13 @@ impl<'a> humoco_wot::WotSigner for CoreIdentitySigner<'a> {
 fn enrich_contact_with_wot(contact: &mut FrontendContact, wot_opt: Option<&humoco_wot::TrustRegister>) {
     if let Some(reg) = wot_opt {
         if let Ok(can_did) = canonicalize_did(&contact.did) {
+            if reg.self_did == can_did {
+                contact.trust_level = None;
+                contact.desired_hops = None;
+                contact.has_peer_list = false;
+                contact.peer_list_updated_at = None;
+                return;
+            }
             contact.trust_level = reg.own_contacts.get(&can_did).map(|e| e.level);
             contact.desired_hops = reg.own_contacts.get(&can_did).map(|e| e.desired_hops);
             contact.has_peer_list = reg.raw_list_store.contains_key(&can_did);
@@ -1258,20 +1311,30 @@ fn enrich_contact_with_wot(contact: &mut FrontendContact, wot_opt: Option<&humoc
     }
 }
 
+fn format_contact_display_name(c: &FrontendContact) -> Option<String> {
+    let first = c.profile.first_name.as_deref().unwrap_or("").trim();
+    let last = c.profile.last_name.as_deref().unwrap_or("").trim();
+    let name = match (first.is_empty(), last.is_empty()) {
+        (false, false) => format!("{} {}", first, last),
+        (false, true) => first.to_string(),
+        (true, false) => last.to_string(),
+        (true, true) => c.profile.organization.as_deref().unwrap_or("").trim().to_string(),
+    };
+    if name.is_empty() { None } else { Some(name) }
+}
+
 fn lookup_contact_name(contacts_map: Option<&FrontendAddressBook>, target_did: &str) -> Option<String> {
     let book = contacts_map?;
-    let can_target = canonicalize_did(target_did).ok()?;
-    for (k, c) in &book.contacts {
-        if k == target_did || canonicalize_did(k).ok().as_ref() == Some(&can_target) {
-            let first = c.profile.first_name.as_deref().unwrap_or("").trim();
-            let last = c.profile.last_name.as_deref().unwrap_or("").trim();
-            let name = match (first.is_empty(), last.is_empty()) {
-                (false, false) => format!("{} {}", first, last),
-                (false, true) => first.to_string(),
-                (true, false) => last.to_string(),
-                (true, true) => c.profile.organization.as_deref().unwrap_or("").trim().to_string(),
-            };
-            if !name.is_empty() {
+    let trimmed_target = target_did.trim();
+    if let Some((_, exact_contact)) = book.contacts.iter().find(|(k, _)| k.trim() == trimmed_target) {
+        if let Some(name) = format_contact_display_name(exact_contact) {
+            return Some(name);
+        }
+    }
+    let can_target = canonicalize_did(trimmed_target).ok()?;
+    for c in book.contacts.values() {
+        if canonicalize_did(&c.did).ok().as_ref() == Some(&can_target) {
+            if let Some(name) = format_contact_display_name(c) {
                 return Some(name);
             }
         }
@@ -1713,22 +1776,30 @@ mod tests {
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_eq!(bob.syncs[0].status, "pending_auth", "pending_auth status must not be overwritten with active on static read success");
 
-        // 2. Failure update (sets status to unreachable and increments fail_count)
+        // 2. Transient failure on pending_auth increments fail_count without immediately flipping to unreachable
         let updated2 = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1100, Some(password));
         assert!(updated2);
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_eq!(bob.syncs[0].last_error_at, Some(1100));
         assert_eq!(bob.syncs[0].fail_count, 1);
-        assert_eq!(bob.syncs[0].status, "unreachable");
+        assert_eq!(bob.syncs[0].status, "pending_auth");
 
-        // 3. Second failure
+        // 3. Second failure still keeps pending_auth; third consecutive failure transitions to unreachable
         let updated3 = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1200, Some(password));
         assert!(updated3);
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_eq!(bob.syncs[0].last_error_at, Some(1200));
         assert_eq!(bob.syncs[0].fail_count, 2);
+        assert_eq!(bob.syncs[0].status, "pending_auth");
+
+        let updated3b = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1250, Some(password));
+        assert!(updated3b);
+        let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
+        assert_eq!(bob.syncs[0].last_error_at, Some(1250));
+        assert_eq!(bob.syncs[0].fail_count, 3);
         assert_eq!(bob.syncs[0].status, "unreachable");
 
         // 4. Recovery success resets fail_count; since not in market_selected_syncs, transitions to "unverified"
@@ -2137,6 +2208,120 @@ mod tests {
 
         let settings_3 = state.load_settings(&mut service, Some(password)).unwrap();
         assert_eq!(settings_3.market_selected_syncs[0].status, "revoked");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_save_and_delete_own_subaccounts_and_reject_self_profile_and_self_trust() {
+        let temp_dir = std::env::temp_dir().join(format!("humoco_subaccount_contact_test_{}", uuid::Uuid::new_v4()));
+        let password = "test-password-123";
+        let alice_service = crate::commands::sync::tests::setup_test_app(
+            &temp_dir.join("alice"),
+            "Test Alice",
+            crate::commands::sync::tests::ALICE_PHRASE,
+            password,
+        );
+        let (own_uid, own_vk) = alice_service
+            .with_wallet_and_identity(|w, id| (w.get_user_id().to_string(), id.signing_key.verifying_key()))
+            .unwrap();
+        let laden_uid = human_money_core::crypto::create_user_id(&own_vk, Some("laden")).unwrap();
+        let privat_uid = human_money_core::crypto::create_user_id(&own_vk, Some("privat")).unwrap();
+
+        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let mut service = state.service.lock().unwrap();
+
+        // 1. Exact own active profile must be rejected
+        let self_contact = FrontendContact {
+            did: own_uid.clone(),
+            profile: FrontendUserProfile {
+                id: Some(own_uid.clone()),
+                first_name: Some("Ich".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: None,
+            desired_hops: None,
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![],
+        };
+        let self_err = state.save_contact(&mut service, self_contact, Some(password)).unwrap_err();
+        assert!(self_err.to_string().contains("active profile"));
+
+        // 2. Own subaccount with trust_level must be rejected (Self trust forbidden)
+        let rated_sub = FrontendContact {
+            did: laden_uid.clone(),
+            profile: FrontendUserProfile {
+                id: Some(laden_uid.clone()),
+                first_name: Some("Mein Laden".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(1),
+            desired_hops: None,
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![],
+        };
+        let trust_err = state.save_contact(&mut service, rated_sub, Some(password)).unwrap_err();
+        assert!(trust_err.to_string().contains("Self trust forbidden"));
+
+        // 3. Two distinct own subaccounts (trust_level: None) co-exist without overwriting each other
+        let laden_contact = FrontendContact {
+            did: laden_uid.clone(),
+            profile: FrontendUserProfile {
+                id: Some(laden_uid.clone()),
+                first_name: Some("Mein Laden".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: None,
+            desired_hops: None,
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![],
+        };
+        let privat_contact = FrontendContact {
+            did: privat_uid.clone(),
+            profile: FrontendUserProfile {
+                id: Some(privat_uid.clone()),
+                first_name: Some("Mein Privat".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: None,
+            desired_hops: None,
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![],
+        };
+        state.save_contact(&mut service, laden_contact, Some(password)).unwrap();
+        state.save_contact(&mut service, privat_contact, Some(password)).unwrap();
+
+        let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+        assert_eq!(contacts.len(), 2, "Both own subaccounts must stay in address book");
+        assert!(contacts.iter().any(|c| c.did == laden_uid && c.trust_level.is_none()));
+        assert!(contacts.iter().any(|c| c.did == privat_uid && c.trust_level.is_none()));
+
+        // 4. lookup_contact_name resolves exact subaccount name rather than sibling
+        let book = state.contacts.lock().unwrap().clone();
+        assert_eq!(super::lookup_contact_name(book.as_ref(), &laden_uid).as_deref(), Some("Mein Laden"));
+        assert_eq!(super::lookup_contact_name(book.as_ref(), &privat_uid).as_deref(), Some("Mein Privat"));
+
+        // 5. Deleting one subaccount must leave sibling intact
+        state.delete_contact(&mut service, &privat_uid, Some(password)).unwrap();
+        let remaining = state.load_contacts(&mut service, Some(password)).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].did, laden_uid);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

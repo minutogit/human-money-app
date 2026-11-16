@@ -469,9 +469,6 @@ pub async fn finalize_sync_setup_impl(
     };
 
     let write_url = canonical_url;
-    let read_base = write_url.strip_suffix("/sync.php").unwrap_or(&write_url);
-    let read_url = format!("{}/{}", read_base, admin.data_dir);
-
     let client = sync_client::create_sync_http_client();
 
     // Live-check the running sync server before activating or persisting write_url.
@@ -489,6 +486,28 @@ pub async fn finalize_sync_setup_impl(
             write_url, admin.descriptor.drop_pub, info.drop_pub
         )));
     }
+    let server_read_url = info.read_url.trim().trim_end_matches('/').to_string();
+    if server_read_url.is_empty() {
+        return Err(FrontendError::from(format!(
+            "Sync server at {} returned an empty read_url in ?info",
+            write_url
+        )));
+    }
+    sync_client::validate_sync_url(&server_read_url).map_err(|e| {
+        FrontendError::from(format!(
+            "Sync server at {} returned an invalid read_url ('{}') in ?info (check public_base_url / HTTPS config): {}",
+            write_url, server_read_url, e
+        ))
+    })?;
+    sync_client::list_index(&client, &server_read_url, None, None)
+        .await
+        .map_err(|e| {
+            FrontendError::from(format!(
+                "Sync server read_url '{}' (reported by ?info at {}) is unreachable — check public_base_url / data_dir in server config: {}",
+                server_read_url, write_url, e
+            ))
+        })?;
+
     let remote_status = sync_client::fetch_admin_status(&client, &write_url, &admin_sk)
         .await
         .map_err(|e| {
@@ -499,7 +518,7 @@ pub async fn finalize_sync_setup_impl(
         })?;
 
     admin.descriptor.write_url = write_url.clone();
-    admin.descriptor.read_url = read_url.clone();
+    admin.descriptor.read_url = server_read_url;
 
     // Push members to all 4 channels; roll back MARKET_SYNC_ADMIN_KEY if any channel fails.
     if let Err(err) = push_all_channel_members(
@@ -682,9 +701,40 @@ pub async fn test_sync_connection_impl(
         });
     }
 
-    // Test read via fetch_drop_info
+    // Test read via fetch_sync_info + live read_url index check
     match sync_client::fetch_sync_info(&client, &write_url).await {
         Ok(info) => {
+            let server_read_url = info.read_url.trim().trim_end_matches('/').to_string();
+            if server_read_url.is_empty() {
+                return Ok(FrontendSyncConnectionTestResult {
+                    success: false,
+                    message: "Read test failed: server returned empty read_url in ?info".to_string(),
+                    write_ok: true,
+                    read_ok: false,
+                });
+            }
+            if let Err(e) = sync_client::validate_sync_url(&server_read_url) {
+                return Ok(FrontendSyncConnectionTestResult {
+                    success: false,
+                    message: format!(
+                        "Read test failed: invalid read_url '{}' in ?info (check public_base_url / HTTPS config): {}",
+                        server_read_url, e
+                    ),
+                    write_ok: true,
+                    read_ok: false,
+                });
+            }
+            if let Err(e) = sync_client::list_index(&client, &server_read_url, None, None).await {
+                return Ok(FrontendSyncConnectionTestResult {
+                    success: false,
+                    message: format!(
+                        "Read test failed on read_url '{}' (check public_base_url / data_dir in server config): {}",
+                        server_read_url, e
+                    ),
+                    write_ok: true,
+                    read_ok: false,
+                });
+            }
             Ok(FrontendSyncConnectionTestResult {
                 success: true,
                 message: format!(
@@ -1351,8 +1401,8 @@ pub async fn probe_contact_syncs_impl(
     for contact in address_book.contacts.values_mut() {
         for ep in &mut contact.syncs {
             if initial_has_healthy && !force {
-                let needs_initial_probe = ep.last_probed_at.is_none()
-                    && (ep.status == "unverified" || ep.read_url.is_empty() || ep.drop_pub.is_empty());
+                let needs_initial_probe =
+                    ep.status == "unverified" || ep.read_url.is_empty() || ep.drop_pub.is_empty();
                 if !needs_initial_probe {
                     continue;
                 }
@@ -1415,7 +1465,12 @@ pub async fn probe_contact_syncs_impl(
             } else {
                 // 1. Fetch server info via ?info
                 match sync_client::fetch_sync_info(&client, &canonical_write).await {
-                    Err(_) => {
+                    Err(e) => {
+                        log::warn!(
+                            "Sync probe ?info failed for {}: {}",
+                            canonical_write,
+                            e
+                        );
                         ep.status = "unreachable".to_string();
                         ep.fail_count = ep.fail_count.saturating_add(1);
                         ep.last_probed_at = Some(now);
@@ -1431,11 +1486,25 @@ pub async fn probe_contact_syncs_impl(
                                 .ok()
                                 .map(|_| n.clone())
                         });
-                        let info_read_url = info.read_url.clone();
+                        let trimmed_read = info.read_url.trim().trim_end_matches('/').to_string();
+                        let read_url_valid = !trimmed_read.is_empty()
+                            && sync_client::validate_sync_url(&trimmed_read).is_ok();
+                        if !read_url_valid {
+                            log::warn!(
+                                "Sync server at {} returned invalid read_url '{}' in ?info",
+                                canonical_write,
+                                info.read_url
+                            );
+                        }
+                        let resolved_read_url = if read_url_valid {
+                            trimmed_read
+                        } else {
+                            ep.read_url.clone()
+                        };
                         let info_drop_pub = info.drop_pub.clone();
 
                         ep.write_url = canonical_write.clone();
-                        ep.read_url = info.read_url;
+                        ep.read_url = resolved_read_url.clone();
                         ep.drop_pub = info.drop_pub;
                         ep.last_seen_at = Some(now);
                         contacts_modified = true;
@@ -1457,18 +1526,33 @@ pub async fn probe_contact_syncs_impl(
                                 .map(|pk| (pk, None))
                         };
 
-                        let mut probe_ok = false;
-                        let mut probe_status = "unreachable".to_string();
+                        let probe_ok = true;
+                        let probe_status: String;
 
                         match stealth_pk_res {
-                            Err(_) => {
-                                ep.status = "unreachable".to_string();
-                                ep.fail_count = ep.fail_count.saturating_add(1);
+                            Err(e) => {
+                                log::warn!(
+                                    "Sync probe failed to derive stealth pubkey for {} (drop_pub='{}'): {}",
+                                    canonical_write,
+                                    ep.drop_pub,
+                                    e
+                                );
+                                // Server responded to ?info (reachable), so report pending_auth rather than offline/unreachable.
+                                probe_status = "pending_auth".to_string();
+                                ep.status = "pending_auth".to_string();
+                                ep.fail_count = 0;
                                 ep.last_probed_at = Some(now);
                             }
                             Ok((stealth_pk, slot_pfx)) => {
                                 let cap_prefix = slot_pfx.as_deref().or(my_prefix.as_deref());
                                 let card_cap = sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, cap_prefix, "card").await;
+                                if let Err(ref e) = card_cap {
+                                    log::warn!(
+                                        "Sync probe HEAD capability (card) failed on {}: {}",
+                                        canonical_write,
+                                        e
+                                    );
+                                }
                                 if let Ok(ref cap) = card_cap {
                                     if let Some(mb) = cap.max_bytes.filter(|&v| v > 0) {
                                         channel_max_bytes_updates.push((canonical_write.clone(), "card".to_string(), mb));
@@ -1477,27 +1561,30 @@ pub async fn probe_contact_syncs_impl(
                                 let post_cap = if card_cap.as_ref().map(|c| c.authorized).unwrap_or(false) {
                                     Ok(sync_client::SyncCapabilityResult { authorized: true, ..Default::default() })
                                 } else {
-                                    sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, cap_prefix, "post").await
+                                    let res = sync_client::head_slot_capability(&client, &canonical_write, &stealth_pk, cap_prefix, "post").await;
+                                    if let Err(ref e) = res {
+                                        log::warn!(
+                                            "Sync probe HEAD capability (post) failed on {}: {}",
+                                            canonical_write,
+                                            e
+                                        );
+                                    }
+                                    res
                                 };
 
                                 let is_authorized = card_cap.as_ref().map(|c| c.authorized).unwrap_or(false)
                                     || post_cap.as_ref().map(|c| c.authorized).unwrap_or(false);
 
-                                if is_authorized {
+                                if is_authorized && read_url_valid {
                                     probe_status = "active".to_string();
-                                    probe_ok = true;
                                     ep.status = "active".to_string();
                                     ep.fail_count = 0;
                                     ep.last_probed_at = Some(now);
-                                } else if card_cap.is_ok() || post_cap.is_ok() {
+                                } else {
+                                    // Server answered ?info (reachable), so never classify as offline/unreachable.
                                     probe_status = "pending_auth".to_string();
-                                    probe_ok = true;
                                     ep.status = "pending_auth".to_string();
                                     ep.fail_count = 0;
-                                    ep.last_probed_at = Some(now);
-                                } else {
-                                    ep.status = "unreachable".to_string();
-                                    ep.fail_count = ep.fail_count.saturating_add(1);
                                     ep.last_probed_at = Some(now);
                                 }
                             }
@@ -1505,12 +1592,12 @@ pub async fn probe_contact_syncs_impl(
 
                         if let Some(ref notice) = verified_rev {
                             crate::state::apply_revocation_notice_to_descriptor(ep, notice, now);
-                            verified_revocations.push((info_read_url.clone(), notice.clone()));
+                            verified_revocations.push((resolved_read_url.clone(), notice.clone()));
                         }
 
                         probe_cache.insert(
                             sync_endpoint_key.clone(),
-                            (info_read_url, info_drop_pub, probe_status, probe_ok, verified_rev),
+                            (resolved_read_url, info_drop_pub, probe_status, probe_ok, verified_rev),
                         );
                     }
                 }
@@ -3677,6 +3764,23 @@ pub fn preview_contact_trust_change_impl(
         .unwrap_or_default();
 
     let can_target = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
+
+    let own_can_did = service
+        .with_wallet(|w| canonicalize_did(w.get_user_id()).ok())
+        .ok()
+        .flatten();
+    if own_can_did.as_deref() == Some(can_target.as_str()) {
+        return Ok(FrontendTrustChangeImpact {
+            can_read_my_market_before: false,
+            can_read_my_market_after: false,
+            can_read_my_wot_before: false,
+            can_read_my_wot_after: false,
+            can_write_my_sync_before: true,
+            can_write_my_sync_after: true,
+            can_send_me_post_before: true,
+            can_send_me_post_after: true,
+        });
+    }
 
     let reg = state.get_or_load_wot_register(&mut service, password.as_deref()).ok();
     let current_level = reg
@@ -6247,5 +6351,148 @@ pub(crate) mod tests {
             .unwrap()
             .expect("Finalized service must return Some(FrontendSyncAdminStatus)");
         assert_eq!(status.descriptor.write_url, expected_write_url);
+    }
+
+    #[tokio::test]
+    async fn test_probe_distinguishes_reachable_head_error_from_offline_and_validates_admin_read_url() {
+        let base_dir = temp_test_dir("probe_head_error_vs_offline");
+        let password = "pw";
+
+        // Custom mini HTTP server where ?info returns 200 OK, PUT ?members returns 204,
+        // HEAD returns 405 Method Not Allowed, and ?info read_url points to non-loopback HTTP (invalid).
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server_url = format!("http://127.0.0.1:{}/sync.php", port);
+
+        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_state = create_test_state(alice_service);
+        let draft = prepare_sync_setup_impl(None, None, None, Some(password.to_string()), &alice_state).unwrap();
+        let admin_pub = draft.admin_pubkey.clone();
+        let valid_local_read = format!("http://127.0.0.1:{}/{}", port, draft.data_dir);
+
+        let override_bad_read_url = std::sync::Arc::new(std::sync::Mutex::new(true));
+        let bad_flag = std::sync::Arc::clone(&override_bad_read_url);
+        let admin_pub_srv = admin_pub.clone();
+        let valid_read_srv = valid_local_read.clone();
+
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let bad_read = *bad_flag.lock().unwrap();
+                let ap = admin_pub_srv.clone();
+                let vr = valid_read_srv.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 16_384];
+                    let n = stream.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let first_line = req.lines().next().unwrap_or("");
+                    let mut parts = first_line.split_whitespace();
+                    let method = parts.next().unwrap_or("");
+                    let path = parts.next().unwrap_or("");
+
+                    let resp = if method == "GET" && path.contains("info") {
+                        let read_u = if bad_read {
+                            "http://misconfigured.example.org/d-bad".to_string()
+                        } else {
+                            vr
+                        };
+                        let body = serde_json::json!({
+                            "drop_pub": ap,
+                            "read_url": read_u,
+                            "register_url": null,
+                            "channels": ["card", "wot", "backup", "post"]
+                        })
+                        .to_string();
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                    } else if method == "PUT" && path.contains("members") {
+                        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_string()
+                    } else if method == "HEAD" {
+                        "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n".to_string()
+                    } else {
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string()
+                    };
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+
+        // 1. Admin finalize & connection test MUST reject invalid info.read_url ("http://misconfigured.example.org/...")
+        let conn_res = test_sync_connection_impl(server_url.clone(), Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert!(!conn_res.success);
+        assert!(conn_res.write_ok);
+        assert!(!conn_res.read_ok);
+
+        let fin_err = finalize_sync_setup_impl(server_url.clone(), Some(password.to_string()), &alice_state)
+            .await
+            .expect_err("finalize must reject invalid read_url reported by ?info");
+        assert!(fin_err.message.contains("read_url"));
+
+        // 2. Fix read_url on server; Bob probes while HEAD returns 405 Method Not Allowed.
+        // Because ?info succeeds, Bob MUST get "pending_auth" (never "unreachable" / offline!).
+        *override_bad_read_url.lock().unwrap() = false;
+
+        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+        let bob_state = create_test_state(bob_service);
+        let alice_did = {
+            let s = alice_state.service.lock().unwrap();
+            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+        };
+
+        // Also give Bob a healthy sync and set last_probed_at = Some(500) on an "unverified" contact sync
+        // to prove recovered unverified endpoints are still probed when force=false.
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let mut settings = bob_state.load_settings(&mut s, Some(password)).unwrap();
+            settings.market_selected_syncs.push(FrontendSyncDescriptor {
+                write_url: "https://healthy.example.org/sync.php".to_string(),
+                read_url: "https://healthy.example.org/d-ok".to_string(),
+                drop_pub: "33".repeat(32),
+                status: "active".to_string(),
+                ..Default::default()
+            });
+            bob_state.save_settings(&mut s, settings, Some(password)).unwrap();
+
+            let contact = FrontendContact {
+                did: alice_did,
+                profile: FrontendUserProfile::default(),
+                tags: vec![],
+                added_at: chrono::Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level: Some(2),
+                desired_hops: Some(1),
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![FrontendSyncDescriptor {
+                    write_url: server_url.clone(),
+                    read_url: String::new(),
+                    drop_pub: String::new(),
+                    status: "unverified".to_string(),
+                    last_probed_at: Some(500),
+                    ..Default::default()
+                }],
+            };
+            bob_state.save_contact(&mut s, contact, Some(password)).unwrap();
+        }
+
+        let probed = probe_contact_syncs_impl(false, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+        assert_eq!(probed.len(), 1);
+        assert_eq!(
+            probed[0].status, "pending_auth",
+            "Reachable server (?info 200) with failing HEAD (405) must report pending_auth, never unreachable"
+        );
+        assert_eq!(probed[0].fail_count, 0);
+        assert_eq!(probed[0].read_url, valid_local_read);
+        assert!(probed[0].last_seen_at.is_some());
     }
 }
